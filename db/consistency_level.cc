@@ -58,10 +58,9 @@ size_t block_for_local_serial(replica::keyspace& ks) {
     //       a lot of complications since both snitch output for a local host
     //       and the snitch itself (and thus its output) may change dynamically.
     //
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
-    auto local_addr = utils::fb_utilities::get_broadcast_address();
 
-    return local_quorum_for(ks, snitch_ptr->get_datacenter(local_addr));
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
+    return local_quorum_for(ks, topo.get_datacenter());
 }
 
 size_t block_for_each_quorum(replica::keyspace& ks) {
@@ -114,17 +113,6 @@ bool is_datacenter_local(consistency_level l) {
     return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
 }
 
-bool is_local(gms::inet_address endpoint) {
-    using namespace locator;
-
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
-    auto local_addr = utils::fb_utilities::get_broadcast_address();
-
-    return snitch_ptr->get_datacenter(local_addr) ==
-           snitch_ptr->get_datacenter(endpoint);
-}
-
-
 template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         replica::keyspace& ks,
@@ -133,7 +121,7 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
-    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
 
     network_topology_strategy* nrs =
             static_cast<network_topology_strategy*>(&rs);
@@ -148,12 +136,13 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     // will never get any endpoints outside the dataceters from
     // nrs->get_datacenters().
     //
+
     for (auto& endpoint : live_endpoints) {
-        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].live);
+        ++(dc_endpoints[topo.get_datacenter(endpoint)].live);
     }
 
     for (auto& endpoint : pending_endpoints) {
-        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].pending);
+        ++(dc_endpoints[topo.get_datacenter(endpoint)].pending);
     }
 
     return dc_endpoints;
@@ -202,18 +191,20 @@ void assure_sufficient_live_nodes(
         return pending <= live ? live - pending : 0;
     };
 
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
+
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE:
-        if (count_local_endpoints(live_endpoints) < count_local_endpoints(pending_endpoints) + 1) {
+        if (topo.count_local_endpoints(live_endpoints) < topo.count_local_endpoints(pending_endpoints) + 1) {
             throw exceptions::unavailable_exception(cl, 1, 0);
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
-        size_t local_live = count_local_endpoints(live_endpoints);
-        size_t pending = count_local_endpoints(pending_endpoints);
+        size_t local_live = topo.count_local_endpoints(live_endpoints);
+        size_t pending = topo.count_local_endpoints(pending_endpoints);
         if (local_live < need + pending) {
             cl_logger.debug("Local replicas {} are insufficient to satisfy LOCAL_QUORUM requirement of needed {} and pending {}", live_endpoints, local_live, pending);
             throw exceptions::unavailable_exception(cl, need, adjust_live_for_error(local_live, pending));
@@ -255,7 +246,8 @@ filter_for_query(consistency_level cl,
     }
 
     if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
-        auto it = boost::range::stable_partition(live_endpoints, is_local);
+        const auto& topo = ks.get_effective_replication_map()->get_topology();
+        auto it = boost::range::stable_partition(live_endpoints, topo.get_local_dc_filter());
         local_count = std::distance(live_endpoints.begin(), it);
         if (is_datacenter_local(cl)) {
             live_endpoints.erase(it, live_endpoints.end());
@@ -366,15 +358,16 @@ is_sufficient_live_nodes(consistency_level cl,
                          replica::keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints) {
     using namespace locator;
+    const auto& topo = ks.get_effective_replication_map()->get_topology();
 
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         return true;
     case consistency_level::LOCAL_ONE:
-        return count_local_endpoints(live_endpoints) >= 1;
+        return topo.count_local_endpoints(live_endpoints) >= 1;
     case consistency_level::LOCAL_QUORUM:
-        return count_local_endpoints(live_endpoints) >= block_for(ks, cl);
+        return topo.count_local_endpoints(live_endpoints) >= block_for(ks, cl);
     case consistency_level::EACH_QUORUM:
     {
         auto& rs = ks.get_replication_strategy();

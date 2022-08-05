@@ -18,8 +18,8 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(snitch, config_options, replication_strategy_type::simple) {
+simple_strategy::simple_strategy(const replication_strategy_config_options& config_options) :
+        abstract_replication_strategy(config_options, replication_strategy_type::simple) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -79,7 +79,7 @@ std::optional<std::set<sstring>>simple_strategy::recognized_options(const topolo
     return {{ "replication_factor" }};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, snitch_ptr&, const replication_strategy_config_options&>;
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 

@@ -184,13 +184,8 @@ static const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-static void retain_local_endpoints(inet_address_vector_replica_set& eps) {
-    auto itend = boost::range::remove_if(
-        eps,
-        [](gms::inet_address ep) {
-            return !db::is_local(ep);
-        }
-    );
+static void retain_local_endpoints(const locator::topology& topo, inet_address_vector_replica_set& eps) {
+    auto itend = boost::range::remove_if(eps, std::not_fn(topo.get_local_dc_filter()));
     eps.erase(itend, eps.end());
 }
 
@@ -495,11 +490,12 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     // Group vnodes by assigned endpoint.
     std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
+    const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
         inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(ks, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
-            retain_local_endpoints(live_endpoints);
+            retain_local_endpoints(topo, live_endpoints);
         }
 
         if (live_endpoints.empty()) {

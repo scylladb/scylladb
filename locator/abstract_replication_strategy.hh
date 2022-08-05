@@ -51,7 +51,6 @@ class abstract_replication_strategy {
     friend class effective_replication_map;
 protected:
     replication_strategy_config_options _config_options;
-    snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
     template <typename... Args>
@@ -73,7 +72,6 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     abstract_replication_strategy(
-        snitch_ptr& snitch,
         const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
 
@@ -175,6 +173,10 @@ public:
 
     const replication_map& get_replication_map() const noexcept {
         return _replication_map;
+    }
+
+    const topology& get_topology() const noexcept {
+        return _tmptr->get_topology();
     }
 
     const size_t get_replication_factor() const noexcept {

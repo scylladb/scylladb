@@ -1348,6 +1348,12 @@ sstring topology::get_datacenter(inet_address ep) const {
     return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
 }
 
+std::function<bool(inet_address)> topology::get_local_dc_filter() const noexcept {
+    return [ this, local_dc = get_datacenter() ] (inet_address ep) {
+        return get_datacenter(ep) == local_dc;
+    };
+}
+
 /////////////////// class topology end /////////////////////////////////////////
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {

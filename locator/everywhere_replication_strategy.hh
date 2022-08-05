@@ -16,7 +16,7 @@
 namespace locator {
 class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
-    everywhere_replication_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options);
+    everywhere_replication_strategy(const replication_strategy_config_options& config_options);
 
     virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 

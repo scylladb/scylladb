@@ -1372,7 +1372,8 @@ public:
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
     bool waited_for(gms::inet_address from) override {
-        return fbu::is_me(from) || db::is_local(from);
+        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        return fbu::is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
     }
 
 public:
@@ -1380,9 +1381,10 @@ public:
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info, db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
-        _total_endpoints = db::count_local_endpoints(_targets);
+                abstract_write_response_handler(p, ks, cl, type, std::move(mh),
+                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info,
+                        p->get_token_metadata_ptr()->get_topology().count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+        _total_endpoints = p->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets);
     }
 };
 
@@ -2959,9 +2961,8 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
         return my_address;
     }
 
-    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints | boost::adaptors::filtered([&] (auto&& ep) {
-        return db::is_local(ep);
-    }));
+    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
+        | boost::adaptors::filtered(get_token_metadata_ptr()->get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
@@ -3044,9 +3045,10 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(db::is_local)));
+        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
-        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(db::is_local)));
+        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
         pending_endpoints.erase(itend, pending_endpoints.end());
     }
 
@@ -3769,6 +3771,7 @@ struct digest_read_result {
 };
 
 class digest_read_resolver : public abstract_read_resolver {
+    shared_ptr<storage_proxy> _proxy;
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<result<digest_read_result>> _cl_promise; // cl is reached
@@ -3793,8 +3796,12 @@ class digest_read_resolver : public abstract_read_resolver {
         return _digest_results.size();
     }
 public:
-    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout),
-                                _block_for(block_for),  _target_count_for_cl(target_count_for_cl) {}
+    digest_read_resolver(shared_ptr<storage_proxy> proxy, schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+        : abstract_read_resolver(std::move(schema), cl, 0, timeout)
+        , _proxy(std::move(proxy))
+        , _block_for(block_for)
+        , _target_count_for_cl(target_count_for_cl)
+    {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_request_failed) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
@@ -3821,8 +3828,10 @@ public:
         auto& first = *_digest_results.begin();
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
+private:
     bool waiting_for(gms::inet_address ep) {
-        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || db::is_local(ep) : true;
+        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_cl_reported) {
@@ -3861,6 +3870,8 @@ public:
             }
         }
     }
+
+public:
     future<result<digest_read_result>> has_cl() {
         return _cl_promise.get_future();
     }
@@ -4674,8 +4685,8 @@ public:
             // Return an empty result in this case
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _schema, _cl, _block_for,
+                db::is_datacenter_local(_cl) ? _proxy->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
@@ -4709,7 +4720,8 @@ public:
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
-                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(db::is_local)));
+                            auto local_dc_filter = exec->_proxy->get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
@@ -4928,7 +4940,8 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
+        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
