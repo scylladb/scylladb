@@ -28,14 +28,17 @@ Scylla tries to maximize the resource usage of all system components. The shard-
 
 CPU
 ^^^
-Scylla requires modern Intel CPUs that support the SSE4.2 instruction set and will not boot without it.
+ScyllaDB requires modern Intel CPUs that support the SSE4.2 instruction set and will not boot without it.
 
-The following CPUs are supported by Scylla:
+ScyllaDB supports the following CPUs:
 
-* Intel core: Westmere or later (2010)
-* Intel atom: Goldmont or later (2016)
-* AMD low power: Jaguar or later (2013)
-* AMD standard: Bulldozer or later (2011)
+* Intel core: Westmere and later (2010)
+* Intel atom: Goldmont and later (2016)
+* AMD low power: Jaguar and later (2013)
+* AMD standard: Bulldozer and later (2011)
+* Apple M1 and M2
+* Ampere Altra
+* AWS Graviton, Graviton2, Graviton3
 
 
 In terms of the number of cores, any number will work since Scylla scales up with the number of cores. 
