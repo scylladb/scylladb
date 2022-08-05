@@ -18,16 +18,7 @@
 class mutation;
 class atomic_cell_or_collection;
 
-class counter_id : public utils::tagged_uuid<counter_id> {
-public:
-    counter_id() = default;
-    explicit counter_id(utils::UUID uuid) noexcept : utils::tagged_uuid<counter_id>(uuid) {}
-
-    // For tests.
-    static counter_id generate_random() {
-        return counter_id(utils::make_random_uuid());
-    }
-};
+using counter_id = utils::tagged_uuid<struct counter_id_tag>;
 
 template<mutable_view is_mutable>
 class basic_counter_shard_view {

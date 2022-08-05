@@ -2134,7 +2134,7 @@ public:
 
         std::map<counter_id, std::set<int64_t>> counter_used_clock_values;
         std::vector<counter_id> counter_ids;
-        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::generate_random);
+        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::create_random_id);
 
         auto random_counter_cell = [&] {
             std::uniform_int_distribution<size_t> shard_count_dist(1, counter_ids.size());

@@ -41,7 +41,7 @@ void verify_shard_order(counter_cell_view ccv) {
 
 std::vector<counter_id> generate_ids(unsigned count) {
     std::vector<counter_id> id;
-    std::generate_n(std::back_inserter(id), count, counter_id::generate_random);
+    std::generate_n(std::back_inserter(id), count, counter_id::create_random_id);
     boost::range::sort(id);
     return id;
 }
