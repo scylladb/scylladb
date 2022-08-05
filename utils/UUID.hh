@@ -220,7 +220,7 @@ struct tagged_uuid {
     explicit operator bool() const {
         // The default constructor sets the id to nil, which is
         // guaranteed to not match any valid id.
-        return id != utils::UUID();
+        return bool(id);
     }
     static tagged_uuid create_random_id() { return tagged_uuid{utils::make_random_uuid()}; }
     explicit tagged_uuid(const utils::UUID& uuid) : id(uuid) {}
