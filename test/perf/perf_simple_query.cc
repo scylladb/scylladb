@@ -74,6 +74,7 @@ struct test_config {
     bool stop_on_error;
     sstring timeout;
     bool bypass_cache;
+    bool perf_attach_detach_point = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -127,6 +128,25 @@ static bytes make_random_key(test_config& cfg) {
     return make_key(make_random_seq(cfg));
 }
 
+template <typename Func>
+static
+std::vector<perf_result> wrap_time_parallel(const test_config& cfg, Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true) {
+    if (cfg.perf_attach_detach_point) {
+        for (unsigned i = 5; i > 0; --i) {
+            fmt::print("waiting for perf to attach... {}\n", i);
+            sleep(1s).get();
+        }
+    }
+    auto ret = time_parallel(std::forward<Func>(func), concurrency_per_core, iterations, operations_per_shard, stop_on_error);
+    if (cfg.perf_attach_detach_point) {
+        for (unsigned i = 5; i > 0; --i) {
+            fmt::print("waiting for perf to detach... {}\n", i);
+            sleep(1s).get();
+        }
+    }
+    return ret;
+}
+
 static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?";
@@ -137,7 +157,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
         query += " using timeout " + cfg.timeout;
     }
     auto id = env.prepare(query).get0();
-    return time_parallel([&env, &cfg, id] {
+    return wrap_time_parallel(cfg, [&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
@@ -156,7 +176,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
             "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
             "WHERE \"KEY\" = ?", usings);
     auto id = env.prepare(query).get0();
-    return time_parallel([&env, &cfg, id] {
+    return wrap_time_parallel(cfg, [&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
@@ -170,7 +190,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
     }
     sstring query = format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf {}WHERE \"KEY\" = ?", usings);
     auto id = env.prepare(query).get0();
-    return time_parallel([&env, &cfg, id] {
+    return wrap_time_parallel(cfg, [&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
@@ -189,7 +209,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
             "\"C4\" = \"C4\" + 5 "
             "WHERE \"KEY\" = ?", usings);
     auto id = env.prepare(query).get0();
-    return time_parallel([&env, &cfg, id] {
+    return wrap_time_parallel(cfg, [&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
@@ -296,7 +316,7 @@ static std::vector<perf_result> test_alternator_read(service::client_state& stat
                 "ReturnConsumedCapacity": "TOTAL"
             }
         )";
-    return time_parallel([&] {
+    return wrap_time_parallel(cfg, [&] {
         auto key = std::to_string(make_random_seq(cfg));
         // Chunked content is used to minimize string copying, and thus extra allocations
         rjson::chunked_content content;
@@ -309,7 +329,7 @@ static std::vector<perf_result> test_alternator_read(service::client_state& stat
 }
 
 static std::vector<perf_result> test_alternator_write(service::client_state& state, alternator::executor& executor, test_config& cfg) {
-    return time_parallel([&] {
+    return wrap_time_parallel(cfg, [&] {
         std::string prefix = R"(
             {
                 "TableName": "alternator_table",
@@ -354,7 +374,7 @@ static std::vector<perf_result> test_alternator_write(service::client_state& sta
 static std::vector<perf_result> test_alternator_delete(service::client_state& state, noncopyable_function<void()> flush_memtables,
         alternator::executor& executor, test_config& cfg) {
     create_alternator_partitions(state, std::move(flush_memtables), executor, cfg);
-    return time_parallel([&] {
+    return wrap_time_parallel(cfg, [&] {
         std::string json = R"(
             {
                 "TableName": "alternator_table",
@@ -519,6 +539,7 @@ int main(int argc, char** argv) {
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
+        ("perf-attach-detach-point", "provide attach/detach points for perf")
         ;
 
     set_abort_on_internal_error(true);
@@ -565,6 +586,7 @@ int main(int argc, char** argv) {
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
+            cfg.perf_attach_detach_point = app.configuration().contains("perf-attach-detach-point");
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
