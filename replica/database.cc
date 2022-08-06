@@ -1003,7 +1003,7 @@ void database::remove(const table& cf) noexcept {
     }
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
     auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
     lw_shared_ptr<table> cf;
@@ -1018,15 +1018,19 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     cf->clear_views();
     co_await cf->await_pending_ops();
     co_await _querier_cache.evict_all_for_table(cf->schema()->id());
-    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
+    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot_name_opt.has_value(), std::move(snapshot_name_opt)));
     co_await cf->stop();
     f.get(); // re-throw exception from truncate() if any
 }
 
 future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot) {
     auto table_dir = fs::path(sharded_db.local().find_column_family(ks_name, cf_name).dir());
+    std::optional<sstring> snapshot_name_opt;
+    if (with_snapshot) {
+        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
+    }
     co_await sharded_db.invoke_on_all([&] (database& db) {
-        return db.drop_column_family(ks_name, cf_name, tsf, with_snapshot);
+        return db.drop_column_family(ks_name, cf_name, tsf, snapshot_name_opt);
     });
     co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
 }
@@ -2321,13 +2325,13 @@ future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool s
     });
 }
 
-future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
+future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf, std::optional<sstring> snapshot_name_opt) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf, std::move(tsf));
+    return truncate(ks, cf, std::move(tsf), true, std::move(snapshot_name_opt));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
+future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     dblog.debug("Truncating {}.{}: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
     auto holder = cf.async_gate().hold();
 
@@ -2377,7 +2381,8 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     db_clock::time_point truncated_at = co_await tsf();
 
     if (auto_snapshot) {
-        auto name = format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
+        auto name = snapshot_name_opt.value_or(
+            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
         co_await cf.snapshot(*this, name);
     }
 

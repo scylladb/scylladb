@@ -1640,12 +1640,13 @@ public:
     typedef std::function<future<db_clock::time_point>()> timestamp_func;
 
     /** Truncates the given column family */
-    future<> truncate(sstring ksname, sstring cfname, timestamp_func);
-    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
+    // If snapshot_name_opt is disengaged, the snapshot name is formatted as "{timestamp}-<table-name>"
+    future<> truncate(sstring ksname, sstring cfname, timestamp_func, std::optional<sstring> snapshot_name_opt = {});
+    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
     bool update_column_family(schema_ptr s);
 private:
-    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);
+    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, std::optional<sstring> snapshot_name_opt);
 public:
     // drops the table on all shards and removes the table directory if there are no snapshots
     static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
