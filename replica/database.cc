@@ -2346,6 +2346,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     // any sstable written _after_ we issue the flush below will
     // only have higher rp:s than we will get from the discard_sstable
     // call.
+    auto low_mark_at = db_clock::now();
     auto low_mark = cf.set_low_replay_position_mark();
 
     const auto uuid = cf.schema()->id();
@@ -2388,8 +2389,13 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
     // the low_mark assertion does not hold, because we maybe/probably never got around to 
     // creating the sstables that would create them.
-    assert(!did_flush || low_mark <= rp || rp == db::replay_position());
-    rp = std::max(low_mark, rp);
+    // If truncated_at is earlier than the time low_mark was taken
+    // then the replay_position returned by discard_sstables may be
+    // smaller than low_mark.
+    assert(!did_flush || rp == db::replay_position() || (truncated_at <= low_mark_at ? rp <= low_mark : low_mark <= rp));
+    if (rp == db::replay_position()) {
+        rp = low_mark;
+    }
     co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
             if (should_flush) {
