@@ -71,6 +71,7 @@
 #include "readers/multishard.hh"
 
 #include "lang/wasm.hh"
+#include "utils/joinpoint.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
@@ -1023,8 +1024,12 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     f.get(); // re-throw exception from truncate() if any
 }
 
-future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot) {
+future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, bool with_snapshot) {
     auto table_dir = fs::path(sharded_db.local().find_column_family(ks_name, cf_name).dir());
+    utils::joinpoint<db_clock::time_point> jp{[] {
+        return make_ready_future<db_clock::time_point>(db_clock::time_point::max());
+    }};
+    auto tsf = [&jp] { return jp.value(); };
     std::optional<sstring> snapshot_name_opt;
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
