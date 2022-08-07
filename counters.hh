@@ -372,7 +372,7 @@ template<>
 struct appending_hash<counter_shard_view> {
     template<typename Hasher>
     void operator()(Hasher& h, const counter_shard_view& cshard) const {
-        ::feed_hash(h, cshard.id().uuid());
+        ::feed_hash(h, cshard.id());
         ::feed_hash(h, cshard.value());
         ::feed_hash(h, cshard.logical_clock());
     }

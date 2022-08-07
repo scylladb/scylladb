@@ -250,6 +250,14 @@ struct appending_hash<utils::UUID> {
     }
 };
 
+template<typename Tag>
+struct appending_hash<utils::tagged_uuid<Tag>> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const utils::tagged_uuid<Tag>& id) const noexcept {
+        appending_hash<utils::UUID>{}(h, id.uuid());
+    }
+};
+
 namespace std {
 template<>
 struct hash<utils::UUID> {
