@@ -652,6 +652,8 @@ arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, de
                         help="LLVM-specific inline threshold compilation parameter")
 arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store_true', default=False,
                         help='List all available build artifacts, that can be passed to --with')
+arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
+                        help='Set datestamp for SCYLLA-VERSION-GEN')
 args = arg_parser.parse_args()
 
 if args.list_artifacts:
@@ -1536,7 +1538,8 @@ if args.artifacts:
 else:
     build_artifacts = all_artifacts
 
-status = subprocess.call("./SCYLLA-VERSION-GEN")
+date_stamp = f"--date-stamp {args.date_stamp}" if args.date_stamp else ""
+status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp}", shell=True)
 if status != 0:
     print('Version file generation failed')
     sys.exit(1)
