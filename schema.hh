@@ -30,6 +30,7 @@
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "schema_fwd.hh"
 
 namespace dht {
 
@@ -122,7 +123,6 @@ private:
 // also change when schema mutations are applied.
 using table_schema_version = utils::UUID;
 
-class schema;
 class schema_registry_entry;
 class schema_builder;
 
@@ -574,10 +574,6 @@ public:
         return false;
     }
 };
-
-class schema;
-
-using schema_ptr = lw_shared_ptr<const schema>;
 
 /*
  * Effectively immutable.
