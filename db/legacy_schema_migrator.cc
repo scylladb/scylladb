@@ -36,7 +36,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
-#include "utils/joinpoint.hh"
 #include "types/user.hh"
 
 static seastar::logger mlogger("legacy_schema_migrator");
@@ -534,10 +533,9 @@ public:
 
     future<> drop_legacy_tables() {
         mlogger.info("Dropping legacy schema tables");
-        auto ts = db_clock::now();
         auto with_snapshot = !_keyspaces.empty();
-        return parallel_for_each(legacy_schema_tables, [this, ts, with_snapshot](const sstring& cfname) {
-            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, [ts] { return make_ready_future<db_clock::time_point>(ts); }, with_snapshot);
+        return parallel_for_each(legacy_schema_tables, [this, with_snapshot](const sstring& cfname) {
+            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, with_snapshot);
         });
     }
 
@@ -568,8 +566,8 @@ public:
     }
 
     future<> flush_schemas() {
-        auto& db = _qp.db().real_database();
-        return db.flush_on_all(db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
+        auto& db = _qp.db().real_database().container();
+        return replica::database::flush_tables_on_all_shards(db, db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
     }
 
     future<> migrate() {

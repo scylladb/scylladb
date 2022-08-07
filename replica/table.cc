@@ -1326,47 +1326,19 @@ logalloc::occupancy_stats table::occupancy() const {
 }
 
 
-// Snapshots: snapshotting the files themselves is easy: if more than one CF
-// happens to link an SSTable twice, all but one will fail, and we will end up
-// with one copy.
-//
-// The problem for us, is that the snapshot procedure is supposed to leave a
-// manifest file inside its directory.  So if we just call snapshot() from
-// multiple shards, only the last one will succeed, writing its own SSTables to
-// the manifest leaving all other shards' SSTables unaccounted for.
-//
-// Moreover, for things like drop table, the operation should only proceed when the
-// snapshot is complete. That includes the manifest file being correctly written,
-// and for this reason we need to wait for all shards to finish their snapshotting
-// before we can move on.
-//
-// To know which files we must account for in the manifest, we will keep an
-// SSTable set.  Theoretically, we could just rescan the snapshot directory and
-// see what's in there. But we would need to wait for all shards to finish
-// before we can do that anyway. That is the hard part, and once that is done
-// keeping the files set is not really a big deal.
-//
-// This code assumes that all shards will be snapshotting at the same time. So
-// far this is a safe assumption, but if we ever want to take snapshots from a
-// group of shards only, this code will have to be updated to account for that.
-struct snapshot_manager {
-    std::unordered_set<sstring> files;
-    named_semaphore requests = {0, named_semaphore_exception_factory{"snapshot manager requests"}};
-    named_semaphore manifest_write = {0, named_semaphore_exception_factory{"snapshot manager manifest write"}};
-    snapshot_manager() {}
-};
-static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
-
-static future<>
-seal_snapshot(sstring jsondir) {
+future<>
+table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
     std::ostringstream ss;
     int n = 0;
     ss << "{" << std::endl << "\t\"files\" : [ ";
-    for (auto&& rf: pending_snapshots.at(jsondir)->files) {
+    for (const auto& fsp : file_sets) {
+      for (const auto& rf : *fsp) {
         if (n++ > 0) {
             ss << ", ";
         }
         ss << "\"" << rf << "\"";
+        co_await coroutine::maybe_yield();
+      }
     }
     ss << " ]" << std::endl << "}" << std::endl;
 
@@ -1375,130 +1347,118 @@ seal_snapshot(sstring jsondir) {
 
     tlogger.debug("Storing manifest {}", jsonfile);
 
-    return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([jsonfile, json = std::move(json)] {
-        return open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
-            return make_file_output_stream(std::move(f)).then([json](output_stream<char>&& out) {
-                return do_with(std::move(out), [json] (output_stream<char>& out) {
-                    return out.write(json.c_str(), json.size()).then([&out] {
-                       return out.flush();
-                    }).then([&out] {
-                       return out.close();
-                    });
-                });
-            });
-        });
-    }).then([jsondir] {
-        return io_check(sync_directory, std::move(jsondir));
-    }).finally([jsondir] {
-        pending_snapshots.erase(jsondir);
-        return make_ready_future<>();
-    });
+    co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
+    auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
+    auto out = co_await make_file_output_stream(std::move(f));
+    std::exception_ptr ex;
+    try {
+        co_await out.write(json.c_str(), json.size());
+        co_await out.flush();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await out.close();
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+
+    co_await io_check(sync_directory, std::move(jsondir));
 }
 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
     std::ostringstream ss;
-    try {
-        this->schema()->describe(db, ss);
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
+
+    this->schema()->describe(db, ss);
+
     auto schema_description = ss.str();
     auto schema_file_name = dir + "/schema.cql";
-    return open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate).then([schema_description = std::move(schema_description)](file f) {
-        return make_file_output_stream(std::move(f)).then([schema_description  = std::move(schema_description)] (output_stream<char>&& out) mutable {
-            return do_with(std::move(out), [schema_description  = std::move(schema_description)] (output_stream<char>& out) {
-                return out.write(schema_description.c_str(), schema_description.size()).then([&out] {
-                   return out.flush();
-                }).then([&out] {
-                   return out.close();
-                });
-            });
-        });
-    });
+    auto f = co_await open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate);
+    auto out = co_await make_file_output_stream(std::move(f));
+    std::exception_ptr ex;
 
+    try {
+        co_await out.write(schema_description.c_str(), schema_description.size());
+        co_await out.flush();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await out.close();
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
-future<> table::snapshot(database& db, sstring name) {
-    auto jsondir = _config.datadir + "/snapshots/" + name;
-    tlogger.debug("snapshot {}", jsondir);
+// Runs the orchestration code on an arbitrary shard to balance the load.
+future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name) {
+    auto jsondir = table_shards[this_shard_id()]->_config.datadir + "/snapshots/" + name;
+    auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
+
+    co_await smp::submit_to(orchestrator, [&] () -> future<> {
+        auto& t = *table_shards[this_shard_id()];
+        auto s = t.schema();
+        tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
+
+        std::vector<table::snapshot_file_set> file_sets;
+        file_sets.reserve(smp::count);
+
+        co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+            file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
+                return table_shards[this_shard_id()]->take_snapshot(sharded_db.local(), jsondir);
+            }));
+        });
+
+        co_await t.finalize_snapshot(sharded_db.local(), std::move(jsondir), std::move(file_sets));
+    });
+}
+
+future<table::snapshot_file_set> table::take_snapshot(database& db, sstring jsondir) {
+    tlogger.trace("take_snapshot {}", jsondir);
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
     std::exception_ptr ex;
 
-    std::vector<sstables::shared_sstable> tables;
-    try {
-        tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
-        co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-        co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
-            return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
-                return io_check([sstable, &dir = jsondir] {
-                    return sstable->create_links(dir);
-                });
+    auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+    co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
+    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
+        return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
+            return io_check([sstable, &dir = jsondir] {
+                return sstable->create_links(dir);
             });
         });
-        co_await io_check(sync_directory, jsondir);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
-    auto shard = std::hash<sstring>()(jsondir) % smp::count;
-    std::unordered_set<sstring> table_names;
-    try {
-        for (auto& sst : tables) {
-            auto f = sst->get_filename();
-            auto rf = f.substr(sst->get_dir().size() + 1);
-            table_names.insert(std::move(rf));
-        }
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await smp::submit_to(shard, [requester = this_shard_id(), &jsondir, this, &db,
-            tables = std::move(table_names), datadir = _config.datadir, ex = std::move(ex)] () mutable -> future<> {
-        if (!pending_snapshots.contains(jsondir)) {
-            try {
-                pending_snapshots.emplace(jsondir, make_lw_shared<snapshot_manager>());
-            } catch (...) {
-                // abort since the process will hang if we can't coordinate
-                // snapshot across shards, similar to failing to allocation a continuation.
-                tlogger.error("Failed allocating snapshot_manager: {}. Aborting.", std::current_exception());
-                abort();
-            }
-        }
-        auto snapshot = pending_snapshots.at(jsondir);
-        try {
-            for (auto&& sst: tables) {
-                snapshot->files.insert(std::move(sst));
-            }
-        } catch (...) {
-            ex = std::current_exception();
-        }
-
-        tlogger.debug("snapshot {}: signal requests", jsondir);
-        snapshot->requests.signal(1);
-        if (requester == this_shard_id()) {
-            tlogger.debug("snapshot {}: waiting for all shards", jsondir);
-            co_await snapshot->requests.wait(smp::count);
-            // this_shard_id() here == requester == this_shard_id() before submit_to() above,
-            // so the db reference is still local
-            tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-            co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
-                tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
-                ex = std::move(ptr);
-            });
-            tlogger.debug("snapshot {}: seal_snapshot", jsondir);
-            co_await seal_snapshot(jsondir).handle_exception([&] (std::exception_ptr ptr) {
-                tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
-                ex = std::move(ptr);
-            });
-            snapshot->manifest_write.signal(smp::count);
-        }
-        tlogger.debug("snapshot {}: waiting for manifest on behalf of shard {}", jsondir, requester);
-        co_await snapshot->manifest_write.wait(1);
-        tlogger.debug("snapshot {}: done: error={}", jsondir, ex);
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
     });
+    co_await io_check(sync_directory, jsondir);
+
+    auto table_names = std::make_unique<std::unordered_set<sstring>>();
+    table_names->reserve(tables.size());
+    for (auto& sst : tables) {
+        auto f = sst->get_filename();
+        auto rf = f.substr(sst->get_dir().size() + 1);
+        table_names->insert(std::move(rf));
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return make_foreign(std::move(table_names));
+}
+
+future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
+    std::exception_ptr ex;
+
+    tlogger.debug("snapshot {}: writing schema.cql", jsondir);
+    co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
+        tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
+        ex = std::move(ptr);
+    });
+    tlogger.debug("snapshot {}: seal_snapshot", jsondir);
+    co_await seal_snapshot(jsondir, std::move(file_sets)).handle_exception([&] (std::exception_ptr ptr) {
+        tlogger.error("Failed to seal snapshot in {}: {}.", jsondir, ptr);
+        ex = std::move(ptr);
+    });
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 future<bool> table::snapshot_exists(sstring tag) {

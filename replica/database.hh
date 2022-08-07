@@ -70,6 +70,7 @@
 #include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
+#include "compaction/compaction_manager.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -98,8 +99,6 @@ class sstables_manager;
 class compaction_data;
 
 }
-
-class compaction_manager;
 
 namespace compaction {
 class table_state;
@@ -851,10 +850,16 @@ public:
     db::replay_position set_low_replay_position_mark();
 
 private:
-    future<> snapshot(database& db, sstring name);
+    using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-    friend class database;
+    future<snapshot_file_set> take_snapshot(database& db, sstring jsondir);
+    // Writes the table schema and the manifest of all files in the snapshot directory.
+    future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
+    static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
+
 public:
+    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
+
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
@@ -1624,31 +1629,42 @@ public:
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);
     // flush a table identified by the given id on all shards.
-    future<> flush_on_all(utils::UUID id);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id);
     // flush a single table in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::string_view table_name);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name);
     // flush a list of tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::vector<sstring> table_names);
+    static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names);
     // flush all tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name);
+    static future<> flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
 
-    future<> snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
-    future<> snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush);
+    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, bool skip_flush);
+    static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
+    static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush);
 
-    // See #937. Truncation now requires a callback to get a time stamp
-    // that must be guaranteed to be the same for all shards.
-    typedef std::function<future<db_clock::time_point>()> timestamp_func;
-
-    /** Truncates the given column family */
-    future<> truncate(sstring ksname, sstring cfname, timestamp_func);
-    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
-
+public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);
+    future<> detach_column_family(table& cf);
+
+    static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, utils::UUID uuid);
+
+    struct table_truncate_state {
+        gate::holder holder;
+        db_clock::time_point low_mark_at;
+        db::replay_position low_mark;
+        std::vector<compaction_manager::compaction_reenabler> cres;
+        bool did_flush;
+    };
+
+    static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
+    /** Truncates the given column family */
+    // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
+
     // drops the table on all shards and removes the table directory if there are no snapshots
-    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
+    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, bool with_snapshot = true);
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();

@@ -54,41 +54,69 @@ public:
     }
 };
 
+static future<> apply_mutation(sharded<replica::database>& sharded_db, utils::UUID uuid, const mutation& m, bool do_flush = false,
+        db::commitlog::force_sync fs = db::commitlog::force_sync::no, db::timeout_clock::time_point timeout = db::no_timeout) {
+    auto shard = m.shard_of();
+    return sharded_db.invoke_on(shard, [uuid, fm = freeze(m), do_flush, fs, timeout] (replica::database& db) {
+        auto& t = db.find_column_family(uuid);
+        return db.apply(t.schema(), fm, tracing::trace_state_ptr(), fs, timeout).then([do_flush, &t] {
+            return do_flush ? t.flush() : make_ready_future<>();
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
         auto& db = e.local_db();
-        auto s = db.find_schema("ks", "cf");
-        dht::partition_range_vector pranges;
+        sstring ks_name = "ks";
+        sstring cf_name = "cf";
+        auto s = db.find_schema(ks_name, cf_name);
+        auto uuid = s->id();
 
+        std::vector<size_t> keys_per_shard;
+        std::vector<dht::partition_range_vector> pranges_per_shard;
+        keys_per_shard.resize(smp::count);
+        pranges_per_shard.resize(smp::count);
         for (uint32_t i = 1; i <= 1000; ++i) {
             auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", i)));
             mutation m(s, pkey);
             m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
-            pranges.emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
-            db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+            auto shard = m.shard_of();
+            keys_per_shard[shard]++;
+            pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
+            apply_mutation(e.db(), uuid, m).get();
         }
 
-        auto assert_query_result = [&] (size_t expected_size) {
+        auto assert_query_result = [&] (const std::vector<size_t>& expected_sizes) {
             auto max_size = std::numeric_limits<size_t>::max();
             auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(1000));
-            auto&& [result, cache_tempature] = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0();
-            assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
+            e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+                auto shard = this_shard_id();
+                auto s = db.find_schema(uuid);
+                auto&& [result, cache_tempature] = co_await db.query(s, cmd, query::result_options::only_result(), pranges_per_shard[shard], nullptr, db::no_timeout);
+                assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_sizes[shard]);
+            }).get();
         };
-        assert_query_result(1000);
+        assert_query_result(keys_per_shard);
 
-        db.truncate("ks", "cf", [] { return make_ready_future<db_clock::time_point>(db_clock::now()); }).get();
+        replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf").get();
 
-        assert_query_result(0);
+        for (auto it = keys_per_shard.begin(); it < keys_per_shard.end(); ++it) {
+            *it = 0;
+        }
+        assert_query_result(keys_per_shard);
 
-        auto cl = db.commitlog();
-        auto rp = db::commitlog_replayer::create_replayer(e.db()).get0();
-        auto paths = cl->list_existing_segments().get0();
-        rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+        e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+            auto cl = db.commitlog();
+            auto rp = co_await db::commitlog_replayer::create_replayer(e.db());
+            auto paths = co_await cl->list_existing_segments();
+            co_await rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX);
+        }).get();
 
-        assert_query_result(0);
+        assert_query_result(keys_per_shard);
         return make_ready_future<>();
     }, cfg);
 }
@@ -114,12 +142,7 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
                 auto shard = m.shard_of();
-                return e.db().invoke_on(shard, [&, fm = freeze(m)] (replica::database& db) -> future<> {
-                    auto& t = db.find_column_family(uuid);
-                    return db.apply(t.schema(), fm, tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).then([&t] {
-                        return t.flush();
-                    });
-                }).finally([&] {
+                return apply_mutation(e.db(), uuid, m, true /* do_flush */).finally([&] {
                     ++count;
                 });
             });
@@ -128,12 +151,8 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         uint32_t num_keys = 1000;
 
         auto f0 = insert_data(0, num_keys);
-        auto f1 = do_until([&] { return count >= num_keys; }, [&] () -> future<> {
-            return e.db().invoke_on_all([&, ts = db_clock::now()] (replica::database& db) {
-                auto& ks = db.find_keyspace(ks_name);
-                auto& cf = db.find_column_family(uuid);
-                return db.truncate(ks, cf, [ts] { return make_ready_future<db_clock::time_point>(ts); }, false /* with_snapshot */);
-            }).then([] {
+        auto f1 = do_until([&] { return count >= num_keys; }, [&, ts = db_clock::now()] {
+            return replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf", ts, false /* with_snapshot */).then([] {
                 return yield();
             });
         });
@@ -148,40 +167,63 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
-            dht::partition_range_vector pranges;
-            for (uint32_t i = 1; i <= 3; ++i) {
+            auto uuid = s->id();
+            std::vector<size_t> keys_per_shard;
+            std::vector<dht::partition_range_vector> pranges_per_shard;
+            keys_per_shard.resize(smp::count);
+            pranges_per_shard.resize(smp::count);
+            for (uint32_t i = 1; i <= 3 * smp::count; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.partition().apply(tombstone(api::timestamp_type(1), gc_clock::now()));
-                db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+                apply_mutation(e.db(), uuid, m).get();
+                auto shard = m.shard_of();
+                pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
-            for (uint32_t i = 3; i <= 8; ++i) {
+            for (uint32_t i = 3 * smp::count; i <= 8 * smp::count; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
-                db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
-                pranges.emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
+                apply_mutation(e.db(), uuid, m).get();
+                auto shard = m.shard_of();
+                keys_per_shard[shard]++;
+                pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
 
             auto max_size = std::numeric_limits<size_t>::max();
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(3));
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
-                assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
+                e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+                    auto shard = this_shard_id();
+                    auto s = db.find_schema(uuid);
+                    auto result = std::get<0>(co_await db.query(s, cmd, query::result_options::only_result(), pranges_per_shard[shard], nullptr, db::no_timeout));
+                    auto expected_size = std::min<size_t>(keys_per_shard[shard], 3);
+                    assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
+                }).get();
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
                         query::row_limit(query::max_rows), query::partition_limit(5));
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
-                assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(5);
+                e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+                    auto shard = this_shard_id();
+                    auto s = db.find_schema(uuid);
+                    auto result = std::get<0>(co_await db.query(s, cmd, query::result_options::only_result(), pranges_per_shard[shard], nullptr, db::no_timeout));
+                    auto expected_size = std::min<size_t>(keys_per_shard[shard], 5);
+                    assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
+                }).get();
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
                         query::row_limit(query::max_rows), query::partition_limit(3));
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
-                assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
+                e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+                    auto shard = this_shard_id();
+                    auto s = db.find_schema(uuid);
+                    auto result = std::get<0>(co_await db.query(s, cmd, query::result_options::only_result(), pranges_per_shard[shard], nullptr, db::no_timeout));
+                    auto expected_size = std::min<size_t>(keys_per_shard[shard], 3);
+                    assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
+                }).get();
             }
         });
     });
@@ -203,8 +245,9 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
             auto ts = group0_guard.write_timestamp();
             mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
             replica::column_family& cf = e.local_db().find_column_family(s);
+            auto uuid = cf.schema()->id();
             for (auto&& m : partitions) {
-                e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+                apply_mutation(e.db(), uuid, m).get();
             }
             cf.flush().get();
             cf.get_row_cache().invalidate(row_cache::external_updater([] {})).get();
@@ -436,7 +479,7 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
 
 future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
     try {
-        co_await db.local().snapshot_on_all(ks_name, {cf_name}, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(db, ks_name, cf_name, snapshot_name, skip_flush);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
                 ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
@@ -657,7 +700,7 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
 
         // existing snapshots expected to remain after dropping the table
         testlog.debug("Dropping table {}.{}", ks_name, table_name);
-        replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }).get();
+        replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name).get();
         BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(num_snapshots)), true);
 
         // clear all tags
@@ -1172,7 +1215,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 default_priority_class(),
                 nullptr);
 
-        auto f = replica::database::drop_table_on_all_shards(e.db(), "ks", "cf", [ts] { return make_ready_future<db_clock::time_point>(ts); });
+        auto f = replica::database::drop_table_on_all_shards(e.db(), "ks", "cf");
 
         // we add a querier to the querier cache while the drop is ongoing
         auto& qc = db.get_querier_cache();
@@ -1201,7 +1244,7 @@ static future<> test_drop_table_with_auto_snapshot(bool auto_snapshot) {
         // Pass `with_snapshot=true` to drop_table_on_all
         // to allow auto_snapshot (based on the configuration above).
         // The table directory should therefore exist after the table is dropped if auto_snapshot is disabled in the configuration.
-        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, true);
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, true);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, auto_snapshot);
         co_return;
@@ -1226,7 +1269,7 @@ SEASTAR_TEST_CASE(drop_table_with_no_snapshot) {
         // Pass `with_snapshot=false` to drop_table_on_all
         // to disallow auto_snapshot.
         // The table directory should therefore not exist after the table is dropped.
-        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, false);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, false);
         co_return;
@@ -1239,13 +1282,13 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
 
     co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
         auto snapshot_tag = format("test-{}", db_clock::now().time_since_epoch().count());
-        co_await e.local_db().snapshot_on_all(ks_name, snapshot_tag, false);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), ks_name, table_name, snapshot_tag, false);
         auto cf_dir = e.local_db().find_column_family(ks_name, table_name).dir();
 
         // With explicit snapshot and with_snapshot=false
         // dir should still be kept, regardless of the
         // with_snapshot parameter and auto_snapshot config.
-        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, [ts = db_clock::now()] { return make_ready_future<db_clock::time_point>(ts); }, false);
+        co_await replica::database::drop_table_on_all_shards(e.db(), ks_name, table_name, false);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
         co_return;
