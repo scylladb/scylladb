@@ -43,6 +43,6 @@ get_gc_before_for_range_result get_gc_before_for_range(schema_ptr s, const dht::
 
 gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time);
 
-void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time);
+void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);

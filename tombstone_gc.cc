@@ -155,8 +155,8 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
     std::abort();
 }
 
-void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time) {
-    auto m = get_or_create_repair_history_map_for_table(s->id());
+void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
+    auto m = get_or_create_repair_history_map_for_table(id);
     m->map += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
 }
 
