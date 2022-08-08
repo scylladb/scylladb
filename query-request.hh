@@ -23,11 +23,13 @@
 #include "utils/small_vector.hh"
 #include "query_class_config.hh"
 #include "db/per_partition_rate_limit_info.hh"
-
+#include "utils/UUID.hh"
 #include "bytes.hh"
 
 class position_in_partition_view;
 class partition_slice_builder;
+
+using query_id = utils::tagged_uuid<struct query_id_tag>;
 
 namespace query {
 
@@ -277,7 +279,7 @@ using is_first_page = bool_class<class is_first_page_tag>;
 // Can be accessed across cores.
 class read_command {
 public:
-    utils::UUID cf_id;
+    table_id cf_id;
     table_schema_version schema_version; // TODO: This should be enough, drop cf_id
     partition_slice slice;
     uint32_t row_limit_low_bits;
@@ -291,7 +293,7 @@ public:
     // under the unique key "query_uuid". Later, when we want to resume
     // the read at exactly the same position (i.e., to request the next page)
     // we can pass this same unique id in that query's "query_uuid" field.
-    utils::UUID query_uuid;
+    query_id query_uuid;
     // Signal to the replica that this is the first page of a (maybe) paged
     // read request as far the replica is concerned. Can be used by the replica
     // to avoid doing work normally done on paged requests, e.g. attempting to
@@ -306,14 +308,14 @@ public:
     db::allow_per_partition_rate_limit allow_limit; // not serialized
 public:
     // IDL constructor
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
                  uint32_t row_limit_low_bits,
                  gc_clock::time_point now,
                  std::optional<tracing::trace_info> ti,
                  uint32_t partition_limit,
-                 utils::UUID query_uuid,
+                 query_id query_uuid,
                  query::is_first_page is_first_page,
                  std::optional<query::max_result_size> max_result_size,
                  uint32_t row_limit_high_bits)
@@ -332,7 +334,7 @@ public:
         , allow_limit(db::allow_per_partition_rate_limit::no)
     { }
 
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
             table_schema_version schema_version,
             partition_slice slice,
             query::max_result_size max_result_size,
@@ -340,7 +342,7 @@ public:
             query::partition_limit partition_limit = query::partition_limit::max,
             gc_clock::time_point now = gc_clock::now(),
             std::optional<tracing::trace_info> ti = std::nullopt,
-            utils::UUID query_uuid = utils::UUID(),
+            query_id query_uuid = query_id::create_null_id(),
             query::is_first_page is_first_page = query::is_first_page::no,
             api::timestamp_type rt = api::new_timestamp(),
             db::allow_per_partition_rate_limit allow_limit = db::allow_per_partition_rate_limit::no)

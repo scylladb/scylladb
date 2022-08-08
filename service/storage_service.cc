@@ -428,7 +428,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (utils::UUID schema_version) mutable {
+    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
@@ -1747,9 +1747,9 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();
-                return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, std::nullopt);
+                return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, std::nullopt);
             }
-            return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, f.get0());
+            return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, f.get0());
         });
     }, std::move(results), [] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;

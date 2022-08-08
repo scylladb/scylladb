@@ -32,9 +32,8 @@ private:
     long _total_size;
     bool _mutation_done_sent = false;
 public:
-    using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
-    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, dht::token_range_vector ranges, long total_size = 0);
+    stream_transfer_task(shared_ptr<stream_session> session, table_id cf_id, dht::token_range_vector ranges, long total_size = 0);
     ~stream_transfer_task();
 public:
     virtual void abort() override {

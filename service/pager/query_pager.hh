@@ -63,7 +63,7 @@ protected:
 
     std::optional<partition_key> _last_pkey;
     position_in_partition _last_pos;
-    std::optional<utils::UUID> _query_uuid;
+    std::optional<query_id> _query_uuid;
 
     shared_ptr<service::storage_proxy> _proxy;
     schema_ptr _schema;

@@ -136,26 +136,26 @@ void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
 }
 
 future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
-    auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
+    auto non_system_filter = [&] (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
         return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
     };
 
     auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {
-        return boost::copy_range<std::unordered_map<utils::UUID, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
-                boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
+        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
+                boost::adaptors::transformed([]  (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
             return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
         }));
     };
 
-    auto sum_stats_per_cf = [] (std::unordered_map<utils::UUID, stat> a, std::unordered_map<utils::UUID, stat> b) {
+    auto sum_stats_per_cf = [] (std::unordered_map<table_id, stat> a, std::unordered_map<table_id, stat> b) {
         for (auto& r : b) {
             a[r.first] += r.second;
         }
         return a;
     };
 
-    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<utils::UUID, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<utils::UUID, stat> rates) mutable {
+    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<table_id, stat> rates) mutable {
         _diff = 0;
         _gstate.reserve(_slen); // assume length did not change from previous iteration
         _slen = 0;

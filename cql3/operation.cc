@@ -297,8 +297,8 @@ operation::set_counter_value_from_tuple_list::prepare(data_dictionary::database 
                 if (id <= last) {
                     throw marshal_exception(
                                     format("invalid counter id order, {} <= {}",
-                                                    id.to_uuid().to_sstring(),
-                                                    last.to_uuid().to_sstring()));
+                                                    id.uuid().to_sstring(),
+                                                    last.uuid().to_sstring()));
                 }
                 last = id;
                 // TODO: maybe allow more than global values to propagate,

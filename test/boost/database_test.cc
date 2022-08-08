@@ -54,7 +54,7 @@ public:
     }
 };
 
-static future<> apply_mutation(sharded<replica::database>& sharded_db, utils::UUID uuid, const mutation& m, bool do_flush = false,
+static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id uuid, const mutation& m, bool do_flush = false,
         db::commitlog::force_sync fs = db::commitlog::force_sync::no, db::timeout_clock::time_point timeout = db::no_timeout) {
     auto shard = m.shard_of();
     return sharded_db.invoke_on(shard, [uuid, fm = freeze(m), do_flush, fs, timeout] (replica::database& db) {
@@ -1219,7 +1219,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
 
         // we add a querier to the querier cache while the drop is ongoing
         auto& qc = db.get_querier_cache();
-        qc.insert_data_querier(utils::make_random_uuid(), std::move(q), nullptr);
+        qc.insert_data_querier(query_id::create_random_id(), std::move(q), nullptr);
         BOOST_REQUIRE_EQUAL(qc.get_stats().population, 1);
 
         op.reset(); // this should allow the drop to finish

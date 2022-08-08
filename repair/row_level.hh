@@ -47,8 +47,7 @@ struct shard_config {
 
 class repair_history {
 public:
-    // The key for the map is the table_id
-    std::unordered_map<utils::UUID, std::unordered_map<dht::token_range, size_t>> finished_ranges;
+    std::unordered_map<table_id, std::unordered_map<dht::token_range, size_t>> finished_ranges;
     gc_clock::time_point repair_time = gc_clock::time_point::max();
 };
 
@@ -127,7 +126,7 @@ public:
     // stop them abruptly).
     future<> shutdown();
 
-    future<std::optional<gc_clock::time_point>> update_history(utils::UUID repair_id, utils::UUID table_id, dht::token_range range, gc_clock::time_point repair_time);
+    future<std::optional<gc_clock::time_point>> update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
     future<> cleanup_history(utils::UUID repair_id);
     future<> load_history();
 
@@ -243,7 +242,7 @@ class repair_hasher;
 class repair_writer;
 
 future<> repair_cf_range_row_level(repair_info& ri,
-        sstring cf_name, utils::UUID table_id, dht::token_range range,
+        sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,

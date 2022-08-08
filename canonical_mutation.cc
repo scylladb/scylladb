@@ -15,14 +15,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "hashing_partition_visitor.hh"
 #include "utils/UUID.hh"
-#include "serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include <iostream>
 
@@ -44,7 +37,7 @@ canonical_mutation::canonical_mutation(const mutation& m)
                  }).end_canonical_mutation();
 }
 
-utils::UUID canonical_mutation::column_family_id() const {
+table_id canonical_mutation::column_family_id() const {
     auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
     return mv.table_id();

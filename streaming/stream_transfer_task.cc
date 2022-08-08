@@ -35,7 +35,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, dht::token_range_vector ranges, long total_size)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, table_id cf_id, dht::token_range_vector ranges, long total_size)
     : stream_task(session, cf_id)
     , _ranges(std::move(ranges))
     , _total_size(total_size) {
@@ -46,7 +46,7 @@ stream_transfer_task::~stream_transfer_task() = default;
 struct send_info {
     netw::messaging_service& ms;
     utils::UUID plan_id;
-    utils::UUID cf_id;
+    table_id cf_id;
     netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     stream_reason reason;

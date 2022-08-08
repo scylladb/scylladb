@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include "range.hh"
 #include "tracing/tracing.hh"
+#include "schema_fwd.hh"
 
 #include <list>
 #include <vector>
@@ -93,8 +94,6 @@ class repair_row_level_start_response;
 class node_ops_cmd_response;
 class node_ops_cmd_request;
 enum class row_level_diff_detect_algorithm : uint8_t;
-
-using table_schema_version = utils::UUID;
 
 namespace streaming {
 
@@ -349,10 +348,10 @@ public:
 
     // Wrapper for STREAM_MUTATION_FRAGMENTS
     // The receiver of STREAM_MUTATION_FRAGMENTS sends status code to the sender to notify any error on the receiver side. The status code is of type int32_t. 0 means successful, -1 means error, other status code value are reserved for future use.
-    void register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source)>&& func);
+    void register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, UUID plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source)>&& func);
     future<> unregister_stream_mutation_fragments();
     rpc::sink<int32_t> make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>>& source);
-    future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>> make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id);
+    future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>> make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, utils::UUID plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id);
 
     // Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM
     future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>> make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id);
@@ -372,8 +371,8 @@ public:
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
 
-    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id);
+    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id);
     future<> unregister_stream_mutation_done();
 
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func);
@@ -485,9 +484,9 @@ public:
     future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
 
     // Wrapper for SCHEMA_CHECK
-    void register_schema_check(std::function<future<utils::UUID>()>&& func);
+    void register_schema_check(std::function<future<table_schema_version>()>&& func);
     future<> unregister_schema_check();
-    future<utils::UUID> send_schema_check(msg_addr);
+    future<table_schema_version> send_schema_check(msg_addr);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);

@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "idl/keys.idl.hh"
+
 enum class bound_weight : int8_t {
     before_all_prefixed = -1,
     equal = 0,

@@ -22,7 +22,6 @@
 #include "db/config.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
-#include "utils/bit_cast.hh"
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
 #include "gms/feature_service.hh"
@@ -144,8 +143,8 @@ std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
 }
 
 // Must run inside a seastar thread
-static std::vector<utils::UUID> get_table_ids(const replica::database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
-    std::vector<utils::UUID> table_ids;
+static std::vector<table_id> get_table_ids(const replica::database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
+    std::vector<table_id> table_ids;
     table_ids.reserve(tables.size());
     for (auto& table : tables) {
         thread::maybe_yield();
@@ -154,7 +153,7 @@ static std::vector<utils::UUID> get_table_ids(const replica::database& db, const
     return table_ids;
 }
 
-static std::vector<sstring> get_table_names(const replica::database& db, const std::vector<utils::UUID>& table_ids) {
+static std::vector<sstring> get_table_names(const replica::database& db, const std::vector<table_id>& table_ids) {
     std::vector<sstring> table_names;
     table_names.reserve(table_ids.size());
     for (auto& table_id : table_ids) {
@@ -509,7 +508,7 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
 
 static
 const dht::sharder&
-get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& keyspace, const std::vector<utils::UUID>& table_ids) {
+get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& keyspace, const std::vector<table_id>& table_ids) {
     schema_ptr last_s;
     for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
         schema_ptr s;
@@ -537,7 +536,7 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
 repair_info::repair_info(repair_service& repair,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
-    std::vector<utils::UUID> table_ids_,
+    std::vector<table_id> table_ids_,
     repair_uniq_id id_,
     const std::vector<sstring>& data_centers_,
     const std::vector<sstring>& hosts_,
@@ -606,7 +605,7 @@ size_t repair_info::ranges_size() {
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-future<> repair_info::repair_range(const dht::token_range& range, utils::UUID table_id) {
+future<> repair_info::repair_range(const dht::token_range& range, ::table_id table_id) {
     check_in_shutdown();
     check_in_abort();
     ranges_index++;
@@ -1154,7 +1153,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         abort_source as;
         auto off_strategy_updater = seastar::async([this, uuid, &table_ids, &participants, &as] {
-            auto tables = std::list<utils::UUID>(table_ids.begin(), table_ids.end());
+            auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {

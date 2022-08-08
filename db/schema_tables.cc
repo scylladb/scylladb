@@ -64,9 +64,7 @@
 #include "lang/lua.hh"
 
 #include "db/query_context.hh"
-#include "serializer.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
@@ -140,10 +138,10 @@ struct qualified_name {
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
-    std::map<utils::UUID, schema_mutations>&& tables_before,
-    std::map<utils::UUID, schema_mutations>&& tables_after,
-    std::map<utils::UUID, schema_mutations>&& views_before,
-    std::map<utils::UUID, schema_mutations>&& views_after);
+    std::map<table_id, schema_mutations>&& tables_before,
+    std::map<table_id, schema_mutations>&& tables_after,
+    std::map<table_id, schema_mutations>&& views_before,
+    std::map<table_id, schema_mutations>&& views_after);
 
 struct [[nodiscard]] user_types_to_drop final {
     seastar::noncopyable_function<future<> ()> drop;
@@ -733,7 +731,7 @@ redact_columns_for_missing_features(mutation m, schema_features features) {
  * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
  * will be converted into UUID which would act as content-based version of the schema.
  */
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
     auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
         auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
@@ -773,7 +771,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     }
 }
 
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     return calculate_schema_digest(proxy, features, std::not_fn(&is_system_keyspace));
 }
@@ -969,17 +967,17 @@ static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, 
     }));
 }
 
-static utils::UUID table_id_from_mutations(const schema_mutations& sm) {
+static table_id table_id_from_mutations(const schema_mutations& sm) {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row table_row = table_rs.row(0);
-    return table_row.get_nonnull<utils::UUID>("id");
+    return table_id(table_row.get_nonnull<utils::UUID>("id"));
 }
 
 static
-future<std::map<utils::UUID, schema_mutations>>
+future<std::map<table_id, schema_mutations>>
 read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, schema_ptr s)
 {
-    std::map<utils::UUID, schema_mutations> result;
+    std::map<table_id, schema_mutations> result;
     for (auto&& keyspace_name : keyspace_names) {
         for (auto&& table_name : co_await read_table_names_of_keyspace(proxy, keyspace_name, s)) {
             auto qn = qualified_name(keyspace_name, table_name);
@@ -1065,7 +1063,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
 
     // Insert the new column mapping for a given schema version (without TTL)
     std::vector<mutation> muts;
-    partition_key pk = partition_key::from_exploded(*history_tbl, {uuid_type->decompose(s->id())});
+    partition_key pk = partition_key::from_exploded(*history_tbl, {uuid_type->decompose(s->id().uuid())});
 
     ttl_opt ttl;
     if (with_ttl) {
@@ -1075,7 +1073,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     const auto ts = api::new_timestamp();
     for (const auto& cdef : boost::range::join(s->static_columns(), s->regular_columns())) {
         mutation m(history_tbl, pk);
-        auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version()),
+        auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version().uuid()),
                                                                  utf8_type->decompose(cdef.name_as_text())});
         fill_column_info(*s, ckey, cdef, ts, ttl, m);
         muts.emplace_back(std::move(m));
@@ -1089,7 +1087,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     schema_ptr s = keyspaces();
     // compare before/after schemas of the affected keyspaces only
     std::set<sstring> keyspaces;
-    std::set<utils::UUID> column_families;
+    std::set<table_id> column_families;
     for (auto&& mutation : mutations) {
         keyspaces.emplace(value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
         column_families.emplace(mutation.column_family_id());
@@ -1114,7 +1112,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 
         if (do_flush) {
             auto& db = proxy.local().get_db();
-            co_await coroutine::parallel_for_each(column_families, [&db] (const utils::UUID& id) -> future<> {
+            co_await coroutine::parallel_for_each(column_families, [&db] (const table_id& id) -> future<> {
                 return replica::database::flush_table_on_all_shards(db, id);
             });
         }
@@ -1238,8 +1236,8 @@ enum class schema_diff_side {
 };
 
 static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
-    std::map<utils::UUID, schema_mutations>&& before,
-    std::map<utils::UUID, schema_mutations>&& after,
+    std::map<table_id, schema_mutations>&& before,
+    std::map<table_id, schema_mutations>&& after,
     noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
     schema_diff d;
@@ -1269,10 +1267,10 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
-    std::map<utils::UUID, schema_mutations>&& tables_before,
-    std::map<utils::UUID, schema_mutations>&& tables_after,
-    std::map<utils::UUID, schema_mutations>&& views_before,
-    std::map<utils::UUID, schema_mutations>&& views_after)
+    std::map<table_id, schema_mutations>&& tables_before,
+    std::map<table_id, schema_mutations>&& tables_after,
+    std::map<table_id, schema_mutations>&& views_before,
+    std::map<table_id, schema_mutations>&& views_after)
 {
     auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
@@ -2326,7 +2324,7 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(scylla_tables(), pkey);
-    m.set_clustered_cell(ckey, "version", utils::UUID(table->version()), timestamp);
+    m.set_clustered_cell(ckey, "version", table->version().uuid(), timestamp);
     // Since 4.0, we stopped using cdc column in scylla tables. Extensions are
     // used instead. Since we stopped reading this column in commit 861c7b5, we
     // can now keep it always empty.
@@ -2358,7 +2356,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     mutation m{s, pkey};
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
-    m.set_clustered_cell(ckey, "id", table->id(), timestamp);
+    m.set_clustered_cell(ckey, "id", table->id().uuid(), timestamp);
 
     auto scylla_tables_mutation = make_scylla_tables_mutation(table, timestamp);
 
@@ -2806,7 +2804,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = table_row.get_nonnull<sstring>("table_name");
-    auto id = table_row.get_nonnull<utils::UUID>("id");
+    auto id = table_id(table_row.get_nonnull<utils::UUID>("id"));
     schema_builder builder{ks_name, cf_name, id};
 
     auto cf = cf_type::standard;
@@ -3083,7 +3081,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
 
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = row.get_nonnull<sstring>("view_name");
-    auto id = row.get_nonnull<utils::UUID>("id");
+    auto id = table_id(row.get_nonnull<utils::UUID>("id"));
 
     schema_builder builder{ks_name, cf_name, id};
     prepare_builder_from_table_row(ctxt, builder, row);
@@ -3106,7 +3104,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
         builder.with_version(sm.digest());
     }
 
-    auto base_id = row.get_nonnull<utils::UUID>("base_table_id");
+    auto base_id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
     auto base_name = row.get_nonnull<sstring>("base_table_name");
     auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
     auto where_clause = row.get_nonnull<sstring>("where_clause");
@@ -3151,12 +3149,12 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     mutation m{s, pkey};
     auto ckey = clustering_key::from_singular(*s, view->cf_name());
 
-    m.set_clustered_cell(ckey, "base_table_id", view->view_info()->base_id(), timestamp);
+    m.set_clustered_cell(ckey, "base_table_id", view->view_info()->base_id().uuid(), timestamp);
     m.set_clustered_cell(ckey, "base_table_name", view->view_info()->base_name(), timestamp);
     m.set_clustered_cell(ckey, "where_clause", view->view_info()->where_clause(), timestamp);
     m.set_clustered_cell(ckey, "bloom_filter_fp_chance", view->bloom_filter_fp_chance(), timestamp);
     m.set_clustered_cell(ckey, "include_all_columns", view->view_info()->include_all_columns(), timestamp);
-    m.set_clustered_cell(ckey, "id", view->id(), timestamp);
+    m.set_clustered_cell(ckey, "id", view->id().uuid(), timestamp);
 
     add_table_params_to_mutations(m, ckey, view, timestamp);
 
@@ -3457,7 +3455,7 @@ table_schema_version schema_mutations::digest() const {
     const db::schema_features no_features;
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, no_features);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns, no_features);
-    return utils::UUID_gen::get_name_UUID(h.finalize());
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
@@ -3473,11 +3471,11 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
 static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
-future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version version) {
+future<column_mapping> get_column_mapping(::table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::no
     );
     if (results->empty()) {
@@ -3514,24 +3512,24 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
     co_return std::move(cm);
 }
 
-future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version) {
+future<bool> column_mapping_exists(table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::yes
     );
     co_return !results->empty();
 }
 
-future<> drop_column_mapping(utils::UUID table_id, table_schema_version version) {
+future<> drop_column_mapping(table_id table_id, table_schema_version version) {
     const static sstring DEL_COLUMN_MAPPING_QUERY =
         format("DELETE FROM system.{} WHERE cf_id = ? and schema_version = ?",
             db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
     co_await qctx->qp().execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version},
+        {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::no);
 }
 

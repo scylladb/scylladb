@@ -18,47 +18,7 @@
 class mutation;
 class atomic_cell_or_collection;
 
-class counter_id {
-    int64_t _least_significant;
-    int64_t _most_significant;
-public:
-    static_assert(std::is_same<decltype(std::declval<utils::UUID>().get_least_significant_bits()), int64_t>::value
-            &&  std::is_same<decltype(std::declval<utils::UUID>().get_most_significant_bits()), int64_t>::value,
-        "utils::UUID is expected to work with two signed 64-bit integers");
-
-    counter_id() = default;
-    explicit counter_id(utils::UUID uuid) noexcept
-        : _least_significant(uuid.get_least_significant_bits())
-        , _most_significant(uuid.get_most_significant_bits())
-    { }
-
-    utils::UUID to_uuid() const {
-        return utils::UUID(_most_significant, _least_significant);
-    }
-
-    bool operator<(const counter_id& other) const {
-        return to_uuid() < other.to_uuid();
-    }
-    bool operator>(const counter_id& other) const {
-        return other.to_uuid() < to_uuid();
-    }
-    bool operator==(const counter_id& other) const {
-        return to_uuid() == other.to_uuid();
-    }
-    bool operator!=(const counter_id& other) const {
-        return !(*this == other);
-    }
-public:
-    // For tests.
-    static counter_id generate_random() {
-        return counter_id(utils::make_random_uuid());
-    }
-};
-static_assert(
-        std::is_standard_layout_v<counter_id> && std::is_trivial_v<counter_id>,
-        "counter_id should be a POD type");
-
-std::ostream& operator<<(std::ostream& os, const counter_id& id);
+using counter_id = utils::tagged_uuid<struct counter_id_tag>;
 
 template<mutable_view is_mutable>
 class basic_counter_shard_view {
@@ -412,7 +372,7 @@ template<>
 struct appending_hash<counter_shard_view> {
     template<typename Hasher>
     void operator()(Hasher& h, const counter_shard_view& cshard) const {
-        ::feed_hash(h, cshard.id().to_uuid());
+        ::feed_hash(h, cshard.id());
         ::feed_hash(h, cshard.value());
         ::feed_hash(h, cshard.logical_clock());
     }

@@ -20,7 +20,7 @@
 #include "gms/feature.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/msg_addr.hh"
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -71,7 +71,7 @@ private:
     service::raft_group0_client& _group0_client;
     sharded<db::system_keyspace>& _sys_ks;
     serialized_action _schema_push;
-    utils::UUID _schema_version_to_publish;
+    table_schema_version _schema_version_to_publish;
 
     friend class group0_state_machine; // needed for access to _messaging
     size_t _concurrent_ddl_retries;
@@ -163,7 +163,7 @@ public:
     // The future resolves after the change is applied locally.
     future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description = "");
 
-    void passive_announce(utils::UUID version);
+    void passive_announce(table_schema_version version);
 
     future<> drain();
     future<> stop();
@@ -190,7 +190,7 @@ private:
 
     void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
-    future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
 
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
     future<> announce_without_raft(std::vector<mutation> schema);
@@ -222,6 +222,6 @@ public:
     void set_concurrent_ddl_retries(size_t);
 };
 
-future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
+future<column_mapping> get_column_mapping(table_id, table_schema_version v);
 
 }

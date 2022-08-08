@@ -126,7 +126,7 @@ public:
         return versioned_value(to_sstring(load));
     }
 
-    static versioned_value schema(const utils::UUID &new_version) {
+    static versioned_value schema(const table_schema_version& new_version) {
         return versioned_value(new_version.to_sstring());
     }
 

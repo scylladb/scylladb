@@ -543,7 +543,7 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
 }
 
 future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noexcept {
-    if (_cmd.query_uuid == utils::UUID{} || _cmd.is_first_page) {
+    if (!_cmd.query_uuid || _cmd.is_first_page) {
         return make_ready_future<>();
     }
     try {
@@ -584,7 +584,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
             full_position last_pos) noexcept {
-    if (_cmd.query_uuid == utils::UUID{}) {
+    if (!_cmd.query_uuid) {
         co_return;
     }
 

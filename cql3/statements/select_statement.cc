@@ -357,7 +357,7 @@ select_statement::do_execute(query_processor& qp,
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -528,7 +528,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
     cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -1241,7 +1241,7 @@ indexed_table_select_statement::read_posting_list(query_processor& qp,
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
 
@@ -1485,7 +1485,7 @@ parallelized_select_statement::do_execute(
         query::partition_limit(query::max_partitions),
         now,
         tracing::make_trace_info(state.get_trace_state()),
-        utils::UUID(),
+        query_id::create_null_id(),
         query::is_first_page::no,
         options.get_timestamp(state)
     );

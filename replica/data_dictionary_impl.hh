@@ -70,7 +70,7 @@ public:
             return std::nullopt;
         }
     }
-    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, utils::UUID id) const override {
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, table_id id) const override {
         try {
             return wrap(unwrap(db).find_column_family(id));
         } catch (no_such_column_family&) {

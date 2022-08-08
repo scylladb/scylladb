@@ -12,10 +12,6 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-std::ostream& operator<<(std::ostream& os, const counter_id& id) {
-    return os << id.to_uuid();
-}
-
 std::ostream& operator<<(std::ostream& os, counter_shard_view csv) {
     return os << "{global_shard id: " << csv.id() << " value: " << csv.value()
               << " clock: " << csv.logical_clock() << "}";

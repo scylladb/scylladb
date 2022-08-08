@@ -85,7 +85,7 @@ public:
     // Each entry with index of idx should be accessed on shard idx only.
     // Each entry contains a vector of sstables for this shard.
     // The table UUID is returned too.
-    static future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
+    static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf);
     static future<> process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
             distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);

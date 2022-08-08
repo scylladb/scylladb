@@ -310,7 +310,7 @@ const column_mapping& schema::get_column_mapping() const {
     return _column_mapping;
 }
 
-schema::raw_schema::raw_schema(utils::UUID id)
+schema::raw_schema::raw_schema(table_id id)
     : _id(id)
     , _partitioner(::get_partitioner(default_partitioner_name))
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
@@ -431,7 +431,7 @@ schema::schema(const schema& o)
 
 schema::schema(reversed_tag, const schema& o)
     : schema(o, [] (schema& s) {
-        s._raw._version = utils::UUID_gen::negate(s._raw._version);
+        s._raw._version = reversed(s._raw._version);
         for (auto& col : s._raw._columns) {
             if (col.kind == column_kind::clustering_key) {
                 col.type = reversed(col.type);
@@ -441,7 +441,7 @@ schema::schema(reversed_tag, const schema& o)
 {
 }
 
-lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+lw_shared_ptr<const schema> make_shared_schema(std::optional<table_id> id, std::string_view ks_name,
     std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
     std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
     data_type regular_column_name_type, sstring comment) {
@@ -554,7 +554,7 @@ bool index_metadata::equals_noname(const index_metadata& other) const {
     return _kind == other._kind && _options == other._options;
 }
 
-const utils::UUID& index_metadata::id() const {
+const table_id& index_metadata::id() const {
     return _id;
 }
 
@@ -752,11 +752,11 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static bool is_global_index(replica::database& db, const utils::UUID& id, const schema& s) {
+static bool is_global_index(replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_global_index(s);
 }
 
-static bool is_index(replica::database& db, const utils::UUID& id, const schema& s) {
+static bool is_index(replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
@@ -910,9 +910,9 @@ bool operator==(const column_definition& x, const column_definition& y)
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
-utils::UUID
+table_id
 generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
-    return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
+    return table_id(utils::UUID_gen::get_name_UUID(ks_name + cf_name));
 }
 
 bool thrift_schema::has_compound_comparator() const {
@@ -944,8 +944,8 @@ schema_builder& schema_builder::with_null_sharder() {
 }
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
-        std::optional<utils::UUID> id, data_type rct)
-        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
+        std::optional<table_id> id, data_type rct)
+        : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()))
 {
     // Various schema-creation commands (creating tables, indexes, etc.)
     // usually place limits on which characters are allowed in keyspace or
@@ -989,7 +989,7 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
 }
 
 schema_builder::schema_builder(
-        std::optional<utils::UUID> id,
+        std::optional<table_id> id,
         std::string_view ks_name,
         std::string_view cf_name,
         std::vector<schema::column> partition_key,
@@ -1204,7 +1204,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     }
 }
 
-schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
+schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
     _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
@@ -1232,7 +1232,7 @@ schema_ptr schema_builder::build() {
     if (_version) {
         new_raw._version = *_version;
     } else {
-        new_raw._version = utils::UUID_gen::get_time_UUID();
+        new_raw._version = table_schema_version(utils::UUID_gen::get_time_UUID());
     }
 
     if (new_raw._is_counter) {
@@ -1670,12 +1670,12 @@ schema_ptr schema::make_reversed() const {
 }
 
 schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(utils::UUID_gen::negate(_raw._version), [this] (table_schema_version) {
+    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) {
         return frozen_schema(make_reversed());
     });
 }
 
-raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
+raw_view_info::raw_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause)
         : _base_id(std::move(base_id))
         , _base_name(std::move(base_name))
         , _include_all_columns(include_all_columns)

@@ -230,7 +230,7 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
         unsigned long nr = read_unaligned<unsigned long>(buf.get());
-        d = bit_cast<double>(net::ntoh(nr));
+        d = std::bit_cast<double>(net::ntoh(nr));
         return make_ready_future<>();
     });
 }

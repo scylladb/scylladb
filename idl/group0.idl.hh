@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "idl/raft_storage.idl.hh"
+
 namespace service {
 
 struct group0_info {

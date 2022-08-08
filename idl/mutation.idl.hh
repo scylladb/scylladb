@@ -6,8 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "counters.hh"
+#include "mutation.hh"
+
+#include "idl/uuid.idl.hh"
+#include "idl/keys.idl.hh"
+
 class counter_id final {
-    utils::UUID to_uuid();
+    utils::UUID uuid();
 };
 
 class counter_shard final {
@@ -117,8 +123,8 @@ class mutation_partition stub [[writable]] {
 };
 
 class mutation stub [[writable]] {
-    utils::UUID table_id;
-    utils::UUID schema_version;
+    ::table_id table_id;
+    table_schema_version schema_version;
     partition_key key;
     mutation_partition partition;
 };
@@ -134,8 +140,8 @@ class column_mapping {
 };
 
 class canonical_mutation stub [[writable]] {
-    utils::UUID table_id;
-    utils::UUID schema_version;
+    ::table_id table_id;
+    table_schema_version schema_version;
     partition_key key;
     column_mapping mapping;
     mutation_partition partition;

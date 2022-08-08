@@ -286,7 +286,7 @@ public:
         uint64_t population = 0;
     };
 
-    using index = std::unordered_multimap<utils::UUID, std::unique_ptr<querier_base>>;
+    using index = std::unordered_multimap<query_id, std::unique_ptr<querier_base>>;
 
 private:
     index _data_querier_index;
@@ -299,7 +299,7 @@ private:
 private:
     template <typename Querier>
     void insert_querier(
-            utils::UUID key,
+            query_id key,
             querier_cache::index& index,
             querier_cache::stats& stats,
             Querier&& q,
@@ -309,7 +309,7 @@ private:
     template <typename Querier>
     std::optional<Querier> lookup_querier(
         querier_cache::index& index,
-        utils::UUID key,
+        query_id key,
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
@@ -326,11 +326,11 @@ public:
     querier_cache(querier_cache&&) = delete;
     querier_cache& operator=(querier_cache&&) = delete;
 
-    void insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_data_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_mutation_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_shard_querier(query_id key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
     /// Lookup a data querier in the cache.
     ///
@@ -345,7 +345,7 @@ public:
     /// The found querier is checked for a matching position and schema version.
     /// The start position of the querier is checked against the start position
     /// of the page using the `range' and `slice'.
-    std::optional<querier> lookup_data_querier(utils::UUID key,
+    std::optional<querier> lookup_data_querier(query_id key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -355,7 +355,7 @@ public:
     /// Lookup a mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<querier> lookup_mutation_querier(utils::UUID key,
+    std::optional<querier> lookup_mutation_querier(query_id key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -365,7 +365,7 @@ public:
     /// Lookup a shard mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(utils::UUID key,
+    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(query_id key,
             const schema& s,
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
@@ -386,7 +386,7 @@ public:
     /// Evict all queriers that belong to a table.
     ///
     /// Should be used when dropping a table.
-    future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
+    future<> evict_all_for_table(const table_id& schema_id) noexcept;
 
     /// Close all queriers and wait on background work.
     ///

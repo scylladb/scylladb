@@ -546,7 +546,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
             mutation m(s, key);
 
             std::vector<counter_id> ids;
-            std::generate_n(std::back_inserter(ids), 3, counter_id::generate_random);
+            std::generate_n(std::back_inserter(ids), 3, counter_id::create_random_id);
             boost::range::sort(ids);
 
             counter_cell_builder b1;

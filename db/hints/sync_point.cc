@@ -13,16 +13,9 @@
 #include <seastar/core/smp.hh>
 
 #include "db/hints/sync_point.hh"
-#include "gms/inet_address_serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/replay_position.dist.hh"
-#include "idl/replay_position.dist.impl.hh"
-#include "idl/hinted_handoff.idl.hh"
+#include "sync_point.hh"
 #include "idl/hinted_handoff.dist.hh"
 #include "idl/hinted_handoff.dist.impl.hh"
-#include "serializer.hh"
-#include "serializer_impl.hh"
 #include "utils/base64.hh"
 
 namespace db {

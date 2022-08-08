@@ -100,7 +100,7 @@ public:
     int32_t get_default_time_to_live() const;
     int32_t get_gc_grace_seconds() const;
     int32_t get_paxos_grace_seconds() const;
-    std::optional<utils::UUID> get_id() const;
+    std::optional<table_id> get_id() const;
     bool get_synchronous_updates_flag() const;
 
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions) const;

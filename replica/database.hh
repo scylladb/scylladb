@@ -14,7 +14,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
-#include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -1187,7 +1186,7 @@ public:
     }
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
+    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
@@ -1204,8 +1203,8 @@ public:
         return _config.datadir;
     }
 
-    sstring column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const;
-    sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
+    sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
+    sstring column_family_directory(const sstring& name, table_id uuid) const;
 
     future<> ensure_populated() const;
     void mark_as_populated();
@@ -1323,13 +1322,13 @@ private:
             db::per_partition_rate_limit::info> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
     using ks_cf_to_uuid_t =
-        flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
+        flat_hash_map<std::pair<sstring, sstring>, table_id, utils::tuple_hash, string_pair_eq>;
     ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
-    utils::updateable_value_source<utils::UUID> _version;
+    utils::updateable_value_source<table_schema_version> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager& _compaction_manager;
@@ -1408,7 +1407,7 @@ private:
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
     void remove(const table&) noexcept;
 public:
-    static utils::UUID empty_version;
+    static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
         return _result_memory_limiter;
@@ -1444,10 +1443,10 @@ public:
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
     future<> drop_caches() const;
 
-    void update_version(const utils::UUID& version);
+    void update_version(const table_schema_version& version);
 
-    const utils::UUID& get_version() const;
-    utils::observable<utils::UUID>& observable_schema_version() const { return _version.as_observable(); }
+    const table_schema_version& get_version() const;
+    utils::observable<table_schema_version>& observable_schema_version() const { return _version.as_observable(); }
 
     db::commitlog* commitlog() const {
         return _commitlog.get();
@@ -1480,8 +1479,8 @@ public:
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */
-    const utils::UUID& find_uuid(std::string_view ks, std::string_view cf) const;
-    const utils::UUID& find_uuid(const schema_ptr&) const;
+    const table_id& find_uuid(std::string_view ks, std::string_view cf) const;
+    const table_id& find_uuid(const schema_ptr&) const;
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
@@ -1502,13 +1501,13 @@ public:
     std::vector<sstring> get_all_keyspaces() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
-    column_family& find_column_family(const utils::UUID&);
-    const column_family& find_column_family(const utils::UUID&) const;
+    column_family& find_column_family(const table_id&);
+    const column_family& find_column_family(const table_id&) const;
     column_family& find_column_family(const schema_ptr&);
     const column_family& find_column_family(const schema_ptr&) const;
-    bool column_family_exists(const utils::UUID& uuid) const;
+    bool column_family_exists(const table_id& uuid) const;
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
-    schema_ptr find_schema(const utils::UUID&) const;
+    schema_ptr find_schema(const table_id&) const;
     bool has_schema(std::string_view ks_name, std::string_view cf_name) const;
     std::set<sstring> existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude = sstring()) const;
     sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
@@ -1587,11 +1586,11 @@ public:
         return _keyspaces;
     }
 
-    const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
+    const std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
 
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() {
+    std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() {
         return _column_families;
     }
 
@@ -1629,7 +1628,7 @@ public:
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);
     // flush a table identified by the given id on all shards.
-    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, table_id id);
     // flush a single table in a keyspace on all shards.
     static future<> flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name);
     // flush a list of tables in a keyspace on all shards.
@@ -1646,7 +1645,7 @@ public:
 private:
     future<> detach_column_family(table& cf);
 
-    static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, utils::UUID uuid);
+    static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
 
     struct table_truncate_state {
         gate::holder holder;

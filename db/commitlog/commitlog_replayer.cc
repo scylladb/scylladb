@@ -84,7 +84,7 @@ public:
     future<> process(stats*, commitlog::buffer_and_replay_position buf_rp) const;
     future<stats> recover(sstring file, const sstring& fname_prefix) const;
 
-    typedef std::unordered_map<utils::UUID, replay_position> rp_map;
+    typedef std::unordered_map<table_id, replay_position> rp_map;
     typedef std::unordered_map<unsigned, rp_map> shard_rpm_map;
     typedef std::unordered_map<unsigned, replay_position> shard_rp_map;
 
@@ -92,7 +92,7 @@ public:
         auto i = _min_pos.find(shard);
         return i != _min_pos.end() ? i->second : replay_position();
     }
-    replay_position cf_min_pos(const utils::UUID& uuid, unsigned shard) const {
+    replay_position cf_min_pos(const table_id& uuid, unsigned shard) const {
         auto i = _rpm.find(shard);
         if (i == _rpm.end()) {
             return replay_position();

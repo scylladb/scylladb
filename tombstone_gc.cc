@@ -27,9 +27,9 @@ public:
     boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
 };
 
-thread_local std::unordered_map<utils::UUID, seastar::lw_shared_ptr<repair_history_map>> repair_history_maps;
+thread_local std::unordered_map<table_id, seastar::lw_shared_ptr<repair_history_map>> repair_history_maps;
 
-static seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_map_for_table(const utils::UUID& id) {
+static seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_map_for_table(const table_id& id) {
     auto it = repair_history_maps.find(id);
     if (it != repair_history_maps.end()) {
         return it->second;
@@ -39,7 +39,7 @@ static seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_m
     }
 }
 
-seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(const utils::UUID& id) {
+seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(const table_id& id) {
     auto it = repair_history_maps.find(id);
     if (it != repair_history_maps.end()) {
         return it->second;
@@ -48,7 +48,7 @@ seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(cons
     }
 }
 
-void drop_repair_history_map_for_table(const utils::UUID& id) {
+void drop_repair_history_map_for_table(const table_id& id) {
     repair_history_maps.erase(id);
 }
 

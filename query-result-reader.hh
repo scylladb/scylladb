@@ -15,15 +15,7 @@
 #include "digest_algorithm.hh"
 #include "full_position.hh"
 
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
-#include "idl/position_in_partition.dist.hh"
 #include "idl/query.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
-#include "idl/position_in_partition.dist.impl.hh"
 #include "idl/query.dist.impl.hh"
 
 namespace query {

@@ -3618,7 +3618,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         if (schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, schema);
         }
-        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(

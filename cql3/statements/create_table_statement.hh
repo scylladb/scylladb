@@ -60,13 +60,13 @@ class create_table_statement : public schema_altering_statement {
     column_set_type _static_columns;
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
-    std::optional<utils::UUID> _id;
+    std::optional<table_id> _id;
 public:
     create_table_statement(cf_name name,
                            ::shared_ptr<cf_prop_defs> properties,
                            bool if_not_exists,
                            column_set_type static_columns,
-                           const std::optional<utils::UUID>& id);
+                           const std::optional<table_id>& id);
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 

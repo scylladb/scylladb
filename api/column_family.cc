@@ -43,7 +43,7 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     return std::make_tuple(name.substr(0, pos), name.substr(end));
 }
 
-const utils::UUID& get_uuid(const sstring& ks, const sstring& cf, const replica::database& db) {
+const table_id& get_uuid(const sstring& ks, const sstring& cf, const replica::database& db) {
     try {
         return db.find_uuid(ks, cf);
     } catch (replica::no_such_column_family& e) {
@@ -51,7 +51,7 @@ const utils::UUID& get_uuid(const sstring& ks, const sstring& cf, const replica:
     }
 }
 
-const utils::UUID& get_uuid(const sstring& name, const replica::database& db) {
+const table_id& get_uuid(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
     return get_uuid(ks, cf, db);
 }
@@ -110,7 +110,7 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx,
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_and_histogram replica::column_family_stats::*f) {
-    utils::UUID uuid = get_uuid(name, ctx.db.local());
+    auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -122,7 +122,7 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    utils::UUID uuid = get_uuid(name, ctx.db.local());
+    auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -149,7 +149,7 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
 
 static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    utils::UUID uuid = get_uuid(name, ctx.db.local());
+    auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).rate();},
             utils::rate_moving_average_and_histogram(),
@@ -855,7 +855,7 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
-        const utils::UUID& uuid = get_uuid(req.param["name"], ctx.db.local());
+        auto uuid = get_uuid(req.param["name"], ctx.db.local());
         replica::column_family& cf = ctx.db.local().find_column_family(uuid);
         return !cf.is_auto_compaction_disabled_by_user();
     });

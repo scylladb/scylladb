@@ -611,11 +611,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-            auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
+            auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
             // major compact smaller tables first, to increase chances of success if low on space.
-            std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+            std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                 return db.find_column_family(id).get_stats().live_disk_space_used;
             });
             // as a table can be dropped during loop below, let's find it before issuing major compaction request.
@@ -641,11 +641,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
             return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-                auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
+                auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
                 // cleanup smaller tables first, to increase chances of success if low on space.
-                std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+                std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
                 auto& cm = db.get_compaction_manager();

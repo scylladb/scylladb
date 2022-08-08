@@ -6,6 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "raft/raft.hh"
+#include "gms/inet_address_serializer.hh"
+
+#include "idl/frozen_schema.idl.hh"
+#include "idl/uuid.idl.hh"
+#include "idl/raft_storage.idl.hh"
+
 namespace service {
 
 struct schema_change {

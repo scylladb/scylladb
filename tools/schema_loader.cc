@@ -109,7 +109,7 @@ private:
         }
         return wrap(*it);
     }
-    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, utils::UUID id) const override {
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, table_id id) const override {
         auto& tables = unwrap(db).tables;
         auto it = std::find_if(tables.begin(), tables.end(), [id] (const table& tbl) { return tbl.schema->id() == id; });
         if (it == tables.end()) {
