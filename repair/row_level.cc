@@ -3007,14 +3007,14 @@ future<> repair_service::load_history() {
             auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
-            co_await get_db().invoke_on_all([&entry, range, repair_time] (replica::database& local_db) {
-                try {
-                    ::update_repair_time(entry.table_uuid, range, repair_time);
-                } catch (...) {
-                    rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
-                            entry.ks, entry.cf, range, repair_time);
-                }
-            });
+            try {
+                co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
+                    ::update_repair_time(table_uuid, range, repair_time);
+                });
+            } catch (...) {
+                rlogger.warn("Failed to update repair history time for keyspace={}, table={}, range={}, repair_time={}",
+                        entry.ks, entry.cf, range, repair_time);
+            }
         });
     }
     co_return;
