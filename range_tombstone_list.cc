@@ -376,15 +376,13 @@ range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::erase(range_tombstones_type::iterator it) {
-    amortized_reserve(_ops, _ops.size() + 1);
-    _ops.emplace_back(erase_undo_op(*it));
+    _ops.emplace_back(std::in_place_type<erase_undo_op>, *it);
     return _dst._tombstones.erase(it);
 }
 
 void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
-    amortized_reserve(_ops, _ops.size() + 1);
-    swap(it->tombstone(), new_rt);
-    _ops.emplace_back(update_undo_op(std::move(new_rt), *it));
+    _ops.emplace_back(std::in_place_type<update_undo_op>, std::move(it->tombstone()), *it);
+    it->tombstone() = std::move(new_rt);
 }
 
 void range_tombstone_list::reverter::revert() noexcept {
