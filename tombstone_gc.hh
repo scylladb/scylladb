@@ -37,7 +37,7 @@ class tombstone_gc_options;
 class tombstone_gc_state {
     per_table_history_maps* _repair_history_maps;
 public:
-    tombstone_gc_state() noexcept;
+    tombstone_gc_state() = delete;
     tombstone_gc_state(per_table_history_maps* maps) noexcept : _repair_history_maps(maps) {}
 
     explicit operator bool() const noexcept {

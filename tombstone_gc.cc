@@ -22,17 +22,6 @@
 
 extern logging::logger dblog;
 
-class repair_history_map {
-public:
-    boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
-};
-
-thread_local std::unordered_map<table_id, seastar::lw_shared_ptr<repair_history_map>> repair_history_maps;
-
-tombstone_gc_state::tombstone_gc_state() noexcept
-    : _repair_history_maps(&repair_history_maps)
-{ }
-
 seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_repair_history_map_for_table(const table_id& id) {
     if (!_repair_history_maps) {
         return {};
