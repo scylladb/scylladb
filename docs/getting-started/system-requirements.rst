@@ -109,20 +109,25 @@ Cloud Instance Recommendations
 Amazon Web Services (AWS)
 --------------------------------
 
+* The recommended instance types are :ref:`i3 <system-requirements-i3-instances>`, :ref:`i3en <system-requirements-i3en-instances>`, and :ref:`i4i <system-requirements-i4i-instances>`.
+* We recommend using enhanced networking that exposes the physical network cards to the VM.
+
 .. note::
 
   Some of the ScyllaDB configuration features rely on querying instance metadata. 
   Disabling access to instance metadata will impact using Ec2 Snitches and tuning performance.
   See `AWS - Configure the instance metadata options <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html>`_ for more information.
 
+.. _system-requirements-i3-instances:
 
-We highly recommend EC2 **I3** instances—High I/O. This family includes the High Storage Instances that provide very fast SSD-backed instance storage optimized for very high random I/O performance and provide high IOPS at a low cost. We recommend using enhanced networking that exposes the physical network cards to the VM.
+i3 instances
+^^^^^^^^^^^^
+This family includes the High Storage Instances that provide very fast SSD-backed instance storage optimized for very high random I/O performance and provide high IOPS at a low cost. We recommend using enhanced networking that exposes the physical network cards to the VM.
 
 i3 instances are designed for I/O intensive workloads and equipped with super-efficient NVMe SSD storage. It can deliver up to 3.3 Million IOPS.
 An i3 instance is great for low latency and high throughput, compared to the i2 instances, the i3 instance provides storage that it's less expensive and denser along with the ability to deliver substantially more IOPS and more network bandwidth per CPU core.
 
-i3 instances
-^^^^^^^^^^^^
+
 ===========================  ===========  ============  =====================
 Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
 ===========================  ===========  ============  =====================
@@ -144,6 +149,8 @@ i3.metal New in version 2.3  72 :sup:`*`  512           8 x 1.9 NVMe SSD
 Source: `Amazon EC2 I3 Instances <https://aws.amazon.com/ec2/instance-types/i3/>`_
 
 More on using Scylla with `i3.metal vs i3.16xlarge <https://www.scylladb.com/2018/06/21/impact-virtualization-database/>`_ 
+
+.. _system-requirements-i3en-instances:
 
 i3en instances
 ^^^^^^^^^^^^^^
@@ -180,11 +187,11 @@ All i3en instances have the following specs:
 See `Amazon EC2 I3en Instances <https://aws.amazon.com/ec2/instance-types/i3en/>`_ for details. 
 
 
+.. _system-requirements-i4i-instances:
+
 i4i instances
 ^^^^^^^^^^^^^^
 i4i support is available for ScyllaDB Open Source 5.0 and later and ScyllaDB Enterprise 2021.1.10 and later.
-
-
 
 ===========================  ===========  ============  =====================
 Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
@@ -206,7 +213,7 @@ i4i.32xlarge	             128	        1,024	      8 x 3,750 GB
 i4i.metal	             128	         1,024	      8 x 3,750 GB
 ===========================  ===========  ============  =====================
 
-All i41 instances have the following specs:
+All i4i instances have the following specs:
 
 * 3.5 GHz all-core turbo Intel® Xeon® Scalable (Ice Lake) processors
 * 40 Gbps bandwidth to EBS in the largest size and up to 10 Gbps in the four smallest sizes (twice that of i3 instances. Up to 75 Gbps networking bandwidth (three times more than I3 instances).
