@@ -1005,7 +1005,6 @@ void database::remove(const table& cf) noexcept {
 
 future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
-    drop_repair_history_map_for_table(uuid);
     remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
