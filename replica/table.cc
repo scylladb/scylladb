@@ -719,6 +719,10 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         metadata.max_timestamp = old->get_max_timestamp();
         auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
 
+        if (!_async_gate.is_closed()) {
+            co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(as_table_state());
+        }
+
         auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions] (flat_mutation_reader_v2 reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
@@ -741,39 +745,10 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
           co_await coroutine::return_exception_ptr(std::move(ex));
         });
 
-        auto reader = old->make_flush_reader(
+        auto f = consumer(old->make_flush_reader(
             old->schema(),
             compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
-            service::get_local_memtable_flush_priority());
-
-        if (old->has_any_tombstones()) {
-            reader = make_compacting_reader(
-                std::move(reader),
-                gc_clock::now(),
-                [] (const dht::decorated_key&) { return api::min_timestamp; });
-        }
-
-        std::exception_ptr err;
-        try {
-            auto* fragment = co_await reader.peek();
-            if (!fragment) {
-                co_await reader.close();
-                _memtables->erase(old);
-                co_return;
-            }
-            if (!_async_gate.is_closed()) {
-                co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(as_table_state());
-            }
-        } catch (...) {
-            err = std::current_exception();
-        }
-        if (err) {
-            tlogger.error("failed to flush memtable for {}.{}: {}", old->schema()->ks_name(), old->schema()->cf_name(), err);
-            co_await reader.close();
-            co_await coroutine::return_exception_ptr(std::move(err));
-        }
-
-        auto f = consumer(std::move(reader));
+            service::get_local_memtable_flush_priority()));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to

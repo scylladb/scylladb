@@ -219,8 +219,6 @@ public:
     mutation_cleaner& cleaner() noexcept {
         return _cleaner;
     }
-    bool has_any_tombstones() const noexcept;
-
 public:
     memtable_list* get_memtable_list() noexcept {
         return _memtable_list;

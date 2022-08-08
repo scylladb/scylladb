@@ -1037,14 +1037,12 @@ struct mutation_application_stats {
     uint64_t row_writes = 0;
     uint64_t rows_compacted_with_tombstones = 0;
     uint64_t rows_dropped_by_tombstones = 0;
-    bool has_any_tombstones = false;
 
     mutation_application_stats& operator+=(const mutation_application_stats& other) {
         row_hits += other.row_hits;
         row_writes += other.row_writes;
         rows_compacted_with_tombstones += other.rows_compacted_with_tombstones;
         rows_dropped_by_tombstones += other.rows_dropped_by_tombstones;
-        has_any_tombstones |= other.has_any_tombstones;
         return *this;
     }
 };
