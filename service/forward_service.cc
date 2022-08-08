@@ -401,15 +401,16 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         std::vector<size_t>() // Represents empty GROUP BY indices.
     );
 
+    // We serve up to 256 ranges at a time to avoid allocating a huge vector for ranges
+    static constexpr size_t max_ranges = 256;
     dht::partition_range_vector ranges_owned_by_this_shard;
+    ranges_owned_by_this_shard.reserve(std::min(max_ranges, req.pr.size()));
     partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr));
 
     std::optional<dht::partition_range> current_range;
     do {
-        // We serve up to 256 ranges at a time to avoid allocating a huge vector for ranges
-        static constexpr size_t max_ranges = 256;
         while ((current_range = owned_iter.next(*schema))) {
-            ranges_owned_by_this_shard.push_back(*current_range);
+            ranges_owned_by_this_shard.push_back(std::move(*current_range));
             if (ranges_owned_by_this_shard.size() >= max_ranges) {
                 break;
             }
