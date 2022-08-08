@@ -1235,9 +1235,13 @@ SEASTAR_TEST_CASE(test_update_failure) {
 class throttle {
     unsigned _block_counter = 0;
     promise<> _p; // valid when _block_counter != 0, resolves when goes down to 0
+    std::optional<promise<>> _entered;
+    bool _one_shot;
 public:
+    // one_shot means whether only the first enter() after block() will block.
+    throttle(bool one_shot = false) : _one_shot(one_shot) {}
     future<> enter() {
-        if (_block_counter) {
+        if (_block_counter && (!_one_shot || _entered)) {
             promise<> p1;
             promise<> p2;
 
@@ -1249,16 +1253,21 @@ public:
                 p3.set_value();
             });
             _p = std::move(p2);
-
+            if (_entered) {
+                _entered->set_value();
+                _entered.reset();
+            }
             return f1;
         } else {
             return make_ready_future<>();
         }
     }
 
-    void block() {
+    future<> block() {
         ++_block_counter;
         _p = promise<>();
+        _entered = promise<>();
+        return _entered->get_future();
     }
 
     void unblock() {
@@ -1402,7 +1411,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
             mt2->apply(m);
         }
 
-        thr.block();
+        auto f = thr.block();
 
         auto m0_range = dht::partition_range::make_singular(ring[0].ring_position());
         auto rd1 = cache.make_reader(s, semaphore.make_permit(), m0_range);
@@ -1413,6 +1422,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         rd2.set_max_buffer_size(1);
         auto rd2_fill_buffer = rd2.fill_buffer();
 
+        f.get();
         sleep(10ms).get();
 
         // This update should miss on all partitions
@@ -1540,12 +1550,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
             mt2->apply(m);
         }
 
-        thr.block();
+        auto f = thr.block();
 
         auto rd1 = cache.make_reader(s, semaphore.make_permit());
         rd1.set_max_buffer_size(1);
         auto rd1_fill_buffer = rd1.fill_buffer();
 
+        f.get();
         sleep(10ms).get();
 
         // This update should miss on all partitions
