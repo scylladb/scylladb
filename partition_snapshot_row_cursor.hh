@@ -444,7 +444,7 @@ public:
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         maybe_advance_to(lower_bound);
-        return no_clustering_row_between(_schema, lower_bound, position());
+        return no_clustering_row_between_weak(_schema, lower_bound, position());
     }
 
     // Call only when valid.
