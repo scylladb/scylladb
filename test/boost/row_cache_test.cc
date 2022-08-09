@@ -3352,6 +3352,7 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
 SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        gen.set_key_cardinality(16);
         memtable_snapshot_source underlying(gen.schema());
         schema_ptr s = gen.schema();
         schema_ptr rev_s = s->make_reversed();
