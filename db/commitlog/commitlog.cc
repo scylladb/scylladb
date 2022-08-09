@@ -225,7 +225,6 @@ const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 class db::commitlog::segment_manager : public ::enable_shared_from_this<segment_manager> {
 public:
     config cfg;
-    std::vector<sstring> _segments_to_replay;
     const uint64_t max_size;
     const uint64_t max_mutation_size;
     // Divide the size-on-disk threshold by #cpus used, since we assume
@@ -479,7 +478,8 @@ public:
     buffer_type acquire_buffer(size_t s, size_t align);
     temporary_buffer<char> allocate_single_buffer(size_t, size_t);
 
-    future<std::vector<descriptor>> list_descriptors(sstring dir);
+    future<std::vector<descriptor>> list_descriptors(sstring dir) const;
+    future<std::vector<sstring>> get_segments_to_replay() const;
 
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
@@ -499,7 +499,7 @@ private:
     void abort_recycled_list(std::exception_ptr);
 
     size_t max_request_controller_units() const;
-    segment_id_type _ids = 0;
+    segment_id_type _ids = 0, _low_id = 0;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
     queue<named_file> _recycled_segments;
@@ -1436,7 +1436,7 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
 }
 
 future<std::vector<db::commitlog::descriptor>>
-db::commitlog::segment_manager::list_descriptors(sstring dirname) {
+db::commitlog::segment_manager::list_descriptors(sstring dirname) const {
     auto dir = co_await open_checked_directory(commit_error_handler, dirname);
     std::vector<db::commitlog::descriptor> result;
 
@@ -1466,6 +1466,26 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
     co_return result;
 }
 
+// #11237 - make get_segments_to_replay on-demand. Since we base the time-part of
+// descriptor ids on hightest of wall-clock and segments found on disk on init,
+// we can just scan files now and include only those representing generations before
+// the creation of this commitlog instance.
+// This _could_ give weird results iff we had a truly sharded commitlog folder
+// where init of the instances was not very synced _and_ we allowed more than
+// one shard to do replay. But allowed usage always either is one dir - one shard (hints)
+// or does shard 0 init first (main/database), then replays on 0 as well.
+future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_replay() const {
+    std::vector<sstring> segments_to_replay;
+    auto descs = co_await list_descriptors(cfg.commit_log_location);
+    for (auto& d : descs) {
+        auto id = replay_position(d.id).base_id();
+        if (id <= _low_id) {
+            segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
+        }
+    }
+    co_return segments_to_replay;
+}
+
 future<> db::commitlog::segment_manager::init() {
     auto descs = co_await list_descriptors(cfg.commit_log_location);
 
@@ -1473,16 +1493,12 @@ future<> db::commitlog::segment_manager::init() {
     segment_id_type id = *cfg.base_segment_id;
     for (auto& d : descs) {
         id = std::max(id, replay_position(d.id).base_id());
-        _segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
-        // #11184 - include replay footprint so we make sure to delete any segments
-        // pushing us over limits in "delete_segments" (assumed called after replay)
-        // Note: if noone calls get_segments_to_replay + delete we're rather borked,
-        // but...
-        totals.total_size_on_disk += co_await file_size(_segments_to_replay.back());
     }
 
     // base id counter is [ <shard> | <base> ]
     _ids = replay_position(this_shard_id(), id).id;
+    _low_id = id;
+
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _timer.set_callback(std::bind(&segment_manager::on_timer, this));
     auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
@@ -2955,8 +2971,8 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
     });
 }
 
-std::vector<sstring> db::commitlog::get_segments_to_replay() const {
-    return std::move(_segment_manager->_segments_to_replay);
+future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
+    return _segment_manager->get_segments_to_replay();
 }
 
 future<> db::commitlog::delete_segments(std::vector<sstring> files) const {
