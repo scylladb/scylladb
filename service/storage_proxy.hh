@@ -226,7 +226,7 @@ public:
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
     query::tombstone_limit get_tombstone_limit() const;
-    inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
 
 private:
     distributed<replica::database>& _db;
@@ -332,7 +332,7 @@ private:
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
-    inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
