@@ -142,6 +142,10 @@ static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replic
     return make_exception_future<final_tuple_type>(std::move(eptr));
 }
 
+static bool only_me(const inet_address_vector_replica_set& replicas) {
+    return replicas.size() == 1 && replicas[0] == utils::fb_utilities::get_broadcast_address();
+}
+
 // This class handles all communication with other nodes in `storage_proxy`:
 // sending and receiving RPCs, checking the state of other nodes (e.g. by accessing gossiper state), fetching schema.
 //
@@ -5112,9 +5116,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    auto& gossiper = _remote->gossiper();
-    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
-            gossiper,
+    inet_address_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
@@ -5415,12 +5417,11 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     // get stuck on 0 and never increased too much if the number of results remains small.
     concurrency_factor = std::max(size_t(1), ranges.size());
 
-    auto& gossiper = _remote->gossiper();
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
         inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, *erm, live_endpoints, merged_preferred_replicas, gossiper, pcf);
+        inet_address_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
         ++i;
 
@@ -5432,7 +5433,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
             inet_address_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
-            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, *erm, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -5477,7 +5478,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
-            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set filtered_merged = filter_replicas_for_read(cl, *erm, merged, current_merged_preferred_replicas, pcf);
 
             // Estimate whether merging will be a win or not
             if (!is_worth_merging_for_range_query(erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
@@ -6029,6 +6030,38 @@ inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const s
     endpoints->erase(it, endpoints->end());
     sort_endpoints_by_proximity(erm.get_topology(), *endpoints);
     return std::move(*endpoints);
+}
+
+// `live_endpoints` must already contain only replicas for this query; the function only filters out some of them.
+inet_address_vector_replica_set
+storage_proxy::filter_replicas_for_read(
+        db::consistency_level cl,
+        const locator::effective_replication_map& erm,
+        inet_address_vector_replica_set live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
+        db::read_repair_decision repair_decision,
+        std::optional<gms::inet_address>* extra,
+        replica::column_family* cf) const {
+    if (live_endpoints.empty() || only_me(live_endpoints)) {
+        // `db::filter_for_query` would return the same thing, but thanks to this branch we avoid having
+        // to access `remote` - so we can perform local queries without the need of `remote`.
+        return live_endpoints;
+    }
+
+    // There are nodes other than us in `live_endpoints`.
+    auto& gossiper = remote().gossiper();
+
+    return db::filter_for_query(cl, erm, std::move(live_endpoints), preferred_endpoints, repair_decision, gossiper, extra, cf);
+}
+
+inet_address_vector_replica_set
+storage_proxy::filter_replicas_for_read(
+        db::consistency_level cl,
+        const locator::effective_replication_map& erm,
+        const inet_address_vector_replica_set& live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
+        replica::column_family* cf) const {
+    return filter_replicas_for_read(cl, erm, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
