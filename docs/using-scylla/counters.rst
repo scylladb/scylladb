@@ -97,9 +97,7 @@ Example:
 
 Remember that once deleted, counter column values should not be used again. If you reuse them, proper behavior is not guaranteed.
 
-Read our blog_ on counters, or see the data type :ref:`description <counters>`.
-
-.. _blog: http://www.scylladb.com/2017/04/04/counters/
+Read our `blog <http://www.scylladb.com/2017/04/04/counters/>`_ on counters, or see the data type :ref:`description <counters>`.
 
 More information 
 ................
