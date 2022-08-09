@@ -48,7 +48,7 @@ However, counters have limitations not present in other column types:
 * Counters may not be indexed.
 * Counters may not be part of a materialized view.
 * One cannot use TIMESTAMP or set a TTL (time to live) when updating a counter.
-* Once deleted, counter column values cannot be used again.
+* Once deleted, counter column values **should** not be used again. If you reuse them, proper behavior is not guaranteed.
 * Counters cannot be set to a specific value, other than when incrementing from 0 using the UPDATE command at initialization.
 * Updates are **not** :term:`idempotent <Idempotent>`. In the case of a write failure, the client cannot safely retry the request. 
 
@@ -95,7 +95,8 @@ Example:
 	pk | my_counter
 	---+-----------
 
-Remember that once deleted, counter column values cannot be used again.    
+Remember that once deleted, counter column values should not be used again. If you reuse them, proper behavior is not guaranteed.
+
 Read our blog_ on counters, or see the data type :ref:`description <counters>`.
 
 .. _blog: http://www.scylladb.com/2017/04/04/counters/
