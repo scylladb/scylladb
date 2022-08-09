@@ -641,7 +641,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 static mutation_partition read_using_cursor(partition_snapshot& snap) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     partition_snapshot_row_cursor cur(*snap.schema(), snap);
-    cur.maybe_refresh();
+    cur.advance_to(position_in_partition::before_all_clustered_rows());
     auto mp = read_partition_from(*snap.schema(), cur);
     for (auto&& rt : snap.range_tombstones()) {
         mp.apply_delete(*snap.schema(), rt);
