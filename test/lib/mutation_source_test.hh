@@ -59,6 +59,8 @@ public:
     range_tombstone make_random_range_tombstone();
     std::vector<dht::decorated_key> make_partition_keys(size_t n);
     std::vector<query::clustering_range> make_random_ranges(unsigned n_ranges);
+    // Sets the number of distinct clustering keys which will be used in generated mutations.
+    void set_key_cardinality(size_t);
 };
 
 bytes make_blob(size_t blob_size);
