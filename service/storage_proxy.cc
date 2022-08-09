@@ -5218,14 +5218,23 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [&g = _remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [this, pcf] (const inet_address_vector_replica_set& range) {
+                    if (range.size() == 1 && range[0] == utils::fb_utilities::get_broadcast_address()) {
+                        return float(pcf->get_my_hit_rate().rate);
+                    }
+
+                    assert (!range.empty());
+
+                    // There are nodes other than us in `range`.
+                    auto& gossiper = remote().gossiper();
+
                     struct {
                         const gms::gossiper& g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
                             return float(cf->get_hit_rate(g, ep).rate);
                         }
-                    } ep_to_hr{g, pcf};
+                    } ep_to_hr{gossiper, pcf};
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
                 };
                 auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
