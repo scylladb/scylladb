@@ -11,6 +11,11 @@ Bulk load the sstables from a directory to a Scylla cluster via the **CQL API**.
 
    sstableloader does **not** support loading from encrypted files. For restoring data from encrypted files see :ref:`Migration to Scylla  <cassandra-to-scylla-procedure>`.
 
+.. note:: 
+
+    ScyllaDB does not support local counters used by Apache Cassandra 2.0. If you are migrating from Cassandra 2.0 or a later Cassandra version upgraded from 2.0, using SSTableLoader to migrate local counters to ScyllaDB will not work.
+    
+    ScyllaDB supports global counters, which are used by Cassandra 2.1 and later.
 
 SSTableLoader can be used to restore data from Scylla or Apache Cassandra backups or to clone data from cluster to cluster.
 It is especially useful, when the number of nodes, or token range distrbution between the source and target cluster are **not** the same. Since CQL API is used, Scylla will take care of distrbution the data.
