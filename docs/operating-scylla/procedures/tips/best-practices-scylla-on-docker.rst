@@ -246,7 +246,7 @@ For example, to restrict Scylla to 4 GB of memory:
 
 --overprovisioned ENABLE
 ------------------------
-The ``--overprovisioned`` command line option enables or disables optimizations for running Scylla in an overprovisioned environment. If no ``--overprovisioned`` option is specified, Scylla defaults to running with optimizations disabled.
+The ``--overprovisioned`` command line option enables or disables optimizations for running Scylla in an overprovisioned environment. If no ``--overprovisioned`` option is specified, Scylla defaults to running with optimizations enabled.
 
 For example, to enable optimizations for running in an overprovisioned environment:
 
