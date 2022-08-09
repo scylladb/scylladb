@@ -586,7 +586,8 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
     auto permit = std::move(flush_permit);
     auto r = exponential_backoff_retry(100ms, 10s);
     // Try flushing for around half an hour (30 minutes every 10 seconds)
-    int allowed_retries = 30 * 60 / 10;
+    int default_retries = 30 * 60 / 10;
+    int allowed_retries = default_retries;
     std::optional<utils::phased_barrier::operation> op;
     size_t memtable_size;
     future<> previous_flush = make_ready_future<>();
@@ -612,6 +613,13 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
                 if (try_catch<std::bad_alloc>(ex)) {
                     // There is a chance something else will free the memory, so we can try again
                     if (allowed_retries-- <= 0) {
+                        abort_on_error();
+                    }
+                } else if (auto ep = try_catch<std::system_error>(ex)) {
+                    if (ep->code().value() == ENOSPC) {
+                        // Keep on trying
+                        allowed_retries = default_retries;
+                    } else {
                         abort_on_error();
                     }
                 } else {
@@ -681,7 +689,7 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
         auto write_permit = permit.release_sstable_write_permit();
 
         utils::get_local_injector().inject("table_seal_active_memtable_try_flush", []() {
-            throw std::bad_alloc();
+            throw std::system_error(ENOSPC, std::system_category(), "Injected error");
         });
         co_return co_await this->try_flush_memtable_to_sstable(old, std::move(write_permit));
     });
