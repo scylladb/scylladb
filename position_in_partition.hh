@@ -567,6 +567,20 @@ bool no_clustering_row_between(const schema& s, position_in_partition_view a, po
     }
 }
 
+// Returns true if and only if there can't be any clustering_row with position >= a and < b.
+// It is assumed that a <= b.
+inline
+bool no_clustering_row_between_weak(const schema& s, position_in_partition_view a, position_in_partition_view b) {
+    clustering_key_prefix::equality eq(s);
+    if (a.has_key() && b.has_key()) {
+        return eq(a.key(), b.key())
+               && (a.get_bound_weight() == bound_weight::after_all_prefixed
+                   || b.get_bound_weight() != bound_weight::after_all_prefixed);
+    } else {
+        return !a.has_key() && !b.has_key();
+    }
+}
+
 // Includes all position_in_partition objects "p" for which: start <= p < end
 // And only those.
 class position_range {
