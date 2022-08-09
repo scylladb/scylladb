@@ -1139,7 +1139,8 @@ public:
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
-        _total_block_for = db::block_for(ks, _cl) + pending_endpoints;
+        auto erm = ks.get_effective_replication_map();
+        _total_block_for = db::block_for(*erm, _cl) + pending_endpoints;
         ++_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
@@ -1497,6 +1498,7 @@ public:
             inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit,
             db::per_partition_rate_limit::info rate_limit_info) :
         abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), rate_limit_info, 0, dead_endpoints) {
+        auto erm = ks.get_effective_replication_map();
         auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
 
         for (auto& target : targets) {
@@ -1509,7 +1511,7 @@ public:
                 size_t total_endpoints_for_dc = boost::range::count_if(targets, [&topology, &dc] (const gms::inet_address& ep){
                     return topology.get_datacenter(ep) == dc;
                 });
-                _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(ks, dc) + pending_for_dc, total_endpoints_for_dc, 0});
+                _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(*erm, dc) + pending_for_dc, total_endpoints_for_dc, 0});
                 _total_block_for += pending_for_dc;
             }
         }
@@ -2763,7 +2765,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
 
-    db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
+    db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
 
     return create_write_response_handler(ks, cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
             std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info);
@@ -2963,10 +2965,11 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
 
 gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, db::consistency_level cl) {
     auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+    auto erm = ks.get_effective_replication_map();
     auto live_endpoints = get_live_endpoints(ks, m.token());
 
     if (live_endpoints.empty()) {
-        throw exceptions::unavailable_exception(cl, block_for(ks, cl), 0);
+        throw exceptions::unavailable_exception(cl, block_for(*erm, cl), 0);
     }
 
     const auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -3020,14 +3023,15 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         // Let's just use the schema of the first mutation in a vector.
         auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl, permit] (std::exception_ptr exp) {
             auto& ks = _db.local().find_keyspace(s->ks_name());
+            auto erm = ks.get_effective_replication_map();
             try {
                 std::rethrow_exception(std::move(exp));
             } catch (rpc::timeout_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
             } catch (timed_out_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
             } catch (rpc::closed_error&) {
-                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(ks, cl), db::write_type::COUNTER));
+                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER));
             }
         };
 
@@ -3471,8 +3475,9 @@ future<> storage_proxy::send_to_endpoint(
                 std::back_inserter(dead_endpoints),
                 std::bind_front(&storage_proxy::is_alive, this));
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
+        auto erm = ks.get_effective_replication_map();
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
-        db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
+        db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
             ks,
             cl,
@@ -4918,6 +4923,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
@@ -4930,7 +4936,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     auto& gossiper = _remote->gossiper();
-    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
+    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
             gossiper,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
@@ -4940,7 +4946,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     // Throw UAE early if we don't have enough replicas.
     try {
-        db::assure_sufficient_live_nodes(cl, ks, target_replicas);
+        db::assure_sufficient_live_nodes(cl, *erm, target_replicas);
     } catch (exceptions::unavailable_exception& ex) {
         slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
         get_stats().read_unavailables.mark();
@@ -4951,7 +4957,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         get_stats().read_repair_attempts++;
     }
 
-    size_t block_for = db::block_for(ks, cl);
+    size_t block_for = db::block_for(*erm, cl);
     auto p = shared_from_this();
 
     db::per_partition_rate_limit::info rate_limit_info;
@@ -5175,6 +5181,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         service_permit permit) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
@@ -5206,7 +5213,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         dht::partition_range& range = *i;
         inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, gossiper, pcf);
+        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, *erm, live_endpoints, merged_preferred_replicas, gossiper, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
         ++i;
 
@@ -5218,7 +5225,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
             inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, *erm, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -5259,11 +5266,11 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
             // Check if there is enough endpoint for the merge to be possible.
-            if (!is_sufficient_live_nodes(cl, ks, merged)) {
+            if (!is_sufficient_live_nodes(cl, *erm, merged)) {
                 break;
             }
 
-            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, ks, merged, current_merged_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
@@ -5300,7 +5307,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         }
         slogger.trace("creating range read executor with targets {}", filtered_endpoints);
         try {
-            db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
+            db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
         } catch(exceptions::unavailable_exception& ex) {
             slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
             get_stats().range_slice_unavailables.mark();
