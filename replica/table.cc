@@ -396,9 +396,7 @@ table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::s
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
-    if (sstable->requires_view_building()) {
-        _sstables_staging.emplace(sstable->generation(), sstable);
-    } else if (backlog_tracker) {
+    if (backlog_tracker) {
         add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
     // update sstable set last in case either updating
@@ -804,7 +802,6 @@ table::stop() {
                             _main_sstables = _compaction_strategy.make_sstable_set(_schema);
                             _maintenance_sstables = make_maintenance_sstable_set();
                             _sstables = make_compound_sstable_set();
-                            _sstables_staging.clear();
                         })).then([this] {
                             _compaction_strategy.get_backlog_tracker().disable();
                             _cache.refresh_snapshot();
@@ -2256,7 +2253,6 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
         dirs_to_sync.emplace(sst->get_dir());
         try {
             co_await sst->move_to_new_dir(dir(), sst->generation(), false);
-            _sstables_staging.erase(sst->generation());
             // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
             if (main_sstables->contains(sst)) {
                 add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);

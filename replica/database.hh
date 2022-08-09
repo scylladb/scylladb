@@ -420,9 +420,6 @@ private:
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
-    // sstables that should not be compacted (e.g. because they need to be used
-    // to generate view updates later)
-    std::unordered_map<sstables::generation_type, sstables::shared_sstable> _sstables_staging;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // This semaphore ensures that an operation like snapshot won't have its selected
