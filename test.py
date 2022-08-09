@@ -337,7 +337,7 @@ class PythonTestSuite(TestSuite):
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
-        def create_server(cluster_name, seed):
+        def create_server(cluster_name: str, seeds: List[str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             config_options = self.cfg.get("extra_scylla_config_options",
                                           {"authenticator": "PasswordAuthenticator",
@@ -349,7 +349,7 @@ class PythonTestSuite(TestSuite):
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 host_registry=self.hosts,
                 cluster_name=cluster_name,
-                seed=seed,
+                seeds=seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options)
 

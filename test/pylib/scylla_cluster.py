@@ -107,7 +107,7 @@ class ScyllaServer:
 
     def __init__(self, exe: str, vardir: str,
                  host_registry,
-                 cluster_name: str, seed: Optional[str],
+                 cluster_name: str, seeds: List[str],
                  cmdline_options: List[str],
                  config_options: Dict[str, str]) -> None:
         self.exe = pathlib.Path(exe).resolve()
@@ -116,7 +116,7 @@ class ScyllaServer:
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
         self.hostname = ""
-        self.seed = seed
+        self.seeds = seeds
         self.cmd: Optional[asyncio.subprocess.Process] = None
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
@@ -167,8 +167,8 @@ class ScyllaServer:
         # Scylla assumes all instances of a cluster use the same port,
         # so each instance needs an own IP address.
         self.hostname = await self.host_registry.lease_host()
-        if not self.seed:
-            self.seed = self.hostname
+        if not self.seeds:
+            self.seeds = [self.hostname]
         # Use the last part in host IP 127.151.3.27 -> 27
         # There can be no duplicates within the same test run
         # thanks to how host registry registers subnets, and
@@ -193,7 +193,7 @@ class ScyllaServer:
         fmt = {
               "cluster_name": self.cluster_name,
               "host": self.hostname,
-              "seeds": self.seed,
+              "seeds": ",".join(self.seeds),
               "workdir": self.workdir,
               "authenticator": self.authenticator,
               "authorizer": self.authorizer
@@ -329,10 +329,10 @@ Check the log files:
         state. Helps quickly propagate tokens and speed up node boot if the
         previous state propagation was missed."""
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.seed]),
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(self.seeds),
                                    request_timeout=self.START_TIMEOUT)
         with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                     contact_points=[self.seed],
+                     contact_points=self.seeds,
                      auth_provider=auth,
                      # This is the latest version Scylla supports
                      protocol_version=4,
@@ -419,14 +419,13 @@ Check the log files:
 
 class ScyllaCluster:
     def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+                 create_server: Callable[[str, Optional[List[str]]], ScyllaServer]) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.cluster: List[ScyllaServer] = []
         self.create_server = create_server
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.last_seed: Optional[str] = None     # id as IP Address like '127.1.2.3'
 
     async def install_and_start(self) -> None:
         try:
@@ -439,9 +438,12 @@ class ScyllaCluster:
             self.start_exception = e
         logging.info("Created cluster %s", self)
 
+    def _seeds(self) -> List[str]:
+        return [server.host for server in self.cluster]
+
     async def add_server(self) -> None:
         """Add a new server to the cluster"""
-        server = self.create_server(self.name, self.last_seed)
+        server = self.create_server(self.name, self._seeds())
         self.cluster.append(server)
         try:
             await server.install_and_start()
@@ -449,7 +451,6 @@ class ScyllaCluster:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(e))
             raise
-        self.last_seed = server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
         return self.cluster[i]
