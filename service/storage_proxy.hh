@@ -433,7 +433,7 @@ public:
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
 
-    remote& remote();
+    remote& remote() const;
 
     const distributed<replica::database>& get_db() const {
         return _db;

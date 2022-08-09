@@ -2573,7 +2573,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
 }
 
-struct storage_proxy::remote& storage_proxy::remote() {
+struct storage_proxy::remote& storage_proxy::remote() const {
     return *_remote;
 }
 
