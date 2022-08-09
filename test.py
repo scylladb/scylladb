@@ -635,12 +635,14 @@ class CQLApprovalTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            # FIXME: cluster should provide contact points
             self.args.insert(1, "--host={}".format(cluster[0].host))
             # If pre-check fails, e.g. because Scylla failed to start
             # or crashed between two tests, fail entire test.py
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
+                # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
                 cluster.after_test(self.uname)
@@ -670,6 +672,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
+                    # FIXME: why only logs of the first server?
                     self.server_log = cluster[0].read_log()
                     self.server_log_filename = cluster[0].log_filename
                     if self.is_before_test_ok is False:
@@ -778,16 +781,19 @@ class PythonTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            # FIXME: cluster should provide contact points
             self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
+                # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
                 status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
                 self.success = status
             except Exception as e:
+                # FIXME: why only logs of the first server?
                 self.server_log = cluster[0].read_log()
                 self.server_log_filename = cluster[0].log_filename
                 if self.is_before_test_ok is False:
