@@ -22,6 +22,9 @@ namespace sp = httpd::storage_proxy_json;
 using proxy = service::storage_proxy;
 using namespace json;
 
+utils::time_estimated_histogram timed_rate_moving_average_summary_merge(utils::time_estimated_histogram a, const utils::timed_rate_moving_average_summary_and_histogram& b) {
+    return a.merge(b.histogram());
+}
 
 /**
  * This function implement a two dimentional map reduce where
@@ -55,10 +58,10 @@ future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
  * @param initial_value - the initial value to use for both aggregations* @return
  * @return A future that resolves to the result of the aggregation.
  */
-template<typename V, typename Reducer, typename F>
+template<typename V, typename Reducer, typename F, typename C>
 future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
-        V F::*f, Reducer reducer, V initial_value) {
-    return two_dimensional_map_reduce(d, [f] (F& stats) {
+        C F::*f, Reducer reducer, V initial_value) {
+    return two_dimensional_map_reduce(d, [f] (F& stats) -> V {
         return stats.*f;
     }, reducer, initial_value);
 }
@@ -112,10 +115,10 @@ utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimat
     return res;
 }
 
-static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::time_estimated_histogram service::storage_proxy_stats::stats::*f) {
-
-    return two_dimensional_map_reduce(ctx.sp, f, utils::time_estimated_histogram_merge,
-            utils::time_estimated_histogram()).then([](const utils::time_estimated_histogram& val) {
+static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram service::storage_proxy_stats::stats::*f) {
+    return two_dimensional_map_reduce(ctx.sp, [f] (service::storage_proxy_stats::stats& stats) {
+        return (stats.*f).histogram();
+    }, utils::time_estimated_histogram_merge, utils::time_estimated_histogram()).then([](const utils::time_estimated_histogram& val) {
         return make_ready_future<json::json_return_type>(time_to_json_histogram(val));
     });
 }
@@ -130,7 +133,7 @@ static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx
     });
 }
 
-static future<json::json_return_type>  total_latency(http_context& ctx, utils::timed_rate_moving_average_and_histogram service::storage_proxy_stats::stats::*f) {
+static future<json::json_return_type>  total_latency(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram service::storage_proxy_stats::stats::*f) {
     return two_dimensional_map_reduce(ctx.sp, [f] (service::storage_proxy_stats::stats& stats) {
             return (stats.*f).hist.mean * (stats.*f).hist.count;
         }, std::plus<double>(), 0.0).then([](double val) {
@@ -150,7 +153,7 @@ static future<json::json_return_type>  total_latency(http_context& ctx, utils::t
 template<typename F>
 future<json::json_return_type>
 sum_histogram_stats_storage_proxy(distributed<proxy>& d,
-        utils::timed_rate_moving_average_and_histogram F::*f) {
+        utils::timed_rate_moving_average_summary_and_histogram F::*f) {
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
         return (stats.*f).hist;
     }, std::plus<utils::ihistogram>(), utils::ihistogram()).
@@ -170,7 +173,7 @@ sum_histogram_stats_storage_proxy(distributed<proxy>& d,
 template<typename F>
 future<json::json_return_type>
 sum_timer_stats_storage_proxy(distributed<proxy>& d,
-        utils::timed_rate_moving_average_and_histogram F::*f) {
+        utils::timed_rate_moving_average_summary_and_histogram F::*f) {
 
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
         return (stats.*f).rate();
@@ -491,14 +494,14 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
     });
 
     sp::get_read_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::estimated_read);
+        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::read);
     });
 
     sp::get_read_latency.set(r, [&ctx](std::unique_ptr<request> req) {
         return total_latency(ctx, &service::storage_proxy_stats::stats::read);
     });
     sp::get_write_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::estimated_write);
+        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::write);
     });
 
     sp::get_write_latency.set(r, [&ctx](std::unique_ptr<request> req) {
