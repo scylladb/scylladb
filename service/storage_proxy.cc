@@ -5485,14 +5485,23 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [&g = _remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [this, pcf] (const inet_address_vector_replica_set& range) {
+                    if (only_me(range)) {
+                        // The `min_element` call below would return the same thing, but thanks to this branch
+                        // we avoid having to access `remote` - so we can perform local queries without `remote`.
+                        return float(pcf->get_my_hit_rate().rate);
+                    }
+
+                    // There are nodes other than us in `range`.
                     struct {
                         const gms::gossiper& g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
                             return float(cf->get_hit_rate(g, ep).rate);
                         }
-                    } ep_to_hr{g, pcf};
+                    } ep_to_hr{remote().gossiper(), pcf};
+
+                    assert (!range.empty());
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
                 };
                 auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
