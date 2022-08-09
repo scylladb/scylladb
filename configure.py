@@ -673,7 +673,8 @@ scylla_raft_core = [
     'raft/log.cc',
 ]
 
-scylla_core = (['replica/database.cc',
+scylla_core = (['message/messaging_service.cc',
+                'replica/database.cc',
                 'replica/table.cc',
                 'replica/distributed_loader.cc',
                 'replica/memtable.cc',
@@ -949,7 +950,6 @@ scylla_core = (['replica/database.cc',
                 'locator/ec2_snitch.cc',
                 'locator/ec2_multi_region_snitch.cc',
                 'locator/gce_snitch.cc',
-                'message/messaging_service.cc',
                 'service/client_state.cc',
                 'service/storage_service.cc',
                 'service/misc_services.cc',
