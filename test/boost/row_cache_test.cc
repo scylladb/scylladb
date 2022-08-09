@@ -1235,9 +1235,13 @@ SEASTAR_TEST_CASE(test_update_failure) {
 class throttle {
     unsigned _block_counter = 0;
     promise<> _p; // valid when _block_counter != 0, resolves when goes down to 0
+    std::optional<promise<>> _entered;
+    bool _one_shot;
 public:
+    // one_shot means whether only the first enter() after block() will block.
+    throttle(bool one_shot = false) : _one_shot(one_shot) {}
     future<> enter() {
-        if (_block_counter) {
+        if (_block_counter && (!_one_shot || _entered)) {
             promise<> p1;
             promise<> p2;
 
@@ -1249,16 +1253,21 @@ public:
                 p3.set_value();
             });
             _p = std::move(p2);
-
+            if (_entered) {
+                _entered->set_value();
+                _entered.reset();
+            }
             return f1;
         } else {
             return make_ready_future<>();
         }
     }
 
-    void block() {
+    future<> block() {
         ++_block_counter;
         _p = promise<>();
+        _entered = promise<>();
+        return _entered->get_future();
     }
 
     void unblock() {
@@ -1402,7 +1411,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
             mt2->apply(m);
         }
 
-        thr.block();
+        auto f = thr.block();
 
         auto m0_range = dht::partition_range::make_singular(ring[0].ring_position());
         auto rd1 = cache.make_reader(s, semaphore.make_permit(), m0_range);
@@ -1413,6 +1422,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         rd2.set_max_buffer_size(1);
         auto rd2_fill_buffer = rd2.fill_buffer();
 
+        f.get();
         sleep(10ms).get();
 
         // This update should miss on all partitions
@@ -1540,12 +1550,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
             mt2->apply(m);
         }
 
-        thr.block();
+        auto f = thr.block();
 
         auto rd1 = cache.make_reader(s, semaphore.make_permit());
         rd1.set_max_buffer_size(1);
         auto rd1_fill_buffer = rd1.fill_buffer();
 
+        f.get();
         sleep(10ms).get();
 
         // This update should miss on all partitions
@@ -3992,5 +4003,83 @@ SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
         cache_entry& entry = t.get_row_cache().lookup(pk);
         const utils::immutable_collection<mutation_partition::rows_type>& rt = entry.partition().version()->partition().clustered_rows();
         BOOST_ASSERT(rt.calculate_size() == 1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_eviction_of_upper_bound_of_population_range) {
+    return seastar::async([] {
+        simple_schema s;
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+
+        auto pkey = s.make_pkey("pk");
+
+        mutation m1(s.schema(), pkey);
+        s.add_row(m1, s.make_ckey(1), "v1");
+        s.add_row(m1, s.make_ckey(2), "v2");
+        cache_mt->apply(m1);
+
+        cache_tracker tracker;
+        throttle thr(true);
+        auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return cache_mt->as_data_source(); }),
+                                                           [&] (mutation_source src) {
+            return throttled_mutation_source(thr, std::move(src));
+        });
+        row_cache cache(s.schema(), cache_source, tracker);
+
+        auto pr = dht::partition_range::make_singular(pkey);
+
+        auto read = [&] (int start, int end) {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make(s.make_ckey(start), s.make_ckey(end)))
+                    .build();
+            auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice);
+            auto close_rd = deferred_close(rd);
+            auto m_cache = read_mutation_from_flat_mutation_reader(rd).get0();
+            close_rd.close_now();
+            rd = cache_mt->make_flat_reader(s.schema(), semaphore.make_permit(), pr, slice);
+            auto close_rd2 = deferred_close(rd);
+            auto m_mt = read_mutation_from_flat_mutation_reader(rd).get0();
+            BOOST_REQUIRE(m_mt);
+            assert_that(m_cache).has_mutation().is_equal_to(*m_mt);
+        };
+
+        // populate [2]
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make_singular(s.make_ckey(2)))
+                    .build();
+            assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice))
+                    .has_monotonic_positions();
+        }
+
+        auto arrived = thr.block();
+
+        // Read [0, 2]
+        auto f = seastar::async([&] {
+            read(0, 2);
+        });
+
+        arrived.get();
+
+        // populate (2, 3]
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make(query::clustering_range::bound(s.make_ckey(2), false),
+                                                              query::clustering_range::bound(s.make_ckey(3), true)))
+                    .build();
+            assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice))
+                    .has_monotonic_positions();
+        }
+
+        testlog.trace("Evicting");
+        evict_one_row(tracker); // Evicts before(0)
+        evict_one_row(tracker); // Evicts ck(2)
+        testlog.trace("Unblocking");
+
+        thr.unblock();
+        f.get();
+
+        read(0, 3);
     });
 }
