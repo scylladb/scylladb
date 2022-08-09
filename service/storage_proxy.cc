@@ -4444,6 +4444,7 @@ protected:
 
     schema_ptr _schema;
     shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     lw_shared_ptr<query::read_command> _cmd;
     lw_shared_ptr<query::read_command> _retry_cmd;
     dht::partition_range _partition_range;
@@ -4471,9 +4472,13 @@ private:
     }
 
 public:
-    abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+    abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                           _schema(std::move(s)), _proxy(std::move(proxy))
+                         , _effective_replication_map_ptr(std::move(ermp))
+                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
@@ -4837,9 +4842,11 @@ private:
 
 class never_speculating_read_executor : public abstract_read_executor {
 public:
-    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
+    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
             db::per_partition_rate_limit::info rate_limit_info) :
-                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
+                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
         _block_for = _targets.size();
     }
 };
@@ -4988,14 +4995,14 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     if (target_replicas.size() == all_replicas.size()) {
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
@@ -5003,7 +5010,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
         if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
             target_replicas.push_back(extra_replica);
             slogger.trace("creating read executor with extra target {}", extra_replica);
@@ -5011,9 +5018,9 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
-        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 }
 
@@ -5328,7 +5335,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             throw;
         }
 
-        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
         ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
