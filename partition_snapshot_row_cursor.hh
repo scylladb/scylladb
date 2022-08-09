@@ -325,7 +325,7 @@ public:
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         prepare_heap(lower_bound);
-        bool found = no_clustering_row_between(_schema, lower_bound, _heap[0].it->position());
+        bool found = no_clustering_row_between_weak(_schema, lower_bound, _heap[0].it->position());
         recreate_current_row();
         return found;
     }
