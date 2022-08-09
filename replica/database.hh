@@ -961,6 +961,7 @@ public:
     }
 
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
+    cache_hit_rate get_my_hit_rate() const;
     cache_hit_rate get_hit_rate(const gms::gossiper& g, gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 
