@@ -1,6 +1,6 @@
-.. |OS| replace:: Ubuntu 20.04
+.. |OS| replace:: Ubuntu
 .. |ROLLBACK| replace:: rollback
-.. _ROLLBACK: /upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-20-04/#id4
+.. _ROLLBACK: /upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu/#rollback-procedure
 .. |APT| replace:: ScyllaDB deb repo
 .. _APT: http://www.scylladb.com/download/
 .. |APT_ENTERPRISE| replace:: Scylla Enterprise Deb repo
