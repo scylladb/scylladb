@@ -35,8 +35,8 @@ struct mutation_consume_cookie {
         rts_iterator_type rts_end;
         range_tombstone_change_generator rt_gen;
 
-        clustering_iterators(const schema& s, mutation_partition::rows_type& crs, range_tombstone_list& rts)
-            : crs_begin(crs.begin()), crs_end(crs.end()), rts_begin(rts.begin()), rts_end(rts.end()), rt_gen(s) { }
+        clustering_iterators(const schema& s, crs_iterator_type crs_b, crs_iterator_type crs_e, rts_iterator_type rts_b, rts_iterator_type rts_e)
+            : crs_begin(std::move(crs_b)), crs_end(std::move(crs_e)), rts_begin(std::move(rts_b)), rts_end(std::move(rts_e)), rt_gen(s) { }
     };
 
     schema_ptr schema;
@@ -233,7 +233,9 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
     }
 
     if (!cookie.iterators) {
-        cookie.iterators = std::make_unique<mutation_consume_cookie::clustering_iterators>(*s, partition.mutable_clustered_rows(), *rt_list);
+        auto& crs = partition.mutable_clustered_rows();
+        auto& rts = *rt_list;
+        cookie.iterators = std::make_unique<mutation_consume_cookie::clustering_iterators>(*s, crs.begin(), crs.end(), rts.begin(), rts.end());
     }
 
     crs_iterator_type crs_it, crs_end;
