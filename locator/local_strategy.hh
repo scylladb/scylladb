@@ -27,7 +27,7 @@ public:
     virtual ~local_strategy() {};
     virtual size_t get_replication_factor(const token_metadata&) const override;
 
-    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
+    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
     virtual void validate_options() const override;
 

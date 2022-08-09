@@ -369,7 +369,7 @@ static bool has_sufficient_replicas(
     return true;
 }
 
-static std::vector<inet_address> calculate_natural_endpoints(
+static locator::endpoint_set calculate_natural_endpoints(
                 const token& search_token, const token_metadata& tm,
                 snitch_ptr& snitch,
                 const std::unordered_map<sstring, size_t>& datacenters) {
@@ -377,7 +377,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    utils::sequenced_set<inet_address> replicas;
+    locator::endpoint_set replicas;
 
     // replicas we have found in each DC
     std::unordered_map<sstring, std::unordered_set<inet_address>> dc_replicas;
@@ -388,7 +388,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     // when we relax the rack uniqueness we can append this to the current
     // result so we don't have to wind back the iterator
     //
-    std::unordered_map<sstring, utils::sequenced_set<inet_address>>
+    std::unordered_map<sstring, locator::endpoint_set>
         skipped_dc_endpoints;
 
     //
@@ -477,7 +477,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
         }
     }
 
-    return std::move(replicas.get_vector());
+    return replicas;
 }
 
 // Called in a seastar thread.

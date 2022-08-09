@@ -570,11 +570,11 @@ private:
     /**
      * Finds living endpoints responsible for the given ranges
      *
-     * @param keyspaceName the keyspace ranges belong to
+     * @param erm the keyspace effective_replication_map ranges belong to
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
+    future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
@@ -598,7 +598,7 @@ private:
     future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
-    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
+    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 public:
@@ -611,12 +611,12 @@ public:
 
 
     /**
-     * Get all ranges an endpoint is responsible for (by keyspace)
+     * Get all ranges an endpoint is responsible for (by keyspace effective_replication_map)
      * Replication strategy's get_ranges() guarantees that no wrap-around range is returned.
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    dht::token_range_vector get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set

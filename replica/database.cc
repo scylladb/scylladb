@@ -1110,6 +1110,28 @@ std::vector<sstring> database::get_all_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
+std::unordered_map<sstring, locator::effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
+    std::unordered_map<sstring, locator::effective_replication_map_ptr> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+            res.emplace(i.first, i.second.get_effective_replication_map());
+        }
+    }
+    return res;
+}
+
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
         get_column_families()

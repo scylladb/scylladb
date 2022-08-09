@@ -174,11 +174,9 @@ abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tm
     }
     auto prev_tok = sorted_tokens.back();
     for (auto tok : sorted_tokens) {
-        for (inet_address a : co_await calculate_natural_endpoints(tok, tm)) {
-            if (a == ep) {
-                insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
-                break;
-            }
+        auto eps = co_await calculate_natural_endpoints(tok, tm);
+        if (eps.contains(ep)) {
+            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
         prev_tok = tok;
     }
@@ -245,38 +243,31 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
             continue;
         }
         auto eps = co_await calculate_natural_endpoints(t, tm);
-        bool found = false;
-        for (auto ep : eps) {
-            if (ep != endpoint) {
-                continue;
-            }
+        if (eps.contains(endpoint)) {
             dht::token_range_vector r = tm.get_primary_ranges_for(t);
             rslogger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
             for (auto&& rng : r) {
-                ret.emplace(ep, rng);
+                ret.emplace(endpoint, rng);
             }
-            found = true;
-            break;
-        }
-        if (!found) {
+        } else {
             rslogger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
         }
     }
     co_return ret;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (auto& t : tm.sorted_tokens()) {
+    for (const auto& [t, eps] : _replication_map) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = get_natural_endpoints(t);
         for (auto& r : ranges) {
             ret.emplace(r, eps);
         }
+        co_await coroutine::maybe_yield();
     }
-    return ret;
+    co_return ret;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
@@ -286,7 +277,7 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         auto eps = co_await calculate_natural_endpoints(t, tm);
         for (auto& r : ranges) {
-            ret.emplace(r, eps);
+            ret.emplace(r, eps.get_vector());
         }
     }
     co_return ret;
@@ -303,8 +294,13 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     token_metadata temp;
     temp = co_await tmptr->clone_only_token_map();
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
-    for (auto& x : co_await get_address_ranges(temp, pending_address)) {
-            ret.push_back(x.second);
+    for (const auto& t : temp.sorted_tokens()) {
+        auto eps = co_await calculate_natural_endpoints(t, temp);
+        if (eps.contains(pending_address)) {
+            dht::token_range_vector r = temp.get_primary_ranges_for(t);
+            rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);
+            ret.insert(ret.end(), r.begin(), r.end());
+        }
     }
     co_await temp.clear_gently();
     co_return ret;
@@ -314,7 +310,8 @@ future<mutable_effective_replication_map_ptr> calculate_effective_replication_ma
     replication_map replication_map;
 
     for (const auto &t : tmptr->sorted_tokens()) {
-        replication_map.emplace(t, co_await rs->calculate_natural_endpoints(t, *tmptr));
+        auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+        replication_map.emplace(t, eps.get_vector());
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
