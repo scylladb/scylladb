@@ -1285,7 +1285,7 @@ public:
             }
             if (_cl_achieved) { // For CL=ANY this can still be false
                 for (auto&& ep : get_targets()) {
-                    ++stats().background_replica_writes_failed.get_ep_stat(_proxy->get_token_metadata_ptr()->get_topology(), ep);
+                    ++stats().background_replica_writes_failed.get_ep_stat(_effective_replication_map_ptr->get_topology(), ep);
                 }
                 stats().background_writes_failed += int(!_targets.empty());
             }
@@ -1384,7 +1384,7 @@ public:
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
     bool waited_for(gms::inet_address from) override {
-        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        const auto& topo = _effective_replication_map_ptr->get_topology();
         return fbu::is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
     }
 
@@ -1395,10 +1395,10 @@ public:
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                abstract_write_response_handler(p, std::move(ermp), cl, type, std::move(mh),
+                abstract_write_response_handler(p, ermp, cl, type, std::move(mh), // can't move ermp, it's used below
                         std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info,
-                        p->get_token_metadata_ptr()->get_topology().count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
-        _total_endpoints = p->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets);
+                        ermp->get_topology().count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+        _total_endpoints = _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets);
     }
 };
 
@@ -1492,7 +1492,7 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
     };
     std::unordered_map<sstring, dc_info> _dc_responses;
     bool waited_for(gms::inet_address from) override {
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        auto& topology = _effective_replication_map_ptr->get_topology();
         sstring data_center = topology.get_datacenter(from);
         auto dc_resp = _dc_responses.find(data_center);
 
@@ -1509,7 +1509,7 @@ public:
             db::per_partition_rate_limit::info rate_limit_info) :
         abstract_write_response_handler(std::move(p), std::move(ermp), cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), rate_limit_info, 0, dead_endpoints) {
         auto* erm = _effective_replication_map_ptr.get();
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        auto& topology = erm->get_topology();
 
         for (auto& target : targets) {
             auto dc = topology.get_datacenter(target);
@@ -1527,7 +1527,7 @@ public:
         }
     }
     bool failure(gms::inet_address from, size_t count, error err) override {
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        auto& topology = _effective_replication_map_ptr->get_topology();
         const sstring& dc = topology.get_datacenter(from);
         auto dc_resp = _dc_responses.find(dc);
 
@@ -2993,7 +2993,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
     }
 
     const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
-        | boost::adaptors::filtered(get_token_metadata_ptr()->get_topology().get_local_dc_filter()));
+        | boost::adaptors::filtered(erm->get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
@@ -3077,7 +3077,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
         auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
         itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
@@ -3606,7 +3606,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    auto& topology = get_token_metadata_ptr()->get_topology();
+    auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
     auto local_dc = topology.get_datacenter();
 
     for(auto dest: handler.get_targets()) {
@@ -3659,9 +3659,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
-                ++stats.writes_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
+                ++stats.writes_attempts.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             } else {
-                ++stats.read_repair_write_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
+                ++stats.read_repair_write_attempts.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             }
 
             if (coordinator == my_address) {
@@ -3673,7 +3673,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         // Waited on indirectly.
         (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(p->get_token_metadata_ptr()->get_topology(), coordinator);
+            ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
             if (try_catch<replica::rate_limit_exception>(eptr)) {
@@ -3815,6 +3815,7 @@ class digest_read_resolver : public abstract_read_resolver {
     };
 private:
     shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<result<digest_read_result>> _cl_promise; // cl is reached
@@ -3836,9 +3837,12 @@ private:
         _digest_results.clear();
     }
 public:
-    digest_read_resolver(shared_ptr<storage_proxy> proxy, schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+    digest_read_resolver(shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
         : abstract_read_resolver(std::move(schema), cl, 0, timeout)
         , _proxy(std::move(proxy))
+        , _effective_replication_map_ptr(std::move(ermp))
         , _block_for(block_for)
         , _target_count_for_cl(target_count_for_cl)
     {}
@@ -3882,7 +3886,7 @@ public:
     }
 private:
     bool waiting_for(gms::inet_address ep) {
-        const auto& topo = _proxy->get_token_metadata_ptr()->get_topology();
+        const auto& topo = _effective_replication_map_ptr->get_topology();
         return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
     }
     void got_response(gms::inet_address ep) {
@@ -4468,7 +4472,7 @@ private:
     }
 
     const locator::topology& get_topology() const noexcept {
-        return _proxy->get_token_metadata_ptr()->get_topology();
+        return _effective_replication_map_ptr->get_topology();
     }
 
 public:
@@ -4742,8 +4746,8 @@ public:
             // Return an empty result in this case
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? _proxy->get_token_metadata_ptr()->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _effective_replication_map_ptr, _schema, _cl, _block_for,
+                db::is_datacenter_local(_cl) ? _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
@@ -4784,7 +4788,7 @@ public:
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
-                            auto local_dc_filter = exec->_proxy->get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+                            auto local_dc_filter = exec->_effective_replication_map_ptr->get_topology().get_local_dc_filter();
                             auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
@@ -5007,7 +5011,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        auto local_dc_filter = get_token_metadata_ptr()->get_topology().get_local_dc_filter();
+        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
         if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
