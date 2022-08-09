@@ -2048,9 +2048,16 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         // Note: this is only for replay files. We can decide to
         // recycle these, but they don't count into footprint,
         // thus unopened named_files are what we want (known_size == 0)
+
+        // #11184 - include replay footprint so we make sure to delete any segments
+        // pushing us over limits in "delete_segments" (assumed called after replay)
+        // #11237 - cannot do this already in "init()" - we need to be able to create
+        // segments before replay+delete, and more to the point: shards that _don't_ replay
+        // must not add this to their footprint (a.) shared, b.) not there after this call)
+        totals.total_size_on_disk += co_await file_size(s);
         _files_to_dispose.emplace_back(s, dispose_mode::Delete);
     }
-    return do_pending_deletes();
+    co_return co_await do_pending_deletes();
 }
 
 void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) {
