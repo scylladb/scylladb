@@ -4880,9 +4880,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    auto& gossiper = _remote->gossiper();
-    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
-            gossiper,
+    inet_address_vector_replica_set target_replicas = calculate_target_replicas(cl, ks, all_replicas, preferred_endpoints, repair_decision,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
@@ -5152,12 +5150,11 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     // get stuck on 0 and never increased too much if the number of results remains small.
     concurrency_factor = std::max(size_t(1), ranges.size());
 
-    auto& gossiper = _remote->gossiper();
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
         inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, gossiper, pcf);
+        inet_address_vector_replica_set filtered_endpoints = calculate_target_replicas(cl, ks, live_endpoints, merged_preferred_replicas, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
         ++i;
 
@@ -5169,7 +5166,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
             inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set next_filtered_endpoints = calculate_target_replicas(cl, ks, next_endpoints, current_range_preferred_replicas, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -5214,7 +5211,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
-            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, ks, merged, current_merged_preferred_replicas, gossiper, pcf);
+            inet_address_vector_replica_set filtered_merged = calculate_target_replicas(cl, ks, merged, current_merged_preferred_replicas, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
@@ -5760,6 +5757,36 @@ inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(replica
     auto eps = get_live_endpoints(ks, token);
     sort_endpoints_by_proximity(eps);
     return eps;
+}
+
+inet_address_vector_replica_set
+storage_proxy::calculate_target_replicas(
+        db::consistency_level cl,
+        replica::keyspace& ks,
+        inet_address_vector_replica_set live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
+        db::read_repair_decision repair_decision,
+        gms::inet_address* extra,
+        replica::column_family* cf) const {
+    // Don't access `remote` if this is a local query.
+    if (live_endpoints.empty() || (live_endpoints.size() == 1 && live_endpoints[0] == utils::fb_utilities::get_broadcast_address())) {
+        return live_endpoints;
+    }
+
+    // There are nodes other than us in `live_endpoints`.
+    auto& gossiper = remote().gossiper();
+
+    return db::filter_for_query(cl, ks, std::move(live_endpoints), preferred_endpoints, repair_decision, gossiper, extra, cf);
+}
+
+inet_address_vector_replica_set
+storage_proxy::calculate_target_replicas(
+        db::consistency_level cl,
+        replica::keyspace& ks,
+        const inet_address_vector_replica_set& live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
+        replica::column_family* cf) const {
+    return calculate_target_replicas(cl, ks, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
