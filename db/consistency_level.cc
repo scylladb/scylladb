@@ -69,8 +69,8 @@ size_t block_for_each_quorum(replica::keyspace& ks) {
     auto& rs = ks.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        network_topology_strategy* nrs =
-            static_cast<network_topology_strategy*>(&rs);
+        const network_topology_strategy* nrs =
+            static_cast<const network_topology_strategy*>(&rs);
         size_t n = 0;
 
         for (auto& dc : nrs->get_datacenters()) {
@@ -123,8 +123,8 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     auto& rs = ks.get_replication_strategy();
     const auto& topo = ks.get_effective_replication_map()->get_topology();
 
-    network_topology_strategy* nrs =
-            static_cast<network_topology_strategy*>(&rs);
+    const network_topology_strategy* nrs =
+            static_cast<const network_topology_strategy*>(&rs);
 
     std::unordered_map<sstring, dc_node_count> dc_endpoints;
     for (auto& dc : nrs->get_datacenters()) {
