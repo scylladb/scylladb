@@ -1,4 +1,5 @@
 import time
+import pytest
 
 from contextlib import contextmanager
 
@@ -30,3 +31,20 @@ def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag=""):
     finally:
         resp = rest_api.send("DELETE", "storage_service/snapshots", params)
         resp.raise_for_status()
+
+# Tries to inject an error via Scylla REST API. It only works in specific
+# build modes (dev, debug, sanitize), so this function will trigger a test
+# to be skipped if it cannot be executed.
+@contextmanager
+def scylla_inject_error(rest_api, err, one_shot=False):
+    rest_api.send("POST", f"v2/error_injection/injection/{err}", {"one_shot": str(one_shot)})
+    response = rest_api.send("GET", f"v2/error_injection/injection")
+    assert response.ok
+    print("Enabled error injections:", response.content.decode('utf-8'))
+    if response.content.decode('utf-8') == "[]":
+        pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
+    try:
+        yield
+    finally:
+        print("Disabling error injection", err)
+        response = rest_api.send("DELETE", f"v2/error_injection/injection/{err}")

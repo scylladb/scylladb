@@ -8,12 +8,8 @@
 
 import pytest
 import random
-import sys
 from botocore.exceptions import ClientError
-from alternator_util import random_string, full_scan, full_query, multiset
-
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import scylla_inject_error
+from util import random_string, full_scan, full_query, multiset, scylla_inject_error
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.
