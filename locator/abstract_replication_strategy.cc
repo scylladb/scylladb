@@ -308,10 +308,22 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
 
 future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
+    const auto& sorted_tokens = tmptr->sorted_tokens();
 
-    for (const auto &t : tmptr->sorted_tokens()) {
-        auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
-        replication_map.emplace(t, eps.get_vector());
+    if (!sorted_tokens.empty()) {
+        replication_map.reserve(sorted_tokens.size());
+        if (rs->natural_endpoints_depend_on_token()) {
+            for (const auto &t : sorted_tokens) {
+                auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+                replication_map.emplace(t, eps.get_vector());
+            }
+        } else {
+            auto eps = co_await rs->calculate_natural_endpoints(sorted_tokens.front(), *tmptr);
+            for (const auto &t : sorted_tokens) {
+                replication_map.emplace(t, eps.get_vector());
+                co_await coroutine::maybe_yield();
+            }
+        }
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
