@@ -219,6 +219,7 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
             // Move to background.
             (void)f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
                 if (_sync_state != sync_state::SYNCING) {
+                    f.ignore_ready_future();
                     return;
                 }
                 if (f.failed()) {
