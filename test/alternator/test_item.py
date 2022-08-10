@@ -7,7 +7,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from alternator_util import random_string, random_bytes
+from util import random_string, random_bytes
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.

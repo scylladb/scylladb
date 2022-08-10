@@ -9,7 +9,7 @@ import time
 import re
 import math
 from botocore.exceptions import ClientError
-from alternator_util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
+from util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
 from contextlib import contextmanager
 from decimal import Decimal
 

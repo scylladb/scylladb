@@ -13,7 +13,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from alternator_util import random_string, full_scan, full_query, multiset
+from util import random_string, full_scan, full_query, multiset
 
 # Basic test for ProjectionExpression, requesting only top-level attributes.
 # Result should include the selected attributes only - if one wants the key

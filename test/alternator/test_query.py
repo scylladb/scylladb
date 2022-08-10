@@ -14,7 +14,7 @@ import random
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from alternator_util import random_string, random_bytes, full_query, multiset
+from util import random_string, random_bytes, full_query, multiset
 from boto3.dynamodb.conditions import Key, Attr
 
 def test_query_nonexistent_table(dynamodb):

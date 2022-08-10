@@ -8,7 +8,7 @@ import random
 import string
 import pytest
 from botocore.exceptions import ClientError
-from alternator_util import random_string
+from util import random_string
 
 # The simplest test of using UpdateExpression to set a top-level attribute,
 # instead of the older AttributeUpdates parameter.

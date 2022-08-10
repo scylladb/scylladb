@@ -9,7 +9,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from alternator_util import random_string
+from util import random_string
 
 # Most of the tests in this file check that the "Expected" parameter works for
 # the UpdateItem operation. It should also work the same for the PutItem and
