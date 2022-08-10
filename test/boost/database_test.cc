@@ -1091,7 +1091,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
     auto tmpdir_for_data = make_lw_shared<tmpdir>();
     auto db_cfg_ptr = make_shared<db::config>();
     db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
-    utils::UUID host_id;
+    locator::host_id host_id;
 
     // populate tmpdir_for_data and
     // move a random sstable to quarantine

@@ -417,11 +417,11 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         m3.set_static_cell(scol, std::move(c3));
 
         auto m0 = m1;
-        transform_counter_updates_to_shards(m0, nullptr, 0, utils::UUID{});
+        transform_counter_updates_to_shards(m0, nullptr, 0, locator::host_id::create_null_id());
 
         auto empty = mutation(s, pk);
         auto m = m1;
-        transform_counter_updates_to_shards(m, &empty, 0, utils::UUID{});
+        transform_counter_updates_to_shards(m, &empty, 0, locator::host_id::create_null_id());
         BOOST_REQUIRE_EQUAL(m, m0);
 
         auto ac = get_counter_cell(m);
@@ -441,7 +441,7 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
       }
 
         m = m2;
-        transform_counter_updates_to_shards(m, &m0, 0, utils::UUID{});
+        transform_counter_updates_to_shards(m, &m0, 0, locator::host_id::create_null_id());
 
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
@@ -460,7 +460,7 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
       }
 
         m = m3;
-        transform_counter_updates_to_shards(m, &m0, 0, utils::UUID{});
+        transform_counter_updates_to_shards(m, &m0, 0, locator::host_id::create_null_id());
         ac = get_counter_cell(m);
         BOOST_REQUIRE(!ac.is_live());
         ac = get_static_counter_cell(m);

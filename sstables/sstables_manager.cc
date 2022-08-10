@@ -29,7 +29,7 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
-const utils::UUID& sstables_manager::get_local_host_id() const {
+const locator::host_id& sstables_manager::get_local_host_id() const {
     return _db_config.host_id;
 }
 

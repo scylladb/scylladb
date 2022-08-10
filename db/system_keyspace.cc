@@ -1516,14 +1516,14 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> sy
     });
 }
 
-future<std::unordered_map<gms::inet_address, utils::UUID>> system_keyspace::load_host_ids() {
+future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace::load_host_ids() {
     sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        std::unordered_map<gms::inet_address, utils::UUID> ret;
+        std::unordered_map<gms::inet_address, locator::host_id> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("host_id")) {
-                ret.emplace(peer, row.get_as<utils::UUID>("host_id"));
+                ret.emplace(peer, locator::host_id(row.get_as<utils::UUID>("host_id")));
             }
         }
         return ret;
@@ -1860,9 +1860,9 @@ public:
                 set_cell(cr, "status", _gossiper.get_gossip_status(endpoint));
                 set_cell(cr, "load", _gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                std::optional<utils::UUID> hostid = tm.get_host_id_if_known(endpoint);
+                auto hostid = tm.get_host_id_if_known(endpoint);
                 if (hostid) {
-                    set_cell(cr, "host_id", hostid);
+                    set_cell(cr, "host_id", hostid->uuid());
                 }
 
                 if (tm.get_topology().has_endpoint(endpoint)) {
@@ -2748,23 +2748,23 @@ future<> system_keyspace::make(distributed<replica::database>& db, distributed<s
     return system_keyspace_make(db, ss, g, cfg, tables);
 }
 
-future<utils::UUID> system_keyspace::load_local_host_id() {
+future<locator::host_id> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
-        co_return co_await set_local_host_id(utils::make_random_uuid());
+        co_return co_await set_local_host_id(locator::host_id::create_random_id());
     } else {
-        auto host_id = msg->one().get_as<utils::UUID>("host_id");
+        auto host_id = locator::host_id(msg->one().get_as<utils::UUID>("host_id"));
         slogger.info("Loaded local host id: {}", host_id);
         co_return host_id;
     }
 }
 
-future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
+future<locator::host_id> system_keyspace::set_local_host_id(locator::host_id host_id) {
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    co_await execute_cql(req, sstring(LOCAL), host_id);
+    co_await execute_cql(req, sstring(LOCAL), host_id.uuid());
     co_await force_blocking_flush(LOCAL);
     co_return host_id;
 }

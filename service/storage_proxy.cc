@@ -2059,7 +2059,7 @@ bool paxos_response_handler::learned(gms::inet_address ep) {
 }
 
 static inet_address_vector_replica_set
-replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<utils::UUID>& replica_ids) {
+replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<locator::host_id>& replica_ids) {
     inet_address_vector_replica_set endpoints;
     endpoints.reserve(replica_ids.size());
 
@@ -2072,9 +2072,9 @@ replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<ut
     return endpoints;
 }
 
-static std::vector<utils::UUID>
+static std::vector<locator::host_id>
 endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_vector_replica_set& endpoints) {
-    std::vector<utils::UUID> replica_ids;
+    std::vector<locator::host_id> replica_ids;
     replica_ids.reserve(endpoints.size());
 
     for (const auto& endpoint : endpoints) {
@@ -5992,7 +5992,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
 }
 
 future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline) {
-    const utils::UUID my_host_id = _db.local().get_config().host_id;
+    const auto my_host_id = _db.local().get_config().host_id;
     if (spoint.host_id != my_host_id) {
         throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
                 spoint.host_id, my_host_id));

@@ -333,7 +333,7 @@ public:
      * @param host_id      - the ID of the host being removed
      * @param local_host_id - my own host ID for replication coordination
      */
-    future<> advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
+    future<> advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id);
 
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
@@ -342,7 +342,7 @@ public:
      * @param endpoint
      * @param host_id
      */
-    future<> advertise_token_removed(inet_address endpoint, utils::UUID host_id);
+    future<> advertise_token_removed(inet_address endpoint, locator::host_id host_id);
 
     future<> unsafe_assassinate_endpoint(sstring address);
 
@@ -362,7 +362,7 @@ public:
 
     bool is_gossip_only_member(inet_address endpoint);
     bool is_safe_for_bootstrap(inet_address endpoint);
-    bool is_safe_for_restart(inet_address endpoint, utils::UUID host_id);
+    bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -399,7 +399,7 @@ public:
 
     bool uses_host_id(inet_address endpoint) const;
 
-    utils::UUID get_host_id(inet_address endpoint) const;
+    locator::host_id get_host_id(inet_address endpoint) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 

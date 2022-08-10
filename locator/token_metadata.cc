@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "utils/UUID.hh"
 #include "token_metadata.hh"
 #include <optional>
 #include "locator/snitch_base.hh"
@@ -40,7 +39,6 @@ static void remove_by_value(C& container, V value) {
 
 class token_metadata_impl final {
 public:
-    using UUID = utils::UUID;
     using inet_address = gms::inet_address;
 private:
     /**
@@ -55,7 +53,7 @@ private:
     std::unordered_set<inet_address> _normal_token_owners;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
-    std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
+    std::unordered_map<inet_address, locator::host_id> _endpoint_to_host_id_map;
 
     std::unordered_map<token, inet_address> _bootstrap_tokens;
     std::unordered_set<inet_address> _leaving_endpoints;
@@ -133,19 +131,19 @@ public:
      * @param hostId
      * @param endpoint
      */
-    void update_host_id(const UUID& host_id, inet_address endpoint);
+    void update_host_id(const host_id& host_id, inet_address endpoint);
 
     /** Return the unique host ID for an end-point. */
-    UUID get_host_id(inet_address endpoint) const;
+    host_id get_host_id(inet_address endpoint) const;
 
     /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
+    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
 
     /** Return the end-point for a unique host ID */
-    std::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
+    std::optional<inet_address> get_endpoint_for_host_id(host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
+    const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
@@ -525,7 +523,7 @@ void token_metadata_impl::debug_show() const {
         for (auto x : _token_to_endpoint_map) {
             fmt::print("inet_address={}, token={}\n", x.second, x.first);
         }
-        fmt::print("Endpoint -> UUID\n");
+        fmt::print("Endpoint -> host_id\n");
         for (auto x : _endpoint_to_host_id_map) {
             fmt::print("inet_address={}, uuid={}\n", x.first, x.second);
         }
@@ -537,18 +535,18 @@ void token_metadata_impl::debug_show() const {
     reporter->arm_periodic(std::chrono::seconds(1));
 }
 
-void token_metadata_impl::update_host_id(const UUID& host_id, inet_address endpoint) {
+void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
-utils::UUID token_metadata_impl::get_host_id(inet_address endpoint) const {
+host_id token_metadata_impl::get_host_id(inet_address endpoint) const {
     if (!_endpoint_to_host_id_map.contains(endpoint)) {
         throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
     }
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
-std::optional<utils::UUID> token_metadata_impl::get_host_id_if_known(inet_address endpoint) const {
+std::optional<host_id> token_metadata_impl::get_host_id_if_known(inet_address endpoint) const {
     auto it = _endpoint_to_host_id_map.find(endpoint);
     if (it == _endpoint_to_host_id_map.end()) {
         return { };
@@ -556,7 +554,7 @@ std::optional<utils::UUID> token_metadata_impl::get_host_id_if_known(inet_addres
     return it->second;
 }
 
-std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id(UUID host_id) const {
+std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id(host_id host_id) const {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
@@ -569,7 +567,7 @@ std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id(UUID h
     }
 }
 
-const std::unordered_map<inet_address, utils::UUID>& token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const{
+const std::unordered_map<inet_address, host_id>& token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const{
     return _endpoint_to_host_id_map;
 }
 
@@ -1077,26 +1075,26 @@ token_metadata::debug_show() const {
 }
 
 void
-token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) {
+token_metadata::update_host_id(const host_id& host_id, inet_address endpoint) {
     _impl->update_host_id(host_id, endpoint);
 }
 
-token_metadata::UUID
+host_id
 token_metadata::get_host_id(inet_address endpoint) const {
     return _impl->get_host_id(endpoint);
 }
 
-std::optional<token_metadata::UUID>
+std::optional<host_id>
 token_metadata::get_host_id_if_known(inet_address endpoint) const {
     return _impl->get_host_id_if_known(endpoint);
 }
 
 std::optional<token_metadata::inet_address>
-token_metadata::get_endpoint_for_host_id(UUID host_id) const {
+token_metadata::get_endpoint_for_host_id(host_id host_id) const {
     return _impl->get_endpoint_for_host_id(host_id);
 }
 
-const std::unordered_map<inet_address, utils::UUID>&
+const std::unordered_map<inet_address, host_id>&
 token_metadata::get_endpoint_to_host_id_map_for_reading() const {
     return _impl->get_endpoint_to_host_id_map_for_reading();
 }

@@ -32,6 +32,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <chrono>
 #include "db/config.hh"
+#include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/count_if.hpp>
@@ -1177,7 +1178,7 @@ future<> gossiper::replicate(inet_address ep, application_state key, const versi
     });
 }
 
-future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
+future<> gossiper::advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id) {
     auto& state = get_endpoint_state(endpoint);
     // remember this node's generation
     int generation = state.get_heart_beat_state().get_generation();
@@ -1201,7 +1202,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
     co_await replicate(endpoint, eps);
 }
 
-future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
+future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_id host_id) {
     auto& eps = get_endpoint_state(endpoint);
     eps.update_timestamp(); // make sure we don't evict it too soon
     eps.get_heart_beat_state().force_newer_generation_unsafe();
@@ -1394,7 +1395,7 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
     return ready;
 }
 
-utils::UUID gossiper::get_host_id(inet_address endpoint) const {
+locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(format("Host {} does not use new-style tokens!", endpoint));
     }
@@ -1402,7 +1403,7 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) const {
     if (!app_state) {
         throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
-    return utils::UUID(app_state->value);
+    return locator::host_id(utils::UUID(app_state->value));
 }
 
 std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
@@ -2389,7 +2390,7 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return allowed;
 }
 
-bool gossiper::is_safe_for_restart(inet_address endpoint, utils::UUID host_id) {
+bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_id) {
     // Reject to restart a node in case:
     // *) if the node has been removed from the cluster by nodetool decommission or
     //    nodetool removenode

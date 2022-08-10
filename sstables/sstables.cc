@@ -274,6 +274,15 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, u
     });
 }
 
+template <typename Tag>
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::tagged_uuid<Tag>& id) {
+    // Read directly into tha tagged_uuid `id` member
+    // This is ugly, but save an allocation or reimplementation
+    // of parse(..., utils::UUID&)
+    utils::UUID& uuid = *const_cast<utils::UUID*>(&id.uuid());
+    return parse(s, v, in, uuid);
+}
+
 // For all types that take a size, we provide a template that takes the type
 // alone, and another, separate one, that takes a size parameter as well, of
 // type Size. This is because although most of the time the size and the data
@@ -1821,7 +1830,7 @@ void sstable::validate_originating_host_id() const {
     }
 
     auto local_host_id = _manager.get_local_host_id();
-    if (local_host_id == utils::UUID{}) {
+    if (!local_host_id) {
         // we don't know the local host id before it is loaded from
         // (or generated and written to) system.local, but some system
         // sstable reads must happen before the bootstrap process gets
