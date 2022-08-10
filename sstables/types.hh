@@ -25,6 +25,7 @@
 #include "version.hh"
 #include "encoding_stats.hh"
 #include "utils/UUID.hh"
+#include "locator/host_id.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -313,7 +314,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     int64_t rows_count; // 3_x only
     db::replay_position commitlog_lower_bound; // 3_x only
     disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
-    std::optional<utils::UUID> originating_host_id; // 3_11_11 and later (me format)
+    std::optional<locator::host_id> originating_host_id; // 3_11_11 and later (me format)
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {

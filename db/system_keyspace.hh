@@ -24,6 +24,7 @@
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
+#include "locator/host_id.hh"
 
 namespace service {
 
@@ -339,7 +340,7 @@ public:
      * Return a map of store host_ids to IP addresses
      *
      */
-    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
+    future<std::unordered_map<gms::inet_address, locator::host_id>> load_host_ids();
 
     /*
      * Read this node's tokens stored in the LOCAL table.
@@ -367,12 +368,12 @@ public:
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    future<utils::UUID> load_local_host_id();
+    future<locator::host_id> load_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    future<utils::UUID> set_local_host_id(utils::UUID host_id);
+    future<locator::host_id> set_local_host_id(locator::host_id host_id);
 
     static api::timestamp_type schema_creation_timestamp();
 

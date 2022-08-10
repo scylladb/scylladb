@@ -31,6 +31,7 @@
 #include "tools/schema_loader.hh"
 #include "tools/utils.hh"
 #include "utils/rjson.hh"
+#include "locator/host_id.hh"
 
 // has to be below the utils/rjson.hh include
 #include <rapidjson/ostreamwrapper.h>
@@ -1158,6 +1159,11 @@ private:
 
     void visit(const utils::UUID& uuid) {
         _writer.String(uuid.to_sstring());
+    }
+
+    template <typename Tag>
+    void visit(const utils::tagged_uuid<Tag>& id) {
+        visit(id.uuid());
     }
 
     template <typename Integer>
@@ -3193,7 +3199,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
-            dbcfg.host_id = ::utils::make_random_uuid();
+            dbcfg.host_id = locator::host_id::create_random_id();
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 

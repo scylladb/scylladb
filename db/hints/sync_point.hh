@@ -15,6 +15,7 @@
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include "db/commitlog/replay_position.hh"
+#include "locator/host_id.hh"
 
 namespace db {
 namespace hints {
@@ -24,7 +25,7 @@ namespace hints {
 struct sync_point {
     using shard_rps = std::unordered_map<gms::inet_address, db::replay_position>;
     // ID of the host which created this sync point
-    utils::UUID host_id;
+    locator::host_id host_id;
     std::vector<shard_rps> regular_per_shard_rps;
     std::vector<shard_rps> mv_per_shard_rps;
 
@@ -49,7 +50,7 @@ struct per_manager_sync_point_v1 {
 
 // IDL type
 struct sync_point_v1 {
-    utils::UUID host_id;
+    locator::host_id host_id;
     uint16_t shard_count;
 
     // Sync point information for regular mutation hints

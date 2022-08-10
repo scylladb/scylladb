@@ -1098,7 +1098,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
-            UUID host_id(coordinator[1]);
+            auto host_id = locator::host_id(utils::UUID(coordinator[1]));
             // grab any data we are now responsible for and notify responsible node
             auto ep = get_token_metadata().get_endpoint_for_host_id(host_id);
             if (!ep) {
@@ -2270,7 +2270,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
         return seastar::async([&ss, host_id_string, ignore_nodes = std::move(ignore_nodes)] {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto host_id = utils::UUID(host_id_string);
+            auto host_id = locator::host_id(utils::UUID(host_id_string));
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
             if (!endpoint_opt) {
                 throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
@@ -3298,7 +3298,7 @@ future<> storage_service::force_remove_completion() {
                 auto leaving = tm.get_leaving_endpoints();
                 slogger.warn("Removal not confirmed, Leaving={}", leaving);
                 for (auto endpoint : leaving) {
-                    utils::UUID host_id;
+                    locator::host_id host_id;
                     auto tokens = tm.get_tokens(endpoint);
                     try {
                         host_id = tm.get_host_id(endpoint);

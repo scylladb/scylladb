@@ -48,6 +48,7 @@
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
 #include "db/per_partition_rate_limit_info.hh"
+#include "locator/host_id.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -91,7 +92,7 @@ class mutation_holder;
 class view_update_write_response_handler;
 struct hint_wrapper;
 
-using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
+using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;

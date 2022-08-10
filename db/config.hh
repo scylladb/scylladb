@@ -20,7 +20,7 @@
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
-#include "utils/UUID.hh"
+#include "locator/host_id.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
 
@@ -383,7 +383,7 @@ public:
 
     const db::extensions& extensions() const;
 
-    utils::UUID host_id;
+    locator::host_id host_id;
 
     static const sstring default_tls_priority;
 private:

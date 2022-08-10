@@ -16,7 +16,7 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "inet_address_vectors.hh"
-#include "utils/UUID.hh"
+#include "locator/host_id.hh"
 #include <optional>
 #include <memory>
 #include <boost/range/iterator_range.hpp>
@@ -132,7 +132,6 @@ class token_metadata_impl;
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 public:
-    using UUID = utils::UUID;
     using inet_address = gms::inet_address;
 private:
     class tokens_iterator {
@@ -205,19 +204,19 @@ public:
      * @param hostId
      * @param endpoint
      */
-    void update_host_id(const UUID& host_id, inet_address endpoint);
+    void update_host_id(const locator::host_id& host_id, inet_address endpoint);
 
     /** Return the unique host ID for an end-point. */
-    UUID get_host_id(inet_address endpoint) const;
+    host_id get_host_id(inet_address endpoint) const;
 
     /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
+    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
 
     /** Return the end-point for a unique host ID */
-    std::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
+    std::optional<inet_address> get_endpoint_for_host_id(locator::host_id host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
+    const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 

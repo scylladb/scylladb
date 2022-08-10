@@ -278,6 +278,11 @@ inline void write(sstable_version_types v, file_writer& out, const utils::UUID& 
     out.write(uuid.serialize());
 }
 
+template <typename Tag>
+inline void write(sstable_version_types v, file_writer& out, const utils::tagged_uuid<Tag>& id) {
+    write(v, out, id.uuid());
+}
+
 template <typename W>
 requires Writer<W>
 inline void write(sstable_version_types v, W& out, const bytes& s) {
