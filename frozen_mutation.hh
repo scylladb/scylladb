@@ -55,11 +55,6 @@ private:
                 _stop_consuming = _consumer.consume(static_row(std::move(row)));
             }
         }
-        _rt_gen.flush(pos, [this] (range_tombstone_change rt) {
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(std::move(rt));
-            }
-        });
         if (_current_row) {
             auto row_entry = std::move(_current_row_entry);
             _current_row = nullptr;
@@ -67,6 +62,11 @@ private:
                 _stop_consuming = _consumer.consume(clustering_row(std::move(*row_entry)));
             }
         }
+        _rt_gen.flush(pos, [this] (range_tombstone_change rt) {
+            if (!_stop_consuming) {
+                _stop_consuming = _consumer.consume(std::move(rt));
+            }
+        });
     }
 
 public:
