@@ -749,6 +749,25 @@ void reader_concurrency_semaphore::clear_inactive_reads() {
     }
 }
 
+future<> reader_concurrency_semaphore::evict_inactive_reads_for_table(table_id id) noexcept {
+    inactive_reads_type evicted_readers;
+    auto it = _inactive_reads.begin();
+    while (it != _inactive_reads.end()) {
+        auto& ir = *it;
+        ++it;
+        if (ir.reader.schema()->id() == id) {
+            do_detach_inactive_reader(ir, evict_reason::manual);
+            ir.ttl_timer.cancel();
+            ir.unlink();
+            evicted_readers.push_back(ir);
+        }
+    }
+    while (!evicted_readers.empty()) {
+        std::unique_ptr<inactive_read> irp(&evicted_readers.front());
+        co_await irp->reader.close();
+    }
+}
+
 std::runtime_error reader_concurrency_semaphore::stopped_exception() {
     return std::runtime_error(format("{} was stopped", _name));
 }
@@ -771,11 +790,9 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     co_return;
 }
 
-flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
-    auto reader = std::move(ir.reader);
+void reader_concurrency_semaphore::do_detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
     ir.detach();
-    reader.permit()._impl->on_evicted();
-    std::unique_ptr<inactive_read> irp(&ir);
+    ir.reader.permit()._impl->on_evicted();
     try {
         if (ir.notify_handler) {
             ir.notify_handler(reason);
@@ -794,7 +811,12 @@ flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(ina
             break;
     }
     --_stats.inactive_reads;
-    return reader;
+}
+
+flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+    std::unique_ptr<inactive_read> irp(&ir);
+    do_detach_inactive_reader(ir, reason);
+    return std::move(irp->reader);
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
