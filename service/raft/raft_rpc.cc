@@ -44,6 +44,7 @@ void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send append reply to {}: {}", id, std::current_exception());
                 }
@@ -58,6 +59,7 @@ void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& v
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send vote request {}: {}", id, ex);
                 }
@@ -72,6 +74,7 @@ void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send vote reply {}: {}", id, ex);
                 }
@@ -86,6 +89,7 @@ void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& tim
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send timeout now {}: {}", id, ex);
                 }
@@ -100,6 +104,7 @@ void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& rea
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send read barrier {}: {}", id, ex);
                 }
@@ -114,6 +119,7 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send read barrier reply {}: {}", id, ex);
                 }
