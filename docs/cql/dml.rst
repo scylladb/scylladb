@@ -255,10 +255,14 @@ The following should be considered when using the ``GROUP BY`` option:
 Ordering results
 ~~~~~~~~~~~~~~~~
 
-The ``ORDER BY`` clause lets you select the order of the returned results. It takes as argument a list of column names
-along with the order for the column (``ASC`` for ascendant and ``DESC`` for descendant, omitting the order being
-equivalent to ``ASC``). Currently, the possible orderings are limited by the :ref:`clustering order <clustering-order>`
-defined on the table:
+The default order for a SELECT statement depends on the default clustering order of a table, which is defined when 
+the table is created - it is ``ASC`` (ascendant) by default, but can be changed using the ``WITH CLUSTERING ORDER BY``
+option. See :ref:`CREATE TABLE <create-table-statement>`.
+
+The ``ORDER BY`` clause allows you to configure a non-default order of the returned result. It takes a list of column names
+along with the order for the column as an argument  (``ASC`` for ascendant and ``DESC`` for descendant, omitting the default order). 
+
+Currently, the possible orderings are limited by the :ref:`clustering order <clustering-order>` defined on the table:
 
 - If the table has been defined without any specific ``CLUSTERING ORDER``, then allowed orderings are the order
   induced by the clustering columns and the reverse of that one.
