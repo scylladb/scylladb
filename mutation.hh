@@ -212,13 +212,14 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
     using rts_type = range_tombstone_list;
     using rts_iterator_type = std::conditional_t<rts_in_reverse, std::reverse_iterator<rts_type::iterator>, rts_type::iterator>;
 
-    if constexpr (reverse == consume_in_reverse::yes) {
-        s = s->make_reversed();
-    }
-
     if (!cookie.schema) {
-        cookie.schema = s;
+        if constexpr (reverse == consume_in_reverse::yes) {
+            cookie.schema = s->make_reversed();
+        } else {
+            cookie.schema = s;
+        }
     }
+    s = cookie.schema;
 
     auto* rt_list = &partition.mutable_row_tombstones();
     if (reverse == consume_in_reverse::yes && !cookie.reversed_range_tombstones) {
