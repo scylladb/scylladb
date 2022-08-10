@@ -410,7 +410,11 @@ class CQLApprovalTestSuite(PythonTestSuite):
 
 
 class TopologyTestSuite(PythonTestSuite):
-    """A collection of Python pytests against Scylla instances dealing with topology changes"""
+    """A collection of Python pytests against Scylla instances dealing with topology changes.
+       Instead of using a single Scylla cluster directly, there is a cluster manager handling
+       the lifecycle of clusters and bringing up new ones as needed. The cluster health checks
+       are done per test case.
+    """
 
     def build_test_list(self) -> List[str]:
         """Build list of Topology python tests"""
