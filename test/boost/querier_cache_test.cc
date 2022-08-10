@@ -327,11 +327,6 @@ public:
         return *this;
     }
 
-    test_querier_cache& evict_all_for_table() {
-        _cache.evict_all_for_table(get_schema()->id()).get();
-        return *this;
-    }
-
     test_querier_cache& no_misses() {
         BOOST_REQUIRE_EQUAL(_cache.get_stats().misses, _expected_stats.misses);
         return *this;
@@ -725,21 +720,6 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 db::no_timeout).get();
         return make_ready_future<>();
     }, std::move(db_cfg_ptr)).get();
-}
-
-SEASTAR_THREAD_TEST_CASE(test_evict_all_for_table) {
-    test_querier_cache t;
-
-    const auto entry = t.produce_first_page_and_save_mutation_querier();
-
-    t.evict_all_for_table();
-    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .misses()
-        .no_drops()
-        .no_evictions();
-
-    // Check that the querier was removed from the semaphore too.
-    BOOST_CHECK(!t.get_semaphore().try_evict_one_inactive_read());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
