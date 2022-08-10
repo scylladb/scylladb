@@ -43,7 +43,7 @@ struct mutation_consume_cookie {
     bool partition_start_consumed = false;
     bool static_row_consumed = false;
     // only used when reverse == consume_in_reverse::yes
-    std::unique_ptr<range_tombstone_list> reversed_range_tombstones;
+    bool reversed_range_tombstone = false;
     std::unique_ptr<clustering_iterators> iterators;
 };
 
@@ -205,7 +205,9 @@ namespace {
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
 std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::legacy_half_reverse || reverse == consume_in_reverse::yes;
-    constexpr bool rts_in_reverse = reverse == consume_in_reverse::legacy_half_reverse;
+    // We can read the range_tombstone_list in reverse order in consume_in_reverse::yes mode
+    // since we deoverlap range_tombstones on insertion.
+    constexpr bool rts_in_reverse = reverse == consume_in_reverse::legacy_half_reverse || reverse == consume_in_reverse::yes;
 
     using crs_type = mutation_partition::rows_type;
     using crs_iterator_type = std::conditional_t<crs_in_reverse, std::reverse_iterator<crs_type::iterator>, crs_type::iterator>;
@@ -221,20 +223,9 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
     }
     s = cookie.schema;
 
-    auto* rt_list = &partition.mutable_row_tombstones();
-    if (reverse == consume_in_reverse::yes && !cookie.reversed_range_tombstones) {
-        cookie.reversed_range_tombstones = std::make_unique<rts_type>(*s);
-        while (!rt_list->empty()) {
-            auto rt = rt_list->pop_front_and_lock();
-            rt.reverse();
-            cookie.reversed_range_tombstones->apply(*s, std::move(rt));
-        }
-        rt_list = &*cookie.reversed_range_tombstones;
-    }
-
     if (!cookie.iterators) {
         auto& crs = partition.mutable_clustered_rows();
-        auto& rts = *rt_list;
+        auto& rts = partition.mutable_row_tombstones();
         cookie.iterators = std::make_unique<mutation_consume_cookie::clustering_iterators>(*s, crs.begin(), crs.end(), rts.begin(), rts.end());
     }
 
@@ -276,6 +267,10 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
         }
         bool emit_rt = rts_it != rts_end;
         if (rts_it != rts_end) {
+            if (reverse == consume_in_reverse::yes && !cookie.reversed_range_tombstone) {
+                rts_it->tombstone().reverse();
+                cookie.reversed_range_tombstone = true;
+            }
             if (crs_it != crs_end) {
                 const auto cmp_res = cmp(rts_it->position(), crs_it->position());
                 if constexpr (reverse == consume_in_reverse::legacy_half_reverse) {
@@ -289,6 +284,7 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
             flush_tombstones(rts_it->position());
             cookie.iterators->rt_gen.consume(std::move(rts_it->tombstone()));
             ++rts_it;
+            cookie.reversed_range_tombstone = false;
         } else {
             flush_tombstones(crs_it->position());
             stop = consumer.consume(clustering_row(std::move(*crs_it)));
