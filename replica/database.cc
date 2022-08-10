@@ -1441,6 +1441,10 @@ bool database::can_apply_per_partition_rate_limit(const schema& s, db::operation
     return replica::can_apply_per_partition_rate_limit(s, _dbcfg, op_type);
 }
 
+bool database::is_internal_query() const {
+    return classify_request(_dbcfg) != request_class::user;
+}
+
 std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
         db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
         db::operation_type op_type) {

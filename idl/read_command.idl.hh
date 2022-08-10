@@ -58,6 +58,7 @@ class read_command {
     query::is_first_page is_first_page [[version 2.2]] = query::is_first_page::no;
     std::optional<query::max_result_size> max_result_size [[version 4.3]] = std::nullopt;
     uint32_t row_limit_high_bits [[version 4.3]] = 0;
+    uint64_t tombstone_limit [[version 5.2]] = query::max_tombstones;
 };
 
 }

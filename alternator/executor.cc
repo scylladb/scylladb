@@ -1359,7 +1359,8 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(proxy.get_tombstone_limit()));
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -3063,7 +3064,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(_proxy.get_tombstone_limit()));
 
     std::unordered_set<std::string> used_attribute_names;
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
@@ -3217,7 +3219,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                    query::tombstone_limit(_proxy.get_tombstone_limit()));
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
@@ -3629,7 +3632,8 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 

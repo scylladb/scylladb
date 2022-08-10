@@ -57,7 +57,7 @@ SEASTAR_TEST_CASE(test_internal_operation_filtering) {
             auto partition_slice = query::partition_slice(
                     {query::clustering_range::make_open_ended_both_sides()}, {}, {}, std::move(opts));
 
-            auto cmd = make_lw_shared<query::read_command>(sptr->id(), sptr->version(), partition_slice, query::max_result_size(1), query::row_limit(1));
+            auto cmd = make_lw_shared<query::read_command>(sptr->id(), sptr->version(), partition_slice, query::max_result_size(1), query::tombstone_limit::max, query::row_limit(1));
             cmd->allow_limit = allow_limit;
 
             // Rejection is probabilistic, so try many times

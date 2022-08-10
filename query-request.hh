@@ -267,10 +267,12 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice);
 partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
+constexpr auto max_tombstones = std::numeric_limits<uint64_t>::max();
 
 // Tagged integers to disambiguate constructor arguments.
 enum class row_limit : uint64_t { max = max_rows };
 enum class partition_limit : uint32_t { max = max_partitions };
+enum class tombstone_limit : uint64_t { max = max_tombstones };
 
 using is_first_page = bool_class<class is_first_page_tag>;
 
@@ -304,6 +306,8 @@ public:
     // the remote doesn't send it.
     std::optional<query::max_result_size> max_result_size;
     uint32_t row_limit_high_bits;
+    // Cut the page after processing this many tombstones (even if the page is empty).
+    uint64_t tombstone_limit;
     api::timestamp_type read_timestamp; // not serialized
     db::allow_per_partition_rate_limit allow_limit; // not serialized
 public:
@@ -318,7 +322,8 @@ public:
                  query_id query_uuid,
                  query::is_first_page is_first_page,
                  std::optional<query::max_result_size> max_result_size,
-                 uint32_t row_limit_high_bits)
+                 uint32_t row_limit_high_bits,
+                 uint64_t tombstone_limit)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
@@ -330,6 +335,7 @@ public:
         , is_first_page(is_first_page)
         , max_result_size(max_result_size)
         , row_limit_high_bits(row_limit_high_bits)
+        , tombstone_limit(tombstone_limit)
         , read_timestamp(api::new_timestamp())
         , allow_limit(db::allow_per_partition_rate_limit::no)
     { }
@@ -338,6 +344,7 @@ public:
             table_schema_version schema_version,
             partition_slice slice,
             query::max_result_size max_result_size,
+            query::tombstone_limit tombstone_limit,
             query::row_limit row_limit = query::row_limit::max,
             query::partition_limit partition_limit = query::partition_limit::max,
             gc_clock::time_point now = gc_clock::now(),
@@ -357,6 +364,7 @@ public:
         , is_first_page(is_first_page)
         , max_result_size(max_result_size)
         , row_limit_high_bits(static_cast<uint32_t>(static_cast<uint64_t>(row_limit) >> 32))
+        , tombstone_limit(static_cast<uint64_t>(tombstone_limit))
         , read_timestamp(rt)
         , allow_limit(allow_limit)
     { }

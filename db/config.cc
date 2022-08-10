@@ -561,6 +561,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The maximum number of tombstones a query can scan before warning.")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
+    , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
+        "The number of tombstones after which a query cuts a page, even if not full or even empty.")
     /* Network timeout settings */
     , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")

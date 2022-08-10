@@ -266,3 +266,22 @@ def scylla_inject_error(rest_api, err, one_shot=False):
     finally:
         print("Disabling error injection", err)
         response = requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
+
+
+class config_value_context:
+    """Change the value of a config item while the context is active.
+
+    The config item has to be live-updatable.
+    """
+    def __init__(self, cql, key, value):
+        self._cql = cql
+        self._key = key
+        self._value = value
+        self._original_value = None
+
+    def __enter__(self):
+        self._original_value = self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value
+        self._cql.execute(f"UPDATE system.config SET value='{self._value}' WHERE name='{self._key}'")
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self._cql.execute(f"UPDATE system.config SET value='{self._original_value}' WHERE name='{self._key}'")

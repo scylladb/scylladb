@@ -1655,7 +1655,8 @@ public:
 
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), std::move(opts));
         const auto max_result_size = _ctx._proxy.get_max_result_size(partition_slice);
-        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_result_size(max_result_size), query::row_limit(row_limit));
+        const auto tombstone_limit = query::tombstone_limit(_ctx._proxy.get_tombstone_limit());
+        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_result_size(max_result_size), tombstone_limit, query::row_limit(row_limit));
 
         const auto select_cl = adjust_cl(write_cl);
 

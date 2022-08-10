@@ -512,7 +512,7 @@ struct scan_ranges_context {
         opts.set<query::partition_slice::option::bypass_cache>();
         std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
         auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
-        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
         executor::client_state client_state{executor::client_state::internal_tag()};
         tracing::trace_state_ptr trace_state;
         // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism

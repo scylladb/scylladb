@@ -211,7 +211,7 @@ modification_statement::read_command(query_processor& qp, query::clustering_row_
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
     const auto max_result_size = qp.proxy().get_max_result_size(ps);
-    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size));
+    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size), query::tombstone_limit::max);
 }
 
 std::vector<query::clustering_range>

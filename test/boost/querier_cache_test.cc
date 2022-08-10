@@ -658,14 +658,14 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         auto cmd1 = query::read_command(s->id(),
                 s->version(),
                 slice,
-                1,
+                query::max_result_size(1024 * 1024),
+                query::tombstone_limit::max,
+                query::row_limit(1),
+                query::partition_limit(1),
                 gc_clock::now(),
                 std::nullopt,
-                1,
                 query_id::create_random_id(),
-                query::is_first_page::yes,
-                query::max_result_size(1024 * 1024),
-                0);
+                query::is_first_page::yes);
 
         // Should save the querier in cache.
         db.query_mutations(s,
@@ -688,14 +688,14 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
                 slice,
-                1,
+                query::max_result_size(1024 * 1024),
+                query::tombstone_limit::max,
+                query::row_limit(1),
+                query::partition_limit(1),
                 gc_clock::now(),
                 std::nullopt,
-                1,
                 query_id::create_random_id(),
-                query::is_first_page::no,
-                query::max_result_size(1024 * 1024),
-                0);
+                query::is_first_page::no);
 
         // Should evict the already cached querier.
         db.query_mutations(s,

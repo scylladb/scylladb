@@ -389,7 +389,7 @@ private:
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice)
-        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size})
+        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, query::max_tombstones)
         , _builder(s, _res_builder) { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -2265,7 +2265,8 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
 
     std::vector<query::clustering_range> bounds{query::clustering_range::make_singular(base_ck)};
     query::partition_slice partition_slice(std::move(bounds), {},  {}, selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice,
+            _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
     auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();

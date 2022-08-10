@@ -550,11 +550,11 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     slice.options.set<query::partition_slice::option::allow_short_read>();
 
     query::result::builder digest_only_builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash},
-            l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
+            l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0(), query::max_tombstones);
     data_query(s, semaphore.make_permit(), source, query::full_partition_range, slice, digest_only_builder);
 
     query::result::builder result_and_digest_builder(slice, query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash},
-            l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
+            l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0(), query::max_tombstones);
     data_query(s, semaphore.make_permit(), source, query::full_partition_range, slice, result_and_digest_builder);
 
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());

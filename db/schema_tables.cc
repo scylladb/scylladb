@@ -869,7 +869,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
             .with_range(std::move(clustering_range))
             .build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice),
-            query::row_limit(query::max_rows));
+            query::tombstone_limit::max, query::row_limit(query::max_rows));
     co_return co_await query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
 }
 
@@ -878,7 +878,7 @@ read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring
     schema_ptr s = keyspaces();
     auto key = partition_key::from_singular(*s, keyspace_name);
     auto slice = s->full_slice();
-    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), std::move(slice), proxy.local().get_max_result_size(slice));
+    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
     co_return co_await query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 

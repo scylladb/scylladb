@@ -1996,7 +1996,7 @@ struct query_state {
                          query::result_memory_accounter memory_accounter)
             : schema(std::move(s))
             , cmd(cmd)
-            , builder(cmd.slice, opts, std::move(memory_accounter))
+            , builder(cmd.slice, opts, std::move(memory_accounter), cmd.tombstone_limit)
             , limit(cmd.get_row_limit())
             , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
