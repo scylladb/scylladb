@@ -332,17 +332,15 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
 template<FlattenedConsumerV2 Consumer>
 auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
         -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
-    if (!cookie.partition_start_consumed) {
-        consumer.consume_new_partition(_ptr->_dk);
-    }
-
     auto& partition = _ptr->_p;
 
-    if (!cookie.partition_start_consumed && partition.partition_tombstone()) {
-        consumer.consume(partition.partition_tombstone());
+    if (!cookie.partition_start_consumed) {
+        consumer.consume_new_partition(_ptr->_dk);
+        if (partition.partition_tombstone()) {
+            consumer.consume(partition.partition_tombstone());
+        }
+        cookie.partition_start_consumed = true;
     }
-
-    cookie.partition_start_consumed = true;
 
     stop_iteration stop = stop_iteration::no;
     if (!cookie.static_row_consumed && !partition.static_row().empty()) {
@@ -372,17 +370,15 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_
 template<FlattenedConsumerV2 Consumer>
 auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
         -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
-    if (!cookie.partition_start_consumed) {
-        consumer.consume_new_partition(_ptr->_dk);
-    }
-
     auto& partition = _ptr->_p;
 
-    if (!cookie.partition_start_consumed && partition.partition_tombstone()) {
-        consumer.consume(partition.partition_tombstone());
+    if (!cookie.partition_start_consumed) {
+        consumer.consume_new_partition(_ptr->_dk);
+        if (partition.partition_tombstone()) {
+            consumer.consume(partition.partition_tombstone());
+        }
+        cookie.partition_start_consumed = true;
     }
-
-    cookie.partition_start_consumed = true;
 
     stop_iteration stop = stop_iteration::no;
     if (!cookie.static_row_consumed && !partition.static_row().empty()) {
