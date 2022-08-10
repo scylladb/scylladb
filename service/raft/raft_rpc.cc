@@ -134,7 +134,11 @@ future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
-   return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
+    return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            rlogger.trace("Failed to execute read barrier on leader {}: {}", id, e);
+            return make_exception_future<raft::read_barrier_reply>(raft::intermittent_connection_error());
+        });
 }
 
 void raft_rpc::add_server(raft::server_address addr) {
