@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_server import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
@@ -337,8 +337,11 @@ class PythonTestSuite(TestSuite):
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
-        def create_server(cluster_name, seed):
+        def create_server(cluster_name: str, seeds: List[str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
+            config_options = self.cfg.get("extra_scylla_config_options",
+                                          {"authenticator": "PasswordAuthenticator",
+                                           "authorizer": "CassandraAuthorizer"})
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             server = ScyllaServer(
@@ -346,8 +349,9 @@ class PythonTestSuite(TestSuite):
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 host_registry=self.hosts,
                 cluster_name=cluster_name,
-                seed=seed,
-                cmdline_options=cmdline_options)
+                seeds=seeds,
+                cmdline_options=cmdline_options,
+                config_options=config_options)
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
@@ -403,6 +407,24 @@ class CQLApprovalTestSuite(PythonTestSuite):
     @property
     def pattern(self) -> str:
         return "*test.cql"
+
+
+class TopologyTestSuite(PythonTestSuite):
+    """A collection of Python pytests against Scylla instances dealing with topology changes"""
+
+    def build_test_list(self) -> List[str]:
+        """Build list of Topology python tests"""
+        return TestSuite.build_test_list(self)
+
+    async def add_test(self, shortname: str) -> None:
+        """Add test to suite"""
+        test = TopologyTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self) -> str:
+        """Python pattern"""
+        return "test_*.py"
 
 
 class RunTestSuite(TestSuite):
@@ -635,12 +657,14 @@ class CQLApprovalTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            # FIXME: cluster should provide contact points
             self.args.insert(1, "--host={}".format(cluster[0].host))
             # If pre-check fails, e.g. because Scylla failed to start
             # or crashed between two tests, fail entire test.py
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
+                # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
                 cluster.after_test(self.uname)
@@ -670,6 +694,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
+                    # FIXME: why only logs of the first server?
                     self.server_log = cluster[0].read_log()
                     self.server_log_filename = cluster[0].log_filename
                     if self.is_before_test_ok is False:
@@ -778,16 +803,19 @@ class PythonTest(Test):
 
         async with self.suite.clusters.instance() as cluster:
             logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            # FIXME: cluster should provide contact points
             self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
                 cluster.before_test(self.uname)
                 self.is_before_test_ok = True
+                # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
                 status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
                 self.success = status
             except Exception as e:
+                # FIXME: why only logs of the first server?
                 self.server_log = cluster[0].read_log()
                 self.server_log_filename = cluster[0].log_filename
                 if self.is_before_test_ok is False:
@@ -803,6 +831,41 @@ class PythonTest(Test):
         if self.server_log_filename is not None:
             system_err = ET.SubElement(xml_res, 'system-err')
             system_err.text = read_log(self.server_log_filename)
+
+
+class TopologyTest(PythonTest):
+    """Run a pytest collection of cases against Scylla clusters handling topology changes"""
+    is_before_test_ok: bool
+    is_after_test_ok: bool
+    status: bool
+
+    def __init__(self, test_no: int, shortname: str, suite) -> None:
+        super().__init__(test_no, shortname, suite)
+
+    async def run(self, options: argparse.Namespace) -> Test:
+
+        async with get_cluster_manager(self.shortname, self.suite.clusters) as manager:
+            self.args.insert(0, "--host={}".format(manager.cluster[0].host))
+            logging.info("Leasing Scylla cluster %s for test %s", manager.cluster, self.uname)
+
+            try:
+                manager.cluster.before_test(self.uname)
+                self.is_before_test_ok = True
+                manager.cluster[0].take_log_savepoint()
+                status = await run_test(self, options)
+                manager.cluster.after_test(self.uname)
+                self.is_after_test_ok = True
+                self.success = status
+            except Exception as e:
+                self.server_log = manager.cluster[0].read_log()
+                self.server_log_filename = manager.cluster[0].log_filename
+                if self.is_before_test_ok is False:
+                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                    print("Server log of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        return self
 
 
 class TabularConsoleOutput:

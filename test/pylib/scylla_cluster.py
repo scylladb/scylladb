@@ -5,13 +5,18 @@
 #
 import aiohttp
 import asyncio
+from contextlib import asynccontextmanager
+import itertools
 import logging
 import os
 import pathlib
 import shutil
 import time
 import uuid
-from typing import Optional, List, Callable
+from typing import Optional, Dict, List, Set, Callable, AsyncIterator, NamedTuple
+from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.host_registry import HostRegistry
+from test.pylib.pool import Pool
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -77,8 +82,8 @@ request_timeout_in_ms: 300000
 # Set up authentication in order to allow testing this module
 # and other modules dependent on it: e.g. service levels
 
-authenticator: PasswordAuthenticator
-authorizer: CassandraAuthorizer
+authenticator: {authenticator}
+authorizer: {authorizer}
 strict_allow_filtering: true
 
 permissions_update_interval_in_ms: 100
@@ -105,19 +110,22 @@ class ScyllaServer:
 
     def __init__(self, exe: str, vardir: str,
                  host_registry,
-                 cluster_name: str, seed: Optional[str],
-                 cmdline_options: List[str]) -> None:
+                 cluster_name: str, seeds: List[str],
+                 cmdline_options: List[str],
+                 config_options: Dict[str, str]) -> None:
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
         self.host_registry = host_registry
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
         self.hostname = ""
-        self.seed = seed
+        self.seeds = seeds
         self.cmd: Optional[asyncio.subprocess.Process] = None
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+        self.authenticator: str = config_options["authenticator"]
+        self.authorizer: str = config_options["authorizer"]
 
         async def stop_server() -> None:
             if self.is_running:
@@ -162,8 +170,8 @@ class ScyllaServer:
         # Scylla assumes all instances of a cluster use the same port,
         # so each instance needs an own IP address.
         self.hostname = await self.host_registry.lease_host()
-        if not self.seed:
-            self.seed = self.hostname
+        if not self.seeds:
+            self.seeds = [self.hostname]
         # Use the last part in host IP 127.151.3.27 -> 27
         # There can be no duplicates within the same test run
         # thanks to how host registry registers subnets, and
@@ -188,8 +196,10 @@ class ScyllaServer:
         fmt = {
               "cluster_name": self.cluster_name,
               "host": self.hostname,
-              "seeds": self.seed,
+              "seeds": ",".join(self.seeds),
               "workdir": self.workdir,
+              "authenticator": self.authenticator,
+              "authorizer": self.authorizer
         }
         with self.config_filename.open('w') as config_file:
             config_file.write(SCYLLA_CONF_TEMPLATE.format(**fmt))
@@ -322,10 +332,10 @@ Check the log files:
         state. Helps quickly propagate tokens and speed up node boot if the
         previous state propagation was missed."""
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.seed]),
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(self.seeds),
                                    request_timeout=self.START_TIMEOUT)
         with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                     contact_points=[self.seed],
+                     contact_points=self.seeds,
                      auth_provider=auth,
                      # This is the latest version Scylla supports
                      protocol_version=4,
@@ -334,6 +344,14 @@ Check the log files:
                 session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
                                 "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
                 session.execute("DROP KEYSPACE k")
+
+    async def shutdown_control_connection(self) -> None:
+        if self.control_connection is not None:
+            self.control_connection.shutdown()
+            self.control_connection = None
+        if self.control_cluster is not None:
+            self.control_cluster.shutdown()
+            self.control_cluster = None
 
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
@@ -345,12 +363,8 @@ Check the log files:
         if not self.cmd:
             return
 
+        await self.shutdown_control_connection()
         try:
-            if self.control_connection is not None:
-                self.control_connection.shutdown()
-            if self.control_cluster is not None:
-                self.control_cluster.shutdown()
-
             self.cmd.kill()
         except ProcessLookupError:
             pass
@@ -361,8 +375,29 @@ Check the log files:
                 logging.info("stopped server at host %s in %s", hostname,
                              self.workdir.name)
             self.cmd = None
-            self.control_connection = None
-            self.control_cluster = None
+
+    async def stop_gracefully(self) -> None:
+        """Stop a running server. No-op if not running. Uses SIGTERM to
+        stop, so it is graceful. Waits for the process to exit before return."""
+        # Preserve for logging
+        hostname = self.hostname
+        logging.info("gracefully stopping server at host %s", hostname)
+        if not self.cmd:
+            return
+
+        await self.shutdown_control_connection()
+        try:
+            self.cmd.terminate()
+        except ProcessLookupError:
+            pass
+        else:
+            # FIXME: add timeout, fail the test and mark cluster as dirty
+            # if we timeout.
+            await self.cmd.wait()
+        finally:
+            if self.cmd:
+                logging.info("gracefully stopped server at host %s", hostname)
+            self.cmd = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
@@ -388,60 +423,112 @@ Check the log files:
 
 
 class ScyllaCluster:
+
+    class ActionReturn(NamedTuple):
+        success: bool
+        msg: str
+
     def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[str]], ScyllaServer]) -> None:
+                 create_server: Callable[[str, Optional[List[str]]], ScyllaServer]) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
-        self.cluster: List[ScyllaServer] = []
         self.create_server = create_server
+        self.running: Dict[str, ScyllaServer] = {}  # started servers
+        self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
+        self.removed: Set[str] = set()              # servers stopped and uninstalled (can't return)
+        # cluster is started (but it might not have running servers)
+        self.is_running: bool = False
+        # cluster was modified in a way it should not be used in subsequent tests
+        self.is_dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
 
     async def install_and_start(self) -> None:
         try:
             for i in range(self.replicas):
-                seed = self.cluster[-1].host if self.cluster else None
-                server = self.create_server(self.name, seed)
-                self.cluster.append(server)
-                try:
-                    await server.install_and_start()
-                except Exception as e:
-                    logging.error("Failed to start Scylla server at host %s in %s: %s",
-                                  server.hostname, server.workdir.name, str(e))
-                    raise
+                await self.add_server()
             self.keyspace_count = self._get_keyspace_count()
         except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as e:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = e
+        self.is_running = True
         logging.info("Created cluster %s", self)
+        self.is_dirty = False
+
+    async def uninstall(self) -> None:
+        """Stop running servers, uninstall all servers, and remove API socket"""
+        self.is_dirty = True
+        logging.info("Uninstalling cluster")
+        await self.stop()
+        await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
+
+    async def stop(self) -> None:
+        """Stop all running servers ASAP"""
+        if self.is_running:
+            logging.info("Cluster %s stopping", self)
+            self.is_dirty = True
+            # If self.running is empty, no-op
+            await asyncio.gather(*(server.stop() for server in self.running.values()))
+            self.stopped.update(self.running)
+            self.running.clear()
+            self.is_running = False
+
+    async def stop_gracefully(self) -> None:
+        """Stop all running servers in a clean way"""
+        if self.is_running:
+            logging.info("Cluster %s stopping gracefully", self)
+            self.is_dirty = True
+            # If self.running is empty, no-op
+            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
+            self.stopped.update(self.running)
+            self.running.clear()
+            self.is_running = False
+
+    def _seeds(self) -> List[str]:
+        return [server for server in self.running.keys()]
+
+    async def add_server(self) -> str:
+        """Add a new server to the cluster"""
+        server = self.create_server(self.name, self._seeds())
+        self.is_dirty = True
+        try:
+            logging.info("Cluster %s adding server", server)
+            await server.install_and_start()
+        except Exception as e:
+            logging.error("Failed to start Scylla server at host %s in %s: %s",
+                          server.hostname, server.workdir.name, str(e))
+            raise
+        self.running[server.host] = server
+        return server.host
 
     def __getitem__(self, i: int) -> ScyllaServer:
-        return self.cluster[i]
+        assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
+        return list(self.running.values())[i]
 
     def __str__(self):
-        return "{" + ", ".join(str(c) for c in self.cluster) + "}"
+        return f"{{{', '.join(str(c) for c in self.running)}}}"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert(self.start_exception is None)
-        assert self.cluster[0].control_connection is not None
-        rows = self.cluster[0].control_connection.execute(
-            "select count(*) as c from system_schema.keyspaces")
+        assert self[0].control_connection is not None
+        rows = self[0].control_connection.execute(
+               "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
         return keyspace_count
 
     def before_test(self, name) -> None:
         """Check that  the cluster is ready for a test. If
         there was a start error, throw it here - the server is
-        started when it's added to the pool, which can't be attributed
+        running when it's added to the pool, which can't be attributed
         to any specific test, throwing it here would stop a specific
         test."""
         if self.start_exception:
             raise self.start_exception
 
-        for server in self.cluster:
-            server.write_log_marker("------ Starting test {} ------\n".format(name))
+        for server in self.running.values():
+            server.write_log_marker(f"------ Starting test {name} ------\n")
 
     def after_test(self, name) -> None:
         """Check that the cluster is still alive and the test
@@ -450,5 +537,101 @@ class ScyllaCluster:
         if self._get_keyspace_count() != self.keyspace_count:
             raise RuntimeError("Test post-condition failed, "
                                "the test must drop all keyspaces it creates.")
-        for server in self.cluster:
-            server.write_log_marker("------ Ending test {} ------\n".format(name))
+        for server in itertools.chain(self.running.values(), self.stopped.values()):
+            server.write_log_marker(f"------ Ending test {name} ------\n")
+
+    async def server_stop(self, server_id: str, gracefully: bool) -> ActionReturn:
+        """Stop a server. No-op if already stopped."""
+        logging.info("Cluster %s stopping server %s", self, server_id)
+        if server_id in self.stopped:
+            return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} already stopped")
+        if server_id in self.removed:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} removed")
+        if server_id not in self.running:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        self.is_dirty = True
+        server = self.running.pop(server_id)
+        if gracefully:
+            await server.stop_gracefully()
+        else:
+            await server.stop()
+        self.stopped[server_id] = server
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
+
+    async def server_start(self, server_id: str) -> ActionReturn:
+        """Start a stopped server"""
+        logging.info("Cluster %s starting server", self)
+        if server_id in self.running:
+            return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} already started")
+        if server_id in self.removed:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} removed")
+        if server_id not in self.stopped:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        self.is_dirty = True
+        server = self.stopped.pop(server_id)
+        server.seeds = self._seeds()
+        await server.start()
+        self.running[server_id] = server
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} started")
+
+    async def server_restart(self, server_id: str) -> ActionReturn:
+        """Restart a running server"""
+        ret = await self.server_stop(server_id, gracefully=True)
+        if not ret.success:
+            return ret
+        return await self.server_start(server_id)
+
+    async def server_remove(self, server_id: str) -> ActionReturn:
+        """Remove a specified server"""
+        self.is_dirty = True
+        logging.info("Cluster %s removing server %s", self, server_id)
+        if server_id in self.running:
+            server = self.running.pop(server_id)
+            await server.stop_gracefully()
+        elif server_id in self.stopped:
+            server = self.stopped.pop(server_id)
+        else:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        await server.uninstall()
+        self.removed.add(server_id)
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} removed")
+
+
+class ScyllaClusterManager:
+    """Manages a Scylla cluster for running test cases"""
+    cluster: ScyllaCluster
+
+    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+        self.test_name: str = test_name
+        self.clusters: Pool[ScyllaCluster] = clusters
+
+    async def start(self) -> None:
+        """Start, start first cluster"""
+        await self._get_cluster()
+
+    async def stop(self) -> None:
+        """Stop, cycle last cluster if not dirty and present"""
+        self.cluster.after_test(self.test_name)
+        await self._return_cluster()
+
+    async def _get_cluster(self) -> None:
+        self.cluster = await self.clusters.get()
+        logging.info("Getting new Scylla cluster %s", self.cluster)
+
+    async def _return_cluster(self) -> None:
+        logging.info("Returning Scylla cluster %s", self.cluster)
+        await self.clusters.put(self.cluster)
+        del self.cluster
+
+
+@asynccontextmanager
+async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster]) \
+        -> AsyncIterator[ScyllaClusterManager]:
+    """Create a temporary manager for the active cluster used in a test
+       and provide the cluster to the caller."""
+    manager = ScyllaClusterManager(test_name, clusters)
+    await manager.start()
+    try:
+        yield manager
+    finally:
+        await manager.stop()
