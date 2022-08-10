@@ -290,6 +290,10 @@ struct state_machine_error: public error {
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
 };
 
+struct intermittent_connection_error: public error {
+    intermittent_connection_error() : error("Intermittent connection error") {}
+};
+
 struct no_other_voting_member : public error {
     no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
 };
@@ -559,6 +563,9 @@ public:
     virtual void send_read_quorum_reply(server_id id, const read_quorum_reply& read_quorum_reply) = 0;
 
     // Forward a read barrier request to the leader.
+    // Should throw a raft::intermittent_connection_error if the target host is unreachable.
+    // In this case, the call will be retried after some time,
+    // possibly with a different server_id if the leader has changed by then.
     virtual future<read_barrier_reply> execute_read_barrier_on_leader(server_id id) = 0;
 
     // Two-way RPC for adding an entry on the leader
