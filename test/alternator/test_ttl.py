@@ -8,10 +8,12 @@ import pytest
 import time
 import re
 import math
+import botocore
 from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
+from util import create_test_table, new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
 from contextlib import contextmanager
 from decimal import Decimal
+from packaging.version import Version
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
 # expects a certain exception must happen, the new passes_or_raises()
@@ -746,3 +748,87 @@ def test_ttl_expiration_long(dynamodb):
                 break
             time.sleep(max_duration/15.0)
         assert count == 99*N
+
+# This case covers an alternative TTL mechanism - tag-based default TTL,
+# set globally per-table. When the tag is present, all updates are applied
+# with given time-to-live value, after which they will be purged.
+# Note that default TTL does not produce Alternator Streams updates.
+def test_tag_based_default_ttl_1s_expiration_updated(scylla_only, dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ]) as table:
+        got = table.meta.client.describe_table(TableName=table.name)['Table']
+        arn = got['TableArn']
+        tags = [{'Key': 'system:default_time_to_live', 'Value': '1'}]
+        table.meta.client.tag_resource(ResourceArn=arn, Tags=tags)
+        for p in range(10):
+            table.put_item(Item={'p': p})
+        # Technically, TTL might have already worked on slow machines,
+        # so let's validate that there are "no more than 10" rows in here
+        assert len(table.scan(ConsistentRead=True)['Items']) <= 10
+        results = []
+        # After ~1s, the rows should be gone
+        for i in range(10):
+            results = table.scan(ConsistentRead=True)['Items']
+            if len(results) == 0:
+               break
+            else:
+                time.sleep(0.2)
+        assert len(results) == 0
+        table.meta.client.untag_resource(ResourceArn=arn, TagKeys=['system:default_time_to_live'])
+        for p in range(10):
+            table.put_item(Item={'p': p})
+        time.sleep(1.1)
+        assert len(table.scan(ConsistentRead=True)['Items']) == 10
+
+def skip_if_tags_on_creation_unsupported():
+    # The feature of creating a table already with tags was only added to
+    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
+    # https://aws.amazon.com/about-aws/whats-new/2019/04/now-you-can-tag-amazon-dynamodb-tables-when-you-create-them/
+    # so older versions of the library cannot run this test.
+    if (Version(botocore.__version__) < Version('1.12.136')):
+        pytest.skip("Botocore version 1.12.136 or above required to run this test")
+
+# Test that the TTL tag added during table creation also takes effect
+def test_tag_based_default_ttl_1s_expiration_created(dynamodb):
+    skip_if_tags_on_creation_unsupported()
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ],
+        Tags=[{'Key': 'system:default_time_to_live', 'Value': '1'}]) as table:
+        for p in range(10):
+            table.put_item(Item={'p': p})
+        # Technically, TTL might have already worked on slow machines,
+        # so let's validate that there are "no more than 10" rows in here
+        assert len(table.scan(ConsistentRead=True)['Items']) <= 10
+        results = []
+        # After ~1s, the rows should be gone
+        for i in range(10):
+            results = table.scan(ConsistentRead=True)['Items']
+            if len(results) == 0:
+               break
+            else:
+                time.sleep(0.2)
+        assert len(results) == 0
+
+# Test that default_time_to_live tag value is validated on table creation
+def test_tag_based_default_ttl_incorrect_values_creation(scylla_only, dynamodb):
+    skip_if_tags_on_creation_unsupported()
+    for incorrect_value in ['hey', '-1', '0']:
+        with pytest.raises(ClientError, match='ValidationException.*time_to_live'):
+            create_test_table(dynamodb,
+                KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+                AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ],
+                Tags=[{'Key': 'system:default_time_to_live', 'Value': incorrect_value}])
+
+# Test that default_time_to_live tag value is validated on tag update
+def test_tag_based_default_ttl_incorrect_values_update(scylla_only, dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ]) as table:
+        got = table.meta.client.describe_table(TableName=table.name)['Table']
+        arn = got['TableArn']
+        for incorrect_value in ['hey', '-1', '0']:
+         with pytest.raises(ClientError, match='ValidationException.*time_to_live'):
+            table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'system:default_time_to_live', 'Value': incorrect_value}])
+
