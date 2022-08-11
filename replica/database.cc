@@ -2830,7 +2830,7 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             auto& cf = _db.local().find_column_family(schema);
 
             _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
-            _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
+            _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.stream_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
             return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
