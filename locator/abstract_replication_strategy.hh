@@ -78,6 +78,10 @@ public:
         const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
 
+    // Evaluates to true iff calculate_natural_endpoints
+    // returns different results for different tokens.
+    virtual bool natural_endpoints_depend_on_token() const noexcept { return true; }
+
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
     // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
