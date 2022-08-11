@@ -62,6 +62,9 @@ public:
     // It is fine to start multiple awaits in parallel.
     // Cannot fail.
     future<> advance_and_await() noexcept {
+        if (is_closed()) {
+            return make_exception_future<>(gate_closed_exception{});
+        }
         auto new_gate = [] {
             seastar::memory::scoped_critical_alloc_section _;
             return make_lw_shared<gate>();
@@ -69,6 +72,16 @@ public:
         ++_phase;
         auto old_gate = std::exchange(_gate, std::move(new_gate));
         return old_gate->close().then([old_gate, op = start()] {});
+    }
+
+    // Ends the current phase but doesn't start a new one. Any new attempts at
+    // starting an operation will result in `gate_closed` exception.
+    future<> close() noexcept {
+        return _gate->close();
+    }
+
+    bool is_closed() const noexcept {
+        return _gate->is_closed();
     }
 
     // Returns current phase number. The smallest value returned is 0.
