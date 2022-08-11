@@ -23,7 +23,7 @@ For the CQL Shell (:doc:`CQLsh </cql/cqlsh>`), the consistency level defaults to
 
 
 .. note::
-      Regardless of the **Consistency Level**, a write is always sent to *all* replicas, as set by the **Replication Factor**. Consistency Level control *when* a client acknowledged, not how many replicas are updated.
+      Regardless of the **Consistency Level**, a write is always sent to *all* replicas, as set by the **Replication Factor**. Consistency Level control *when* a client is acknowledged, not how many replicas are updated.
   
 During a write operation, the coordinator communicates with the replicas (the number of which depends on the Replication Factor).  The write is successful when the specified number of replicas confirm the write.
 
