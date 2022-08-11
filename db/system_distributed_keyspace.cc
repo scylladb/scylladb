@@ -175,7 +175,13 @@ static std::vector<schema_ptr> ensured_tables() {
 // Precondition: `ks_name` is either "system_distributed" or "system_distributed_everywhere".
 static void check_exists(std::string_view ks_name, std::string_view cf_name, const replica::database& db) {
     if (!db.has_schema(ks_name, cf_name)) {
-        on_internal_error(dlogger, format("expected {}.{} to exist but it doesn't", ks_name, cf_name));
+        // Throw `std::runtime_error` instead of calling `on_internal_error` due to some dtests which
+        // 'upgrade' Scylla from Cassandra work directories (which is an unsupported upgrade path)
+        // on which this check does not pass. We don't want the node to crash in these dtests,
+        // but throw an error instead. In production clusters we don't crash on `on_internal_error` anyway.
+        auto err = format("expected {}.{} to exist but it doesn't", ks_name, cf_name);
+        dlogger.error(err.c_str());
+        throw std::runtime_error{std::move(err)};
     }
 }
 
