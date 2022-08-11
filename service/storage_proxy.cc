@@ -5110,7 +5110,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // not once per partition.
     bool is_read_non_local = false;
 
-    const auto tmptr = erm->get_token_metadata_ptr();
+    const auto& tm = erm->get_token_metadata();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
             co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
@@ -5119,7 +5119,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
         const auto replicas = it == query_options.preferred_replicas.end()
-            ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
+            ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
 
         auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
@@ -5150,7 +5150,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto timeout = query_options.timeout(*this);
         auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
-                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
+                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(tm, rex->used_targets()));
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
