@@ -2006,9 +2006,6 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
 
-    // I'm doing a nullcheck here since the init code path for db etc
-    // is a little in flux and commitlog is created only when db is
-    // initied from datadir.
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
 
