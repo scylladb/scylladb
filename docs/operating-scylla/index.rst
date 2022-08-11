@@ -12,7 +12,6 @@ Scylla for Administrators
    ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>
    ScyllaDB Operator <https://operator.docs.scylladb.com/>
    ScyllaDB Manager <https://manager.docs.scylladb.com/>
-
    Upgrade Procedures </upgrade/index>
    System Configuration <system-configuration/index>
    benchmarking-scylla
