@@ -1500,6 +1500,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     }
 
     column_family& cf = find_column_family(cmd.cf_id);
+    auto op = cf.read_in_progress();
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
         ++_stats->total_reads_rate_limited;
@@ -1527,8 +1528,6 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     };
 
     try {
-        auto op = cf.read_in_progress();
-
         future<> f = make_ready_future<>();
         if (querier_opt) {
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
@@ -1574,6 +1573,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
     column_family& cf = find_column_family(cmd.cf_id);
+    auto op = cf.read_in_progress();
 
     std::optional<query::querier> querier_opt;
     reconcilable_result result;
@@ -1593,8 +1593,6 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     };
 
     try {
-        auto op = cf.read_in_progress();
-
         future<> f = make_ready_future<>();
         if (querier_opt) {
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
