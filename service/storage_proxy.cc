@@ -5237,15 +5237,15 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
-    const auto tmptr = erm->get_token_metadata_ptr();
+    const auto& tm = erm->get_token_metadata();
 
     if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 
-    const auto preferred_replicas_for_range = [this, &preferred_replicas, tmptr] (const dht::partition_range& r) {
+    const auto preferred_replicas_for_range = [this, &preferred_replicas, &tm] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
-        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
+        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
@@ -5377,7 +5377,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
     return utils::result_futurize_try([&] {
       return f.then(utils::result_wrap([p,
-            tmptr,
+            erm, // protects &tm
+            &tm,
             exec = std::move(exec),
             results = std::move(results),
             ranges_to_vnodes = std::move(ranges_to_vnodes),
@@ -5403,7 +5404,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // 1) The list of replicas is determined for each vnode
                 // separately and thus this makes lookups more convenient.
                 // 2) On the next page the ranges might not be merged.
-                auto replica_ids = endpoints_to_replica_ids(*tmptr, e->used_targets());
+                auto replica_ids = endpoints_to_replica_ids(tm, e->used_targets());
                 for (auto& r : ranges_per_exec[e.get()]) {
                     used_replicas.emplace(std::move(r), replica_ids);
                 }
