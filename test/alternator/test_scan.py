@@ -432,12 +432,12 @@ def test_scan_paging_missing_limit(dynamodb):
             KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'N' }]) as table:
-        # Insert a 4 MB of data in multiple smaller partitions.
+        # Insert a 6 MB of data in multiple smaller partitions.
         # Because of issue #10327 when the table is *small* Alternator may
-        # return significantly more than 1 MB - sometimes even 3 MB. This
-        # is why we need to use 4 MB of data here and 2 MB is not enough.
+        # return significantly more than 1 MB - sometimes even 4 MB. This
+        # is why we need to use 6 MB of data here and 2 MB is not enough.
         str = 'x' * 10240
-        N = 400
+        N = 600
         with table.batch_writer() as batch:
             for i in range(N):
                 batch.put_item({'p': i, 's': str})
