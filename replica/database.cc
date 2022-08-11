@@ -1846,19 +1846,26 @@ void dirty_memory_manager::start_reclaiming() noexcept {
 
 namespace replica {
 
+future<> database::do_apply_in_memory(const frozen_mutation& m, table& tbl, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    data_listeners().on_write(tbl.schema(), m);
+
+    return tbl.apply(m, tbl.schema(), std::move(h), timeout);
+}
+
+future<> database::do_apply_in_memory(const mutation& m, table& tbl, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    return tbl.apply(m, std::move(h), timeout);
+}
+
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& cf = find_column_family(m.column_family_id());
-
-    data_listeners().on_write(m_schema, m);
-
-    return with_gate(cf.async_gate(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cf, timeout] () mutable -> future<> {
-        return cf.apply(m, std::move(m_schema), std::move(h), timeout);
+    return with_gate(cf.async_gate(), [this, &m, h = std::move(h), &cf, timeout] () mutable -> future<> {
+        return do_apply_in_memory(m, cf, std::move(h), timeout);
     });
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     return with_gate(cf.async_gate(), [this, &m, h = std::move(h), &cf, timeout]() mutable -> future<> {
-        return cf.apply(m, std::move(h), timeout);
+        return do_apply_in_memory(m, cf, std::move(h), timeout);
     });
 }
 
@@ -1938,7 +1945,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
         }
     }
     try {
-        co_await apply_in_memory(m, cf, std::move(h), timeout);
+        co_await do_apply_in_memory(m, cf, std::move(h), timeout);
     } catch (mutation_reordered_with_truncate_exception&) {
         // This mutation raced with a truncate, so we can just drop it.
         dblog.debug("replay_position reordering detected");
@@ -1996,8 +2003,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
     // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
     for (size_t i = 0; i < muts.size(); ++i) {
         auto&& cf = find_column_family(muts[i].column_family_id());
-        auto s = local_schema_registry().get(muts[i].schema_version());
-        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);
+        co_await do_apply_in_memory(muts[i], cf, std::move(handles[i]), timeout);
     }
 }
 
@@ -2065,7 +2071,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::exception(std::move(ex));
         }
     }
-    auto f = co_await coroutine::as_future(this->apply_in_memory(m, s, std::move(h), timeout));
+    auto f = co_await coroutine::as_future(this->do_apply_in_memory(m, cf, std::move(h), timeout));
     if (f.failed()) {
       auto ex = f.get_exception();
       if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {

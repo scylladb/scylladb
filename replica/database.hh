@@ -1356,6 +1356,9 @@ private:
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
 
+private:
+    future<> do_apply_in_memory(const frozen_mutation& m, table& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
+    future<> do_apply_in_memory(const mutation& m, table& tbl, db::rp_handle&&, db::timeout_clock::time_point timeout);
 public:
     data_dictionary::database as_data_dictionary() const;
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
