@@ -129,6 +129,43 @@ isolation policy for a specific table can be overridden by tagging the table
    Example: in order to query the contents of Scylla's system.large_rows,
    pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
 
+### Tag-based default time to live (TTL)
+ * Aside from the DynamoDB TTL mechanism based on the UpdateTimeToLive method,
+   alternator also exposes a way of defining default per-table time to live
+   parameter, expressed in seconds and accessible via a `system:default_time_to_live`
+   tag. The default time to live mechanism will automatically apply TTL
+   on all *new* updated and inserts, and remove them once their expiration period
+   has passed. Note a few important details:
+     - expiration induced by default TTL **does not** produce any Streams events
+     - TTL will only be applied to new updates and inserts, it won't amend existing data in any way
+
+   In order to set default time to live for a table, mark it with a `system:default_time_to_live` tag
+   with the desired number of seconds expressed as a positive integer.
+
+   Example of Tags structure, which will set the default time to live to 42 seconds
+   when used with UpdateTag method on a table:
+   ```json
+    [{
+        "Key": "system:default_time_to_live",
+        "Value": "42"
+    }]
+   ```
+
+   Note that contrary to regular DynamoDB TTL implementation, this mechanism
+   is expressed in seconds, **relative time**, not an absolute point in time
+   after the data is considered expired.
+   For instance, setting the value of tag-based default TTL to 42 means that
+   each piece of data is going to expire 42 seconds after it was inserted/updated.
+
+   Another very important distinction in comparison to DynamoDB TTL is that
+   tag-based default TTL has cell granularity, not row granularity.
+   It means that each attribute value has its own TTL. It's possible to have
+   a database item where different attributes have different TTL's, and some
+   of them have even already expired. Issuing an UpdateItem operation to change
+   one of the attributes will result in bumping the TTL **for this attribute value only**,
+   which may be surprising later, when all the other attributes expire,
+   except for this one.
+
 ## Alternator design and implementation
 
 This section provides only a very brief introduction to Alternator's
