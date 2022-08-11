@@ -5237,7 +5237,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
-    const auto tmptr = get_token_metadata_ptr();
+    const auto tmptr = erm->get_token_metadata_ptr();
 
     if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
