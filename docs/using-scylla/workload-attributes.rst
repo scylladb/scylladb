@@ -34,13 +34,13 @@ Procedure
 
     .. code-block:: cql
 
-	   CREATE SERVICE LEVEL <service_level_name> <attribute>
+     CREATE SERVICE LEVEL <service_level_name> WITH <attribute> [ AND <attribute>];
 	
     For example:
 
     .. code-block:: cql
 
-	   CREATE SERVICE LEVEL sl2 WITH timeout = 500ms;
+	   CREATE SERVICE LEVEL sl2 WITH timeout = 500ms AND workload_type=interactive;
 	
 	
     See :ref:`Available Attributes <workload-attributes-available-attributes>`.
@@ -58,7 +58,13 @@ Procedure
 	   ATTACH SERVICE LEVEL sl2 TO scylla;
 
 
-You can modify the service level attributes with the ``ALTER SERVICE LEVEL`` command. For example:
+You can modify the service level attributes with the ``ALTER SERVICE LEVEL`` command:
+
+    .. code-block:: cql
+
+     ALTER SERVICE LEVEL <service_level_name> WITH <attribute> [ AND <attribute>];
+
+ For example:
 
 .. code-block:: cql
 
