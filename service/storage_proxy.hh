@@ -327,6 +327,7 @@ private:
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
+            locator::effective_replication_map_ptr ermp,
             schema_ptr schema,
             dht::partition_range pr,
             db::consistency_level cl,

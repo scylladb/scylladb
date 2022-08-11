@@ -4933,6 +4933,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
+        locator::effective_replication_map_ptr erm,
         schema_ptr schema,
         dht::partition_range pr,
         db::consistency_level cl,
@@ -4942,8 +4943,6 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         bool& is_read_non_local,
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
-    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    auto erm = ks.get_effective_replication_map();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
@@ -5101,6 +5100,9 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
 
+    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
+
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
 
@@ -5108,7 +5110,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // not once per partition.
     bool is_read_non_local = false;
 
-    const auto tmptr = get_token_metadata_ptr();
+    const auto tmptr = erm->get_token_metadata_ptr();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
             co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
@@ -5119,7 +5121,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         const auto replicas = it == query_options.preferred_replicas.end()
             ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
 
-        auto r_read_executor = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
+        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
                                                  query_options.permit);
         if (!r_read_executor) {
