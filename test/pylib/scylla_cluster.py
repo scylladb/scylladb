@@ -534,6 +534,10 @@ class ScyllaCluster:
         self.running[server.host] = server
         return server.host
 
+    def endpoint(self) -> str:
+        """Get a server id (IP) from running servers"""
+        return next(iter(self.running))
+
     def __getitem__(self, i: int) -> ScyllaServer:
         assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
         return list(self.running.values())[i]
