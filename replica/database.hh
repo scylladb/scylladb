@@ -455,14 +455,6 @@ private:
     // in dynamically
     std::unordered_map<gms::inet_address, cache_hit_rate> _cluster_cache_hit_rates;
 
-    // Operations like truncate, flush, query, etc, may depend on a column family being alive to
-    // complete.  Some of them have their own gate already (like flush), used in specialized wait
-    // logic. That is particularly useful if there is a particular
-    // order in which we need to close those gates. For all the others operations that don't have
-    // such needs, we have this generic _async_gate, which all potentially asynchronous operations
-    // have to get.  It will be closed by stop().
-    seastar::gate _async_gate;
-
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
@@ -612,8 +604,6 @@ public:
     sstring dir() const {
         return _config.datadir;
     }
-
-    seastar::gate& async_gate() { return _async_gate; }
 
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
