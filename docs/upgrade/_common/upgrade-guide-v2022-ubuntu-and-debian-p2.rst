@@ -80,7 +80,7 @@ Restore the configuration file
 Restore system tables
 ---------------------
 
-Restore all tables of **system** and **system_schema** from the previous snapshot - 2022.1 uses a different set of system tables. Reference doc: :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>`.
+Restore all tables of **system** and **system_schema** from the previous snapshot - 2022.1 uses a different set of system tables. Refer to :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>`.
 
 .. code:: sh
 
