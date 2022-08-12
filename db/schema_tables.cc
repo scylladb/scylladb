@@ -70,6 +70,12 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/functions/user_aggregate.hh"
 
+#include "cql3/CqlParser.hpp"
+#include "cql3/expr/expression.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/column_specification.hh"
+#include "types.hh"
+
 using namespace db;
 using namespace std::chrono_literals;
 
@@ -1774,7 +1780,11 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
 
     bytes_opt initcond = std::nullopt;
     if (initcond_str) {
-        initcond = state_type->from_string(initcond_str.value());
+        auto expr = cql3::util::do_with_parser(*initcond_str, std::mem_fn(&cql3_parser::CqlParser::term));
+        auto dummy_ident = ::make_shared<cql3::column_identifier>("", true);
+        auto column_spec = make_lw_shared<cql3::column_specification>("", "", dummy_ident, state_type);
+        auto raw = cql3::expr::evaluate(prepare_expression(expr, db.as_data_dictionary(), "", nullptr, {column_spec}), cql3::query_options::DEFAULT);
+        initcond = std::move(raw).to_bytes_opt();
     }
     return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
@@ -2175,7 +2185,7 @@ std::vector<mutation> make_create_aggregate_mutations(schema_features features, 
         m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc().name().name, timestamp);
     }
     if (aggregate->initcond()) {
-        m.set_clustered_cell(ckey, "initcond", state_type->to_string(*aggregate->initcond()), timestamp);
+        m.set_clustered_cell(ckey, "initcond", state_type->deserialize(*aggregate->initcond()).to_parsable_string(), timestamp);
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc().name().name, timestamp);

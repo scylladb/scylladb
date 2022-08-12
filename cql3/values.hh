@@ -240,10 +240,28 @@ public:
         return is_value();
     }
     bytes to_bytes() && {
-        switch (_data.index()) {
-        case 0:  return std::move(std::get<bytes>(_data));
-        default: return ::to_bytes(std::get<managed_bytes>(_data));
-        }
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return std::move(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return ::to_bytes(managed_bytes_val); },
+            [](null_value&&) -> bytes {
+                throw std::runtime_error("to_bytes() called on raw value that is null");
+            },
+            [](unset_value&&) -> bytes {
+                throw std::runtime_error("to_bytes() called on raw value that is unset_value");
+            }
+        }, std::move(_data));
+    }
+    bytes_opt to_bytes_opt() && {
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return bytes_opt(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return bytes_opt(::to_bytes(managed_bytes_val)); },
+            [](null_value&&) -> bytes_opt {
+                return std::nullopt;
+            },
+            [](unset_value&&) -> bytes_opt {
+                return std::nullopt;
+            }
+        }, std::move(_data));
     }
     managed_bytes to_managed_bytes() && {
         return std::visit(overloaded_functor{

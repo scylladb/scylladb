@@ -9,7 +9,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest
-from util import unique_name, new_test_table, new_function, new_aggregate
+from util import unique_name, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as
 # the built-in function
@@ -137,3 +137,58 @@ def test_reduce_function(scylla_only, cql, test_keyspace):
                 with new_aggregate(cql, test_keyspace, aggr_body) as aggr_f:
                     result = cql.execute(f"SELECT aggregate_name, reduce_func, state_type FROM system_schema.scylla_aggregates WHERE keyspace_name = '{test_keyspace}' AND aggregate_name = '{aggr_f}' AND argument_types = ['int']").one()
                     assert result == (aggr_f, reduce_f, 'bigint')
+
+def test_collection_initcond(scylla_only, cql, test_keyspace):
+    schema = "id int primary key"
+    row_body = "(acc list<int>, val int) RETURNS NULL ON NULL INPUT RETURNS list<int> LANGUAGE lua AS 'table.insert(acc, val); return acc'"
+    final_body = "(acc list<int>) RETURNS NULL ON NULL INPUT RETURNS list<int> LANGUAGE lua AS 'table.sort(acc); return acc'"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (id) VALUES (5)")
+        cql.execute(f"INSERT INTO {table} (id) VALUES (3)")
+        cql.execute(f"INSERT INTO {table} (id) VALUES (8)")
+        cql.execute(f"INSERT INTO {table} (id) VALUES (2)")
+        with new_function(cql, test_keyspace, row_body) as row_f:
+            with new_function(cql, test_keyspace, final_body) as final_f:
+                aggr_body = f"(int) SFUNC {row_f} STYPE list<int> finalfunc {final_f} INITCOND [6,12,9,7,4,1]"
+                with new_aggregate(cql, test_keyspace, aggr_body) as aggr_f:
+                    result = cql.execute(f"SELECT {aggr_f}(id) AS result FROM {table}").one()
+                    assert result.result == [1,2,3,4,5,6,7,8,9,12]
+
+def test_nested_collection_initcond(scylla_only, cql, test_keyspace):
+    with new_type(cql, test_keyspace, "(a int, b int)") as typ:
+        schema = "id tuple<int,int,int> primary key"
+        row_body = f"""(acc frozen<list<set<{typ}>>>, val tuple<int,int,int>) RETURNS NULL ON NULL INPUT RETURNS frozen<list<set<{typ}>>> LANGUAGE lua AS '
+        while acc[val[1]] == nil do
+            table.insert(acc, {{}});
+        end
+        acc[val[1]][{{a=val[2], b=val[3]}}] = true;
+        return acc'"""
+        final_body = f"""(acc frozen<list<set<{typ}>>>) RETURNS NULL ON NULL INPUT RETURNS list<double> LANGUAGE lua AS '
+        local ret = {{}}
+        for i, k in ipairs(acc) do
+            ret[i] = 0.0;
+            siz = 0;
+            for x, v in pairs(k) do
+                ret[i] = ret[i] + x.a * x.b;
+                siz = siz + x.b;
+            end
+            if siz > 0 then
+                ret[i] = ret[i] / siz;
+            else
+                ret[i] = 0;
+            end
+        end
+        return ret '"""
+        with new_test_table(cql, test_keyspace, schema) as table:
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((1,2,3))")
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((1,3,4))")
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((2,2,3))")
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((2,1,2))")
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((3,3,3))")
+                cql.execute(f"INSERT INTO {table} (id) VALUES ((3,1,4))")
+                with new_function(cql, test_keyspace, row_body) as row_f:
+                    with new_function(cql, test_keyspace, final_body) as final_f:
+                        aggr_body = f"(tuple<int,int,int>) SFUNC {row_f} STYPE frozen<list<set<{typ}>>> finalfunc {final_f} INITCOND []"
+                        with new_aggregate(cql, test_keyspace, aggr_body) as aggr_f:
+                            result = cql.execute(f"SELECT {aggr_f}(id) AS result FROM {table}").one()
+                            assert result.result == [18/7,8/5,13/7]
