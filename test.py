@@ -696,8 +696,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
-                    # FIXME: why only logs of the first server?
-                    self.server_log = cluster[0].read_log()
+                    self.server_log = cluster.read_server_log()
                     self.server_log_filename = cluster[0].log_filename
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
@@ -815,8 +814,7 @@ class PythonTest(Test):
                 self.is_after_test_ok = True
                 self.success = status
             except Exception as e:
-                # FIXME: why only logs of the first server?
-                self.server_log = cluster[0].read_log()
+                self.server_log = cluster.read_server_log()
                 self.server_log_filename = cluster[0].log_filename
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
@@ -849,7 +847,7 @@ class TopologyTest(PythonTest):
             try:
                 self.success = await run_test(self, options)
             except Exception as e:
-                self.server_log = manager.cluster[0].read_log()
+                self.server_log = manager.cluster.read_server_log()
                 self.server_log_filename = manager.cluster[0].log_filename
                 if manager.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))

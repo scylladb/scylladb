@@ -543,6 +543,14 @@ class ScyllaCluster:
         for server in self.running.values():
             server.take_log_savepoint()
 
+    def read_server_log(self) -> str:
+        """Read log data of failed server"""
+        # FIXME: pick failed server
+        if self.running:
+            return next(iter(self.running.values())).read_log()
+        else:
+            return ""
+
     def __getitem__(self, i: int) -> ScyllaServer:
         assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
         return list(self.running.values())[i]
