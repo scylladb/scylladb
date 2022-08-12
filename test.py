@@ -660,13 +660,13 @@ class CQLApprovalTest(Test):
                 logging.info("Server log:\n%s", self.server_log)
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            # FIXME: cluster should provide contact points
-            self.args.insert(1, "--host={}".format(cluster[0].host))
-            # If pre-check fails, e.g. because Scylla failed to start
-            # or crashed between two tests, fail entire test.py
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                # FIXME: cluster should provide contact points
+                self.args.insert(1, "--host={}".format(cluster[0].host))
+                # If pre-check fails, e.g. because Scylla failed to start
+                # or crashed between two tests, fail entire test.py
                 self.is_before_test_ok = True
                 # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
@@ -806,11 +806,11 @@ class PythonTest(Test):
     async def run(self, options: argparse.Namespace) -> Test:
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            # FIXME: cluster should provide contact points
-            self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                # FIXME: cluster should provide contact points
+                self.args.insert(0, "--host={}".format(cluster[0].host))
                 self.is_before_test_ok = True
                 # FIXME: should be more comprehensive than checking the first server
                 cluster[0].take_log_savepoint()
