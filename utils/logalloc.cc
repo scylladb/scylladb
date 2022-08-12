@@ -433,6 +433,7 @@ public:
 };
 
 class segment_pool;
+struct reclaim_timer;
 
 class tracker::impl {
     std::unique_ptr<segment_pool> _segment_pool;
@@ -443,6 +444,7 @@ class tracker::impl {
     size_t _reclamation_step = 1;
     bool _abort_on_bad_alloc = false;
     bool _sanitizer_report_backtrace = false;
+    reclaim_timer* _active_timer = nullptr;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -510,6 +512,20 @@ public:
     // const bool&, so interested parties can save a reference and see updates.
     const bool& sanitizer_report_backtrace() const { return _sanitizer_report_backtrace; }
     void set_sanitizer_report_backtrace(bool rb) { _sanitizer_report_backtrace = rb; }
+    bool try_set_active_timer(reclaim_timer& timer) {
+        if (_active_timer) {
+            return false;
+        }
+        _active_timer = &timer;
+        return true;
+    }
+    bool try_reset_active_timer(reclaim_timer& timer) {
+        if (_active_timer == &timer) {
+            _active_timer = nullptr;
+            return true;
+        }
+        return false;
+    }
 private:
     // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
     size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes, is_preemptible preempt);
@@ -939,8 +955,7 @@ private:
         }
     };
 
-    static thread_local reclaim_timer* _active_timer;
-    static thread_local clock::duration _duration_threshold;
+    clock::duration _duration_threshold;
 
     const char* _name;
 
@@ -1237,11 +1252,9 @@ size_t segment_pool::segments_in_use() const noexcept {
     return _segments_in_use;
 }
 
-thread_local reclaim_timer* reclaim_timer::_active_timer;
-thread_local clock::duration reclaim_timer::_duration_threshold = clock::duration::zero();
-
 reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs)
-    : _name(name)
+    : _duration_threshold(engine().get_blocked_reactor_notify_ms())
+    , _name(name)
     , _preemptible(preemptible)
     , _memory_to_release(memory_to_release)
     , _segments_to_release(segments_to_release)
@@ -1252,21 +1265,16 @@ reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_
     , _extra_logs(std::move(extra_logs))
     , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
 {
-    if (_active_timer) {
+    if (!_tracker.try_set_active_timer(*this)) {
         return;
     }
-    _active_timer = this;
 
     _start = clock::now();
     sample_stats(_start_stats);
-
-    if (_duration_threshold == clock::duration::zero()) {
-        _duration_threshold = engine().get_blocked_reactor_notify_ms();
-    }
 }
 
 reclaim_timer::~reclaim_timer() {
-    if (_active_timer != this) {
+    if (!_tracker.try_reset_active_timer(*this)) {
         return;
     }
 
@@ -1277,8 +1285,6 @@ reclaim_timer::~reclaim_timer() {
         _stat_diff = _end_stats - _start_stats;
         report();
     }
-
-    _active_timer = nullptr;
 }
 
 void reclaim_timer::sample_stats(stats& data) {
