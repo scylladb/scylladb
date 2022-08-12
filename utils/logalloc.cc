@@ -212,8 +212,6 @@ migrate_fn_type::unregister_migrator(uint32_t index) {
 
 namespace logalloc {
 
-static thread_local bool s_sanitizer_report_backtrace = false;
-
 #ifdef DEBUG_LSA_SANITIZER
 
 class region_sanitizer {
@@ -224,6 +222,7 @@ class region_sanitizer {
 private:
     static logging::logger logger;
 
+    const bool* _report_backtrace = nullptr;
     bool _broken = false;
     std::unordered_map<const void*, allocation> _allocations;
 private:
@@ -244,6 +243,7 @@ private:
 private:
     void on_error() { abort(); }
 public:
+    region_sanitizer(const bool& report_backtrace) : _report_backtrace(&report_backtrace) { }
     void on_region_destruction() noexcept {
         run_and_handle_errors([&] {
             if (_allocations.empty()) {
@@ -258,7 +258,7 @@ public:
     }
     void on_allocation(const void* ptr, size_t size) noexcept {
         run_and_handle_errors([&] {
-            auto backtrace = s_sanitizer_report_backtrace ? current_backtrace() : saved_backtrace();
+            auto backtrace = *_report_backtrace ? current_backtrace() : saved_backtrace();
             auto [ it, success ] = _allocations.emplace(ptr, allocation { size, std::move(backtrace) });
             if (!success) {
                 logger.error("Attempting to allocate an {} byte object at an already occupied address {}:\n{}\n"
@@ -337,6 +337,7 @@ logging::logger region_sanitizer::logger("lsa-sanitizer");
 #else
 
 struct region_sanitizer {
+    region_sanitizer(const bool&) { }
     void on_region_destruction() noexcept { }
     void on_allocation(const void*, size_t) noexcept { }
     void on_free(const void* ptr, size_t size) noexcept { }
@@ -441,6 +442,7 @@ class tracker::impl {
     unsigned _reclaiming_disabled_depth = 0;
     size_t _reclamation_step = 1;
     bool _abort_on_bad_alloc = false;
+    bool _sanitizer_report_backtrace = false;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -505,6 +507,9 @@ public:
             reclaim(target, is_preemptible::yes);
         });
     }
+    // const bool&, so interested parties can save a reference and see updates.
+    const bool& sanitizer_report_backtrace() const { return _sanitizer_report_backtrace; }
+    void set_sanitizer_report_backtrace(bool rb) { _sanitizer_report_backtrace = rb; }
 private:
     // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
     size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes, is_preemptible preempt);
@@ -1713,7 +1718,7 @@ private:
 
 public:
     explicit region_impl(tracker& tracker, region* region)
-        : basic_region_impl(tracker), _region(region), _id(next_id())
+        : basic_region_impl(tracker), _region(region), _sanitizer(tracker.get_impl().sanitizer_report_backtrace()), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
@@ -1979,7 +1984,7 @@ public:
         _invalidate_counter = std::max(_invalidate_counter, other._invalidate_counter);
 
         _sanitizer.merge(other._sanitizer);
-        other._sanitizer = { };
+        other._sanitizer = region_sanitizer(_tracker.get_impl().sanitizer_report_backtrace());
     }
 
     // Returns occupancy of the sparsest compactible segment.
@@ -2097,7 +2102,7 @@ void tracker::configure(const config& cfg) {
         _impl->enable_abort_on_bad_alloc();
     }
     _impl->setup_background_reclaim(cfg.background_reclaim_sched_group);
-    s_sanitizer_report_backtrace = cfg.sanitizer_report_backtrace;
+    _impl->set_sanitizer_report_backtrace(cfg.sanitizer_report_backtrace);
 }
 
 memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {
