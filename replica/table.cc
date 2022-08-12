@@ -680,7 +680,7 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
                     std::abort();
                 }
             }
-            if (_async_gate.is_closed()) {
+            if (_stopped) {
                 tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
                 co_await std::move(previous_flush);
                 co_await coroutine::return_exception_ptr(std::move(ex));
@@ -781,7 +781,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         metadata.max_timestamp = old->get_max_timestamp();
         auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
 
-        if (!_async_gate.is_closed()) {
+        if (!_stopped) {
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
@@ -854,10 +854,10 @@ table::start() {
 
 future<>
 table::stop() {
-    if (_async_gate.is_closed()) {
+    if (_stopped) {
         co_return;
     }
-    co_await _async_gate.close();
+    _stopped = true;
     // When dropping a table, ops phasers are closed when detaching.
     if (!_pending_reads_phaser.is_closed()) {
         co_await close_for_read_write_ops();
@@ -1128,7 +1128,7 @@ void table::try_trigger_compaction() noexcept {
 
 void table::do_trigger_compaction() {
     // But not if we're locked out or stopping
-    if (!_async_gate.is_closed()) {
+    if (!_stopped) {
         _compaction_manager.submit(as_table_state());
     }
 }
@@ -2034,8 +2034,8 @@ db::replay_position table::set_low_replay_position_mark() {
 
 template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
-    if (_async_gate.is_closed()) {
-        on_internal_error(tlogger, "Table async_gate is closed");
+    if (_stopped) {
+        on_internal_error(tlogger, "Table is stopped");
     }
 
     utils::latency_counter lc;
@@ -2328,9 +2328,8 @@ table::disable_auto_compaction() {
     // - it will break computation of major compaction descriptor
     //   for new submissions
     _compaction_disabled_by_user = true;
-    return with_gate(_async_gate, [this] {
-        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &as_table_state(), sstables::compaction_type::Compaction);
-    });
+    auto op = generic_op_in_progress();
+    return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &as_table_state(), sstables::compaction_type::Compaction).finally([op = std::move(op)] { });
 }
 
 flat_mutation_reader_v2

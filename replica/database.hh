@@ -477,6 +477,7 @@ private:
     utils::phased_barrier _pending_streams_phaser;
     // Phaser for generic operations
     utils::phased_barrier _pending_generic_ops_phaser;
+    bool _stopped = false;
 
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
