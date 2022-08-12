@@ -766,6 +766,8 @@ public:
         do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }
 
+    // Note: caller is required to take write_in_progress() right after looking up
+    // table object and keep it alive until query is over.
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
     future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
@@ -774,6 +776,9 @@ public:
     // the saved querier from the previous page (if there was one) and after
     // completion it contains the to-be saved querier for the next page (if
     // there is one). Pass nullptr when queriers are not saved.
+    //
+    // Note: caller is required to take read_in_progress() right after looking up
+    // table object and keep it alive until query is over.
     future<lw_shared_ptr<query::result>>
     query(schema_ptr,
         reader_permit permit,
@@ -801,6 +806,9 @@ public:
     // the saved querier from the previous page (if there was one) and after
     // completion it contains the to-be saved querier for the next page (if
     // there is one). Pass nullptr when queriers are not saved.
+    //
+    // Note: caller is required to take read_in_progress() right after looking up
+    // table object and keep it alive until query is over.
     future<reconcilable_result>
     mutation_query(schema_ptr s,
             reader_permit permit,
