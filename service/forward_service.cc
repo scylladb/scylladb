@@ -493,7 +493,8 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
-        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(ks, end_token(*vnode));
+        auto erm = ks.get_effective_replication_map();
+        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
             retain_local_endpoints(topo, live_endpoints);
