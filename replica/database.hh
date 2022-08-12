@@ -475,8 +475,8 @@ private:
     utils::phased_barrier _pending_reads_phaser;
     // Corresponding phaser for in-progress streams
     utils::phased_barrier _pending_streams_phaser;
-    // Corresponding phaser for in-progress flushes
-    utils::phased_barrier _pending_flushes_phaser;
+    // Phaser for generic operations
+    utils::phased_barrier _pending_generic_ops_phaser;
 
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
@@ -988,8 +988,12 @@ public:
         return _pending_streams_phaser.operations_in_progress();
     }
 
-    future<> await_pending_flushes() noexcept {
-        return _pending_flushes_phaser.advance_and_await();
+    utils::phased_barrier::operation generic_op_in_progress() {
+        return _pending_generic_ops_phaser.start();
+    }
+
+    future<> await_generic_ops() noexcept {
+        return _pending_generic_ops_phaser.advance_and_await();
     }
 
     future<> close_for_read_write_ops() noexcept {

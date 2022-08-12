@@ -862,7 +862,7 @@ table::stop() {
     if (!_pending_reads_phaser.is_closed()) {
         co_await close_for_read_write_ops();
     }
-    co_await await_pending_flushes();
+    co_await _pending_generic_ops_phaser.close();
     co_await _compaction_group->stop();
     co_await _sstable_deletion_gate.close();
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
@@ -1611,7 +1611,7 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
         return make_ready_future<>();
     }
-    auto op = _pending_flushes_phaser.start();
+    auto op = _pending_generic_ops_phaser.start();
     return _compaction_group->flush().then([this, op = std::move(op), fp = _highest_rp] {
         _flush_rp = std::max(_flush_rp, fp);
     });
