@@ -459,15 +459,15 @@ private:
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
 
-    // Phaser used to synchronize with in-progress writes. This is useful for code that,
-    // after some modification, needs to ensure that news writes will see it before
-    // it can proceed, such as the view building code.
+    // Phasers for operations that have to keep the table alive for a prolonged
+    // period and need to prevent its detachment from the database and its
+    // destruction.
+    // We have several specific phasers and a generic one for ops that don't fit
+    // any of the more specialized ones.
+    // See write_in_progress() for more details.
     utils::phased_barrier _pending_writes_phaser;
-    // Corresponding phaser for in-progress reads.
     utils::phased_barrier _pending_reads_phaser;
-    // Corresponding phaser for in-progress streams
     utils::phased_barrier _pending_streams_phaser;
-    // Phaser for generic operations
     utils::phased_barrier _pending_generic_ops_phaser;
     bool _stopped = false;
 
@@ -951,6 +951,15 @@ public:
       return _compaction_disabled_by_user;
     }
 
+    // Operations phaser for writes.
+    //
+    // Signal to the table that a write is in progress.
+    // Keeps table attached to the database and prevents its stopping and
+    // destruction until the returned op object is alive.
+    // The phaser is closed when detaching the table from the database. After
+    // that, subsequent calls will return with `gate_closed` exception.
+    // Should be taken right after looking up the table and kept around until the
+    // op is over.
     utils::phased_barrier::operation write_in_progress() {
         return _pending_writes_phaser.start();
     }
@@ -963,6 +972,9 @@ public:
         return _pending_writes_phaser.operations_in_progress();
     }
 
+    // Operations phaser for reads.
+    //
+    // See write_in_progress() for more details.
     utils::phased_barrier::operation read_in_progress() {
         return _pending_reads_phaser.start();
     }
@@ -975,6 +987,11 @@ public:
         return _pending_reads_phaser.operations_in_progress();
     }
 
+    // Operations phaser for operations related to streaming/repair.
+    //
+    // See write_in_progress() for more details.
+    // Unlike the above, this phaser is left open after the table is detached
+    // from the database. It is closed when the table is stopped.
     utils::phased_barrier::operation stream_in_progress() {
         return _pending_streams_phaser.start();
     }
@@ -987,6 +1004,10 @@ public:
         return _pending_streams_phaser.operations_in_progress();
     }
 
+    // Operations phaser for operations that doesn't fit any of the more
+    // specialized phasers.
+    //
+    // See write_in_progress() for more details.
     utils::phased_barrier::operation generic_op_in_progress() {
         return _pending_generic_ops_phaser.start();
     }
