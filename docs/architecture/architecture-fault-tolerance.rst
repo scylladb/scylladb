@@ -1,7 +1,7 @@
-Scylla Architecture - Fault Tolerance
-=====================================
+ScyllaDB Architecture - Fault Tolerance
+========================================
 
-Scylla replicates data according to a :term:`replication<Replication>` strategy that you choose. This strategy will determine the placement of the replicated data.  Scylla runs nodes in a hash ring. All nodes are equal: there are no master, slave, or replica sets.
+ScyllaDB replicates data according to a :term:`replication<Replication>` strategy that you choose. This strategy will determine the placement of the replicated data.  ScyllaDB runs nodes in a hash ring. All nodes are equal: there are no master, slave, or replica sets.
 
 The :term:`Replication Factor (RF)<Replication Factor (RF)>` is equivalent to the number of nodes where data (rows and partitions) are replicated.   Data is replicated to multiple (RF=N) nodes.
 
@@ -23,7 +23,7 @@ For the CQL Shell (:doc:`CQLsh </cql/cqlsh>`), the consistency level defaults to
 
 
 .. note::
-      Regardless of the **Consistency Level**, a write is always sent to *all* replicas, as set by the **Replication Factor**. Consistency Level control *when* a client acknowledged, not how many replicas are updated.
+      Regardless of the **Consistency Level**, a write is always sent to *all* replicas, as set by the **Replication Factor**. Consistency Level control *when* a client is acknowledged, not how many replicas are updated.
   
 During a write operation, the coordinator communicates with the replicas (the number of which depends on the Replication Factor).  The write is successful when the specified number of replicas confirm the write.
 
@@ -55,19 +55,19 @@ The Consistency Level itself impacts availability. A **higher** Consistency Leve
 
 Refer to the :ref:`Consistency Level table <consistency-levels-reference>` to get information about the Consistency Levels that are available for a read or write operation.
 
-Scylla, as do many distributed database systems, adheres to the :term:`CAP Theorem<CAP Theorem>`.  The **CAP Theorem** is the notion that **Consistency**, **Availability** and **Partition Tolerance** of data are mutually dependent in a distributed system. Increasing any 2 of these factors will reduce the third.
+ScyllaDB, as do many distributed database systems, adheres to the :term:`CAP Theorem<CAP Theorem>`.  The **CAP Theorem** is the notion that **Consistency**, **Availability** and **Partition Tolerance** of data are mutually dependent in a distributed system. Increasing any 2 of these factors will reduce the third.
 
-Scylla adheres to the CAP theorem  in the following way: 
+ScyllaDB adheres to the CAP theorem  in the following way: 
 
 .. image:: 6-CAP_Theorem.jpg
 
-Scylla chooses availability and partition tolerance over consistency, such that:
+ScyllaDB chooses availability and partition tolerance over consistency, such that:
 
 - It’s impossible to be both consistent and highly available during a network partition;
 
 - If we sacrifice consistency, we can be highly available.
 
-You’ll need to design your application around Scylla’s data modeling, but the net result is an application that will never go down.
+You’ll need to design your application around ScyllaDB’s data modeling, but the net result is an application that will never go down.
 
 
 Additional Resources
@@ -75,4 +75,4 @@ Additional Resources
 
 * :doc:`Consistency Level Console Demo </architecture/console-CL-full-demo>`
 * :doc:`Consistency Levels </cql/consistency/>`
-* From Scylla Univeristy: take the `Consistency Level lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_
+* From ScyllaDB Univeristy: take the `Consistency Level lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_
