@@ -538,6 +538,11 @@ class ScyllaCluster:
         """Get a server id (IP) from running servers"""
         return next(iter(self.running))
 
+    def take_log_savepoint(self) -> None:
+        """Save the log size on all running servers"""
+        for server in self.running.values():
+            server.take_log_savepoint()
+
     def __getitem__(self, i: int) -> ScyllaServer:
         assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
         return list(self.running.values())[i]
@@ -674,8 +679,7 @@ class ScyllaClusterManager:
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
         self.cluster.before_test(self.test_name)
         self.is_before_test_ok = True
-        # FIXME: savepoint for all servers
-        self.cluster[0].take_log_savepoint()
+        self.cluster.take_log_savepoint()
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""

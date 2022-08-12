@@ -667,8 +667,7 @@ class CQLApprovalTest(Test):
                 # If pre-check fails, e.g. because Scylla failed to start
                 # or crashed between two tests, fail entire test.py
                 self.is_before_test_ok = True
-                # FIXME: should be more comprehensive than checking the first server
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
@@ -810,8 +809,7 @@ class PythonTest(Test):
                 logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
                 self.args.insert(0, "--host={}".format(cluster.endpoint()))
                 self.is_before_test_ok = True
-                # FIXME: should be more comprehensive than checking the first server
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
