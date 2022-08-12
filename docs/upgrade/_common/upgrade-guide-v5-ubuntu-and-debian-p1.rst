@@ -96,11 +96,6 @@ Before upgrading, check what version you are running now using ``dpkg -s scylla-
 
 Answer ‘y’ to the first two questions.
 
-**To upgrade ScyllaDB and update 3rd party and OS packages:**
-
-.. include:: /upgrade/_common/upgrade-image.rst
-
-
 .. note::
 
    Alternator users upgrading from Scylla 4.0 to 4.1 need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`.
