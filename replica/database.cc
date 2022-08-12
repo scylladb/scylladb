@@ -2431,7 +2431,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
             auto& cf = *table_shards[this_shard_id()];
             auto st = std::make_unique<table_truncate_state>();
 
-            st->holder = cf.async_gate().hold();
+            st->op = cf.generic_op_in_progress();
 
             // Force mutations coming in to re-acquire higher rp:s
             // This creates a "soft" ordering, in that we will guarantee that

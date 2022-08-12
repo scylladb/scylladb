@@ -1651,7 +1651,7 @@ private:
     static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
 
     struct table_truncate_state {
-        gate::holder holder;
+        utils::phased_barrier::operation op;
         db_clock::time_point low_mark_at;
         db::replay_position low_mark;
         std::vector<compaction_manager::compaction_reenabler> cres;
