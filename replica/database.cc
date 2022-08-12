@@ -1011,7 +1011,8 @@ future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
     remove(cf);
     cf.clear_views();
-    co_await cf.await_pending_ops();
+    co_await cf.close_for_read_write_ops();
+    co_await cf.await_pending_flushes();
     for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
         co_await sem->evict_inactive_reads_for_table(uuid);
     }

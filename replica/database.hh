@@ -992,8 +992,8 @@ public:
         return _pending_flushes_phaser.advance_and_await();
     }
 
-    future<> await_pending_ops() noexcept {
-        return when_all(await_pending_reads(), await_pending_writes(), await_pending_streams(), await_pending_flushes()).discard_result();
+    future<> close_for_read_write_ops() noexcept {
+        return when_all(_pending_reads_phaser.close(), _pending_writes_phaser.close(), _pending_streams_phaser.close()).discard_result();
     }
 
     void add_or_update_view(view_ptr v);

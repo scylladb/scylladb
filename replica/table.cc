@@ -858,7 +858,11 @@ table::stop() {
         co_return;
     }
     co_await _async_gate.close();
-    co_await await_pending_ops();
+    // When dropping a table, ops phasers are closed when detaching.
+    if (!_pending_reads_phaser.is_closed()) {
+        co_await close_for_read_write_ops();
+    }
+    co_await await_pending_flushes();
     co_await _compaction_group->stop();
     co_await _sstable_deletion_gate.close();
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
