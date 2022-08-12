@@ -1858,15 +1858,13 @@ future<> database::do_apply_in_memory(const mutation& m, table& tbl, db::rp_hand
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& tbl = find_column_family(m.column_family_id());
-    return with_gate(tbl.async_gate(), [this, &m, h = std::move(h), &tbl, timeout] () mutable -> future<> {
-        return do_apply_in_memory(m, tbl, std::move(h), timeout);
-    });
+    auto op = tbl.write_in_progress();
+    return do_apply_in_memory(m, tbl, std::move(h), timeout).finally([op = std::move(op)] { });
 }
 
 future<> database::apply_in_memory(const mutation& m, table& tbl, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return with_gate(tbl.async_gate(), [this, &m, h = std::move(h), &tbl, timeout]() mutable -> future<> {
-        return do_apply_in_memory(m, tbl, std::move(h), timeout);
-    });
+    auto op = tbl.write_in_progress();
+    return do_apply_in_memory(m, tbl, std::move(h), timeout).finally([op = std::move(op)] { });
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
