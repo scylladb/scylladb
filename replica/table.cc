@@ -2155,13 +2155,11 @@ table::query(schema_ptr s,
         co_return make_lw_shared<query::result>();
     }
 
-    _async_gate.enter();
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
 
     auto finally = defer([&] () noexcept {
         _stats.reads.mark(lc);
-        _async_gate.leave();
     });
 
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
