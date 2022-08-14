@@ -51,9 +51,7 @@ private:
     void flush_rows_and_tombstones(position_in_partition_view pos) {
         if (!_static_row.empty()) {
             auto row = std::move(_static_row.get_existing());
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(static_row(std::move(row)));
-            }
+            _stop_consuming = _consumer.consume(static_row(std::move(row)));
         }
         if (_current_row) {
             auto row_entry = std::move(_current_row_entry);
