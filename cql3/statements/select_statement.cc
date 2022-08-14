@@ -609,17 +609,24 @@ indexed_table_select_statement::do_execute_base_query(
                 concurrency *= 2;
             }
             return qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-            .then(utils::result_wrap([is_paged, &previous_result_size, &ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) -> coordinator_result<stop_iteration> {
+            .then([is_paged, &previous_result_size, &ranges_to_vnodes, &merger] (coordinator_result<service::storage_proxy::coordinator_query_result> rqr) -> coordinator_result<stop_iteration> {
+                if (!rqr.has_value()) {
+                    return std::move(rqr).as_failure();
+                }
+                auto& qr = rqr.value();
                 auto is_short_read = qr.query_result->is_short_read();
                 // Results larger than 1MB should be shipped to the client immediately
                 const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
                 previous_result_size = qr.query_result->buf().size();
                 merger(std::move(qr.query_result));
                 return stop_iteration(is_short_read || ranges_to_vnodes.empty() || page_limit_reached);
-            }));
-        }).then(utils::result_wrap([&merger, cmd]() mutable {
+            });
+        }).then([&merger, cmd] (coordinator_result<void> r) mutable {
+            if (!r.has_value()) {
+                return make_ready_future<coordinator_result<value_type>>(std::move(r).as_failure());
+            }
             return make_ready_future<coordinator_result<value_type>>(value_type(merger.get(), std::move(cmd)));
-        }));
+        });
     });
 }
 
