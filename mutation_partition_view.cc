@@ -315,12 +315,14 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
 
     auto consume_rt = [&] (range_tombstone&& rt) {
         cookie.iterators->rts_begin = rt_it;
-        visitor.accept_row_tombstone(std::move(rt));
+        return visitor.accept_row_tombstone(std::move(rt));
     };
     auto consume_cr = [&] (ser::deletable_row_view&& cr, clustering_key_prefix&& cr_key) {
         cookie.iterators->crs_begin = cr_it;
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        visitor.accept_row(position_in_partition_view::for_key(cr_key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+        if (visitor.accept_row(position_in_partition_view::for_key(cr_key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes)) {
+            return stop_iteration::yes;
+        }
 
         struct cell_visitor {
             mutation_partition_view_virtual_visitor& _visitor;
@@ -333,6 +335,7 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
             }
         };
         read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        return stop_iteration::no;
     };
 
     std::optional<range_tombstone> rt;
@@ -361,21 +364,21 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
         next_rt();
         next_cr();
         bool emit_rt = bool(rt);
+        stop_iteration stop;
         if (rt && cr) {
             auto rt_pos = rt->position();
             auto cr_pos = position_in_partition_view::for_key(*cr_key);
             emit_rt = (cmp(rt_pos, cr_pos) < 0);
         }
-        // FIXME: allow visitor to return stop_iteration
         if (emit_rt) {
-            consume_rt(std::move(*std::exchange(rt, std::nullopt)));
+            stop = consume_rt(std::move(*std::exchange(rt, std::nullopt)));
         } else if (cr) {
-            consume_cr(std::move(*std::exchange(cr, std::nullopt)), std::move(*cr_key));
+            stop = consume_cr(std::move(*std::exchange(cr, std::nullopt)), std::move(*cr_key));
         } else {
             return accept_ordered_result{stop_iteration::yes, accept_ordered_cookie{}};
         }
-        if (is_preemptible && need_preempt()) {
-            return accept_ordered_result{stop_iteration::no, std::move(cookie)};
+        if (stop || (is_preemptible && need_preempt())) {
+            return accept_ordered_result{stop, std::move(cookie)};
         }
     }
 }

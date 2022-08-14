@@ -43,8 +43,8 @@ public:
     virtual void accept_partition_tombstone(tombstone t) = 0;
     virtual void accept_static_cell(column_id, atomic_cell ac) = 0;
     virtual void accept_static_cell(column_id, collection_mutation_view cmv) = 0;
-    virtual void accept_row_tombstone(range_tombstone rt) = 0;
-    virtual void accept_row(position_in_partition_view pipv, row_tombstone rt, row_marker rm, is_dummy, is_continuous) = 0;
+    virtual stop_iteration accept_row_tombstone(range_tombstone rt) = 0;
+    virtual stop_iteration accept_row(position_in_partition_view pipv, row_tombstone rt, row_marker rm, is_dummy, is_continuous) = 0;
     virtual void accept_row_cell(column_id, atomic_cell ac) = 0;
     virtual void accept_row_cell(column_id, collection_mutation_view cmv) = 0;
 };

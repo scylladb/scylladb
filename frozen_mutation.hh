@@ -102,22 +102,22 @@ public:
         r.append_cell(id, collection_mutation(*_schema.static_column_at(id).type, std::move(collection)));
     }
 
-    virtual void accept_row_tombstone(range_tombstone rt) override {
+    virtual stop_iteration accept_row_tombstone(range_tombstone rt) override {
         flush_rows_and_tombstones(rt.position());
         _rt_gen.consume(std::move(rt));
-        // FIXME: propagate stop_consuming to caller
+        return _stop_consuming;
     }
 
-    virtual void accept_row(position_in_partition_view key, row_tombstone deleted_at, row_marker rm, is_dummy dummy, is_continuous continuous) override {
+    virtual stop_iteration accept_row(position_in_partition_view key, row_tombstone deleted_at, row_marker rm, is_dummy dummy, is_continuous continuous) override {
         if (flush_rows_and_tombstones(key)) {
-            // FIXME: propagate stop_consuming to caller
-            return;
+            return stop_iteration::yes;
         }
         _current_row_entry = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, key, dummy, continuous));
         deletable_row& r = _current_row_entry->row();
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;
+        return stop_iteration::no;
     }
 
     void accept_row_cell(column_id id, atomic_cell cell) override {
