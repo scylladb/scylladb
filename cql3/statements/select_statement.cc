@@ -610,24 +610,20 @@ indexed_table_select_statement::do_execute_base_query(
                 concurrency *= 2;
             }
             coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
-            {
-                if (!rqr.has_value()) {
-                    co_return std::move(rqr).as_failure();
-                }
-                auto& qr = rqr.value();
-                auto is_short_read = qr.query_result->is_short_read();
-                // Results larger than 1MB should be shipped to the client immediately
-                const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
-                previous_result_size = qr.query_result->buf().size();
-                merger(std::move(qr.query_result));
-                if (is_short_read || ranges_to_vnodes.empty() || page_limit_reached) {
-                    break;
-                }
+            if (!rqr.has_value()) {
+                co_return std::move(rqr).as_failure();
+            }
+            auto& qr = rqr.value();
+            auto is_short_read = qr.query_result->is_short_read();
+            // Results larger than 1MB should be shipped to the client immediately
+            const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
+            previous_result_size = qr.query_result->buf().size();
+            merger(std::move(qr.query_result));
+            if (is_short_read || ranges_to_vnodes.empty() || page_limit_reached) {
+                break;
             }
         }
-        {
-            co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd)));
-        }
+        co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd)));
     }
 }
 
