@@ -12,6 +12,7 @@ import time
 import socket
 import os
 import collections
+import ssl
 from contextlib import contextmanager
 
 from cassandra.auth import PlainTextAuthProvider
@@ -145,7 +146,7 @@ def new_secondary_index(cql, table, column, name='', extra=''):
 
 # Helper function for establishing a connection with given username and password
 @contextmanager
-def cql_session(host, port, ssl, username, password):
+def cql_session(host, port, is_ssl, username, password):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -156,7 +157,7 @@ def cql_session(host, port, ssl, username, password):
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout = 120)
-    if ssl:
+    if is_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -188,7 +189,7 @@ def new_user(cql, username=''):
 @contextmanager
 def new_session(cql, username):
     endpoint = cql.hosts[0].endpoint
-    with cql_session(host=endpoint.address, port=endpoint.port, ssl=False, username=username, password=username) as session:
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=False, username=username, password=username) as session:
         yield session
         session.shutdown()
 
