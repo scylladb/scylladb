@@ -2696,11 +2696,12 @@ future<>
 storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state, service_permit permit) {
     get_stats().received_counter_updates += mutations.size();
-    return do_with(std::move(mutations), [this, cl, timeout, trace_state = std::move(trace_state), permit = std::move(permit)] (std::vector<frozen_mutation_and_schema>& update_ms) mutable {
-        return parallel_for_each(update_ms, [this, cl, timeout, trace_state, permit] (frozen_mutation_and_schema& fm_a_s) {
-            return mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit);
+    {
+        auto& update_ms = mutations;
+        co_await coroutine::parallel_for_each(update_ms, [&] (frozen_mutation_and_schema& fm_a_s) -> future<> {
+            co_await mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit);
         });
-    });
+    }
 }
 
 future<>
@@ -3015,7 +3016,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 template<typename Range>
 future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout) {
     if (boost::empty(mutations)) {
-        return make_ready_future<>();
+        co_return;
     }
 
     slogger.trace("mutate_counters cl={}", cl);
@@ -3032,30 +3033,14 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Forward mutations to the leaders chosen for them
     auto my_address = utils::fb_utilities::get_broadcast_address();
-    return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) {
+    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) -> future<> {
+      auto first_schema = endpoint_and_mutations.second[0].s;
+
+      try {
         auto endpoint = endpoint_and_mutations.first;
 
-        // The leader receives a vector of mutations and processes them together,
-        // so if there is a timeout we don't really know which one is to "blame"
-        // and what to put in ks and cf fields of write timeout exception.
-        // Let's just use the schema of the first mutation in a vector.
-        auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl, permit] (std::exception_ptr exp) {
-            auto& ks = _db.local().find_keyspace(s->ks_name());
-            auto erm = ks.get_effective_replication_map();
-            try {
-                std::rethrow_exception(std::move(exp));
-            } catch (rpc::timeout_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
-            } catch (timed_out_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
-            } catch (rpc::closed_error&) {
-                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER));
-            }
-        };
-
-        auto f = make_ready_future<>();
         if (endpoint == my_address) {
-            f = this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit);
+            co_await this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
@@ -3066,11 +3051,31 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // that the query was non-token-aware and bump relevant metric.
             get_stats().writes_coordinator_outside_replica_set += fms.size();
 
-            f = remote().send_counter_mutation(
+            co_await remote().send_counter_mutation(
                     netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 }, timeout, tr_state,
                     std::move(fms), cl);
         }
-        return f.handle_exception(std::move(handle_error));
+      } catch (...) {
+        // The leader receives a vector of mutations and processes them together,
+        // so if there is a timeout we don't really know which one is to "blame"
+        // and what to put in ks and cf fields of write timeout exception.
+        // Let's just use the schema of the first mutation in a vector.
+        auto s = first_schema;
+        auto exp = std::current_exception();
+        {
+            auto& ks = _db.local().find_keyspace(s->ks_name());
+            auto erm = ks.get_effective_replication_map();
+            try {
+                std::rethrow_exception(std::move(exp));
+            } catch (rpc::timeout_error&) {
+                throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
+            } catch (timed_out_error&) {
+                throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
+            } catch (rpc::closed_error&) {
+                throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
+            }
+        }
+      }
     });
 }
 
