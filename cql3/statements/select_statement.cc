@@ -566,12 +566,13 @@ indexed_table_select_statement::do_execute_base_query(
 
     const bool is_paged = bool(paging_state);
     base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
-    return do_with(std::move(query_state), [this, is_paged, &qp, &state, &options, cmd, timeout] (auto&& query_state) {
+    {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
         auto& concurrency = query_state.concurrency;
         auto& previous_result_size = query_state.previous_result_size;
-        return utils::result_repeat([this, is_paged, &previous_result_size, &ranges_to_vnodes, &merger, &qp, &state, &options, &concurrency, cmd, timeout]() {
+        // FIXME: make termination condition explicit
+        for (;;) {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
             dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
@@ -608,10 +609,10 @@ indexed_table_select_statement::do_execute_base_query(
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
-            return qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-            .then([is_paged, &previous_result_size, &ranges_to_vnodes, &merger] (coordinator_result<service::storage_proxy::coordinator_query_result> rqr) -> coordinator_result<stop_iteration> {
+            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            {
                 if (!rqr.has_value()) {
-                    return std::move(rqr).as_failure();
+                    co_return std::move(rqr).as_failure();
                 }
                 auto& qr = rqr.value();
                 auto is_short_read = qr.query_result->is_short_read();
@@ -619,15 +620,15 @@ indexed_table_select_statement::do_execute_base_query(
                 const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
                 previous_result_size = qr.query_result->buf().size();
                 merger(std::move(qr.query_result));
-                return stop_iteration(is_short_read || ranges_to_vnodes.empty() || page_limit_reached);
-            });
-        }).then([&merger, cmd] (coordinator_result<void> r) mutable {
-            if (!r.has_value()) {
-                return make_ready_future<coordinator_result<value_type>>(std::move(r).as_failure());
+                if (is_short_read || ranges_to_vnodes.empty() || page_limit_reached) {
+                    break;
+                }
             }
-            return make_ready_future<coordinator_result<value_type>>(value_type(merger.get(), std::move(cmd)));
-        });
-    });
+        }
+        {
+            co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd)));
+        }
+    }
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
