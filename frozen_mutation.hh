@@ -48,23 +48,26 @@ private:
     Consumer& _consumer;
     stop_iteration _stop_consuming = stop_iteration::no;
 
-    void flush_rows_and_tombstones(position_in_partition_view pos) {
+    stop_iteration flush_rows_and_tombstones(position_in_partition_view pos) {
         if (!_static_row.empty()) {
             auto row = std::move(_static_row.get_existing());
             _stop_consuming = _consumer.consume(static_row(std::move(row)));
+            if (_stop_consuming) {
+                return _stop_consuming;
+            }
         }
         if (_current_row) {
             auto row_entry = std::move(_current_row_entry);
             _current_row = nullptr;
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(clustering_row(std::move(*row_entry)));
+            _stop_consuming = _consumer.consume(clustering_row(std::move(*row_entry)));
+            if (_stop_consuming) {
+                return _stop_consuming;
             }
         }
         _rt_gen.flush(pos, [this] (range_tombstone_change rt) {
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(std::move(rt));
-            }
+            _stop_consuming = _consumer.consume(std::move(rt));
         });
+        return _stop_consuming;
     }
 
 public:
@@ -102,10 +105,14 @@ public:
     virtual void accept_row_tombstone(range_tombstone rt) override {
         flush_rows_and_tombstones(rt.position());
         _rt_gen.consume(std::move(rt));
+        // FIXME: propagate stop_consuming to caller
     }
 
     virtual void accept_row(position_in_partition_view key, row_tombstone deleted_at, row_marker rm, is_dummy dummy, is_continuous continuous) override {
-        flush_rows_and_tombstones(key);
+        if (flush_rows_and_tombstones(key)) {
+            // FIXME: propagate stop_consuming to caller
+            return;
+        }
         _current_row_entry = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, key, dummy, continuous));
         deletable_row& r = _current_row_entry->row();
         r.apply(rm);
