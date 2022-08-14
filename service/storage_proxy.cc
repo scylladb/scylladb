@@ -3035,23 +3035,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) {
         auto endpoint = endpoint_and_mutations.first;
 
-        // The leader receives a vector of mutations and processes them together,
-        // so if there is a timeout we don't really know which one is to "blame"
-        // and what to put in ks and cf fields of write timeout exception.
-        // Let's just use the schema of the first mutation in a vector.
-        auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl, permit] (std::exception_ptr exp) {
-            auto& ks = _db.local().find_keyspace(s->ks_name());
-            auto erm = ks.get_effective_replication_map();
-            try {
-                std::rethrow_exception(std::move(exp));
-            } catch (rpc::timeout_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
-            } catch (timed_out_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
-            } catch (rpc::closed_error&) {
-                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER));
-            }
-        };
+        auto first_schema = endpoint_and_mutations.second[0].s;
 
         auto f = make_ready_future<>();
         if (endpoint == my_address) {
@@ -3070,7 +3054,24 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                     netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 }, timeout, tr_state,
                     std::move(fms), cl);
         }
-        return f.handle_exception(std::move(handle_error));
+
+        // The leader receives a vector of mutations and processes them together,
+        // so if there is a timeout we don't really know which one is to "blame"
+        // and what to put in ks and cf fields of write timeout exception.
+        // Let's just use the schema of the first mutation in a vector.
+        return f.handle_exception([this, sp = this->shared_from_this(), s = first_schema, cl, permit] (std::exception_ptr exp) {
+            auto& ks = _db.local().find_keyspace(s->ks_name());
+            auto erm = ks.get_effective_replication_map();
+            try {
+                std::rethrow_exception(std::move(exp));
+            } catch (rpc::timeout_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
+            } catch (timed_out_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER));
+            } catch (rpc::closed_error&) {
+                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER));
+            }
+        });
     });
 }
 
