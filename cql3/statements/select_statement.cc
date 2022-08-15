@@ -655,29 +655,14 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
 
-    struct base_query_state {
-        query::result_merger merger;
-        std::vector<primary_key> primary_keys;
-        std::vector<primary_key>::iterator current_primary_key;
+        query::result_merger merger(cmd->get_row_limit(), query::max_partitions);
+        std::vector<primary_key> keys = std::move(primary_keys);
+        std::vector<primary_key>::iterator key_it(keys.begin());
         size_t previous_result_size = 0;
         size_t next_iteration_size = 0;
-        base_query_state(uint64_t row_limit, std::vector<primary_key>&& keys)
-                : merger(row_limit, query::max_partitions)
-                , primary_keys(std::move(keys))
-                , current_primary_key(primary_keys.begin())
-                {}
-        base_query_state(base_query_state&&) = default;
-        base_query_state(const base_query_state&) = delete;
-    };
 
-    base_query_state query_state{cmd->get_row_limit(), std::move(primary_keys)};
     const bool is_paged = bool(paging_state);
     {
-        auto &merger = query_state.merger;
-        auto &keys = query_state.primary_keys;
-        auto &key_it = query_state.current_primary_key;
-        auto &previous_result_size = query_state.previous_result_size;
-        auto &next_iteration_size = query_state.next_iteration_size;
         // FIXME: make stop condition explicit
         for (;;) {
             // Starting with 1 key, we check if the result was a short read, and if not,
