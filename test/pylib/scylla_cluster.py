@@ -559,10 +559,6 @@ class ScyllaCluster:
         else:
             return None
 
-    def __getitem__(self, i: int) -> ScyllaServer:
-        assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
-        return list(self.running.values())[i]
-
     def __str__(self):
         return f"{{{', '.join(str(c) for c in self.running)}}}"
 
