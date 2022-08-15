@@ -672,13 +672,14 @@ indexed_table_select_statement::do_execute_base_query(
 
     base_query_state query_state{cmd->get_row_limit(), std::move(primary_keys)};
     const bool is_paged = bool(paging_state);
-    return do_with(std::move(query_state), [this, is_paged, &qp, &state, &options, cmd, timeout] (auto&& query_state) {
+    {
         auto &merger = query_state.merger;
         auto &keys = query_state.primary_keys;
         auto &key_it = query_state.current_primary_key;
         auto &previous_result_size = query_state.previous_result_size;
         auto &next_iteration_size = query_state.next_iteration_size;
-        return utils::result_repeat([this, is_paged, &previous_result_size, &next_iteration_size, &keys, &key_it, &merger, &qp, &state, &options, cmd, timeout]() {
+        // FIXME: make stop condition explicit
+        for (;;) {
             // Starting with 1 key, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more key than before
             auto already_done = std::distance(keys.begin(), key_it);
@@ -692,7 +693,8 @@ indexed_table_select_statement::do_execute_base_query(
             auto command = ::make_lw_shared<query::read_command>(*cmd);
 
             query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
-            return utils::result_map_reduce(key_it, key_it_end, [this, &qp, &state, &options, cmd, timeout] (auto& key) {
+            coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult = co_await utils::result_map_reduce(key_it, key_it_end, coroutine::lambda([&] (auto& key)
+                    -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 // for each partition, read just one clustering row (TODO: can
                 // get all needed rows of one partition at once.)
@@ -700,16 +702,18 @@ indexed_table_select_statement::do_execute_base_query(
                 if (key.clustering) {
                     command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
                 }
-                return qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-                .then([] (coordinator_result<service::storage_proxy::coordinator_query_result> rqr) -> coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> {
+                coordinator_result<service::storage_proxy::coordinator_query_result> rqr
+                        = co_await qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+                {
                     if (!rqr.has_value()) {
-                        return std::move(rqr).as_failure();
+                        co_return std::move(rqr).as_failure();
                     }
-                    return std::move(rqr.value().query_result);
-                });
-            }, std::move(oneshot_merger)).then([is_paged, &previous_result_size, &key_it, key_it_end = std::move(key_it_end), &keys, &merger] (coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult) -> coordinator_result<stop_iteration> {
+                    co_return std::move(rqr.value().query_result);
+                }
+            }), std::move(oneshot_merger));
+            {
                 if (!rresult.has_value()) {
-                    return std::move(rresult).as_failure();
+                    co_return std::move(rresult).as_failure();
                 }
                 auto& result = rresult.value();
                 auto is_short_read = result->is_short_read();
@@ -718,15 +722,13 @@ indexed_table_select_statement::do_execute_base_query(
                 previous_result_size = result->buf().size();
                 merger(std::move(result));
                 key_it = key_it_end;
-                return stop_iteration(is_short_read || key_it == keys.end() || page_limit_reached);
-            });
-        }).then([&merger, cmd] (coordinator_result<void> r) mutable {
-            if (!r.has_value()) {
-                return make_ready_future<coordinator_result<value_type>>(std::move(r).as_failure());
+                if (is_short_read || key_it == keys.end() || page_limit_reached) {
+                    break;
+                }
             }
-            return make_ready_future<coordinator_result<value_type>>(value_type(merger.get(), std::move(cmd)));
-        });
-    });
+        }
+        co_return value_type(merger.get(), std::move(cmd));
+    }
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
