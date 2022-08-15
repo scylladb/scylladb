@@ -701,10 +701,17 @@ indexed_table_select_statement::do_execute_base_query(
                     command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
                 }
                 return qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-                .then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) -> coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> {
-                    return std::move(qr.query_result);
-                }));
-            }, std::move(oneshot_merger)).then(utils::result_wrap([is_paged, &previous_result_size, &key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) -> coordinator_result<stop_iteration> {
+                .then([] (coordinator_result<service::storage_proxy::coordinator_query_result> rqr) -> coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> {
+                    if (!rqr.has_value()) {
+                        return std::move(rqr).as_failure();
+                    }
+                    return std::move(rqr.value().query_result);
+                });
+            }, std::move(oneshot_merger)).then([is_paged, &previous_result_size, &key_it, key_it_end = std::move(key_it_end), &keys, &merger] (coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult) -> coordinator_result<stop_iteration> {
+                if (!rresult.has_value()) {
+                    return std::move(rresult).as_failure();
+                }
+                auto& result = rresult.value();
                 auto is_short_read = result->is_short_read();
                 // Results larger than 1MB should be shipped to the client immediately
                 const bool page_limit_reached = is_paged && result->buf().size() >= query::result_memory_limiter::maximum_result_size;
@@ -712,10 +719,13 @@ indexed_table_select_statement::do_execute_base_query(
                 merger(std::move(result));
                 key_it = key_it_end;
                 return stop_iteration(is_short_read || key_it == keys.end() || page_limit_reached);
-            }));
-        }).then(utils::result_wrap([&merger, cmd] () mutable {
+            });
+        }).then([&merger, cmd] (coordinator_result<void> r) mutable {
+            if (!r.has_value()) {
+                return make_ready_future<coordinator_result<value_type>>(std::move(r).as_failure());
+            }
             return make_ready_future<coordinator_result<value_type>>(value_type(merger.get(), std::move(cmd)));
-        }));
+        });
     });
 }
 
