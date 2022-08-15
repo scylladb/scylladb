@@ -39,7 +39,7 @@ enum class application_state {
     CDC_GENERATION_ID,
     SNITCH_NAME,
     // pad to allow adding new states to existing cluster
-    X10,
+    INSTANCE_ID,
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m);

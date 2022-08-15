@@ -317,7 +317,9 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        auto replace_info = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        bootstrap_tokens = replace_info.tokens;
+        _instance_id_of_node_to_be_replaced = replace_info.instance_id;
         auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -379,6 +381,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // handle_state_normal().
         tmptr->update_host_id(local_host_id, get_broadcast_address());
     }
+    auto local_instance_id = _db.local().get_config().instance_id;
 
     // Replicate the tokens early because once gossip runs other nodes
     // might send reads/writes to this node. Replicate it early to make
@@ -395,6 +398,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
+    app_states.emplace(gms::application_state::INSTANCE_ID, versioned_value::instance_id(local_instance_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
     app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
@@ -1537,7 +1541,7 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
     }
 }
 
-future<storage_service::replacement_info>
+future<replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
@@ -1575,13 +1579,15 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
     }
 
-    replacement_info ret {std::move(tokens)};
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
+    auto instance_id = _gossiper.get_instance_id(replace_address);
     co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
     const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
     co_await _gossiper.reset_endpoint_state_map();
+
+    replacement_info ret{std::move(tokens), instance_id};
     co_return ret;
 }
 
@@ -1882,12 +1888,14 @@ future<> storage_service::decommission() {
                     nodes.push_back(x.first);
                 }
             }
-            slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+            auto instance_id = ss._gossiper.get_instance_id();
+            slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}, instance_id={}", uuid, endpoint, nodes, ignore_nodes, instance_id);
 
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
             auto req = node_ops_cmd_request{node_ops_cmd::decommission_prepare, uuid, ignore_nodes, leaving_nodes, {}};
+            req.instance_ids_to_block = std::list<utils::UUID>{instance_id};
             try {
                 parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2030,7 +2038,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         {get_broadcast_address(), tokens},
     };
     auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_prepare, uuid, ignore_nodes, {}, {}, bootstrap_nodes);
-    slogger.info("bootstrap[{}]: Started bootstrap operation, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, bootstrap_nodes, sync_nodes, ignore_nodes);
+    slogger.info("bootstrap[{}]: Started bootstrap operation, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, bootstrap_nodes, sync_nodes, ignore_nodes, _instance_id_of_node_to_be_replaced);
     try {
         // Step 3: Prepare to sync data
         parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
@@ -2123,7 +2131,10 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     std::unordered_set<gms::inet_address> nodes_down;
     std::unordered_set<gms::inet_address> nodes_aborted;
     auto req = node_ops_cmd_request{node_ops_cmd::replace_prepare, uuid, ignore_nodes, {}, replace_nodes};
-    slogger.info("replace[{}]: Started replace operation, replace_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, replace_nodes, sync_nodes, ignore_nodes);
+    if (_instance_id_of_node_to_be_replaced) {
+        req.instance_ids_to_block = std::list<utils::UUID>{_instance_id_of_node_to_be_replaced.value()};
+    }
+    slogger.info("replace[{}]: Started replace operation, replace_nodes={}, sync_nodes={}, ignore_nodes={}, instance_id_to_replace={}", uuid, replace_nodes, sync_nodes, ignore_nodes, _instance_id_of_node_to_be_replaced);
     try {
         // Step 2: Prepare to sync data
         parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
@@ -2237,6 +2248,12 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             auto tokens = tmptr->get_tokens(endpoint);
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
 
+            auto instance_ids_to_block = std::optional<std::list<utils::UUID>>();
+            auto instance_id_to_remove = ss._gossiper.get_instance_id(endpoint);
+            if (instance_id_to_remove) {
+                instance_ids_to_block = std::list<utils::UUID>{instance_id_to_remove.value()};
+            }
+
             // Step 1: Decide who needs to sync data
             //
             // By default, we require all nodes in the cluster to participate
@@ -2259,6 +2276,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
             auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, leaving_nodes, {}};
+            req.instance_ids_to_block = instance_ids_to_block;
             try {
                 parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2424,7 +2442,12 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             slogger.debug("removenode[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_done) {
-            slogger.info("removenode[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+            slogger.info("removenode[{}]: Marked ops done from coordinator={}, instance_ids_to_block={}", req.ops_uuid, coordinator, req.instance_ids_to_block);
+            if (req.instance_ids_to_block) {
+                for (auto& id : req.instance_ids_to_block.value()) {
+                    _gossiper.add_blocked_instance_id(id);
+                }
+            }
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_sync_data) {
             auto it = _node_ops.find(ops_uuid);
@@ -2474,6 +2497,11 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_done) {
             slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+            if (req.instance_ids_to_block) {
+                for (auto& id : req.instance_ids_to_block.value()) {
+                    _gossiper.add_blocked_instance_id(id);
+                }
+            }
             slogger.debug("Triggering off-strategy compaction for all non-system tables on decommission completion");
             _db.invoke_on_all([](replica::database &db) {
                 for (auto& table : db.get_non_system_column_families()) {
@@ -2534,6 +2562,11 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_done) {
             slogger.info("replace[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+            if (req.instance_ids_to_block) {
+                for (auto& id : req.instance_ids_to_block.value()) {
+                    _gossiper.add_blocked_instance_id(id);
+                }
+            }
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_abort) {
             node_ops_abort(ops_uuid).get();

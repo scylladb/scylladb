@@ -151,6 +151,10 @@ public:
         return versioned_value(host_id.to_sstring());
     }
 
+    static versioned_value instance_id(const utils::UUID& instance_id) {
+        return versioned_value(instance_id.to_sstring());
+    }
+
     static versioned_value tokens(const std::unordered_set<dht::token>& tokens) {
         return versioned_value(make_full_token_string(tokens));
     }

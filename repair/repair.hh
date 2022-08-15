@@ -387,20 +387,25 @@ struct node_ops_cmd_request {
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<utils::UUID> repair_tables;
+    // Optional field, list the instance ids that should be blocked after this node ops
+    std::optional<std::list<utils::UUID>> instance_ids_to_block;
     node_ops_cmd_request(node_ops_cmd command,
             utils::UUID uuid,
             std::list<gms::inet_address> ignore = {},
             std::list<gms::inet_address> leaving = {},
             std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
             std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap = {},
-            std::list<utils::UUID> tables = {})
+            std::list<utils::UUID> tables = {},
+            std::optional<std::list<utils::UUID>> instance_ids = {})
         : cmd(command)
         , ops_uuid(std::move(uuid))
         , ignore_nodes(std::move(ignore))
         , leaving_nodes(std::move(leaving))
         , replace_nodes(std::move(replace))
         , bootstrap_nodes(std::move(bootstrap))
-        , repair_tables(std::move(tables)) {
+        , repair_tables(std::move(tables))
+        , instance_ids_to_block(std::move(instance_ids))
+    {
     }
 };
 

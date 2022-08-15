@@ -1066,6 +1066,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // start, but we only have query processor started that late
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+            cfg->instance_id = sys_ks.local().load_local_instance_id().get0();
+            gossiper.invoke_on_all([&cfg] (gms::gossiper& g) {
+                g.set_instance_id(cfg->instance_id);
+            }).get();
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 

@@ -436,35 +436,35 @@ public:
     future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
 
     // Wrapper for GOSSIP_ECHO verb
-    void register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number)>&& func);
+    void register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_echo();
-    future<> send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout);
-    future<> send_gossip_echo(msg_addr id, int64_t generation_number, abort_source&);
+    future<> send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout, utils::UUID instance_id);
+    future<> send_gossip_echo(msg_addr id, int64_t generation_number, abort_source&, utils::UUID instance_id);
 
     // Wrapper for GOSSIP_SHUTDOWN
-    void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func);
+    void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_shutdown();
-    future<> send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number);
+    future<> send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number, utils::UUID instance_id);
 
     // Wrapper for GOSSIP_DIGEST_SYN
-    void register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_syn)>&& func);
+    void register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_syn, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_digest_syn();
-    future<> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
+    future<> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg, utils::UUID instance_id);
 
     // Wrapper for GOSSIP_DIGEST_ACK
-    void register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack)>&& func);
+    void register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_digest_ack();
-    future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg);
+    future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg, utils::UUID instance_id);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
-    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack2)>&& func);
+    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack2, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_digest_ack2();
-    future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
+    future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg, utils::UUID instance_id);
 
     // Wrapper for GOSSIP_GET_ENDPOINT_STATES
-    void register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request)>&& func);
+    void register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request, rpc::optional<utils::UUID> instance_id)>&& func);
     future<> unregister_gossip_get_endpoint_states();
-    future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request);
+    future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request, utils::UUID instance_id);
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,

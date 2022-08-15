@@ -337,6 +337,7 @@ schema_ptr system_keyspace::built_indexes() {
                 {"scylla_cpu_sharding_algorithm", utf8_type},
                 {"scylla_nr_shards", int32_type},
                 {"scylla_msb_ignore", int32_type},
+                {"instance_id", uuid_type},
 
         },
         // static columns
@@ -2782,6 +2783,27 @@ future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
     co_await execute_cql(req, sstring(LOCAL), host_id);
     co_await force_blocking_flush(LOCAL);
     co_return host_id;
+}
+
+future<utils::UUID> system_keyspace::load_local_instance_id() {
+    sstring req = format("SELECT instance_id FROM system.{} WHERE key=?", LOCAL);
+    auto msg = co_await execute_cql(req, sstring(LOCAL));
+    if (msg->empty() || !msg->one().has("instance_id")) {
+        co_return co_await set_local_instance_id(utils::make_random_uuid());
+    } else {
+        auto instance_id = msg->one().get_as<utils::UUID>("instance_id");
+        slogger.info("Loaded local host id: {}", instance_id);
+        co_return instance_id;
+    }
+}
+
+future<utils::UUID> system_keyspace::set_local_instance_id(utils::UUID instance_id) {
+    slogger.info("Setting local instance id to {}", instance_id);
+
+    sstring req = format("INSERT INTO system.{} (key, instance_id) VALUES (?, ?)", LOCAL);
+    co_await execute_cql(req, sstring(LOCAL), instance_id);
+    co_await force_blocking_flush(LOCAL);
+    co_return instance_id;
 }
 
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>

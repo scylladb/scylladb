@@ -384,6 +384,7 @@ public:
     const db::extensions& extensions() const;
 
     utils::UUID host_id;
+    utils::UUID instance_id;
 
     static const sstring default_tls_priority;
 private:

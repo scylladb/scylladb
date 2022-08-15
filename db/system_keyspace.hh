@@ -375,6 +375,10 @@ public:
      */
     future<utils::UUID> set_local_host_id(utils::UUID host_id);
 
+
+    future<utils::UUID> load_local_instance_id();
+    future<utils::UUID> set_local_instance_id(utils::UUID instance_id);
+
     static api::timestamp_type schema_creation_timestamp();
 
     /**

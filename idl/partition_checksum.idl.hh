@@ -102,6 +102,8 @@ struct node_ops_cmd_request {
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<utils::UUID> repair_tables;
+    // Optional field, list the instance ids that should be blocked after this node ops
+    std::optional<std::list<utils::UUID>> instance_ids_to_block [[version 5.1]];
 };
 
 struct node_ops_cmd_response {

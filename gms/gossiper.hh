@@ -61,6 +61,8 @@ class feature_service;
 
 using advertise_myself = bool_class<class advertise_myself_tag>;
 
+using instance_id_t = utils::UUID;
+
 struct syn_msg_pending {
     bool pending = false;
     std::optional<gossip_digest_syn> syn_msg;
@@ -105,14 +107,15 @@ private:
 
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
-    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
-    future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg);
-    future<> handle_echo_msg(inet_address from, std::optional<int64_t> generation_number_opt);
-    future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt);
+    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg, std::optional<instance_id_t> instance_id);
+    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg, std::optional<instance_id_t> instance_id);
+    future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg, std::optional<instance_id_t> instance_id);
+    future<> handle_echo_msg(inet_address from, std::optional<int64_t> generation_number_opt, std::optional<instance_id_t> instance_id);
+    future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt, std::optional<instance_id_t> instance_id);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
-    future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
+    future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(inet_address from,
+            gossip_get_endpoint_states_request request, std::optional<instance_id_t> instance_id);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to) const noexcept;
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -402,6 +405,8 @@ public:
 
     utils::UUID get_host_id(inet_address endpoint) const;
 
+    std::optional<utils::UUID> get_instance_id(inet_address endpoint) const;
+
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 
     /**
@@ -655,6 +660,15 @@ public:
 
 private:
     direct_fd_pinger _direct_fd_pinger;
+
+private:
+    utils::UUID _instance_id;
+    std::unordered_set<utils::UUID> _blocked_instance_ids;
+public:
+    void set_instance_id(const utils::UUID& instance_id);
+    const utils::UUID& get_instance_id() const;
+    void add_blocked_instance_id(const utils::UUID&);
+    bool is_blocked_instance_id(const utils::UUID&);
 };
 
 struct gossip_get_endpoint_states_request {

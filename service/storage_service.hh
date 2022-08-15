@@ -117,6 +117,11 @@ public:
     void cancel_watchdog();
 };
 
+struct replacement_info {
+    std::unordered_set<dht::token> tokens;
+    std::optional<utils::UUID> instance_id;
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -293,7 +298,6 @@ private:
     future<> shutdown_protocol_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
@@ -770,6 +774,9 @@ private:
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
+
+private:
+    std::optional<utils::UUID> _instance_id_of_node_to_be_replaced;
 };
 
 }
