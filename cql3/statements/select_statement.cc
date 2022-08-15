@@ -663,8 +663,7 @@ indexed_table_select_statement::do_execute_base_query(
 
     const bool is_paged = bool(paging_state);
     {
-        // FIXME: make stop condition explicit
-        for (;;) {
+        while (key_it != keys.end()) {
             // Starting with 1 key, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more key than before
             auto already_done = std::distance(keys.begin(), key_it);
@@ -707,7 +706,7 @@ indexed_table_select_statement::do_execute_base_query(
                 previous_result_size = result->buf().size();
                 merger(std::move(result));
                 key_it = key_it_end;
-                if (is_short_read || key_it == keys.end() || page_limit_reached) {
+                if (is_short_read || page_limit_reached) {
                     break;
                 }
             }
