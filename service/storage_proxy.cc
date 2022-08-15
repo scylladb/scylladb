@@ -1035,6 +1035,7 @@ public:
 class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
 private:
     shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     // The schema for the table the operation works upon.
     schema_ptr _schema;
     // Read command used by this CAS request.
@@ -1638,7 +1639,10 @@ paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_a
         , _key(std::move(key_arg))
         , _permit(std::move(permit_arg))
         , tr_state(tr_state_arg) {
-    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
+    auto ks_name = _schema->ks_name();
+    replica::keyspace& ks = _proxy->_db.local().find_keyspace(ks_name);
+    _effective_replication_map_ptr = ks.get_effective_replication_map();
+    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, *_effective_replication_map_ptr, _key.token(), _cl_for_paxos);
     _live_endpoints = std::move(pp.endpoints);
     _required_participants = pp.required_participants;
     tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
@@ -3195,14 +3199,12 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 }
 
 storage_proxy::paxos_participants
-storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
-    replica::keyspace& ks = _db.local().find_keyspace(ks_name);
-    auto erm = ks.get_effective_replication_map();
-    inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
+storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token &token, db::consistency_level cl_for_paxos) {
+    inet_address_vector_replica_set natural_endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
+    inet_address_vector_topology_change pending_endpoints = erm.get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+        auto local_dc_filter = erm.get_topology().get_local_dc_filter();
         auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
         itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
