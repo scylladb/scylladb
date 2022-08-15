@@ -9,6 +9,7 @@ Scylla for Developers
    Scylla Alternator <alternator/index>
    Scylla Features <features>
    Scylla Drivers <drivers/index>
+   Workload Attributes <workload-attributes>
 
 
 .. panel-box::
@@ -19,6 +20,14 @@ Scylla for Developers
   * :doc:`Scylla Drivers </using-scylla/drivers/index>` - Scylla and third-party drivers for CQL and DynamoDB
   * :doc:`Scylla Alternator </using-scylla/alternator/index>` - The Open Source DynamoDB-compatible API
   * :doc:`CQL Reference </cql/index>` - Reference for the Apache Cassandra Query Language (CQL) and its ScyllaDB extensions
+
+.. panel-box::
+  :title: Features
+  :id: "getting-started"
+  :class: my-panel
+
+  * :doc:`Workload Attributes </using-scylla/workload-attributes/>`
+
   
   
 .. panel-box::
