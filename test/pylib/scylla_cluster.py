@@ -551,6 +551,14 @@ class ScyllaCluster:
         else:
             return ""
 
+    def server_log_filename(self) -> Optional[pathlib.Path]:
+        """The log file name of the failed server"""
+        # FIXME: pick failed server
+        if self.running:
+            return next(iter(self.running.values())).log_filename
+        else:
+            return None
+
     def __getitem__(self, i: int) -> ScyllaServer:
         assert i >= 0, "ScyllaCluster: cluster sub-index must be positive"
         return list(self.running.values())[i]

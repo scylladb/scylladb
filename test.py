@@ -624,7 +624,7 @@ class CQLApprovalTest(Test):
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = suite.suite_path / (self.shortname + ".reject")
         self.server_log: Optional[str] = None
-        self.server_log_filename: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -697,7 +697,7 @@ Check test log at {}.""".format(self.log_filename))
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
                     self.server_log = cluster.read_server_log()
-                    self.server_log_filename = cluster[0].log_filename
+                    self.server_log_filename = cluster.server_log_filename()
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -777,7 +777,7 @@ class PythonTest(Test):
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
-        self.server_log_filename: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         PythonTest._reset(self)
 
     def _reset(self) -> None:
@@ -815,7 +815,7 @@ class PythonTest(Test):
                 self.success = status
             except Exception as e:
                 self.server_log = cluster.read_server_log()
-                self.server_log_filename = cluster[0].log_filename
+                self.server_log_filename = cluster.server_log_filename()
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
@@ -848,7 +848,7 @@ class TopologyTest(PythonTest):
                 self.success = await run_test(self, options)
             except Exception as e:
                 self.server_log = manager.cluster.read_server_log()
-                self.server_log_filename = manager.cluster[0].log_filename
+                self.server_log_filename = manager.cluster.server_log_filename()
                 if manager.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
