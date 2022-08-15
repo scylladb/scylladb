@@ -270,10 +270,8 @@ public:
     /**
      * Returns a vector of segment paths which were
      * preexisting when this instance of commitlog was created.
-     *
-     * The list will be empty when called for the second time.
      */
-    std::vector<sstring> get_segments_to_replay() const;
+    future<std::vector<sstring>> get_segments_to_replay() const;
 
     /**
      * Delete aforementioned segments, and possible metadata

@@ -1138,7 +1138,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto sch_cl = db.local().schema_commitlog();
             if (sch_cl != nullptr) {
-                auto paths = sch_cl->get_segments_to_replay();
+                auto paths = sch_cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     supervisor::notify("replaying schema commit log");
                     auto rp = db::commitlog_replayer::create_replayer(db).get0();
@@ -1164,7 +1164,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
-                auto paths = cl->get_segments_to_replay();
+                auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
                     auto rp = db::commitlog_replayer::create_replayer(db).get0();

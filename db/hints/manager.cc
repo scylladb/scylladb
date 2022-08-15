@@ -425,14 +425,14 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             // which is larger than the segment ID of the RP of the last written hint.
             cfg.base_segment_id = _last_written_rp.base_id();
 
-            return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
+            return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) -> future<commitlog> {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
                 // When this happens we want to refill _sender's segments only if it has finished with the segments he had before.
                 if (_sender.have_segments()) {
-                    return make_ready_future<commitlog>(std::move(l));
+                    co_return l;
                 }
 
-                std::vector<sstring> segs_vec = l.get_segments_to_replay();
+                std::vector<sstring> segs_vec = co_await l.get_segments_to_replay();
 
                 if (segs_vec.empty()) {
                     // If the segs_vec is empty, this means that there are no more
@@ -448,7 +448,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
                     auto rp = _last_written_rp;
                     rp.pos++;
                     _sender.rewind_sent_replay_position_to(rp);
-                    return make_ready_future<commitlog>(std::move(l));
+                    co_return l;
                 }
 
                 std::vector<std::pair<db::segment_id_type, sstring>> local_segs_vec;
@@ -474,7 +474,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
                     _sender.add_segment(std::move(seg));
                 }
 
-                return make_ready_future<commitlog>(std::move(l));
+                co_return l;
             });
         });
     });
