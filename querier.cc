@@ -414,25 +414,6 @@ future<bool> querier_cache::evict_one() noexcept {
     co_return false;
 }
 
-future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
-    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
-        auto& idx = *ip;
-        for (auto it = idx.begin(); it != idx.end();) {
-            if (it->second->schema().id() == schema_id) {
-                auto reader_opt = it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
-                it = idx.erase(it);
-                --_stats.population;
-                if (reader_opt) {
-                    co_await reader_opt->close();
-                }
-            } else {
-                ++it;
-            }
-        }
-    }
-    co_return;
-}
-
 future<> querier_cache::stop() noexcept {
     co_await _closing_gate.close();
 

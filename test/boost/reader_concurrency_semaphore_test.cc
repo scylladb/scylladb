@@ -10,6 +10,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/random_schema.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/testing/test_case.hh>
@@ -902,5 +903,46 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
                 }
             }
         }
+    }
+}
+
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_for_table) {
+    auto spec = tests::make_random_schema_specification(get_name());
+
+    std::list<tests::random_schema> schemas;
+    std::unordered_map<tests::random_schema*, std::vector<reader_concurrency_semaphore::inactive_read_handle>> schema_handles;
+    for (unsigned i = 0; i < 4; ++i) {
+        auto& s = schemas.emplace_back(tests::random_schema(i, *spec));
+        schema_handles.emplace(&s, std::vector<reader_concurrency_semaphore::inactive_read_handle>{});
+    }
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        for (int i = 0; i < 10; ++i) {
+            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout))));
+        }
+    }
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+    }
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+        semaphore.evict_inactive_reads_for_table(s.schema()->id()).get();
+        for (const auto& [k, v] : schema_handles) {
+            if (k == &s) {
+                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return !bool(handle); }));
+            } else if (!v.empty()) {
+                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+            }
+        }
+        handles.clear();
     }
 }

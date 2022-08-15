@@ -186,6 +186,7 @@ private:
     std::optional<future<>> _execution_loop_future;
 
 private:
+    void do_detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
     [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
     void evict(inactive_read&, evict_reason reason) noexcept;
 
@@ -301,6 +302,9 @@ public:
 
     /// Clear all inactive reads.
     void clear_inactive_reads();
+
+    /// Evict all inactive reads the belong to the table designated by the id.
+    future<> evict_inactive_reads_for_table(utils::UUID id) noexcept;
 private:
     // The following two functions are extension points for
     // future inheriting classes that needs to run some stop

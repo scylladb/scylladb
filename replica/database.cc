@@ -939,7 +939,9 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     remove(*cf);
     cf->clear_views();
     co_await cf->await_pending_ops();
-    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
+    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+        co_await sem->evict_inactive_reads_for_table(uuid);
+    }
     std::exception_ptr ex;
     try {
         co_await truncate(ks, *cf, std::move(tsf), snapshot);
