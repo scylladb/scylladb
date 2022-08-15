@@ -569,8 +569,9 @@ class ScyllaCluster:
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert self.start_exception is None
-        assert self[0].control_connection is not None
-        rows = self[0].control_connection.execute(
+        server = next(iter(self.running.values()))
+        assert server.control_connection is not None
+        rows = server.control_connection.execute(
                "select count(*) as c from system_schema.keyspaces")
         keyspace_count = int(rows.one()[0])
         return keyspace_count
