@@ -2968,13 +2968,11 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
     }));
 }
 
-gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, db::consistency_level cl) {
-    auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-    auto erm = ks.get_effective_replication_map();
-    auto live_endpoints = get_live_endpoints(*erm, m.token());
+gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl) {
+    auto live_endpoints = get_live_endpoints(erm, m.token());
 
     if (live_endpoints.empty()) {
-        throw exceptions::unavailable_exception(cl, block_for(*erm, cl), 0);
+        throw exceptions::unavailable_exception(cl, block_for(erm, cl), 0);
     }
 
     const auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -2985,11 +2983,11 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
     }
 
     const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
-        | boost::adaptors::filtered(erm->get_topology().get_local_dc_filter()));
+        | boost::adaptors::filtered(erm.get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
-        erm->get_topology().sort_by_proximity(my_address, live_endpoints);
+        erm.get_topology().sort_by_proximity(my_address, live_endpoints);
         return live_endpoints[0];
     } else {
         static thread_local std::default_random_engine re{std::random_device{}()};
@@ -3010,8 +3008,16 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Choose a leader for each mutation
     std::unordered_map<gms::inet_address, std::vector<frozen_mutation_and_schema>> leaders;
+
+    // The interface doesn't preclude multiple keyspaces (and thus effective_replication_maps),
+    // so we need a container for them. std::set<> will result in the fewest allocations if there is just one.
+    std::set<locator::effective_replication_map_ptr> erms;
+
     for (auto& m : mutations) {
-        auto leader = find_leader_for_counter_update(m, cl);
+        auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+        auto erm = ks.get_effective_replication_map();
+        erms.insert(erm);
+        auto leader = find_leader_for_counter_update(m, *erm, cl);
         leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
         // FIXME: check if CL can be reached
     }
@@ -3048,6 +3054,11 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         auto s = first_schema;
         auto exp = std::current_exception();
         {
+            // Would be better to use the effective replication map we started with, but:
+            // - this is wrong anyway since we picked a random schema
+            // - we only use this to calculate some infomation for the error message
+            // - the topology coordinator should prevent incompatible changes while requests
+            //   (like this one) are in flight
             auto& ks = _db.local().find_keyspace(s->ks_name());
             auto erm = ks.get_effective_replication_map();
             try {
