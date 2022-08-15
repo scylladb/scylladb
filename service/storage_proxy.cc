@@ -1533,6 +1533,35 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
+paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
+        service_permit permit_arg,
+        dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
+        db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
+        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
+        : _proxy(proxy_arg)
+        , _schema(std::move(schema_arg))
+        , _cmd(cmd_arg)
+        , _cl_for_paxos(cl_for_paxos_arg)
+        , _cl_for_learn(cl_for_learn_arg)
+        , _timeout(timeout_arg)
+        , _cas_timeout(cas_timeout_arg)
+        , _key(std::move(key_arg))
+        , _permit(std::move(permit_arg))
+        , tr_state(tr_state_arg) {
+    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
+    _live_endpoints = std::move(pp.endpoints);
+    _required_participants = pp.required_participants;
+    tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
+            _key.token(), _live_endpoints, _required_participants);
+    _proxy->get_stats().cas_foreground++;
+    _proxy->get_stats().cas_total_running++;
+    _proxy->get_stats().cas_total_operations++;
+}
+
+paxos_response_handler::~paxos_response_handler() {
+    _proxy->get_stats().cas_total_running--;
+}
+
 /**
  * Begin a Paxos session by sending a prepare request and completing any in-progress requests seen in the replies.
  *
