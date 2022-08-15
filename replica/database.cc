@@ -1009,7 +1009,9 @@ future<> database::detach_column_family(table& cf) {
     remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
-    co_await _querier_cache.evict_all_for_table(uuid);
+    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+        co_await sem->evict_inactive_reads_for_table(uuid);
+    }
 }
 
 future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
