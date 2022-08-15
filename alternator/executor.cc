@@ -433,6 +433,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
     rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
     rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
+    // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
+    rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
+    rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
     std::unordered_map<std::string,std::string> key_attribute_types;
     // Add base table's KeySchema and collect types for AttributeDefinitions:
