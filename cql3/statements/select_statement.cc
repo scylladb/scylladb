@@ -655,64 +655,58 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
 
-        query::result_merger merger(cmd->get_row_limit(), query::max_partitions);
-        std::vector<primary_key> keys = std::move(primary_keys);
-        std::vector<primary_key>::iterator key_it(keys.begin());
-        size_t previous_result_size = 0;
-        size_t next_iteration_size = 0;
+    query::result_merger merger(cmd->get_row_limit(), query::max_partitions);
+    std::vector<primary_key> keys = std::move(primary_keys);
+    std::vector<primary_key>::iterator key_it(keys.begin());
+    size_t previous_result_size = 0;
+    size_t next_iteration_size = 0;
 
     const bool is_paged = bool(paging_state);
-    {
-        while (key_it != keys.end()) {
-            // Starting with 1 key, we check if the result was a short read, and if not,
-            // we continue exponentially, asking for 2x more key than before
-            auto already_done = std::distance(keys.begin(), key_it);
-            // If the previous result already provided 1MB worth of data,
-            // stop increasing the number of fetched partitions
-            if (previous_result_size < query::result_memory_limiter::maximum_result_size) {
-                next_iteration_size = already_done + 1;
-            }
-            next_iteration_size = std::min<size_t>({next_iteration_size, keys.size() - already_done, max_base_table_query_concurrency});
-            auto key_it_end = key_it + next_iteration_size;
-            auto command = ::make_lw_shared<query::read_command>(*cmd);
-
-            query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
-            coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult = co_await utils::result_map_reduce(key_it, key_it_end, coroutine::lambda([&] (auto& key)
-                    -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
-                auto command = ::make_lw_shared<query::read_command>(*cmd);
-                // for each partition, read just one clustering row (TODO: can
-                // get all needed rows of one partition at once.)
-                command->slice._row_ranges.clear();
-                if (key.clustering) {
-                    command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
-                }
-                coordinator_result<service::storage_proxy::coordinator_query_result> rqr
-                        = co_await qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
-                {
-                    if (!rqr.has_value()) {
-                        co_return std::move(rqr).as_failure();
-                    }
-                    co_return std::move(rqr.value().query_result);
-                }
-            }), std::move(oneshot_merger));
-            {
-                if (!rresult.has_value()) {
-                    co_return std::move(rresult).as_failure();
-                }
-                auto& result = rresult.value();
-                auto is_short_read = result->is_short_read();
-                // Results larger than 1MB should be shipped to the client immediately
-                const bool page_limit_reached = is_paged && result->buf().size() >= query::result_memory_limiter::maximum_result_size;
-                previous_result_size = result->buf().size();
-                merger(std::move(result));
-                key_it = key_it_end;
-                if (is_short_read || page_limit_reached) {
-                    break;
-                }
-            }
+    while (key_it != keys.end()) {
+        // Starting with 1 key, we check if the result was a short read, and if not,
+        // we continue exponentially, asking for 2x more key than before
+        auto already_done = std::distance(keys.begin(), key_it);
+        // If the previous result already provided 1MB worth of data,
+        // stop increasing the number of fetched partitions
+        if (previous_result_size < query::result_memory_limiter::maximum_result_size) {
+            next_iteration_size = already_done + 1;
         }
-        co_return value_type(merger.get(), std::move(cmd));
+        next_iteration_size = std::min<size_t>({next_iteration_size, keys.size() - already_done, max_base_table_query_concurrency});
+        auto key_it_end = key_it + next_iteration_size;
+        auto command = ::make_lw_shared<query::read_command>(*cmd);
+
+        query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
+        coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult = co_await utils::result_map_reduce(key_it, key_it_end, coroutine::lambda([&] (auto& key)
+                -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+            auto command = ::make_lw_shared<query::read_command>(*cmd);
+            // for each partition, read just one clustering row (TODO: can
+            // get all needed rows of one partition at once.)
+            command->slice._row_ranges.clear();
+            if (key.clustering) {
+                command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
+            }
+            coordinator_result<service::storage_proxy::coordinator_query_result> rqr
+                    = co_await qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            if (!rqr.has_value()) {
+                co_return std::move(rqr).as_failure();
+            }
+            co_return std::move(rqr.value().query_result);
+        }), std::move(oneshot_merger));
+        if (!rresult.has_value()) {
+            co_return std::move(rresult).as_failure();
+        }
+        auto& result = rresult.value();
+        auto is_short_read = result->is_short_read();
+        // Results larger than 1MB should be shipped to the client immediately
+        const bool page_limit_reached = is_paged && result->buf().size() >= query::result_memory_limiter::maximum_result_size;
+        previous_result_size = result->buf().size();
+        merger(std::move(result));
+        key_it = key_it_end;
+        if (is_short_read || page_limit_reached) {
+            break;
+        }
     }
+    co_return value_type(merger.get(), std::move(cmd));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
