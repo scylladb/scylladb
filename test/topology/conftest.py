@@ -100,6 +100,13 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                       # down nodes, causing errors. If auth is needed in the future for topology
                       # tests, they should bump up auth RF and run repair.
                       ssl_context=ssl_context,
+                      # The default timeout for new connections is 5 seconds, and for
+                      # requests made by the control connection is 2 seconds. These should
+                      # have been more than enough, but in some extreme cases with a very
+                      # slow debug build running on a very busy machine, they may not be.
+                      # so let's increase them to 60 seconds. See issue #11289.
+                      connect_timeout = 60,
+                      control_connection_timeout = 60,
                    )
 
 
