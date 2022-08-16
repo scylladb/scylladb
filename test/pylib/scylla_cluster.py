@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import aiohttp
 import asyncio
 from contextlib import asynccontextmanager
 import itertools
@@ -11,6 +10,7 @@ import logging
 import os
 import pathlib
 import shutil
+import tempfile
 import time
 import uuid
 from typing import Optional, Dict, List, Set, Callable, AsyncIterator, NamedTuple
@@ -24,6 +24,8 @@ from cassandra.cluster import Cluster, NoHostAvailable  # type: ignore
 from cassandra.cluster import Session                   # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+import aiohttp
+import aiohttp.web
 
 #
 # Put all Scylla options in a template file. Sic: if you make a typo in the
@@ -598,38 +600,169 @@ class ScyllaCluster:
 
 
 class ScyllaClusterManager:
-    """Manages a Scylla cluster for running test cases"""
+    """Manages a Scylla cluster for running test cases
+       Provides an async API for tests to request changes in the Cluster.
+       Parallel requests are not supported.
+    """
     cluster: ScyllaCluster
+    site: aiohttp.web.UnixSite
 
-    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster]) -> None:
+    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
         self.test_name: str = test_name
         self.clusters: Pool[ScyllaCluster] = clusters
+        self.is_running: bool = False
+        self.is_before_test_ok: bool = False
+        self.is_after_test_ok: bool = False
+        # API
+        # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
+        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
+        self.sock_path: str = f"{self.manager_dir}/api"
+        self.app = aiohttp.web.Application()
+        self._setup_routes()
+        self.runner = aiohttp.web.AppRunner(self.app)
 
     async def start(self) -> None:
-        """Start, start first cluster"""
+        """Get first cluster, setup API"""
         await self._get_cluster()
+        await self.runner.setup()
+        self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
+        await self.site.start()
+        self.is_running = True
+
+    async def _before_test(self, test_name: str) -> None:
+        if self.cluster.is_dirty:
+            await self.cluster.stop()
+            await self._get_cluster()
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
+        self.cluster.before_test(self.test_name)
+        self.is_before_test_ok = True
+        # FIXME: savepoint for all servers
+        self.cluster[0].take_log_savepoint()
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
+        await self.site.stop()
         self.cluster.after_test(self.test_name)
-        await self._return_cluster()
+        if not self.cluster.is_dirty:
+            logging.info("Returning Scylla cluster %s", self.cluster)
+            await self.clusters.put(self.cluster)
+        else:
+            await self.cluster.stop()
+        del self.cluster
+        if os.path.exists(self.manager_dir):
+            shutil.rmtree(self.manager_dir)
 
     async def _get_cluster(self) -> None:
         self.cluster = await self.clusters.get()
         logging.info("Getting new Scylla cluster %s", self.cluster)
 
-    async def _return_cluster(self) -> None:
-        logging.info("Returning Scylla cluster %s", self.cluster)
-        await self.clusters.put(self.cluster)
-        del self.cluster
 
+    def _setup_routes(self) -> None:
+        self.app.router.add_get('/up', self._manager_up)
+        self.app.router.add_get('/cluster/up', self._cluster_up)
+        self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
+        self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
+        self.app.router.add_get('/cluster/servers', self._cluster_servers)
+        self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
+        self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
+        self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
+        self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
+        self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
+                                self._cluster_server_stop_gracefully)
+        self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
+        self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
+        self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
+        self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
+
+    async def _manager_up(self, request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text=f"{self.is_running}")
+
+    async def _cluster_up(self, request) -> aiohttp.web.Response:
+        """Is cluster running"""
+        return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
+
+    async def _is_dirty(self, request) -> aiohttp.web.Response:
+        """Report if current cluster is dirty"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
+
+    async def _cluster_replicas(self, request) -> aiohttp.web.Response:
+        """Return cluster's configured number of replicas (replication factor)"""
+        if self.cluster is None:
+            return aiohttp.web.Response(status=500, text="No cluster active")
+        return aiohttp.web.Response(text=f"{self.cluster.replicas}")
+
+    async def _cluster_servers(self, request) -> aiohttp.web.Response:
+        """Return a list of active server ids (IPs)"""
+        return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running.keys()))}")
+
+    async def _before_test_req(self, request) -> aiohttp.web.Response:
+        await self._before_test(request.match_info['test_name'])
+        return aiohttp.web.Response(text="OK")
+
+    async def _after_test(self, request) -> aiohttp.web.Response:
+        test_name = request.match_info['test_name']
+        assert self.cluster is not None
+        self.cluster.after_test(test_name)
+        self.is_after_test_ok = True
+        return aiohttp.web.Response(text="True")
+
+    async def _mark_dirty(self, request) -> aiohttp.web.Response:
+        """Mark current cluster dirty"""
+        assert self.cluster
+        self.cluster.is_dirty = True
+        return aiohttp.web.Response(text="OK")
+
+    async def _server_stop(self, request: aiohttp.web.Request, gracefully: bool) \
+                        -> aiohttp.web.Response:
+        """Stop a server. No-op if already stopped."""
+        assert self.cluster
+        ret = await self.cluster.server_stop(request.match_info['id'], gracefully)
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_stop(self, request) -> aiohttp.web.Response:
+        """Stop a specified server"""
+        assert self.cluster
+        return await self._server_stop(request, gracefully = False)
+
+    async def _cluster_server_stop_gracefully(self, request) -> aiohttp.web.Response:
+        """Stop a specified server gracefully"""
+        assert self.cluster
+        return await self._server_stop(request, gracefully = True)
+
+    async def _cluster_server_start(self, request) -> aiohttp.web.Response:
+        """Start a specified server (must be stopped)"""
+        assert self.cluster
+        ret = await self.cluster.server_start(request.match_info['id'])
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_restart(self, request) -> aiohttp.web.Response:
+        """Restart a specified server (must be already started)"""
+        assert self.cluster
+        ret = await self.cluster.server_restart(request.match_info['id'])
+        return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_add(self, request) -> aiohttp.web.Response:
+        """Add a new server"""
+        assert self.cluster
+        server_id = await self.cluster.add_server()
+        return aiohttp.web.Response(text=server_id)
+
+    async def _cluster_server_remove(self, request) -> aiohttp.web.Response:
+        """Remove a specified server"""
+        assert self.cluster
+        server_id = request.match_info['id']
+        if not await self.cluster.server_remove(server_id):
+            return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
+        return aiohttp.web.Response(text="OK")
 
 @asynccontextmanager
-async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster]) \
+async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
         -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_name, clusters)
+    manager = ScyllaClusterManager(test_name, clusters, test_path)
     await manager.start()
     try:
         yield manager
