@@ -13,8 +13,8 @@ import os.path
 from typing import List, Optional, Callable
 import aiohttp                                                             # type: ignore
 import aiohttp.web                                                         # type: ignore
-from cassandra.cluster import Session as CassandraSession                  # type: ignore
-from cassandra.cluster import Cluster as CassandraCluster                  # type: ignore
+from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 
 
 class ManagerClient():
@@ -23,6 +23,7 @@ class ManagerClient():
         sock_path (str): path to an AF_UNIX socket where Manager server is listening
         con_gen (Callable): generator function for CQL driver connection to a cluster
     """
+    # pylint: disable=too-many-instance-attributes
     conn: aiohttp.UnixConnector
     session: aiohttp.ClientSession
 
