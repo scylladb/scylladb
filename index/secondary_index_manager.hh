@@ -13,6 +13,7 @@
 #include "schema.hh"
 
 #include "data_dictionary/data_dictionary.hh"
+#include "cql3/statements/index_target.hh"
 
 #include <vector>
 #include <set>
@@ -35,15 +36,39 @@ sstring index_table_name(const sstring& index_name);
 sstring index_name_from_table_name(const sstring& table_name);
 
 class index {
-    sstring _target_column;
     index_metadata _im;
+    cql3::statements::index_target::target_type _target_type;
+    sstring _target_column;
 public:
     index(const sstring& target_column, const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;
-    bool supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
+    struct supports_expression_v {
+        enum class value_type {
+            UsualYes,
+            CollectionYes,
+            No,
+        };
+        value_type value;
+        operator bool() const {
+            return value != value_type::No;
+        }
+        static constexpr supports_expression_v from_bool(bool b) {
+            return {b ? value_type::UsualYes : value_type::No};
+        }
+        static constexpr supports_expression_v from_bool_collection(bool b) {
+            return {b ? value_type::CollectionYes : value_type::No};
+        }
+        friend bool operator==(supports_expression_v, supports_expression_v) = default;
+    };
+
+    supports_expression_v supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
+    supports_expression_v supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
     const index_metadata& metadata() const;
     const sstring& target_column() const {
         return _target_column;
+    }
+    cql3::statements::index_target::target_type target_type() const {
+        return _target_type;
     }
 };
 

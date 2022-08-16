@@ -13,6 +13,12 @@
 class schema;
 class partition_key;
 class clustering_row;
+struct atomic_cell_view;
+struct tombstone;
+
+namespace db::view {
+struct view_key_and_action;
+}
 
 class column_computation;
 using column_computation_ptr = std::unique_ptr<column_computation>;
@@ -22,7 +28,7 @@ using column_computation_ptr = std::unique_ptr<column_computation>;
  * Computed columns description is also available at docs/dev/system_schema_keyspace.md. They hold values
  * not provided directly by the user, but rather computed: from other column values and possibly other sources.
  * This class is able to serialize/deserialize column computations and perform the computation itself,
- * based on given schema, partition key and clustering row. Responsibility for providing enough data
+ * based on given schema, and partition key. Responsibility for providing enough data
  * in the clustering row in order for computation to succeed belongs to the caller. In particular,
  * generating a value might involve performing a read-before-write if the computation is performed
  * on more values than are present in the update request.
@@ -36,7 +42,19 @@ public:
     virtual column_computation_ptr clone() const = 0;
 
     virtual bytes serialize() const = 0;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const = 0;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const = 0;
+    /*
+     * depends_on_non_primary_key_column for a column computation is needed to
+     * detect a case where the primary key of a materialized view depends on a
+     * non primary key column from the base table, but at the same time, the view
+     * itself doesn't have non-primary key columns. This is an issue, since as
+     * for now, it was assumed that no non-primary key columns in view schema
+     * meant that the update cannot change the primary key of the view, and
+     * therefore the update path can be simplified.
+     */
+    virtual bool depends_on_non_primary_key_column() const {
+        return false;
+    }
 };
 
 /*
@@ -54,7 +72,7 @@ public:
         return std::make_unique<legacy_token_column_computation>(*this);
     }
     virtual bytes serialize() const override;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };
 
 
@@ -75,5 +93,53 @@ public:
         return std::make_unique<token_column_computation>(*this);
     }
     virtual bytes serialize() const override;
-    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
+};
+
+/*
+ * collection_column_computation is used for a secondary index on a collection
+ * column. In this case we don't have a single value to compute, but rather we
+ * want to return multiple values (e.g., all the keys in the collection).
+ * So this class does not implement the base class's compute_value() -
+ * instead it implements a new method compute_collection_values(), which
+ * can return multiple values. This new method is currently called only from
+ * the materialized-view code which uses collection_column_computation.
+ */
+class collection_column_computation final : public column_computation {
+    enum class kind {
+        keys,
+        values,
+        entries,
+    };
+    const bytes _collection_name;
+    const kind _kind;
+    collection_column_computation(const bytes& collection_name, kind kind) : _collection_name(collection_name), _kind(kind) {}
+
+    using collection_kv = std::pair<bytes_view, atomic_cell_view>;
+    void operate_on_collection_entries(
+            std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
+            const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const;
+
+public:
+    static collection_column_computation for_keys(const bytes& collection_name) {
+        return {collection_name, kind::keys};
+    }
+    static collection_column_computation for_values(const bytes& collection_name) {
+        return {collection_name, kind::values};
+    }
+    static collection_column_computation for_entries(const bytes& collection_name) {
+        return {collection_name, kind::entries};
+    }
+    static column_computation_ptr for_target_type(std::string_view type, const bytes& collection_name);
+
+    virtual bytes serialize() const override;
+    virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
+    virtual column_computation_ptr clone() const override {
+        return std::make_unique<collection_column_computation>(*this);
+    }
+    virtual bool depends_on_non_primary_key_column() const override {
+        return true;
+    }
+
+    std::vector<db::view::view_key_and_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
 };

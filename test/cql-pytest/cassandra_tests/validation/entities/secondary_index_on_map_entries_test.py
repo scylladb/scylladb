@@ -34,7 +34,6 @@ def simple_table_and_index(cql, test_keyspace):
         cql.execute(f"CREATE INDEX ON {table}(ENTRIES(v))")
         yield table
 
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldValidateMapKeyAndValueTypes(cql, simple_table_and_index):
     # The Java version of this test used prepared statements, but the Python
     # driver verifies the types of the bound variables before using them,
@@ -60,7 +59,6 @@ def assertRowsForConditions(cql, table, whereClause, params, *rows):
 def assertNoRowsForConditions(cql, table, whereClause, params):
     assert_empty(execute(cql, table, "SELECT * FROM %s WHERE " + whereClause + " ALLOW FILTERING", *params))
  
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldFindRowsMatchingSingleEqualityRestriction(cql, simple_table_and_index):
     foo = insertIntoSimpleTable(cql, simple_table_and_index, "foo", {"a": 1, "c": 3})
     bar = insertIntoSimpleTable(cql, simple_table_and_index, "bar", {"a": 1, "b": 2})
@@ -73,13 +71,11 @@ def testShouldFindRowsMatchingSingleEqualityRestriction(cql, simple_table_and_in
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["c", 5], baz)
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["d", 4], baz, qux)
 
-@pytest.mark.xfail(reason="issues #2962")
 def testRequireFilteringDirectiveIfMultipleRestrictionsSpecified(cql, simple_table_and_index):
     baseQuery = "SELECT * FROM %s WHERE v['foo'] = 31415 AND v['baz'] = 31416"
     assert_invalid(cql, simple_table_and_index, baseQuery)
     assert_empty(execute(cql, simple_table_and_index, baseQuery + " ALLOW FILTERING"))
 
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldFindRowsMatchingMultipleEqualityRestrictions(cql, simple_table_and_index):
     foo = insertIntoSimpleTable(cql, simple_table_and_index, "foo", {"k1": 1})
     bar = insertIntoSimpleTable(cql, simple_table_and_index, "bar", {"k1": 1, "k2": 2})
@@ -93,7 +89,6 @@ def testShouldFindRowsMatchingMultipleEqualityRestrictions(cql, simple_table_and
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=? AND v[?]=?", ["k3", 3, "k4", 4], qux)
     assertNoRowsForConditions(cql, simple_table_and_index, "v[?]=? AND v[?]=? AND v[?]=?", ["k3", 3, "k4", 4, "k5", 5])
 
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldFindRowsMatchingEqualityAndContainsRestrictions(cql, simple_table_and_index):
     foo = insertIntoSimpleTable(cql, simple_table_and_index, "foo", {"common": 31415, "k1": 1, "k2": 2, "k3": 3})
     bar = insertIntoSimpleTable(cql, simple_table_and_index, "bar", {"common": 31415, "k3": 3, "k4": 4, "k5": 5})
@@ -117,7 +112,6 @@ def assertInvalidRelation(cql, table, rel):
     query = "SELECT * FROM %s WHERE v " + rel
     assert_invalid(cql, table, query)
 
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldNotAcceptUnsupportedRelationsOnEntries(cql, simple_table_and_index):
     assertInvalidRelation(cql, simple_table_and_index, "< 31415")
     assertInvalidRelation(cql, simple_table_and_index, "<= 31415")
@@ -138,7 +132,6 @@ def updateMapInSimpleTable(cql, table, row, mapKey, mapValue):
     row[1] = value
     return row
 
-@pytest.mark.xfail(reason="issues #2962")
 def testShouldRecognizeAlteredOrDeletedMapEntries(cql, simple_table_and_index):
     foo = insertIntoSimpleTable(cql, simple_table_and_index, "foo", {"common": 31415, "target": 8192})
     bar = insertIntoSimpleTable(cql, simple_table_and_index, "bar", {"common": 31415, "target": 8192})
@@ -154,9 +147,11 @@ def testShouldRecognizeAlteredOrDeletedMapEntries(cql, simple_table_and_index):
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["common", 31415], bar, baz)
     assertRowsForConditions(cql, simple_table_and_index, "v[?]=?", ["target", 4096], baz)
 
-@pytest.mark.xfail(reason="issues #2962")
-def testShouldRejectQueriesForNullEntries(cql, simple_table_and_index):
-    assert_invalid(cql, simple_table_and_index, "SELECT * FROM %s WHERE v['somekey'] = null")
+
+# Scylla does not consider "= null" an error, it just matches nothing.
+# See issue #4776.
+#def testShouldRejectQueriesForNullEntries(cql, simple_table_and_index):
+#    assert_invalid(cql, simple_table_and_index, "SELECT * FROM %s WHERE v['somekey'] = null")
 
 def testShouldTreatQueriesAgainstFrozenMapIndexesAsInvalid(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k TEXT PRIMARY KEY, v FROZEN<MAP<TEXT, TEXT>>)") as table:

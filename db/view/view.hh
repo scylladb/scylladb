@@ -123,6 +123,46 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
 
+/*
+ * When a base-table update modifies a value in a materialized view's key
+ * key column, Scylla needs to create a new view row. When indexing a
+ * collection - Scylla needs to add multiple almost-identical rows with just
+ * a different key. Scylla may also need to take additional "actions" for each
+ * of those rows - namely deleting an old row or adding a row marker.
+ *
+ * So the following struct view_key_and_action holds one such row key and
+ * one action. The action can be:
+ * 1. "no_action" - Do nothing beyond adding the view row under the given
+ *     key. The row's key is given, but its other columns are derived from
+ *     the base table's existing row and and the update mutation..
+ * 2. a row_marker - also add a CQL row marker, to allow a view row to live
+ *    even if there is nothing in it besides the key.
+ * 3. a (shadowable) tombstone, to remove and old view row that this one
+ *    replaces.
+ */
+struct view_key_and_action {
+    struct no_action {};
+    struct shadowable_tombstone_tag {
+        api::timestamp_type ts;
+        shadowable_tombstone into_shadowable_tombstone(gc_clock::time_point now) const {
+            return shadowable_tombstone{ts, now};
+        }
+    };
+    using action = std::variant<no_action, row_marker, shadowable_tombstone_tag>;
+
+    bytes _key_bytes;
+    action _action = no_action{};
+
+    view_key_and_action(bytes key_bytes)
+        : _key_bytes(std::move(key_bytes))
+    {}
+    view_key_and_action(bytes key_bytes, action action)
+        : _key_bytes(std::move(key_bytes))
+        , _action(action)
+    {}
+
+};
+
 class view_updates final {
     view_ptr _view;
     const view_info& _view_info;
@@ -148,16 +188,21 @@ public:
 private:
     mutation_partition& partition_for(partition_key&& key);
     row_marker compute_row_marker(const clustering_row& base_row) const;
-    deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
+    struct view_row_entry {
+        deletable_row* _row;
+        view_key_and_action::action _action;
+    };
+    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing);
     bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
     void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
     void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
-        create_entry(base_key, update, now);
         delete_old_entry(base_key, existing, update, now);
+        create_entry(base_key, update, now);
     }
+    void update_entry_for_computed_column(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
 };
 
 class view_update_builder {

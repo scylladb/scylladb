@@ -10,6 +10,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
@@ -28,6 +29,7 @@
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <stdexcept>
 
 namespace cql3 {
 
@@ -49,6 +51,16 @@ create_index_statement::create_index_statement(cf_name name,
 future<>
 create_index_statement::check_access(query_processor& qp, const service::client_state& state) const {
     return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER);
+}
+
+static sstring target_type_name(index_target::target_type type) {
+    switch (type) {
+        case index_target::target_type::keys: return "keys()";
+        case index_target::target_type::keys_and_values: return "entries()";
+        case index_target::target_type::collection_values: return "values()";
+        case index_target::target_type::regular_values: return "value";
+        default: throw std::invalid_argument("should not reach");
+    }
 }
 
 void
@@ -89,6 +101,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         validate_targets_for_multi_column_index(targets);
     }
 
+    const bool is_local_index = targets.size() > 0 && std::holds_alternative<index_target::multiple_columns>(targets.front()->value);
     for (auto& target : targets) {
         auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
         if (!ident) {
@@ -98,7 +111,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
 
         if (cd == nullptr) {
             throw exceptions::invalid_request_exception(
-                    format("No column definition found for column {}", target->as_string()));
+                    format("No column definition found for column {}", target->column_name()));
         }
 
         //NOTICE(sarna): Should be lifted after resolving issue #2963
@@ -127,14 +140,25 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create secondary index on partition key column {}",
-                            target->as_string()));
+                            target->column_name()));
         }
 
         if (cd->type->is_multi_cell()) {
-            // NOTICE(sarna): should be lifted after #2962 (indexes on non-frozen collections) is implemented
-            // NOTICE(kbraun): don't forget about non-frozen user defined types
-            throw exceptions::invalid_request_exception(
-                    format("Cannot create secondary index on non-frozen collection or UDT column {}", cd->name_as_text()));
+            if (cd->type->is_collection()) {
+                if (!db.features().collection_indexing) {
+                    throw exceptions::invalid_request_exception(
+                        "Indexing of collection columns not supported by some older nodes in this cluster. Please upgrade them.");
+                }
+                if (is_local_index) {
+                    throw exceptions::invalid_request_exception(
+                            format("Local secondary index on collection column {} is not implemented yet.", target->column_name()));
+                }
+                validate_not_full_index(*target);
+                validate_for_collection(*target, *cd);
+                rewrite_target_for_collection(*target, *cd);
+            } else {
+                throw exceptions::invalid_request_exception(format("Cannot create secondary index on UDT column {}", cd->name_as_text()));
+            }
         } else if (cd->type->is_collection()) {
             validate_for_frozen_collection(*target);
         } else {
@@ -194,8 +218,8 @@ void create_index_statement::validate_for_frozen_collection(const index_target& 
     if (target.type != index_target::target_type::full) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of frozen collection column {}",
-                        index_target::index_option(target.type),
-                        target.as_string()));
+                        target_type_name(target.type),
+                        target.column_name()));
     }
 }
 
@@ -206,16 +230,70 @@ void create_index_statement::validate_not_full_index(const index_target& target)
     }
 }
 
+void create_index_statement::validate_for_collection(const index_target& target, const column_definition& cd) const
+{
+    auto throw_exception = [&] {
+        const char* msg_format = "Cannot create secondary index on {} of non-frozen collection column {}";
+        throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
+    };
+    switch (target.type) {
+        case index_target::target_type::full:
+            throw std::logic_error("invalid target type(full) in validate_for_collection");
+        case index_target::target_type::regular_values:
+            break;
+        case index_target::target_type::collection_values:
+            break;
+        case index_target::target_type::keys:
+            [[fallthrough]];
+        case index_target::target_type::keys_and_values:
+            if (!cd.type->is_map()) {
+                const char* msg_format = "Cannot create secondary index on {} of column {} with non-map type";
+                throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
+            }
+            break;
+    }
+}
+
+void create_index_statement::rewrite_target_for_collection(index_target& target, const column_definition& cd) const
+{
+    // In Cassandra, `CREATE INDEX ON table(collection)` works the same as `CREATE INDEX ON table(VALUES(collection))`,
+    // and index on VALUES(collection) indexes values, if the collection was a map or a list, but it indexes the keys, if it
+    // was a set. Rewrite it to clean the mess.
+    switch (target.type) {
+        case index_target::target_type::full:
+            throw std::logic_error("invalid target type(full) in rewrite_target_for_collection");
+        case index_target::target_type::keys:
+            // If it was keys, then it must have been a map.
+            break;
+        case index_target::target_type::keys_and_values:
+            // If it was entries, then it must have been a map.
+            break;
+        case index_target::target_type::regular_values:
+            // Regular values for collections means the same as collection values.
+            [[fallthrough]];
+        case index_target::target_type::collection_values:
+            if (cd.type->is_map() || cd.type->is_list()) {
+                target.type = index_target::target_type::collection_values;
+            } else if (cd.type->is_set()) {
+                target.type = index_target::target_type::keys;
+            } else {
+                throw std::logic_error(format("rewrite_target_for_collection: unknown collection type {}", cd.type->cql3_type_name()));
+            }
+            break;
+    }
+}
+
+
 void create_index_statement::validate_is_values_index_if_target_column_not_collection(
         const column_definition* cd, const index_target& target) const
 {
     if (!cd->type->is_collection()
-            && target.type != index_target::target_type::values) {
+            && target.type != index_target::target_type::regular_values) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
-                       index_target::index_option(target.type),
-                       target.as_string(),
-                       index_target::index_option(target.type)));
+                       target_type_name(target.type),
+                       target.column_name(),
+                       target_type_name(target.type)));
     }
 }
 
@@ -226,7 +304,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
         if (!is_map) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create index on {} of column {} with non-map type",
-                           index_target::index_option(target.type), target.as_string()));
+                           target_type_name(target.type), target.column_name()));
         }
     }
 }
@@ -240,10 +318,10 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
     std::unordered_set<sstring> columns;
     for (auto& target : targets) {
-        if (columns.contains(target->as_string())) {
-            throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->as_string()));
+        if (columns.contains(target->column_name())) {
+            throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->column_name()));
         }
-        columns.emplace(target->as_string());
+        columns.emplace(target->column_name());
     }
 }
 
@@ -257,9 +335,9 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
     if (accepted_name.empty()) {
         std::optional<sstring> index_name_root;
         if (targets.size() == 1) {
-           index_name_root = targets[0]->as_string();
+           index_name_root = targets[0]->column_name();
         } else if ((targets.size() == 2 && std::holds_alternative<index_target::multiple_columns>(targets.front()->value))) {
-            index_name_root = targets[1]->as_string();
+            index_name_root = targets[1]->column_name();
         }
         accepted_name = db.get_available_index_name(keyspace(), column_family(), index_name_root);
     }

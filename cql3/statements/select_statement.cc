@@ -10,6 +10,7 @@
 
 #include "cql3/statements/select_statement.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/statements/index_target.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
@@ -967,18 +968,15 @@ static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& explode
 bytes indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
     const column_definition& cdef = *_view_schema->clustering_key_columns().begin();
     clustering_row empty_row(clustering_key_prefix::make_empty());
-    bytes_opt computed_value;
+    bytes computed_value;
     if (!cdef.is_computed()) {
         // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
         // once "computed_columns feature" is supported by every node
-        computed_value = legacy_token_column_computation().compute_value(*_schema, key, empty_row);
+        computed_value = legacy_token_column_computation().compute_value(*_schema, key);
     } else {
-        computed_value = cdef.get_computation().compute_value(*_schema, key, empty_row);
+        computed_value = cdef.get_computation().compute_value(*_schema, key);
     }
-    if (!computed_value) {
-        throw std::logic_error(format("No value computed for idx_token column {}", cdef.name()));
-    }
-    return *computed_value;
+    return computed_value;
 }
 
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
@@ -1304,6 +1302,12 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
+        if (options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            last_dk = dht::decorate_key(*_schema, base_pk);
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
@@ -1340,6 +1344,24 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
         auto rs = cql3::untyped_result_set(rows);
         std::vector<primary_key> primary_keys;
         primary_keys.reserve(rs.size());
+
+        std::optional<std::reference_wrapper<primary_key>> last_primary_key;
+        // Set last_primary_key if indexing map values and not in the first
+        // query page. See comment below why last_primary_key is needed for
+        // indexing map values. We have a test for this with paging:
+        // test_secondary_index.py::test_index_map_values_paging.
+        std::optional<primary_key> page_start_primary_key;
+        if (_index.target_type() == cql3::statements::index_target::target_type::collection_values &&
+            options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            auto base_dk = dht::decorate_key(*_schema, base_pk);
+            auto base_ck = generate_base_key_from_index_pk<clustering_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            page_start_primary_key = primary_key{std::move(base_dk), std::move(base_ck)};
+            last_primary_key = *page_start_primary_key;
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
@@ -1351,7 +1373,24 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
                 return row.get_blob(cdef.name_as_text());
             });
             auto ck = clustering_key::from_range(ck_columns);
+
+            if (_index.target_type() == cql3::statements::index_target::target_type::collection_values) {
+                // The index on collection values is special in a way, as its' clustering key contains not only the
+                // base primary key, but also a column that holds the keys of the cells in the collection, which
+                // allows to distinguish cells with different keys but the same value.
+                // This has an unwanted consequence, that it's possible to receive two identical base table primary
+                // keys. Thankfully, they are guaranteed to occur consequently.
+                if (last_primary_key) {
+                    const auto& [last_dk, last_ck] = last_primary_key->get();
+                    if (last_dk.equal(*_schema, dk) && last_ck.equal(*_schema, ck)) {
+                        continue;
+                    }
+                }
+            }
+
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
+            // Last use of this reference will be before next .emplace_back to the vector.
+            last_primary_key = primary_keys.back();
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
         return make_ready_future<coordinator_result<value_type>>(value_type(std::move(primary_keys), std::move(paging_state)));
@@ -2132,7 +2171,10 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         out << join(", ", cols);
     }
     // Note that cf_name may need to be quoted, just like column names above.
-    out << " FROM " << util::maybe_quote(sstring(cf_name)) << " WHERE " << where_clause << " ALLOW FILTERING";
+    out << " FROM " << util::maybe_quote(sstring(cf_name));
+    if (!where_clause.empty()) {
+        out << " WHERE " << where_clause << " ALLOW FILTERING";
+    }
     return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 

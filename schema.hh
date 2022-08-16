@@ -673,7 +673,7 @@ public:
 private:
     struct reversed_tag { };
 
-    lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
+    lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def) const;
     void rebuild();
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};

@@ -8,7 +8,6 @@
 from cassandra_tests.porting import *
 from cassandra.query import UNSET_VALUE
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testInvalidCollectionEqualityRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:
         execute(cql, table, "CREATE INDEX ON %s (b)")
