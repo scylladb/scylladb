@@ -209,6 +209,8 @@ std::vector<user_type> create_types_from_schema_partition(keyspace_metadata& ks,
 
 std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(replica::database& db, lw_shared_ptr<query::result_set> result);
 
+std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_schema_partition(replica::database& db, lw_shared_ptr<query::result_set> result, lw_shared_ptr<query::result_set> scylla_result);
+
 std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
 
 std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
