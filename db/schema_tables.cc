@@ -2020,6 +2020,33 @@ std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_sc
     return ret;
 }
 
+std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_schema_partition(
+        replica::database& db, lw_shared_ptr<query::result_set> result, lw_shared_ptr<query::result_set> scylla_result) {
+    std::unordered_multimap<sstring, const query::result_set_row*> scylla_aggs;
+    if (scylla_result) {
+        for (const auto& scylla_row : scylla_result->rows()) {
+            auto scylla_agg_name = scylla_row.get_nonnull<sstring>("aggregate_name");
+            scylla_aggs.emplace(scylla_agg_name, &scylla_row);
+        }
+    }
+
+    std::vector<shared_ptr<cql3::functions::user_aggregate>> ret;
+    for (const auto& row : result->rows()) {
+        auto agg_name = row.get_nonnull<sstring>("aggregate_name");
+        auto agg_args = read_arg_types(db, row, row.get_nonnull<sstring>("keyspace_name"));
+        const query::result_set_row *scylla_row_ptr = nullptr;
+        for (auto [it, end] = scylla_aggs.equal_range(agg_name); it != end; ++it) {
+            auto scylla_agg_args = read_arg_types(db, *it->second, it->second->get_nonnull<sstring>("keyspace_name"));
+            if (agg_args == scylla_agg_args) {
+                scylla_row_ptr = it->second;
+                break;
+            }
+        }
+        ret.emplace_back(create_aggregate(db, row, scylla_row_ptr));
+    }
+    return ret;
+}
+
 /*
  * User type metadata serialization/deserialization
  */
