@@ -274,16 +274,16 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
             ++crs_it;
             continue;
         }
-        bool emit_rt;
-        if (crs_it != crs_end && rts_it != rts_end) {
+        bool emit_rt = rts_it != rts_end;
+        if (rts_it != rts_end) {
+          if (crs_it != crs_end) {
             const auto cmp_res = cmp(rts_it->position(), crs_it->position());
             if constexpr (reverse == consume_in_reverse::legacy_half_reverse) {
                 emit_rt = cmp_res > 0;
             } else {
                 emit_rt = cmp_res < 0;
             }
-        } else {
-            emit_rt = rts_it != rts_end;
+          }
         }
         if (emit_rt) {
             flush_tombstones(rts_it->position());
