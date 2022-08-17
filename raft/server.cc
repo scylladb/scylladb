@@ -115,7 +115,13 @@ private:
     condition_variable _applied_index_changed;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
-    queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>>(10);
+
+    struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
+    using applier_fiber_message = std::variant<
+        std::vector<log_entry_ptr>,
+        snapshot_descriptor,
+        removed_from_config>;
+    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -905,9 +911,13 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_value();
                 }
                 if (!_current_rpc_config.contains(_id)) {
-                    // If the node is no longer part of a config and no longer the leader
-                    // it will never know the status of entries it submitted
-                    drop_waiters();
+                    // - It's important we push this after we pushed committed entries above. It
+                    // will cause `applier_fiber` to drop waiters, which should be done after we
+                    // notify all waiters for entries committed in this batch.
+                    // - This may happen multiple times if `io_fiber` gets multiple batches when
+                    // we're outside the configuration, but it should eventually (and generally
+                    // quickly) stop happening (we're outside the config after all).
+                    co_await _apply_entries.push_eventually(removed_from_config{});
                 }
                 // request aborts of snapshot transfers
                 abort_snapshot_transfers();
@@ -1059,6 +1069,12 @@ future<> server_impl::applier_fiber() {
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
                 _stats.sm_load_snapshot++;
+            },
+            [this] (const removed_from_config&) -> future<> {
+                // If the node is no longer part of a config and no longer the leader
+                // it may never know the status of entries it submitted.
+                drop_waiters();
+                co_return;
             }
             ), v);
 
