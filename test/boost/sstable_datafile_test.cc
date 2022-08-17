@@ -3204,3 +3204,87 @@ SEASTAR_TEST_CASE(test_crawling_reader_random_schema_random_mutations) {
         assert_that(sst->make_crawling_reader(schema, env.make_reader_permit())).has_monotonic_positions();
     });
 }
+
+SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        class with_range_tombstone_tag;
+        using with_range_tombstone = bool_class<with_range_tombstone_tag>;
+        class with_static_row_tag;
+        using with_static_row = bool_class<with_static_row_tag>;
+
+        auto check_sstable_first_and_last_positions = [&env] (size_t partitions, with_range_tombstone with_range_tombstone, with_static_row with_static_row) {
+            testlog.info("check_sstable_first_and_last_positions: partitions={}, with_range_tombstone={}, with_static_row={}",
+                partitions, bool(with_range_tombstone), bool(with_static_row));
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pks = ss.make_pkeys(partitions);
+            auto tmp = tmpdir();
+            auto sst_gen = [&env, s, &tmp]() {
+                return env.make_sstable(s, tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+            };
+
+            std::vector<mutation> muts;
+            std::optional<position_in_partition> first_position, last_position;
+
+            static constexpr size_t ckeys_per_partition = 10;
+
+            size_t ck_idx = 0;
+            for (size_t pr = 0; pr < partitions; pr++) {
+                auto mut1 = mutation(s, pks[pr]);
+
+                if (with_static_row) {
+                    ss.add_static_row(mut1, "svalue");
+                    if (!first_position) {
+                        first_position = position_in_partition::for_static_row();
+                    }
+                }
+
+                for (size_t ck = 0; ck < ckeys_per_partition; ck++) {
+                    auto ckey = ss.make_ckey(ck_idx + ck);
+                    if (!first_position) {
+                        first_position = position_in_partition::for_key(ckey);
+                    }
+                    last_position = position_in_partition::for_key(ckey);
+                    if (with_range_tombstone && ck % 2 == 0) {
+                        tombstone tomb(ss.new_timestamp(), gc_clock::now());
+                        range_tombstone rt(
+                            bound_view(ckey, bound_kind::incl_start),
+                            bound_view(ckey, bound_kind::incl_end),
+                            tomb);
+                        mut1.partition().apply_delete(*s, std::move(rt));
+                    } else {
+                        mut1.partition().apply_insert(*s, ckey, ss.new_timestamp());
+                    }
+                }
+                muts.push_back(std::move(mut1));
+            }
+            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+            position_in_partition::equal_compare eq(*s);
+            if (!with_static_row) {
+                BOOST_REQUIRE(sst->min_position().key() == first_position->key());
+                BOOST_REQUIRE(sst->max_position().key() == last_position->key());
+            }
+
+            auto first_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_first_decorated_key(), false).get0();
+            BOOST_REQUIRE(first_position_opt);
+
+            auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get0();
+            BOOST_REQUIRE(last_position_opt);
+
+            BOOST_REQUIRE(eq(*first_position_opt, *first_position));
+            BOOST_REQUIRE(eq(*last_position_opt, *last_position));
+        };
+
+        std::array<size_t, 2> partitions_options = { 1, 5 };
+        std::array<with_range_tombstone, 2> range_tombstone_options = { with_range_tombstone::no, with_range_tombstone::yes };
+        std::array<with_static_row, 2> static_row_options = { with_static_row::no, with_static_row::yes };
+
+        for (size_t partitions : partitions_options) {
+            for (with_range_tombstone range_tombstone_opt : range_tombstone_options) {
+                for (with_static_row static_row_opt : static_row_options) {
+                    check_sstable_first_and_last_positions(partitions, range_tombstone_opt, static_row_opt);
+                }
+            }
+        }
+    });
+}
