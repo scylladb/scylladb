@@ -3200,7 +3200,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
             dbcfg.host_id = locator::host_id::create_random_id();
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
+            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory());
             auto close_sst_man = deferred_close(sst_man);
 
             std::vector<sstables::shared_sstable> sstables;

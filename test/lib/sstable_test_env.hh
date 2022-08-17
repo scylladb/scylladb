@@ -35,7 +35,7 @@ class test_env {
         reader_concurrency_semaphore semaphore;
 
         impl()
-            : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker)
+            : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker, memory::stats().total_memory())
             , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
         { }
         impl(impl&&) = delete;
