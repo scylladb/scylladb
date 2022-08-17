@@ -34,7 +34,6 @@ struct mutation_consume_cookie {
         rts_iterator_type rts_begin;
         rts_iterator_type rts_end;
         range_tombstone_change_generator rt_gen;
-        tombstone current_rt;
 
         clustering_iterators(const schema& s, mutation_partition::rows_type& crs, range_tombstone_list& rts)
             : crs_begin(crs.begin()), crs_end(crs.end()), rts_begin(rts.begin()), rts_end(rts.end()), rt_gen(s) { }
@@ -257,7 +256,6 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
 
     auto flush_tombstones = [&] (position_in_partition_view pos) {
         cookie.iterators->rt_gen.flush(pos, [&] (range_tombstone_change rt) {
-            cookie.iterators->current_rt = rt.tombstone();
             consumer.consume(std::move(rt));
         });
     };
