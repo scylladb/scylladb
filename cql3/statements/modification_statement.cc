@@ -8,8 +8,10 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "cql3/cql_statement.hh"
 #include "types/map.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/util.hh"
@@ -28,6 +30,7 @@
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -439,13 +442,30 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
     }
 }
 
+::shared_ptr<strongly_consistent_modification_statement>
+modification_statement::prepare_for_broadcast_tables() const {
+    // FIXME: implement for every type of `modification_statement`.
+    throw service::broadcast_tables::unsupported_operation_error{};
+}
+
 namespace raw {
+
+::shared_ptr<cql_statement_opt_metadata>
+modification_statement::prepare_statement(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) {
+    ::shared_ptr<cql3::statements::modification_statement> statement = prepare(db, ctx, stats);
+
+    if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+        return statement->prepare_for_broadcast_tables();
+    } else {
+        return statement;
+    }
+}
 
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
-    auto statement = prepare(db, meta, stats);
+    auto statement = prepare_statement(db, meta, stats);
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(std::move(statement), meta, std::move(partition_key_bind_indices));
 }

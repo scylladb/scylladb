@@ -424,6 +424,8 @@ set(scylla_sources
     cql3/statements/sl_prop_defs.cc
     cql3/statements/truncate_statement.cc
     cql3/statements/update_statement.cc
+    cql3/statements/strongly_consistent_modification_statement.cc
+    cql3/statements/strongly_consistent_select_statement.cc
     cql3/statements/use_statement.cc
     cql3/type_json.cc
     cql3/untyped_result_set.cc
@@ -533,6 +535,7 @@ set(scylla_sources
     raft/raft.cc
     raft/server.cc
     raft/tracker.cc
+    service/broadcast_tables/experimental/lang.cc
     range_tombstone.cc
     range_tombstone_list.cc
     tombstone_gc_options.cc

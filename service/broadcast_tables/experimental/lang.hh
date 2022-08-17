@@ -10,8 +10,17 @@
 #include <optional>
 #include <variant>
 
-#include "bytes.hh"
+#include <seastar/core/future.hh>
 
+#include "bytes.hh"
+#include "exceptions/exceptions.hh"
+#include "service/storage_proxy.hh"
+
+namespace service {
+
+class raft_group0_client;
+
+}
 
 namespace service::broadcast_tables {
 
@@ -32,6 +41,24 @@ struct update_query {
 
 struct query {
     std::variant<select_query, update_query> q;
+};
+
+// Function checks if statement should be executed on broadcast table.
+// For now it returns true if and only if target table is system.broadcast_kv_store.
+bool is_broadcast_table_statement(const sstring& keyspace, const sstring& column_family);
+
+future<> execute(service::raft_group0_client& group0_client, const query& query);
+
+class unsupported_operation_error : public exceptions::invalid_request_exception {
+public:
+    unsupported_operation_error()
+        : exceptions::invalid_request_exception{"currently unsupported operation on broadcast_kv_store"} {
+    }
+
+    template<typename S>
+    unsupported_operation_error(const S& message)
+        : exceptions::invalid_request_exception{"currently unsupported operation on broadcast_kv_store: "s + message} {
+    }
 };
 
 } // namespace service::broadcast_tables

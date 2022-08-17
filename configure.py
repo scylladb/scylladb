@@ -804,6 +804,8 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/statements/raw/parsed_statement.cc',
                 'cql3/statements/property_definitions.cc',
                 'cql3/statements/update_statement.cc',
+                'cql3/statements/strongly_consistent_modification_statement.cc',
+                'cql3/statements/strongly_consistent_select_statement.cc',
                 'cql3/statements/delete_statement.cc',
                 'cql3/statements/prune_materialized_view_statement.cc',
                 'cql3/statements/batch_statement.cc',
@@ -1041,6 +1043,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/raft_group0.cc',
                 'direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
+                'service/broadcast_tables/experimental/lang.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
