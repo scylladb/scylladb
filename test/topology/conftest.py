@@ -11,9 +11,11 @@ import pathlib
 import ssl
 import sys
 from typing import List
-from test.pylib.random_tables import RandomTables                        # type: ignore
-from test.pylib.util import unique_name                                  # type: ignore
-from test.pylib.manager_client import ManagerClient
+# Also pylib modules
+sys.path.append(sys.path[0] + '/../pylib')
+from random_tables import RandomTables       # type: ignore # pylint: disable=import-error
+from util import unique_name                 # type: ignore # pylint: disable=import-error
+from manager_client import ManagerClient     # type: ignore # pylint: disable=import-error
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
