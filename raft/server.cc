@@ -987,11 +987,11 @@ future<> server_impl::applier_fiber() {
         while (true) {
             auto v = co_await _apply_entries.pop_eventually();
 
-            if (std::holds_alternative<std::vector<log_entry_ptr>>(v)) {
-                auto& batch = std::get<0>(v);
+            co_await std::visit(make_visitor(
+            [this] (std::vector<log_entry_ptr>& batch) -> future<> {
                 if (batch.empty()) {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
-                    continue;
+                    co_return;
                 }
 
                 // Completion notification code assumes that previous snapshot is applied
@@ -1049,8 +1049,8 @@ future<> server_impl::applier_fiber() {
                    }
                    _stats.snapshots_taken++;
                }
-            } else {
-                snapshot_descriptor& snp = std::get<1>(v);
+            },
+            [this] (snapshot_descriptor& snp) -> future<> {
                 assert(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
@@ -1060,6 +1060,8 @@ future<> server_impl::applier_fiber() {
                 _applied_index_changed.broadcast();
                 _stats.sm_load_snapshot++;
             }
+            ), v);
+
             signal_applied();
         }
     } catch(stop_apply_fiber& ex) {
