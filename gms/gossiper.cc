@@ -2435,8 +2435,9 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
         auto features = feature_service::to_feature_set(x.second);
         if (features.empty()) {
             logger.warn("Loaded empty features for peer node {}", x.first);
+        } else {
+            features_map.emplace(x.first, std::move(features));
         }
-        features_map.emplace(x.first, std::move(features));
     }
 
     for (auto& x : _endpoint_state_map) {
@@ -2450,11 +2451,8 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
             auto it = loaded_peer_features.find(endpoint);
             if (it != loaded_peer_features.end()) {
                 logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", endpoint, feature_service::to_feature_set(it->second));
-                // `features_map` was updated above for this case.
             } else {
                 logger.warn("Node {} does not contain SUPPORTED_FEATURES in gossip or system table", endpoint);
-                // The intersection (`common_features`) will be empty. We can return early.
-                return {};
             }
         } else {
             // Replace the features with live info
