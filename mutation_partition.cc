@@ -257,6 +257,21 @@ void mutation_partition::apply(const schema& s, mutation_partition_view p, const
     apply_weak(s, p, p_schema, app_stats);
 }
 
+future<> mutation_partition::apply_gently(const schema& s, const mutation_partition& p, const schema& p_schema,
+        mutation_application_stats& app_stats) {
+    return apply_weak_gently(s, p, p_schema, app_stats);
+}
+
+future<> mutation_partition::apply_gently(const schema& s, mutation_partition&& p,
+        mutation_application_stats& app_stats) {
+    return apply_weak_gently(s, std::move(p), app_stats);
+}
+
+future<> mutation_partition::apply_gently(const schema& s, mutation_partition_view p, const schema& p_schema,
+        mutation_application_stats& app_stats) {
+    return apply_weak_gently(s, p, p_schema, app_stats);
+}
+
 struct mutation_fragment_applier {
     const schema& _s;
     mutation_partition& _mp;
@@ -524,6 +539,38 @@ void mutation_partition::apply_weak(const schema& s, const mutation_partition& p
 
 void mutation_partition::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
     apply_monotonically(s, std::move(p), no_cache_tracker, app_stats);
+}
+
+future<> mutation_partition::apply_weak_gently(const schema& s, mutation_partition_view p,
+        const schema& p_schema, mutation_application_stats& app_stats) {
+    // FIXME: Optimize
+    mutation_partition p2(*this, copy_comparators_only{});
+    partition_builder b(p_schema, p2);
+    co_await p.accept_gently(p_schema, b);
+    apply_resume res;
+    while (apply_monotonically(s, std::move(p2), p_schema, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
+        co_await coroutine::maybe_yield();
+    }
+}
+
+future<> mutation_partition::apply_weak_gently(const schema& s, const mutation_partition& p,
+        const schema& p_schema, mutation_application_stats& app_stats) {
+    // FIXME: Optimize
+    mutation_partition p2(s, p);
+    apply_resume res;
+    while (apply_monotonically(s, std::move(p2), p_schema, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
+        co_await coroutine::maybe_yield();
+    }
+}
+
+future<> mutation_partition::apply_weak_gently(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
+    // Move p onto a variable on the stack frame
+    // so the coroutine can keep it alive when yielding.
+    mutation_partition p2(std::move(p));
+    apply_resume res;
+    while (apply_monotonically(s, std::move(p2), s, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
+        co_await coroutine::maybe_yield();
+    }
 }
 
 tombstone

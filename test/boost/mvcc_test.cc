@@ -160,6 +160,30 @@ SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
             check_range(*snap2, table.make_ckey_range(8, 10), {rt3, rt5});
             check_range(*snap2, table.make_ckey_range(10, 10), {});
             check_range(*snap2, table.make_ckey_range(0, 10), {rt4, rt2, rt3, rt5});
+
+            auto rt6 = table.make_range_tombstone(table.make_ckey_range(9, 10));
+
+            mutation_partition m3(s);
+            m3.apply_delete(*s, rt6);
+
+            auto&& v3 = e.add_version(*s, no_cache_tracker);
+            v3.partition().apply_weak_gently(*s, m3, *s, app_stats).get();
+            auto snap3 = e.read(r, cleaner, s, no_cache_tracker);
+
+            check_range(*snap3, table.make_ckey_range(0, 0), {});
+            check_range(*snap3, table.make_ckey_range(1, 1), {rt4});
+            check_range(*snap3, table.make_ckey_range(3, 4), {rt2});
+            check_range(*snap3, table.make_ckey_range(3, 5), {rt2, rt5});
+            check_range(*snap3, table.make_ckey_range(3, 6), {rt2, rt3, rt5});
+            check_range(*snap3, table.make_ckey_range(4, 4), {rt2});
+            check_range(*snap3, table.make_ckey_range(5, 5), {rt2, rt5});
+            check_range(*snap3, table.make_ckey_range(6, 6), {rt2, rt3, rt5});
+            check_range(*snap3, table.make_ckey_range(7, 10), {rt2, rt3, rt5, rt6});
+            check_range(*snap3, table.make_ckey_range(8, 8), {rt3, rt5});
+            check_range(*snap3, table.make_ckey_range(9, 9), {rt3, rt6});
+            check_range(*snap3, table.make_ckey_range(8, 10), {rt3, rt5, rt6});
+            check_range(*snap3, table.make_ckey_range(10, 10), {rt6});
+            check_range(*snap3, table.make_ckey_range(0, 10), {rt4, rt2, rt3, rt5, rt6});
         });
     });
 

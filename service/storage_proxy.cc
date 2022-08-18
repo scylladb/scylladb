@@ -4360,8 +4360,7 @@ public:
             for (const version& ver : v) {
                 if (ver.par) {
                     mutation_application_stats app_stats;
-                    m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);
-                    co_await coroutine::maybe_yield();
+                    co_await m.partition().apply_gently(*schema, ver.par->mut().partition(), *schema, app_stats);
                 }
             }
             auto live_row_count = m.live_row_count();

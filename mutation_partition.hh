@@ -1259,6 +1259,21 @@ public:
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema,
             mutation_application_stats& app_stats);
+    //
+    // Applies p to current object using async functions.
+    //
+    // Commutative when this_schema == p_schema. If schemas differ, data in p which
+    // is not representable in this_schema is dropped, thus apply() loses commutativity.
+    //
+    // Weak exception guarantees.
+    future<> apply_gently(const schema& this_schema, const mutation_partition& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
+    // Use in case this instance and p share the same schema.
+    // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
+    future<> apply_gently(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
+    // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
+    future<> apply_gently(const schema& this_schema, mutation_partition_view p, const schema& p_schema,
+            mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -1297,6 +1312,12 @@ public:
     void apply_weak(const schema& s, mutation_partition&&,
             mutation_application_stats& app_stats);
     void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema,
+            mutation_application_stats& app_stats);
+    future<> apply_weak_gently(const schema& s, const mutation_partition& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
+    future<> apply_weak_gently(const schema& s, mutation_partition&&,
+            mutation_application_stats& app_stats);
+    future<> apply_weak_gently(const schema& s, mutation_partition_view p, const schema& p_schema,
             mutation_application_stats& app_stats);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
