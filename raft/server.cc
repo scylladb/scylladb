@@ -471,6 +471,11 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
 }
 
 future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as) {
+    if (_config.max_command_size > 0 && command.size() > _config.max_command_size) {
+        logger.trace("[{}] add_entry command size exceeds the limit: {} > {}",
+                     id(), command.size(), _config.max_command_size);
+        throw command_is_too_big_error(command.size(), _config.max_command_size);
+    }
     _stats.add_command++;
     server_id leader = _fsm->current_leader();
     logger.trace("[{}] an entry is submitted", id());
