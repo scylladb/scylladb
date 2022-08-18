@@ -1381,6 +1381,11 @@ public:
         auto fd_ep_map = std::make_unique<direct_fd_endpoint_map>();
         auto fd_service = std::make_unique<sharded<direct_failure_detector::failure_detector>>();
         auto update_fd_server = [&fd = *fd_service, &ep_map = *fd_ep_map] (raft::server_id id, bool added) {
+            if (!fd.local_is_initialized()) {
+                // We're stopping.
+                return;
+            }
+
             auto ep = ep_map.allocate(id);
             if (added) {
                 fd.local().add_endpoint(ep);
