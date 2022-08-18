@@ -1312,7 +1312,7 @@ future<> sstable::update_info_for_opened_data() {
     }).then([this] {
         this->set_position_range();
         this->set_first_and_last_keys();
-        _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(utils::make_random_uuid());
+        _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
         // Get disk usage for this sstable (includes all components).
         _bytes_on_disk = 0;

@@ -590,7 +590,7 @@ private:
         size_t promoted_index_block_size;
         size_t promoted_index_auto_scale_threshold;
     } _pi_write_m;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
     scylla_metadata::large_data_stats _large_data_stats;
 

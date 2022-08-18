@@ -3131,7 +3131,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             if (desc.sstables.empty()) {
                 return {};
             }
-            std::unordered_set<utils::UUID> run_ids;
+            std::unordered_set<sstables::run_id> run_ids;
             bool incremental_enabled = std::any_of(desc.sstables.begin(), desc.sstables.end(), [&run_ids] (shared_sstable& sst) {
                 return !run_ids.insert(sst->run_identifier()).second;
             });
@@ -3311,7 +3311,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         cf->start();
         cf->mark_ready_for_writes();
 
-        utils::UUID partial_sstable_run_identifier = utils::make_random_uuid();
+        sstables::run_id partial_sstable_run_identifier = sstables::run_id::create_random_id();
         mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
         mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
 
@@ -3607,7 +3607,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
 
         // make ssts belong to same run for compaction to enable incremental approach.
         // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
-        utils::UUID run_id = utils::make_random_uuid();
+        auto run_id = sstables::run_id::create_random_id();
         sstables::test(non_expired_sst).set_run_identifier(run_id);
         sstables::test(expired_sst).set_run_identifier(run_id);
 
@@ -3841,7 +3841,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
             make_sstable_containing(sst_gen, muts),
             make_sstable_containing(sst_gen, muts),
         };
-        utils::UUID run_id = utils::make_random_uuid();
+        sstables::run_id run_id = sstables::run_id::create_random_id();
         for (auto& sst : sstables_spanning_many_windows) {
             sstables::test(sst).set_run_identifier(run_id);
         }

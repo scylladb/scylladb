@@ -2700,7 +2700,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 
         auto tmp = tmpdir();
         sstable_writer_config cfg = env.manager().configure_writer();
-        cfg.run_identifier = utils::make_random_uuid();
+        cfg.run_identifier = sstables::run_id::create_random_id();
         auto sst = make_sstable_easy(env, tmp.path(),  make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);

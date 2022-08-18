@@ -451,7 +451,7 @@ protected:
     bool _contains_multi_fragment_runs = false;
     mutation_source_metadata _ms_metadata = {};
     compaction_sstable_replacer_fn _replacer;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     ::io_priority_class _io_priority;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstable_set> _sstable_set;
@@ -489,7 +489,7 @@ protected:
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
-        std::unordered_set<utils::UUID> ssts_run_ids;
+        std::unordered_set<run_id> ssts_run_ids;
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
@@ -1509,7 +1509,7 @@ class resharding_compaction final : public compaction {
         uint64_t estimated_partitions = 0;
     };
     std::vector<estimated_values> _estimation_per_shard;
-    std::vector<utils::UUID> _run_identifiers;
+    std::vector<run_id> _run_identifiers;
 private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
@@ -1533,7 +1533,7 @@ public:
             }
         }
         for (auto i : boost::irange(0u, smp::count)) {
-            _run_identifiers[i] = utils::make_random_uuid();
+            _run_identifiers[i] = run_id::create_random_id();
         }
     }
 
@@ -1816,7 +1816,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 }
 
 unsigned compaction_descriptor::fan_in() const {
-    return boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
+    return boost::copy_range<std::unordered_set<run_id>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
 }
 
 uint64_t compaction_descriptor::sstables_size() const {

@@ -110,7 +110,7 @@ public:
         shared_future<compaction_stats_opt> _compaction_done = make_ready_future<compaction_stats_opt>();
         exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         sstables::compaction_type _type;
-        utils::UUID _output_run_identifier;
+        sstables::run_id _output_run_identifier;
         gate::holder _gate_holder;
         sstring _description;
 
@@ -134,7 +134,7 @@ public:
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
         inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
-        void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
+        void setup_new_compaction(sstables::run_id output_run_id = sstables::run_id::create_null_id());
         void finish_compaction(state finish_state = state::done) noexcept;
 
         // Compaction manager stop itself if it finds an storage I/O error which results in
@@ -179,7 +179,7 @@ public:
         bool generating_output_run() const noexcept {
             return compaction_running() && _output_run_identifier;
         }
-        const utils::UUID& output_run_id() const noexcept {
+        const sstables::run_id& output_run_id() const noexcept {
             return _output_run_identifier;
         }
 

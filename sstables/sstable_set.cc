@@ -129,8 +129,8 @@ sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) co
 std::vector<sstable_run>
 partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
     auto has_run = [this] (const shared_sstable& sst) { return _all_runs.contains(sst->run_identifier()); };
-    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
-    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
+    auto run_ids = boost::copy_range<std::unordered_set<sstables::run_id>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (sstables::run_id run_id) {
         return _all_runs.at(run_id);
     }));
 }
@@ -259,7 +259,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<utils::UUID, sstable_run>& all_runs, bool use_level_metadata)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata)
         : _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)

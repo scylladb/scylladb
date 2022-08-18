@@ -1410,7 +1410,7 @@ public:
         _writer.EndObject();
     }
     void operator()(const sstables::run_identifier& val) const {
-        _writer.AsString(val.id);
+        _writer.AsString(val.id.uuid());
     }
     void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
         _writer.StartObject();
