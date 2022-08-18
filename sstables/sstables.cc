@@ -1263,6 +1263,27 @@ sstable::find_first_position_in_partition(reader_permit permit, const dht::decor
     co_return std::move(ret);
 }
 
+future<> sstable::load_first_and_last_position_in_partition() {
+    if (!_schema->clustering_key_size()) {
+        co_return;
+    }
+
+    auto& sem = _manager.sstable_metadata_concurrency_sem();
+    reader_permit permit = co_await sem.obtain_permit(&*_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout);
+    auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
+    auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
+
+    // Allow loading to proceed even if we were unable to load this metadata as the lack of it
+    // will not affect correctness.
+    if (!first_pos_opt || !last_pos_opt) {
+        sstlog.warn("Unable to retrieve metadata for first and last keys of {}. Not a critical error.", get_filename());
+        co_return;
+    }
+
+    _first_partition_first_position = std::move(*first_pos_opt);
+    _last_partition_last_position = std::move(*last_pos_opt);
+}
+
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
     auto& st = get_stats_metadata();
     auto estimated_count = st.estimated_cells_count.mean() * st.estimated_cells_count.count();
@@ -1416,6 +1437,8 @@ future<> sstable::update_info_for_opened_data() {
                 _bytes_on_disk += bytes;
             });
         });
+    }).then([this] {
+        return load_first_and_last_position_in_partition();
     });
 }
 

@@ -62,6 +62,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/exception_utils.hh"
 
 namespace fs = std::filesystem;
 
@@ -2505,7 +2506,12 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
                 .build(schema_builder::compact_storage::yes);
 
         auto sst = env.make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
-        sst->load().get0();
+        try {
+            sst->load().get();
+        } catch (...) {
+            BOOST_REQUIRE_EXCEPTION(current_exception_as_future().get(), sstables::malformed_sstable_exception, exception_predicate::message_matches(
+                "Failed to read partition from SSTable .*"));
+        }
 
         {
             assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
@@ -3273,6 +3279,9 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
 
             BOOST_REQUIRE(eq(*first_position_opt, *first_position));
             BOOST_REQUIRE(eq(*last_position_opt, *last_position));
+
+            BOOST_REQUIRE(eq(sst->first_partition_first_position(), *first_position));
+            BOOST_REQUIRE(eq(sst->last_partition_last_position(), *last_position));
         };
 
         std::array<size_t, 2> partitions_options = { 1, 5 };

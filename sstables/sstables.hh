@@ -476,6 +476,13 @@ public:
         return _min_max_position_range.end();
     }
 
+    const position_in_partition& first_partition_first_position() const noexcept {
+        return _first_partition_first_position;
+    }
+
+    const position_in_partition& last_partition_last_position() const noexcept {
+        return _last_partition_last_position;
+    }
 private:
     size_t sstable_buffer_size;
 
@@ -500,6 +507,8 @@ private:
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
     position_range _min_max_position_range = position_range::all_clustered_rows();
+    position_in_partition _first_partition_first_position = position_in_partition::before_all_clustered_rows();
+    position_in_partition _last_partition_last_position = position_in_partition::after_all_clustered_rows();
     std::vector<unsigned> _shards;
     std::optional<dht::decorated_key> _first;
     std::optional<dht::decorated_key> _last;
@@ -621,6 +630,10 @@ private:
     // It does nothing if schema defines no clustering key, and it's supposed
     // to be called when loading an existing sstable or after writing a new one.
     void set_min_max_position_range();
+
+    // Loads first position of the first partition, and last position of the last
+    // partition. Does nothing if schema defines no clustering key.
+    future<> load_first_and_last_position_in_partition();
 
     future<> create_data() noexcept;
 
