@@ -179,7 +179,7 @@ public:
         _sst->_data_file_write_time = wtime;
     }
 
-    void set_run_identifier(utils::UUID identifier) {
+    void set_run_identifier(sstables::run_id identifier) {
         _sst->_run_identifier = identifier;
     }
 
@@ -209,7 +209,7 @@ public:
         _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
-        _sst->_run_identifier = utils::make_random_uuid();
+        _sst->_run_identifier = run_id::create_random_id();
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
@@ -220,7 +220,7 @@ public:
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
-        _sst->_run_identifier = utils::make_random_uuid();
+        _sst->_run_identifier = run_id::create_random_id();
     }
 
     void rewrite_toc_without_scylla_component() {
@@ -370,7 +370,7 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) noexcept : _cm(cm) {}
 
-    future<> run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
+    future<> run(sstables::run_id output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
 
     void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
         _cm.propagate_replacement(t->as_table_state(), removed, added);

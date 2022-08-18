@@ -13,6 +13,7 @@
 #include "compatible_ring_position.hh"
 #include "sstable_set.hh"
 #include "readers/clustering_combined.hh"
+#include "sstables/types_fwd.hh"
 
 namespace sstables {
 
@@ -59,7 +60,7 @@ private:
     std::vector<shared_sstable> _unleveled_sstables;
     interval_map_type _leveled_sstables;
     lw_shared_ptr<sstable_list> _all;
-    std::unordered_map<utils::UUID, sstable_run> _all_runs;
+    std::unordered_map<run_id, sstable_run> _all_runs;
     // Change counter on interval map for leveled sstables which is used by
     // incremental selector to determine whether or not to invalidate iterators.
     uint64_t _leveled_sstables_change_cnt = 0;
@@ -86,7 +87,7 @@ public:
         const std::vector<shared_sstable>& unleveled_sstables,
         const interval_map_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all,
-        const std::unordered_map<utils::UUID, sstable_run>& all_runs,
+        const std::unordered_map<run_id, sstable_run>& all_runs,
         bool use_level_metadata);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;

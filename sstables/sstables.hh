@@ -108,7 +108,7 @@ struct sstable_writer_config {
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
     write_monitor* monitor = &default_write_monitor();
-    utils::UUID run_identifier = utils::make_random_uuid();
+    run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
 
@@ -503,7 +503,7 @@ private:
     std::vector<unsigned> _shards;
     std::optional<dht::decorated_key> _first;
     std::optional<dht::decorated_key> _last;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     utils::observable<sstable&> _on_closed;
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
@@ -713,7 +713,7 @@ public:
         return _components->scylla_metadata ? &*_components->scylla_metadata : nullptr;
     }
 
-    utils::UUID run_identifier() const {
+    run_id run_identifier() const {
         return _run_identifier;
     }
 
@@ -812,7 +812,7 @@ public:
     void set_sstable_level(uint32_t);
 
     void generate_new_run_identifier() {
-        _run_identifier = utils::make_random_uuid();
+        _run_identifier = run_id::create_random_id();
     }
 
     double get_compression_ratio() const;
