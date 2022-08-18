@@ -122,36 +122,36 @@ class ManagerClient():
         await self._get("/cluster/mark-dirty")
 
     async def server_stop(self, server_id: str) -> bool:
-        """Stop specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/stop")
+        """Stop specified server"""
+        ret = await self._get_text(f"/cluster/server/{server_id}/stop")
         return ret == "OK"
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
-        """Stop specified node gracefully"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/stop_gracefully")
+        """Stop specified server gracefully"""
+        ret = await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
         return ret == "OK"
 
     async def server_start(self, server_id: str) -> bool:
-        """Start specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/start")
+        """Start specified server"""
+        ret = await self._get_text(f"/cluster/server/{server_id}/start")
         self._driver_update()
         return ret == "OK"
 
     async def server_restart(self, server_id: str) -> bool:
-        """Restart specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/restart")
+        """Restart specified server"""
+        ret = await self._get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
         return ret == "OK"
 
     async def server_add(self) -> str:
-        """Add a new node"""
-        server_id = await self._get_text("/cluster/addnode")
+        """Add a new server"""
+        server_id = await self._get_text("/cluster/addserver")
         self._driver_update()
         return server_id
 
     async def server_remove(self, server_id: str) -> None:
-        """Remove a specified node"""
-        await self._get(f"/cluster/removenode/{server_id}")
+        """Remove a specified server"""
+        await self._get(f"/cluster/removeserver/{server_id}")
         self._driver_update()
 
     async def start_stopped(self) -> None:
