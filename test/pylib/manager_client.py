@@ -130,8 +130,16 @@ class ManagerClient():
 
     async def server_restart(self, server_id: str) -> bool:
         """Restart specified server"""
-        ret = await self._request(f"/cluster/server/{server_id}/restart")
-        self._driver_update()
+        servers = await self.servers()
+        if len(servers) == 1:
+            # Only 1 server, so close connection and reopen fresh afterwards
+            self.driver_close()
+            ret = await self._request(f"/cluster/server/{server_id}/restart")
+            await self.driver_connect()
+        else:
+            # Multiple servers, make sure other nodes are known by the driver
+            self._driver_update()
+            ret = await self._request(f"/cluster/server/{server_id}/restart")
         return ret == "OK"
 
     async def server_add(self) -> str:
