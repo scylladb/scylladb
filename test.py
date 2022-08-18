@@ -621,7 +621,7 @@ class CQLApprovalTest(Test):
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = suite.suite_path / (self.shortname + ".reject")
         self.server_log: Optional[str] = None
-        self.server_log_filename: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -657,16 +657,14 @@ class CQLApprovalTest(Test):
                 logging.info("Server log:\n%s", self.server_log)
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            # FIXME: cluster should provide contact points
-            self.args.insert(1, "--host={}".format(cluster[0].host))
-            # If pre-check fails, e.g. because Scylla failed to start
-            # or crashed between two tests, fail entire test.py
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                self.args.insert(1, "--host={}".format(cluster.endpoint()))
+                # If pre-check fails, e.g. because Scylla failed to start
+                # or crashed between two tests, fail entire test.py
                 self.is_before_test_ok = True
-                # FIXME: should be more comprehensive than checking the first server
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
@@ -695,9 +693,8 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
-                    # FIXME: why only logs of the first server?
-                    self.server_log = cluster[0].read_log()
-                    self.server_log_filename = cluster[0].log_filename
+                    self.server_log = cluster.read_server_log()
+                    self.server_log_filename = cluster.server_log_filename()
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -777,7 +774,7 @@ class PythonTest(Test):
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
-        self.server_log_filename: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         PythonTest._reset(self)
 
     def _reset(self) -> None:
@@ -803,22 +800,19 @@ class PythonTest(Test):
     async def run(self, options: argparse.Namespace) -> Test:
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            # FIXME: cluster should provide contact points
-            self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                self.args.insert(0, "--host={}".format(cluster.endpoint()))
                 self.is_before_test_ok = True
-                # FIXME: should be more comprehensive than checking the first server
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
                 self.success = status
             except Exception as e:
-                # FIXME: why only logs of the first server?
-                self.server_log = cluster[0].read_log()
-                self.server_log_filename = cluster[0].log_filename
+                self.server_log = cluster.read_server_log()
+                self.server_log_filename = cluster.server_log_filename()
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
@@ -850,8 +844,8 @@ class TopologyTest(PythonTest):
             try:
                 self.success = await run_test(self, options)
             except Exception as e:
-                self.server_log = manager.cluster[0].read_log()
-                self.server_log_filename = manager.cluster[0].log_filename
+                self.server_log = manager.cluster.read_server_log()
+                self.server_log_filename = manager.cluster.server_log_filename()
                 if manager.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
