@@ -1158,7 +1158,7 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
-void sstable::set_position_range() {
+void sstable::set_min_max_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
     }
@@ -1180,7 +1180,7 @@ void sstable::set_position_range() {
         return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
     };
 
-    _position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
+    _min_max_position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
 }
 
 future<std::optional<position_in_partition>>
@@ -1390,7 +1390,7 @@ future<> sstable::update_info_for_opened_data() {
         }
         return make_ready_future<>();
     }).then([this] {
-        this->set_position_range();
+        this->set_min_max_position_range();
         this->set_first_and_last_keys();
         _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
@@ -1715,7 +1715,7 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
     }
 
     return std::ranges::any_of(ranges, [this] (const query::clustering_range& range) {
-        return _position_range.overlaps(*_schema,
+        return _min_max_position_range.overlaps(*_schema,
             position_in_partition_view::for_range_start(range),
             position_in_partition_view::for_range_end(range));
     });

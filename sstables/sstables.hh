@@ -462,7 +462,7 @@ public:
      * The lower bound is inclusive: there might be a clustering row with position equal to min_position.
      */
     const position_in_partition& min_position() const {
-        return _position_range.start();
+        return _min_max_position_range.start();
     }
 
     /* Similar to min_position, but returns an upper-bound.
@@ -473,7 +473,7 @@ public:
      * occuring in the sstable (across all partitions).
      */
     const position_in_partition& max_position() const {
-        return _position_range.end();
+        return _min_max_position_range.end();
     }
 
 private:
@@ -499,7 +499,7 @@ private:
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
-    position_range _position_range = position_range::all_clustered_rows();
+    position_range _min_max_position_range = position_range::all_clustered_rows();
     std::vector<unsigned> _shards;
     std::optional<dht::decorated_key> _first;
     std::optional<dht::decorated_key> _last;
@@ -620,7 +620,7 @@ private:
     // Create a position range based on the min/max_column_names metadata of this sstable.
     // It does nothing if schema defines no clustering key, and it's supposed
     // to be called when loading an existing sstable or after writing a new one.
-    void set_position_range();
+    void set_min_max_position_range();
 
     future<> create_data() noexcept;
 
@@ -856,7 +856,7 @@ public:
     // false => there are no partition tombstones, true => we don't know
     bool may_have_partition_tombstones() const {
         return !has_correct_min_max_column_names()
-            || _position_range.is_all_clustered_rows(*_schema);
+            || _min_max_position_range.is_all_clustered_rows(*_schema);
     }
 
     // Return the large_data_stats_entry identified by large_data_type
