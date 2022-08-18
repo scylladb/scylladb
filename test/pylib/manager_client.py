@@ -101,6 +101,15 @@ class ManagerClient():
         resp = await self._get(resource)
         return await resp.text()
 
+    async def _with_driver_refresh(self, func, *args):
+        """Helper for topology change with down host.
+           Always gets a fresh driver to avoid waiting for timeouts.
+        """
+        self.driver_close()
+        ret = await func(*args)
+        await self.driver_connect()
+        return ret
+
     async def _put_json(self, resource: str, json: dict) -> aiohttp.ClientResponse:
         return await self.session.request(method='PUT', url=self._resource_uri(resource), json=json)
 
@@ -140,12 +149,12 @@ class ManagerClient():
     async def server_stop(self, server_id: str) -> None:
         """Stop specified server"""
         logger.debug("ManagerClient stopping %s", server_id)
-        await self._get_text(f"/cluster/server/{server_id}/stop")
+        await self._with_driver_refresh(self._get_text, f"/cluster/server/{server_id}/stop")
 
     async def server_stop_gracefully(self, server_id: str) -> None:
         """Stop specified server gracefully"""
         logger.debug("ManagerClient stopping gracefully %s", server_id)
-        await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
+        await self._with_driver_refresh(self._get_text, f"/cluster/server/{server_id}/stop_gracefully")
 
     async def server_start(self, server_id: str) -> None:
         """Start specified server"""
@@ -156,8 +165,7 @@ class ManagerClient():
     async def server_restart(self, server_id: str) -> None:
         """Restart specified server"""
         logger.debug("ManagerClient restarting %s", server_id)
-        await self._get_text(f"/cluster/server/{server_id}/restart")
-        self._driver_update()
+        await self._with_driver_refresh(self._get_text, f"/cluster/server/{server_id}/restart")
 
     async def server_add(self) -> str:
         """Add a new server"""
@@ -169,8 +177,7 @@ class ManagerClient():
     async def server_remove(self, server_id: str) -> None:
         """Remove a specified server"""
         logger.debug("ManagerClient removing %s", server_id)
-        await self._get_text(f"/cluster/removeserver/{server_id}")
-        self._driver_update()
+        await self._with_driver_refresh(self._get_text, f"/cluster/removeserver/{server_id}")
 
     async def server_get_config(self, server_id: str) -> dict[str, object]:
         resp = await self._get(f"/cluster/server/{server_id}/get_config")
