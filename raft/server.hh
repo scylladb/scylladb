@@ -45,6 +45,9 @@ public:
         // Max size of a single command, add_entry with a bigger command will throw command_is_too_big_error.
         // The value of zero means no limit.
         size_t max_command_size = 0;
+        // A callback to invoke if one of internal server
+        // background activities has stopped because of an error.
+        std::function<void(std::exception_ptr e)> on_background_error;
     };
 
     virtual ~server() {}

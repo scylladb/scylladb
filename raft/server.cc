@@ -274,6 +274,7 @@ private:
     future<> wait_for_apply(index_t idx, abort_source*);
 
     void check_not_aborted();
+    void handle_background_error(const char* fiber_name);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
@@ -952,7 +953,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
     } catch (stop_apply_fiber&) {
         // Log fiber is stopped explicitly
     } catch (...) {
-        logger.error("[{}] io fiber stopped because of the error: {}", _id, std::current_exception());
+        handle_background_error("io");
     }
     co_return;
 }
@@ -1098,7 +1099,7 @@ future<> server_impl::applier_fiber() {
     } catch(stop_apply_fiber& ex) {
         // the fiber is aborted
     } catch (...) {
-        logger.error("[{}] applier fiber stopped because of the error: {}", _id, std::current_exception());
+        handle_background_error("applier");
     }
     co_return;
 }
@@ -1237,6 +1238,14 @@ void server_impl::abort_snapshot_transfers() {
 void server_impl::check_not_aborted() {
     if (_aborted) {
         throw stopped_error(*_aborted);
+    }
+}
+
+void server_impl::handle_background_error(const char* fiber_name) {
+    const auto e = std::current_exception();
+    logger.error("[{}] {} fiber stopped because of the error: {}", _id, fiber_name, e);
+    if (_config.on_background_error) {
+        _config.on_background_error(e);
     }
 }
 
