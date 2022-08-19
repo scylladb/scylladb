@@ -9,13 +9,13 @@ python = "^3.7"
 pyyaml = "6.0"
 pygments = "2.2.0"
 recommonmark = "0.7.1"
-sphinx-scylladb-theme = "~1.2.1"
+sphinx-scylladb-theme = "~1.3.1"
 sphinx-sitemap = "2.2.0"
 sphinx-autobuild = "2021.3.14"
 Sphinx = "4.3.2"
 sphinx-multiversion-scylla = "~0.2.10"
 sphinx-markdown-tables = "0.0.15"
-redirects_cli ="0.1.0"
+redirects_cli ="~0.1.2"
 
 [build-system]
 requires = ["poetry>=0.12"]
