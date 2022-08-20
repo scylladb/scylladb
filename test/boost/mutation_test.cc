@@ -1849,6 +1849,29 @@ SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_commutativity_and_associativity) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    gen.set_key_cardinality(7);
+
+    for (int i = 0; i < 10; ++i) {
+        mutation m1 = gen();
+        m1.partition().make_fully_continuous();
+        mutation m2 = gen();
+        m2.partition().make_fully_continuous();
+        mutation m3 = gen();
+        m3.partition().make_fully_continuous();
+
+        assert_that(m1 + m2 + m3)
+            .is_equal_to(m1 + m3 + m2)
+            .is_equal_to(m2 + m1 + m3)
+            .is_equal_to(m2 + m3 + m1)
+            .is_equal_to(m3 + m1 + m2)
+            .is_equal_to(m3 + m2 + m1);
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_continuity_merging) {
     return seastar::async([] {
         simple_schema table;
