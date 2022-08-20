@@ -34,7 +34,7 @@ Steps:
 
 .. code-block:: sh
 
-   nodetool flush <keyspace>.<mytable>;
+   nodetool flush <keyspace> <mytable>;
 
 4. Run compaction (this will remove big partitions with tombstones from specified table)
 
