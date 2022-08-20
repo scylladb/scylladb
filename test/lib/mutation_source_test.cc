@@ -2247,6 +2247,11 @@ public:
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
                 row.apply(random_row_marker());
+                if (!row.marker().is_missing() && !row.marker().is_live()) {
+                    // Mutations are not associative if dead marker is not matched with a dead row
+                    // due to shadowable tombstone merging rules. See #11307.
+                    row.apply(tombstone(row.marker().timestamp(), row.marker().deletion_time()));
+                }
                 if (_bool_dist(_gen)) {
                     set_random_cells(row.cells(), column_kind::regular_column);
                 } else {
