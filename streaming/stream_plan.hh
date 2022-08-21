@@ -16,15 +16,13 @@
 #include "gms/inet_address.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
+#include "streaming/stream_fwd.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_reason.hh"
 #include <vector>
 
 namespace streaming {
-
-class stream_state;
-class stream_event_handler;
 
 /**
  * {@link StreamPlan} is a helper class that builds StreamOperation of given configuration.

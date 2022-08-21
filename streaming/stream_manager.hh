@@ -9,6 +9,7 @@
  */
 
 #pragma once
+#include "streaming/stream_fwd.hh"
 #include "streaming/progress_info.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
@@ -44,9 +45,6 @@ class gossiper;
 }
 
 namespace streaming {
-
-class stream_session;
-class stream_result_future;
 
 struct stream_bytes {
     int64_t bytes_sent = 0;
