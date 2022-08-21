@@ -742,17 +742,18 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/start_stopped', self._cluster_start_stopped)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
-        return aiohttp.web.Response(text=f"{self.is_running}")
+        return aiohttp.web.Response(text=f"{'Up' if self.is_running else 'Down'}")
 
     async def _cluster_up(self, _request) -> aiohttp.web.Response:
         """Is cluster running"""
-        return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
+        ret = "Up" if self.cluster is not None and self.cluster.is_running else "Down"
+        return aiohttp.web.Response(text=ret)
 
     async def _is_dirty(self, _request) -> aiohttp.web.Response:
         """Report if current cluster is dirty"""
         if self.cluster is None:
             return aiohttp.web.Response(status=500, text="No cluster active")
-        return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
+        return aiohttp.web.Response(text=f"{'Dirty' if self.cluster.is_dirty else 'Not dirty'}")
 
     async def _cluster_replicas(self, _request) -> aiohttp.web.Response:
         """Return cluster's configured number of replicas (replication factor)"""

@@ -10,7 +10,7 @@
 """
 
 import os.path
-from typing import List, Optional, Callable
+from typing import List, Optional, Callable, NamedTuple
 import aiohttp                                                             # type: ignore
 import aiohttp.web                                                         # type: ignore
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
@@ -66,7 +66,8 @@ class ManagerClient():
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
-        await self._request(f"/cluster/before-test/{test_name}")
+        resp = await self._request(f"/cluster/before-test/{test_name}")
+        assert resp.status == 200, f"Could not run before test checks for test {test_name}"
         if self.cql is None:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
@@ -76,84 +77,113 @@ class ManagerClient():
         """Tell harness this test finished"""
         await self._request(f"/cluster/after-test/{test_name}")
 
-    async def _request(self, resource: str) -> str:
+    class RequestReturn(NamedTuple):
+        """Return status and message for API requests"""
+        status: int
+        text: str
+
+    async def _request(self, resource: str) -> RequestReturn:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        resp = await self.session.get(f"http+unix://{self.sock_name}{resource}")
-        return await resp.text()
+        async with self.session.get(f"http+unix://{self.sock_name}{resource}") as resp:
+            # NOTE: always await text to avoid possible issues with aiohttp
+            ret = ManagerClient.RequestReturn(resp.status, await resp.text())
+        return ret
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
-        ret = await self._request("/up")
-        return ret == "True"
+        resp = await self._request("/up")
+        return resp.status == 200 and resp.text == "Up"
 
     async def is_cluster_up(self) -> bool:
         """Check if cluster is up"""
-        ret = await self._request("/cluster/up")
-        return ret == "True"
+        resp = await self._request("/cluster/up")
+        return resp.status == 200 and resp.text == "Up"
 
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""
-        dirty = await self._request("/cluster/is-dirty")
-        return dirty == "True"
+        resp = await self._request("/cluster/is-dirty")
+        return resp.status == 200 and resp.text == "Dirty"
 
-    async def replicas(self) -> int:
+    async def replicas(self) -> Optional[int]:
         """Get number of configured replicas for the cluster (replication factor)"""
         resp = await self._request("/cluster/replicas")
-        return int(resp)
+        if resp.status == 200:
+            return int(resp.text)
+        return None
 
     async def servers(self) -> List[str]:
         """Get list of running servers"""
-        host_list = await self._request("/cluster/servers")
-        return host_list.split(',')
+        resp = await self._request("/cluster/servers")
+        if resp.status == 200:
+            return resp.text.split(',')
+        return []
 
-    async def mark_dirty(self) -> None:
+    async def mark_dirty(self) -> bool:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self._request("/cluster/mark-dirty")
+        resp = await self._request("/cluster/mark-dirty")
+        return resp.status == 200 and resp.text == "OK"
 
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified server"""
-        ret = await self._request(f"/cluster/server/{server_id}/stop")
-        return ret == "OK"
+        resp = await self._request(f"/cluster/server/{server_id}/stop")
+        return resp.status == 200
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
         """Stop specified server gracefully"""
-        ret = await self._request(f"/cluster/server/{server_id}/stop_gracefully")
-        return ret == "OK"
+        resp = await self._request(f"/cluster/server/{server_id}/stop_gracefully")
+        return resp.status == 200
 
     async def server_start(self, server_id: str) -> bool:
         """Start specified server"""
-        ret = await self._request(f"/cluster/server/{server_id}/start")
-        self._driver_update()
-        return ret == "OK"
+        resp = await self._request(f"/cluster/server/{server_id}/start")
+        if resp.status == 200:
+            self._driver_update()
+            return True
+        return False
 
     async def server_restart(self, server_id: str) -> bool:
         """Restart specified server"""
         servers = await self.servers()
+        if not servers or server_id not in servers:
+            return False
         if len(servers) == 1:
             # Only 1 server, so close connection and reopen fresh afterwards
             self.driver_close()
-            ret = await self._request(f"/cluster/server/{server_id}/restart")
-            await self.driver_connect()
-        else:
+            resp = await self._request(f"/cluster/server/{server_id}/restart")
+            if resp.status == 200:
+                await self.driver_connect()
+                return True
+        elif len(servers) > 1:
             # Multiple servers, make sure other nodes are known by the driver
             self._driver_update()
-            ret = await self._request(f"/cluster/server/{server_id}/restart")
-        return ret == "OK"
+            resp = await self._request(f"/cluster/server/{server_id}/restart")
+            if resp.status == 200:
+                return True
+        return False
 
-    async def server_add(self) -> str:
+    async def server_add(self) -> Optional[str]:
         """Add a new server"""
-        server_id = await self._request("/cluster/addserver")
-        self._driver_update()
-        return server_id
+        resp = await self._request("/cluster/addserver")
+        if resp.status == 200:
+            server_id = resp.text
+            self._driver_update()
+            return server_id
+        return None
 
-    async def server_remove(self, server_id: str) -> None:
+    async def server_remove(self, server_id: str) -> bool:
         """Remove a specified server"""
-        await self._request(f"/cluster/removeserver/{server_id}")
-        self._driver_update()
+        resp = await self._request(f"/cluster/removeserver/{server_id}")
+        if resp.status == 200:
+            self._driver_update()
+            return True
+        return False
 
     async def start_stopped(self) -> None:
         """Start all previously stopped servers"""
-        await self._request(f"/cluster/start_stopped")
-        self._driver_update()
+        resp = await self._request(f"/cluster/start_stopped")
+        if resp.status == 200:
+            self._driver_update()
+            return True
+        return False
