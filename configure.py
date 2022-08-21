@@ -630,6 +630,8 @@ arg_parser.add_argument('--static-yaml-cpp', dest='staticyamlcpp', action='store
                         help='Link libyaml-cpp statically')
 arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debuginfo', type=int, default=0,
                         help='Enable(1)/disable(0)compiler debug information generation for tests')
+arg_parser.add_argument('--perf-tests-debuginfo', action='store', dest='perf_tests_debuginfo', type=int, default=0,
+                        help='Enable(1)/disable(0)compiler debug information generation for perf tests')
 arg_parser.add_argument('--python', action='store', dest='python', default='python3',
                         help='Python3 path')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
@@ -1423,6 +1425,7 @@ linker_flags = linker_flags(compiler=args.cxx)
 
 dbgflag = '-g -gz' if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
+perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 
 # Strip if debuginfo is disabled, otherwise we end up with partial
 # debug info from the libraries we static link with
@@ -1954,7 +1957,8 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                    link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
+                    f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                     f.write('   libs = {}\n'.format(local_libs))
                     f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                     f.write('   libs = {}\n'.format(local_libs))
