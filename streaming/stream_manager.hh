@@ -146,7 +146,7 @@ public:
         return make_ready_future<>();
     }
 
-    void update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
+    void update_progress(UUID plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
     future<> update_all_progress_info();
 
     void remove_progress(UUID plan_id);

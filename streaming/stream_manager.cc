@@ -155,8 +155,8 @@ std::vector<shared_ptr<stream_result_future>> stream_manager::get_all_streams() 
     return result;
 }
 
-void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size) {
-    auto& sbytes = _stream_bytes[cf_id];
+void stream_manager::update_progress(UUID plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size) {
+    auto& sbytes = _stream_bytes[plan_id];
     if (dir == progress_info::direction::OUT) {
         sbytes[peer].bytes_sent += fm_size;
         _total_outgoing_bytes += fm_size;
