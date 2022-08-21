@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
 #include "streaming/stream_fwd.hh"
 #include "streaming/stream_task.hh"
 #include <memory>

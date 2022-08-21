@@ -13,7 +13,6 @@
 #include "streaming/progress_info.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
-#include "utils/UUID.hh"
 #include "utils/updateable_value.hh"
 #include "utils/serialized_action.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
@@ -73,7 +72,6 @@ struct stream_bytes {
  * All stream operation should be created through this class to track streaming status and progress.
  */
 class stream_manager : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_manager>, public peering_sharded_service<stream_manager> {
-    using UUID = utils::UUID;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
     using application_state = gms::application_state;
@@ -91,9 +89,9 @@ private:
     sharded<service::migration_manager>& _mm;
     gms::gossiper& _gossiper;
 
-    std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
-    std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
-    std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
+    std::unordered_map<plan_id, shared_ptr<stream_result_future>> _initiated_streams;
+    std::unordered_map<plan_id, shared_ptr<stream_result_future>> _receiving_streams;
+    std::unordered_map<plan_id, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
     uint64_t _total_incoming_bytes{0};
     uint64_t _total_outgoing_bytes{0};
     semaphore _mutation_send_limiter{256};
@@ -120,24 +118,24 @@ public:
 
     void register_receiving(shared_ptr<stream_result_future> result);
 
-    shared_ptr<stream_result_future> get_sending_stream(UUID plan_id) const;
+    shared_ptr<stream_result_future> get_sending_stream(streaming::plan_id plan_id) const;
 
-    shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id) const;
+    shared_ptr<stream_result_future> get_receiving_stream(streaming::plan_id plan_id) const;
 
     std::vector<shared_ptr<stream_result_future>> get_all_streams() const;
 
     replica::database& db() noexcept { return _db.local(); }
     netw::messaging_service& ms() noexcept { return _ms.local(); }
 
-    const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_initiated_streams() const {
+    const std::unordered_map<plan_id, shared_ptr<stream_result_future>>& get_initiated_streams() const {
         return _initiated_streams;
     }
 
-    const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_receiving_streams() const {
+    const std::unordered_map<plan_id, shared_ptr<stream_result_future>>& get_receiving_streams() const {
         return _receiving_streams;
     }
 
-    void remove_stream(UUID plan_id);
+    void remove_stream(streaming::plan_id plan_id);
 
     void show_streams() const;
 
@@ -146,20 +144,20 @@ public:
         return make_ready_future<>();
     }
 
-    void update_progress(UUID plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
+    void update_progress(streaming::plan_id plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
     future<> update_all_progress_info();
 
-    void remove_progress(UUID plan_id);
+    void remove_progress(streaming::plan_id plan_id);
 
-    stream_bytes get_progress(UUID plan_id, gms::inet_address peer) const;
+    stream_bytes get_progress(streaming::plan_id plan_id, gms::inet_address peer) const;
 
-    stream_bytes get_progress(UUID plan_id) const;
+    stream_bytes get_progress(streaming::plan_id plan_id) const;
 
-    future<> remove_progress_on_all_shards(UUID plan_id);
+    future<> remove_progress_on_all_shards(streaming::plan_id plan_id);
 
-    future<stream_bytes> get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) const;
+    future<stream_bytes> get_progress_on_all_shards(streaming::plan_id plan_id, gms::inet_address peer) const;
 
-    future<stream_bytes> get_progress_on_all_shards(UUID plan_id) const;
+    future<stream_bytes> get_progress_on_all_shards(streaming::plan_id plan_id) const;
 
     future<stream_bytes> get_progress_on_all_shards(gms::inet_address peer) const;
 
@@ -167,7 +165,7 @@ public:
 
     stream_bytes get_progress_on_local_shard() const;
 
-    shared_ptr<stream_session> get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
+    shared_ptr<stream_session> get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
 
 public:
     virtual future<> on_join(inet_address endpoint, endpoint_state ep_state) override { return make_ready_future(); }

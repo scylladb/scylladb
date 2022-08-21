@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
@@ -32,10 +31,9 @@ namespace streaming {
 class stream_plan {
 private:
     using inet_address = gms::inet_address;
-    using UUID = utils::UUID;
     using token = dht::token;
     stream_manager& _mgr;
-    UUID _plan_id;
+    plan_id _plan_id;
     sstring _description;
     stream_reason _reason;
     std::vector<stream_event_handler*> _handlers;
@@ -51,7 +49,7 @@ public:
      */
     stream_plan(stream_manager& mgr, sstring description, stream_reason reason = stream_reason::unspecified)
         : _mgr(mgr)
-        , _plan_id(utils::UUID_gen::get_time_UUID())
+        , _plan_id(plan_id{utils::UUID_gen::get_time_UUID()})
         , _description(description)
         , _reason(reason)
         , _coordinator(make_shared<stream_coordinator>())

@@ -13,7 +13,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/distributed.hh>
 #include "message/messaging_service_fwd.hh"
-#include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
@@ -119,7 +118,6 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
-    using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
 
@@ -193,7 +191,7 @@ public:
     stream_session(stream_manager& mgr, inet_address peer_);
     ~stream_session();
 
-    UUID plan_id() const;
+    streaming::plan_id plan_id() const;
 
     sstring description() const;
 
