@@ -134,7 +134,7 @@ isolation policy for a specific table can be overridden by tagging the table
 This section provides only a very brief introduction to Alternator's
 design. A much more detailed document about the features of the DynamoDB
 API and how they are, or could be, implemented in Scylla can be found in:
-https://docs.google.com/document/d/1i4yjF5OSAazAY_-T8CBce9-2ykW4twx_E_Nt2zDoOVs
+<https://docs.google.com/document/d/1i4yjF5OSAazAY_-T8CBce9-2ykW4twx_E_Nt2zDoOVs>
 
 Almost all of Alternator's source code (except some initialization code)
 can be found in the alternator/ subdirectory of Scylla's source code.
