@@ -23,8 +23,6 @@ KillMode=process
 Restart=on-abnormal
 User=scylla
 OOMScoreAdjust=-950
-StandardOutput=syslog
-StandardError=syslog
 SyslogLevelPrefix=false
 Slice=scylla-server.slice
 
