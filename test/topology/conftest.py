@@ -110,6 +110,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # so let's increase them to 60 seconds. See issue #11289.
                    connect_timeout = 60,
                    control_connection_timeout = 60,
+                   max_schema_agreement_wait=60,
                    )
 
 
