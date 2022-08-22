@@ -63,6 +63,7 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
+    kwargs.setdefault("timeout", 60.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
