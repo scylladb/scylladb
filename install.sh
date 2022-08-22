@@ -29,6 +29,7 @@ Options:
   --upgrade                 upgrade existing scylla installation (don't overwrite config files)
   --supervisor             enable supervisor to manage scylla processes
   --supervisor-log-to-stdout logging to stdout on supervisor
+  --without-systemd         skip installing systemd units
   --help                   this helpful message
 EOF
     exit 1
@@ -68,6 +69,7 @@ packaging=false
 upgrade=false
 supervisor=false
 supervisor_log_to_stdout=false
+without_systemd=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -109,6 +111,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--supervisor-log-to-stdout")
             supervisor_log_to_stdout=true
+            shift 1
+            ;;
+        "--without-systemd")
+            without_systemd=true
             shift 1
             ;;
         "--help")
@@ -313,15 +319,20 @@ if ! $nonroot; then
     done
 fi
 # scylla-node-exporter
-install -d -m755 "$rsysconfdir" "$rsystemd"
+if ! $without_systemd; then
+    install -d -m755 "$rsystemd"
+fi
+install -d -m755 "$rsysconfdir"
 install -d -m755 "$rprefix"/node_exporter
 install -d -m755 "$rprefix"/node_exporter/licenses
 install -m755 node_exporter/node_exporter "$rprefix"/node_exporter
 install -m644 node_exporter/LICENSE "$rprefix"/node_exporter/licenses
 install -m644 node_exporter/NOTICE "$rprefix"/node_exporter/licenses
-install -m644 dist/common/systemd/scylla-node-exporter.service -Dt "$rsystemd"
+if ! $without_systemd; then
+    install -m644 dist/common/systemd/scylla-node-exporter.service -Dt "$rsystemd"
+fi
 installconfig 644 dist/common/sysconfig/scylla-node-exporter "$rsysconfdir"
-if ! $nonroot; then
+if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-node-exporter.service.d
     install -m644 dist/common/systemd/scylla-node-exporter.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-node-exporter.service.d
     if [ "$sysconfdir" != "/etc/sysconfig" ]; then
@@ -331,7 +342,7 @@ EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-node-exporter
 EOS
     fi
-else
+elif ! $without_systemd; then
     install -d -m755 "$rsystemd"/scylla-node-exporter.service.d
     cat << EOS > "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
 [Service]
@@ -355,12 +366,14 @@ for file in dist/common/scylla.d/*.conf; do
 done
 
 install -d -m755 "$retc"/scylla "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
-install -m644 dist/common/systemd/scylla-fstrim.service -Dt "$rsystemd"
-install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
-install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
-install -m644 dist/common/systemd/scylla-server.service -Dt "$rsystemd"
-install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
-install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
+if ! $without_systemd; then
+    install -m644 dist/common/systemd/scylla-fstrim.service -Dt "$rsystemd"
+    install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
+    install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
+    install -m644 dist/common/systemd/scylla-server.service -Dt "$rsystemd"
+    install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
+    install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
+fi
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
 install -m755 libreloc/* -Dt "$rprefix/libreloc"
@@ -406,7 +419,7 @@ cat << EOS > "$rprefix"/scripts/scylla_product.py
 PRODUCT="$product"
 EOS
 
-if ! $nonroot; then
+if ! $nonroot && ! $without_systemd; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d
     install -m644 dist/common/systemd/scylla-server.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-server.service.d
     if [ "$sysconfdir" != "/etc/sysconfig" ]; then
@@ -416,43 +429,16 @@ EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
 EOS
-    for i in daily restart; do
-        install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
-        cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/sysconfdir.conf
+        for i in daily restart; do
+            install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
+            cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/sysconfdir.conf
 [Service]
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
-    done
-        cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
-SYSCONFDIR="$sysconfdir"
-EOS
+        done
     fi
-    install -m755 -d "$rusr/bin"
-    install -m755 -d "$rhkdata"
-    ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
-    ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
-    ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
-    install -d "$rusr"/sbin
-    for i in $SBINFILES; do
-        ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
-    done
-
-    # we need keep /usr/lib/scylla directory to support upgrade/downgrade
-    # without error, so we need to create symlink for each script on the
-    # directory
-    install -m755 -d "$rusr"/lib/scylla/scyllatop/views
-    for i in $(find "$rprefix"/scripts/ -maxdepth 1 -type f); do
-        ln -srf $i "$rusr"/lib/scylla/
-    done
-    for i in $(find "$rprefix"/scyllatop/ -maxdepth 1 -type f); do
-        ln -srf $i "$rusr"/lib/scylla/scyllatop
-    done
-    for i in $(find "$rprefix"/scyllatop/views -maxdepth 1 -type f); do
-        ln -srf $i "$rusr"/lib/scylla/scyllatop/views
-    done
-else
-    install -m755 -d "$rdata"/saved_caches
+elif ! $without_systemd; then
     install -d -m755 "$rsystemd"/scylla-server.service.d
     if [ -d /var/log/journal ]; then
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
@@ -483,16 +469,51 @@ StandardOutput=file:$rprefix/scylla-server.log
 StandardError=
 StandardError=inherit
 EOS
+    fi
+fi
+
+
+if ! $nonroot; then
+    if [ "$sysconfdir" != "/etc/sysconfig" ]; then
         cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
 SYSCONFDIR="$sysconfdir"
 EOS
     fi
+    install -m755 -d "$rusr/bin"
+    install -m755 -d "$rhkdata"
+    ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
+    ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
+    ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
+    install -d "$rusr"/sbin
+    for i in $SBINFILES; do
+        ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
+    done
 
+    # we need keep /usr/lib/scylla directory to support upgrade/downgrade
+    # without error, so we need to create symlink for each script on the
+    # directory
+    install -m755 -d "$rusr"/lib/scylla/scyllatop/views
+    for i in $(find "$rprefix"/scripts/ -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/
+    done
+    for i in $(find "$rprefix"/scyllatop/ -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/scyllatop
+    done
+    for i in $(find "$rprefix"/scyllatop/views -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/scyllatop/views
+    done
+else
+    install -m755 -d "$rdata"/saved_caches
+    cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
+SYSCONFDIR="$sysconfdir"
+EOS
     install -d "$rprefix"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
     done
 fi
+
+
 
 install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
 
@@ -545,7 +566,7 @@ if $nonroot; then
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
-    if ! $supervisor && ! $packaging && check_usermode_support; then
+    if ! $supervisor && ! $packaging && ! $without_systemd && check_usermode_support; then
         systemctl --user daemon-reload
     fi
     echo "Scylla non-root install completed."
