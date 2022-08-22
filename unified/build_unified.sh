@@ -71,5 +71,7 @@ for pkg in $PKGS; do
 done
 ln -f unified/install.sh build/"$MODE"/unified/
 ln -f unified/uninstall.sh build/"$MODE"/unified/
+# relocatable package format version = 2.2
+echo "2.2" > build/"$MODE"/unified/.relocatable_package_version
 cd build/"$MODE"/unified
 tar cpf "$UNIFIED_PKG" --use-compress-program=pigz * .relocatable_package_version
