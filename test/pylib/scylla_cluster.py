@@ -130,6 +130,9 @@ class ScyllaServer:
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
         self.config_options = config_options
+        # Sum of basic server configuration and the user-provided config options (self.config_options).
+        # Calculated in `install` as only then we know the seed servers.
+        self.config: Dict[str, object] = {}
 
         async def stop_server() -> None:
             if self.is_running:
@@ -201,14 +204,14 @@ class ScyllaServer:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.config_filename.parent.mkdir(parents=True, exist_ok=True)
         # Create a configuration file.
-        config = make_scylla_conf(
+        self.config = make_scylla_conf(
                 workdir = self.workdir,
                 host_addr = self.hostname,
                 seed_addrs = self.seeds,
                 cluster_name = self.cluster_name) \
             | self.config_options
         with self.config_filename.open('w') as config_file:
-            yaml.dump(config, config_file)
+            yaml.dump(self.config, config_file)
 
         self.log_file = self.log_filename.open("wb")
 
