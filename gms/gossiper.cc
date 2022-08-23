@@ -1389,6 +1389,18 @@ locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     return locator::host_id(utils::UUID(app_state->value));
 }
 
+std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
+    std::set<gms::inet_address> nodes;
+    for (auto& x : get_endpoint_states()) {
+        auto node = x.first;
+        auto app_state = get_application_state_ptr(node, application_state::HOST_ID);
+        if (app_state && host_id == locator::host_id(utils::UUID(app_state->value))) {
+            nodes.insert(node);
+        }
+    }
+    return nodes;
+}
+
 std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
     std::optional<endpoint_state> reqd_endpoint_state;
     auto es = get_endpoint_state_for_endpoint_ptr(for_endpoint);
@@ -1631,7 +1643,8 @@ bool gossiper::is_normal(const inet_address& endpoint) const {
 }
 
 bool gossiper::is_left(const inet_address& endpoint) const {
-    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_LEFT);
+    auto status = get_gossip_status(endpoint);
+    return status == sstring(versioned_value::STATUS_LEFT) || status == sstring(versioned_value::REMOVED_TOKEN);
 }
 
 bool gossiper::is_normal_ring_member(const inet_address& endpoint) const {
