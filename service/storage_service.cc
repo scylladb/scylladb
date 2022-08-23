@@ -327,7 +327,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        tmptr->update_topology(*replace_address, {});
+        tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -1633,6 +1633,8 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
     }
 
+    auto dc_rack = get_dc_rack_for(replace_address);
+
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
     co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
@@ -1641,6 +1643,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     co_return replacement_info {
         .tokens = std::move(tokens),
+        .dc_rack = std::move(dc_rack),
     };
 }
 
