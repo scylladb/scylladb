@@ -918,6 +918,12 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
         } else if (existing && *existing == endpoint) {
             tmptr->del_replacing_endpoint(endpoint);
         } else {
+            auto nodes = _gossiper.get_nodes_with_host_id(host_id);
+            bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
+            if (left) {
+                slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
+                co_return;
+            }
             slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
             tmptr->update_host_id(host_id, endpoint);
         }
