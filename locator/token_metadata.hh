@@ -53,18 +53,12 @@ public:
     /**
      * Stores current DC/rack assignment for ep
      */
-    void add_endpoint(const inet_address& ep, endpoint_dc_rack dr);
+    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
 
     /**
      * Removes current DC/rack assignment for ep
      */
     void remove_endpoint(inet_address ep);
-
-    /**
-     * Re-reads the DC/rack info for the given endpoint
-     * @param ep endpoint in question
-     */
-    void update_endpoint(inet_address ep, endpoint_dc_rack dr);
 
     /**
      * Returns true iff contains given endpoint

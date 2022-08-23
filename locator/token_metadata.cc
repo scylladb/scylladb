@@ -1246,7 +1246,7 @@ topology::topology(const topology& other) {
     _current_locations = other._current_locations;
 }
 
-void topology::add_endpoint(const inet_address& ep, endpoint_dc_rack dr)
+void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 {
     auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
     sstring dc = snitch->get_datacenter(ep);
@@ -1263,10 +1263,6 @@ void topology::add_endpoint(const inet_address& ep, endpoint_dc_rack dr)
     _dc_endpoints[dc].insert(ep);
     _dc_racks[dc][rack].insert(ep);
     _current_locations[ep] = {dc, rack};
-}
-
-void topology::update_endpoint(inet_address ep, endpoint_dc_rack dr) {
-    add_endpoint(ep, std::move(dr));
 }
 
 void topology::remove_endpoint(inet_address ep)
