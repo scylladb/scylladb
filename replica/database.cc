@@ -191,7 +191,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
     memory::set_additional_diagnostics_producer([this] (memory::memory_diagnostics_writer wr) {
         auto writeln = memory_diagnostics_line_writer(std::move(wr));
 
-        const auto lsa_occupancy_stats = logalloc::lsa_global_occupancy_stats();
+        const auto lsa_occupancy_stats = logalloc::shard_tracker().global_occupancy();
         writeln("LSA\n");
         writeln("  allocated: {}\n", utils::to_hr_size(lsa_occupancy_stats.total_space()));
         writeln("  used:      {}\n", utils::to_hr_size(lsa_occupancy_stats.used_space()));

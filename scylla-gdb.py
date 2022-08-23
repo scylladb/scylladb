@@ -1073,6 +1073,15 @@ class sharded:
         return self.instance()
 
 
+def get_lsa_segment_pool():
+    try:
+        tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'')
+        tracker_impl = std_unique_ptr(tracker["_impl"]).get().dereference()
+        return std_unique_ptr(tracker_impl["_segment_pool"]).get().dereference()
+    except gdb.error:
+        return gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+
+
 def find_db(shard=None):
     try:
         db = gdb.parse_and_eval('::debug::the_database')
@@ -2028,7 +2037,7 @@ class scylla_memory(gdb.Command):
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
                   .format(used_mem=total_mem - free_mem, free_mem=free_mem, total_mem=total_mem))
 
-        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        lsa = get_lsa_segment_pool()
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
         lsa_free = int(lsa['_free_segments']) * segment_size
         non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
@@ -2492,11 +2501,11 @@ class scylla_ptr(gdb.Command):
             ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
-        try:
-            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._store._segments_base) / \'logalloc::segment\'::size' % (ptr))
-        except gdb.error:
-            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr)) # Scylla 3.0 compatibility
-        desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
+        segment_pool = get_lsa_segment_pool()
+        segments_base = int(segment_pool["_store"]["_segments_base"])
+        segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
+        index = int((int(ptr) - segments_base) / segment_size)
+        desc = std_vector(segment_pool["_segments"])[index]
         ptr_meta.is_lsa = bool(desc['_region'])
 
         return ptr_meta
@@ -2533,11 +2542,12 @@ class scylla_segment_descs(gdb.Command):
 
     def invoke(self, arg, from_tty):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        segment_pool = get_lsa_segment_pool()
         try:
-            base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+            base = int(segment_pool["_store"]["_segments_base"])
         except gdb.error:
             try:
-                base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+                base = int(segment_pool["_segments_base"])
             except gdb.error:
                 base = None
 
@@ -2551,15 +2561,15 @@ class scylla_segment_descs(gdb.Command):
                 gdb.write('0x%x: std\n' % (seg_addr))
 
         if base is None: # debug mode build
-            segs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments'))
-            descs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments'))
+            segs = std_vector(segment_pool["_store"]["_segments"])
+            descs = std_vector(segment_pool["_segments"])
 
             for seg, desc_ref in zip(segs, descs):
                 desc = segment_descriptor(desc_ref)
                 print_desc(int(seg), desc)
         else:
             addr = base
-            for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            for desc in std_vector(segment_pool["_segments"]):
                 desc = segment_descriptor(desc)
                 print_desc(addr, desc)
                 addr += segment_size
@@ -2594,10 +2604,11 @@ class scylla_lsa_check(gdb.Command):
         # Scan shard's segment_descriptor:s for anomalies:
         #  - detect segments owned by cache which are not in cache region's _segment_descs
         #  - compute segment occupancy statistics for comparison with region's stored ones
-        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+        segment_pool = get_lsa_segment_pool()
+        base = int(segment_pool["_store"]["_segments_base"])
         desc_free_space = 0
         desc_total_space = 0
-        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+        for desc in std_vector(segment_pool["_segments"]):
             desc = segment_descriptor(desc)
             if desc.is_lsa() and desc.region() == cache_region.impl():
                 if not int(desc.address) in in_buckets:
@@ -2628,7 +2639,7 @@ class scylla_lsa(gdb.Command):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        lsa = get_lsa_segment_pool()
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
 
         lsa_mem = int(lsa['_segments_in_use']) * segment_size
