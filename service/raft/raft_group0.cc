@@ -18,6 +18,7 @@
 #include "direct_failure_detector/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
+#include "replica/database.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/sleep.hh>
@@ -101,8 +102,15 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_addr.id);
     auto& persistence_ref = *storage;
+    auto* cl = _qp.proxy().get_db().local().commitlog();
     auto server = raft::create_server(my_addr.id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), raft::server::configuration());
+            std::move(storage), _raft_gr.failure_detector(),
+            raft::server::configuration {
+                // Dividing by two is to protect against paddings that the
+                // commit log can add for each mutation, as well as
+                // against different commit log limits on different nodes.
+                .max_command_size = cl ? cl->max_record_size() / 2 : 0
+            });
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
