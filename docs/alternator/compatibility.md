@@ -16,7 +16,21 @@ provision that - Scylla requires you to provision your cluster. You need
 to reason about the number and size of your nodes - not the throughput.
 
 When creating a table, the BillingMode and ProvisionedThroughput options
-are ignored by Scylla.
+are ignored by Scylla. Tables default to a Billing mode of `PAY_PER_REQUEST`
+and `DescribeTable` API calls will return a value of 0 for the RCUs, WCUs
+and NumberOfDecreasesToday within the response.
+
+## Scan ordering
+
+In DynamoDB, the Hash key (or partition key) determines where the item will
+be stored within DynamoDB's internal storage. Another notable difference between
+DynamoDB and Scylla comes down to the underlying hashing algorithm.
+While DynamoDB uses a proprietary hashing function, ScyllaDB implements the well-known
+[Murmur3](https://docs.scylladb.com/stable/glossary.html#term-Partitioner) algorithm.
+
+Even though regular users should not typically care about the underlying
+implementation details, particularly such difference causes Scan operations
+to return results in a different order between DynamoDB and Alternator.
 
 ## Load balancing
 
@@ -251,7 +265,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   <https://github.com/scylladb/scylla/issues/5013>
   <https://github.com/scylladb/scylla/issues/5026>
   <https://github.com/scylladb/scylla/issues/7550>
-  <https://github.com/scylladb/scylla/issues/7551 >
+  <https://github.com/scylladb/scylla/issues/7551>
 
 * The recently-added PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE
   expressions) and the new operations ExecuteStatement, BatchExecuteStatement
