@@ -284,11 +284,6 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
 }
 
 future<dht::token_range_vector>
-abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const {
-    return get_pending_address_ranges(std::move(tmptr), std::unordered_set<token>{pending_token}, pending_address);
-}
-
-future<dht::token_range_vector>
 abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
     dht::token_range_vector ret;
     token_metadata temp;
