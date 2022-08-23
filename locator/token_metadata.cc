@@ -96,8 +96,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep) {
-        _topology.update_endpoint(ep);
+    void update_topology(inet_address ep, endpoint_dc_rack dr) {
+        _topology.update_endpoint(ep, std::move(dr));
     }
 
     /**
@@ -446,7 +446,7 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
     // b. update pending _bootstrap_tokens and _leaving_endpoints
     // c. update _token_to_endpoint_map with the new endpoint->token mappings
     //    - set `should_sort_tokens` if new tokens were added
-    _topology.add_endpoint(endpoint);
+    _topology.add_endpoint(endpoint, {});
     remove_by_value(_bootstrap_tokens, endpoint);
     _leaving_endpoints.erase(endpoint);
     invalidate_cached_rings();
@@ -1022,8 +1022,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep) {
-    _impl->update_topology(ep);
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
+    _impl->update_topology(ep, std::move(dr));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
@@ -1243,7 +1243,7 @@ topology::topology(const topology& other) {
     _current_locations = other._current_locations;
 }
 
-void topology::add_endpoint(const inet_address& ep)
+void topology::add_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 {
     auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
     sstring dc = snitch->get_datacenter(ep);
@@ -1262,12 +1262,12 @@ void topology::add_endpoint(const inet_address& ep)
     _current_locations[ep] = {dc, rack};
 }
 
-void topology::update_endpoint(inet_address ep) {
+void topology::update_endpoint(inet_address ep, endpoint_dc_rack dr) {
     if (!_current_locations.contains(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
         return;
     }
 
-    add_endpoint(ep);
+    add_endpoint(ep, std::move(dr));
 }
 
 void topology::remove_endpoint(inet_address ep)

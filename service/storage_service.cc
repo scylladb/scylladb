@@ -3228,7 +3228,7 @@ future<> storage_service::update_topology(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto& ss) {
         return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
             // re-read local rack and DC info
-            tmptr->update_topology(endpoint);
+            tmptr->update_topology(endpoint, {});
             return make_ready_future<>();
         });
     });
