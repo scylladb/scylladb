@@ -422,6 +422,10 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
         co_return;
     }
 
+    if (!is_member(endpoint)) {
+        on_internal_error(tlogger, format("token_metadata_impl: {} must be member to update normal tokens", endpoint));
+    }
+
     bool should_sort_tokens = false;
 
     // Phase 1: erase all tokens previously owned by the endpoint.
@@ -442,11 +446,10 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
     }
 
     // Phase 2:
-    // a. Add the endpoint to _topology if needed.
+    // a. ...
     // b. update pending _bootstrap_tokens and _leaving_endpoints
     // c. update _token_to_endpoint_map with the new endpoint->token mappings
     //    - set `should_sort_tokens` if new tokens were added
-    _topology.add_endpoint(endpoint, {});
     remove_by_value(_bootstrap_tokens, endpoint);
     _leaving_endpoints.erase(endpoint);
     invalidate_cached_rings();
@@ -1263,10 +1266,6 @@ void topology::add_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 }
 
 void topology::update_endpoint(inet_address ep, endpoint_dc_rack dr) {
-    if (!_current_locations.contains(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
-        return;
-    }
-
     add_endpoint(ep, std::move(dr));
 }
 

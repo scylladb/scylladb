@@ -1377,6 +1377,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
             //Pending ranges
+            metadata_clone.update_topology(myip, {});
             metadata_clone.update_normal_tokens(tokens, myip).get();
             auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
             metadata_clone.clear_gently().get();
@@ -1831,6 +1832,7 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     // update a cloned version of tmptr
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
+    cloned_tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), {});
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
 }

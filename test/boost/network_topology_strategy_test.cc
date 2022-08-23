@@ -208,6 +208,7 @@ void simple_test() {
     // Initialize the token_metadata
     stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
         for (auto&& i : endpoint_tokens) {
+            tm.update_topology(i.first, {});
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -312,6 +313,7 @@ void heavy_origin_test() {
 
     stm.mutate_token_metadata([&tokens] (token_metadata& tm) -> future<> {
         for (auto&& i : tokens) {
+            tm.update_topology(i.first, {});
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -625,6 +627,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         
         stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
             for (auto&& i : endpoint_tokens) {
+                tm.update_topology(i.first, {});
                 co_await tm.update_normal_tokens(std::move(i.second), i.first);
             }
         }).get();

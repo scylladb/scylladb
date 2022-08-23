@@ -288,6 +288,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     dht::token_range_vector ret;
     token_metadata temp;
     temp = co_await tmptr->clone_only_token_map();
+    temp.update_topology(pending_address, std::move(dr));
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
     for (const auto& t : temp.sorted_tokens()) {
         auto eps = co_await calculate_natural_endpoints(t, temp);

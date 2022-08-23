@@ -326,6 +326,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
+        tmptr->update_topology(*replace_address, {});
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -362,6 +363,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
+        tmptr->update_topology(get_broadcast_address(), {});
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
         cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
@@ -538,6 +540,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
+        tmptr->update_topology(get_broadcast_address(), {});
         return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
@@ -683,6 +686,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
+                    tmptr->update_topology(endpoint, {});
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
                 }).get();
@@ -869,6 +873,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
         tmptr->remove_endpoint(endpoint);
     }
 
+    tmptr->update_topology(endpoint, {});
     tmptr->add_bootstrap_tokens(tokens, endpoint);
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
@@ -961,6 +966,9 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
+    if (!is_member) {
+        tmptr->update_topology(endpoint, {});
+    }
     co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
@@ -1009,6 +1017,7 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
+        tmptr->update_topology(endpoint, {});
         co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
@@ -1395,6 +1404,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                     // entry has been mistakenly added, delete it
                     _sys_ks.local().remove_endpoint(ep).get();
                 } else {
+                    tmptr->update_topology(ep, {});
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
