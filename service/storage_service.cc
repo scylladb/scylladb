@@ -1884,6 +1884,19 @@ future<> storage_service::decommission() {
             }
             slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
 
+            std::unordered_set<gms::inet_address> gossip_nodes_down;
+            for (auto& node : nodes) {
+                if (!ss._gossiper.is_alive(node)) {
+                    gossip_nodes_down.emplace(node);
+                }
+            }
+            if (!gossip_nodes_down.empty()) {
+                auto msg = format("decommission[{}]: Rejected decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}, nodes_down={}",
+                        uuid, endpoint, nodes, ignore_nodes, gossip_nodes_down);
+                slogger.warn("{}", msg);
+                throw std::runtime_error(msg);
+            }
+
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
