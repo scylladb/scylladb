@@ -2353,22 +2353,32 @@ SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
     });
 }
 
+// Regression test for #10010, #11235.
 SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
     logical_timer timer;
     environment_config cfg {
-            .rnd{0},
-            .network_delay{1, 1},
-            .fd_convict_threshold = 10_t,
+            .rnd{seed},
+            .network_delay{0, 6},
+            .fd_convict_threshold = 50_t,
     };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start([&] (uint64_t tick) {
+
+    co_await with_env_and_ticker<ExReg>(cfg, [&] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
+            env.for_each_server([&] (raft::server_id, raft_server<ExReg>* srv) {
+                // Tick each server with probability 1/10.
+                // Thus each server is ticked, on average, once every 10 timer/network ticks.
+                // On the other hand, we now have servers running at different speeds.
+                if (srv && dist(random_engine) == 0) {
+                    srv->tick();
+                }
+            });
             return ping_shards();
-        }, 10'000);
+        }, 20'000);
 
         raft::server::configuration cfg {
                 .enable_forwarding = true,
@@ -2378,12 +2388,12 @@ SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
         assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
         auto id2 = co_await env.new_server(false, cfg);
         assert(std::holds_alternative<std::monostate>(
-                co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+                co_await env.reconfigure(id1, {id1, id2}, timer.now() + 200_t, timer)));
         // Server 2 forwards the entry that removes server 1 to server 1.
         // We want server 2 to either learn from server 1 about the removal,
         // or become a leader and learn from itself; in both cases the call should finish (no timeout).
-        auto result = co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id1}, timer.now() + 100_t, timer);
-        tlogger.trace("env.modify_config result {}", result);
+        auto result = co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id1}, timer.now() + 200_t, timer);
+        tlogger.info("env.modify_config result {}", result);
         assert(std::holds_alternative<std::monostate>(result));
     });
 }
