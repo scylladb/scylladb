@@ -17,7 +17,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr, UUID plan_id_, sstring description_,
+future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_,
         std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
     auto sr = ::make_shared<stream_result_future>(mgr, plan_id_, description_, coordinator_);
     mgr.register_sending(sr);
@@ -37,7 +37,7 @@ future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr
     return sr->_done.get_future();
 }
 
-shared_ptr<stream_result_future> stream_result_future::init_receiving_side(stream_manager& mgr, UUID plan_id, sstring description, inet_address from) {
+shared_ptr<stream_result_future> stream_result_future::init_receiving_side(stream_manager& mgr, streaming::plan_id plan_id, sstring description, inet_address from) {
     auto sr = mgr.get_receiving_stream(plan_id);
     if (sr) {
         auto err = fmt::format("[Stream #{}] GOT PREPARE_MESSAGE from {}, description={},"

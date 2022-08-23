@@ -11,6 +11,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
+#include "streaming/stream_fwd.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/session_info.hh"
 #include <map>

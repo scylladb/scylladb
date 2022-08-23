@@ -127,7 +127,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
     while (!sstables.empty()) {
-        auto ops_uuid = utils::make_random_uuid();
+        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
         size_t batch_sst_nr = 16;
         std::vector<sstring> sst_names;

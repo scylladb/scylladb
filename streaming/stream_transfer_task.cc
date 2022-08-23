@@ -9,6 +9,7 @@
  */
 
 #include "log.hh"
+#include "streaming/stream_fwd.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
@@ -45,7 +46,7 @@ stream_transfer_task::~stream_transfer_task() = default;
 
 struct send_info {
     netw::messaging_service& ms;
-    utils::UUID plan_id;
+    streaming::plan_id plan_id;
     table_id cf_id;
     netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
@@ -58,7 +59,7 @@ struct send_info {
     dht::partition_range_vector prs;
     mutation_fragment_v1_stream reader;
     noncopyable_function<void(size_t)> update;
-    send_info(netw::messaging_service& ms_, utils::UUID plan_id_, replica::table& tbl_, reader_permit permit_,
+    send_info(netw::messaging_service& ms_, streaming::plan_id plan_id_, replica::table& tbl_, reader_permit permit_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_, noncopyable_function<void(size_t)> update_fn)
         : ms(ms_)

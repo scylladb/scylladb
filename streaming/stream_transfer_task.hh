@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
+#include "streaming/stream_fwd.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/stream_detail.hh"
 #include <map>
@@ -18,7 +18,6 @@
 
 namespace streaming {
 
-class stream_session;
 class send_info;
 
 /**

@@ -12,6 +12,10 @@
 
 namespace streaming {
 
+class plan_id final {
+    utils::UUID uuid();
+};
+
 class stream_request {
     sstring keyspace;
     // For compatibility with <= 1.5, we use wrapping ranges
