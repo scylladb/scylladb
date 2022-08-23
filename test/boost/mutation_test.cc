@@ -2588,6 +2588,19 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
         validating_consumer consumer(*reverse_schema);
         std::move(mut).consume(consumer, consume_in_reverse::yes);
     }
+
+    BOOST_TEST_MESSAGE("Forward gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*forward_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::no).get();
+    }
+    BOOST_TEST_MESSAGE("Reverse gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*reverse_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::yes).get();
+    }
 }
 
 SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) {
