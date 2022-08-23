@@ -424,12 +424,6 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
 
     bool should_sort_tokens = false;
 
-        if (tokens.empty()) {
-            auto msg = format("tokens is empty in update_normal_tokens");
-            tlogger.error("{}", msg);
-            throw std::runtime_error(msg);
-        }
-
         // Phase 1: erase all tokens previously owned by the endpoint.
         for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
             co_await coroutine::maybe_yield();
