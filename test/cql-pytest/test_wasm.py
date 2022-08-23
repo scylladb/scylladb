@@ -972,6 +972,8 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (data (;0;) (i32.const 1024) "\\01"))
 """
     div_src = f"(acc tuple<int, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{div_source}'"
+    for i in range(20):
+      cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES ({i}, {i}, {i})")
     with new_function(cql, test_keyspace, sum_src, sum_name), new_function(cql, test_keyspace, div_src, div_name):
         agg_body = f"(int) SFUNC {sum_name} STYPE tuple<int,int> FINALFUNC {div_name} INITCOND (0,0)"
         hits_before = get_metric(metrics, 'scylla_user_functions_cache_hits')
@@ -990,11 +992,15 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
           res = [row for row in cql.execute(f"SELECT i2 AS result FROM {table}")]
 
           misses_after_reuse = get_metric(metrics, 'scylla_user_functions_cache_misses')
+          # Sum of hits and misses should equal the total number of UDF calls, which is one row function call for
+          # each of the table elements and one additional call for the final function, both multiplied by the number of repetitions.
           assert misses_after_reuse - misses_before_reuse + get_metric(metrics, 'scylla_user_functions_cache_hits') - hits_after == 100 * (1 + len(res))
-          # each shard has its own cache, so check if at least one shard reuses the cache without missing (uda combines 2 functions)
-          # taking into account misses caused by first use of the uda in a shard and misses caused by too big of a growth of an instance
-          # that was used multiple times, we estimate that happens once every 15 uses
-          assert misses_after_reuse - misses_before_reuse < 200 + 100 * (len(res)) / 15
+          # Each shard has its own cache, so check if at least one shard reuses the cache without excessive missing.
+          # Misses caused by replacing an instance that can no longer be used can be justified, we estimate that this happens
+          # once every 7 calls for row function calls (memory has 2 initial pages, 2 pages are added for 2 arguments, max instance
+          # size = 16 pages) and once every 14 calls for final function calls (1 page is added for each call in this case).
+          # Additionally, 2 misses are expected for each of the 2 shards, for the first calls of row and final functions.
+          assert misses_after_reuse - misses_before_reuse <= 4 + 100 * len(res) / 7 + 100 / 14
 
 # Test that wasm instances are removed from the cache when:
 # - a single instance is too big
@@ -1071,6 +1077,7 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (data (;0;) (i32.const 1024) "\\01"))
 """
     src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{ret_source}'"
+    cql.execute(f"INSERT INTO {table} (p) VALUES (42)")
     for _ in range(10):
         ret_name = "ret_" + unique_name()
         with new_function(cql, test_keyspace, src.replace('ret_name', ret_name), ret_name):
