@@ -23,9 +23,6 @@
 #include "concrete_types.hh"
 #include "types/user.hh"
 
-#include "idl/mutation.dist.hh"
-#include "idl/mutation.dist.impl.hh"
-
 using namespace db;
 
 static_assert(MutationViewVisitor<mutation_partition_view_virtual_visitor>);
@@ -276,6 +273,116 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
     }
 }
 
+template <bool is_preemptible>
+mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
+    auto in = _in;
+    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    const column_mapping& cm = s.get_column_mapping();
+
+    if (!cookie.accepted_partition_tombstone) {
+        visitor.accept_partition_tombstone(mpv.tomb());
+        cookie.accepted_partition_tombstone = true;
+    }
+
+    if (!cookie.accepted_static_row) {
+        struct static_row_cell_visitor {
+            mutation_partition_view_virtual_visitor& _visitor;
+
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+                _visitor.accept_static_cell(id, std::move(ac));
+            }
+            void accept_collection(column_id id, const collection_mutation& cm) const {
+                _visitor.accept_static_cell(id, cm);
+            }
+        };
+        read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+        cookie.accepted_static_row = true;
+    }
+
+    if (!cookie.iterators) {
+        cookie.iterators.emplace(accept_ordered_cookie::rts_crs_iterators{
+            .rts_begin = mpv.range_tombstones().cbegin(),
+            .rts_end = mpv.range_tombstones().cend(),
+            .crs_begin = mpv.rows().cbegin(),
+            .crs_end = mpv.rows().cend(),
+        });
+    }
+
+    auto rt_it = cookie.iterators->rts_begin;
+    const auto& rt_e = cookie.iterators->rts_end;
+    auto cr_it = cookie.iterators->crs_begin;
+    const auto& cr_e = cookie.iterators->crs_end;
+
+    auto consume_rt = [&] (range_tombstone&& rt) {
+        cookie.iterators->rts_begin = rt_it;
+        return visitor.accept_row_tombstone(std::move(rt));
+    };
+    auto consume_cr = [&] (ser::deletable_row_view&& cr, clustering_key_prefix&& cr_key) {
+        cookie.iterators->crs_begin = cr_it;
+        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+        if (visitor.accept_row(position_in_partition_view::for_key(cr_key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes)) {
+            return stop_iteration::yes;
+        }
+
+        struct cell_visitor {
+            mutation_partition_view_virtual_visitor& _visitor;
+
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+                _visitor.accept_row_cell(id, std::move(ac));
+            }
+            void accept_collection(column_id id, const collection_mutation& cm) const {
+                _visitor.accept_row_cell(id, cm);
+            }
+        };
+        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        return stop_iteration::no;
+    };
+
+    std::optional<range_tombstone> rt;
+    auto next_rt = [&] {
+        if (rt || rt_it == rt_e) {
+            return;
+        }
+        rt = *rt_it;
+        ++rt_it;
+    };
+
+    std::optional<ser::deletable_row_view> cr;
+    std::optional<clustering_key_prefix> cr_key;
+    auto next_cr = [&] {
+        if (cr || cr_it == cr_e) {
+            return;
+        }
+        cr = *cr_it;
+        cr_key = cr->key();
+        ++cr_it;
+    };
+
+    position_in_partition::tri_compare cmp{s};
+
+    for (;;) {
+        next_rt();
+        next_cr();
+        bool emit_rt = bool(rt);
+        stop_iteration stop;
+        if (rt && cr) {
+            auto rt_pos = rt->position();
+            auto cr_pos = position_in_partition_view::for_key(*cr_key);
+            emit_rt = (cmp(rt_pos, cr_pos) < 0);
+        }
+        if (emit_rt) {
+            stop = consume_rt(std::move(*std::exchange(rt, std::nullopt)));
+        } else if (cr) {
+            stop = consume_cr(std::move(*std::exchange(cr, std::nullopt)), std::move(*cr_key));
+        } else {
+            return accept_ordered_result{stop_iteration::yes, accept_ordered_cookie{}};
+        }
+        if (stop || (is_preemptible && need_preempt())) {
+            return accept_ordered_result{stop, std::move(cookie)};
+        }
+    }
+}
+
 void mutation_partition_view::accept(const schema& s, partition_builder& visitor) const
 {
     do_accept(s.get_column_mapping(), visitor);
@@ -298,8 +405,16 @@ void mutation_partition_view::accept(const column_mapping& cm, mutation_partitio
     do_accept(cm, visitor);
 }
 
-future<> mutation_partition_view::accept_gently(const column_mapping& cm, mutation_partition_view_virtual_visitor& visitor) const {
-    return do_accept_gently(cm, visitor);
+void mutation_partition_view::accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
+    do_accept_ordered<false>(s, visitor, accept_ordered_cookie{});
+}
+
+future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
+    accept_ordered_result res;
+    do {
+        res = do_accept_ordered<true>(s, visitor, std::move(res.cookie));
+        co_await coroutine::maybe_yield();
+    } while (!res.stop);
 }
 
 std::optional<clustering_key> mutation_partition_view::first_row_key() const
