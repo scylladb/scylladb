@@ -1557,7 +1557,8 @@ scylla_product = file.read().strip()
 arch = platform.machine()
 
 for m, mode_config in modes.items():
-    cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\" -DSCYLLA_BUILD_MODE=\"\\\"" + m + "\\\"\""
+    mode_config['cxxflags'] += f" -DSCYLLA_BUILD_MODE={m}"
+    cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
     mode_config["per_src_extra_cxxflags"]["release.cc"] = cxxflags
     if mode_config["can_have_debug_info"]:
         mode_config['cxxflags'] += ' ' + dbgflag
