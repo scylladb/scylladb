@@ -7,12 +7,13 @@
  */
 
 #include "version.hh"
+#include "build_mode.hh"
 
 #include <seastar/core/print.hh>
 
 static const char scylla_version_str[] = SCYLLA_VERSION;
 static const char scylla_release_str[] = SCYLLA_RELEASE;
-static const char scylla_build_mode_str[] = SCYLLA_BUILD_MODE;
+static const char scylla_build_mode_str[] = SCYLLA_BUILD_MODE_STR;
 
 std::string scylla_version()
 {
