@@ -167,12 +167,6 @@ public:
     // Note: the function is not exception safe!
     // It must be called only on a temporary copy of the token_metadata
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    // Batch update token->endpoint mappings for the given endpoints.
-    // The \c endpoint_tokens map contains the set of tokens currently owned by each respective endpoint.
-    //
-    // Note: the function is not exception safe!
-    // It must be called only on a temporary copy of the token_metadata
-    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
