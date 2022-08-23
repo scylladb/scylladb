@@ -141,8 +141,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
-        self.authenticator: str = config_options["authenticator"]
-        self.authorizer: str = config_options["authorizer"]
+        self.config_options = config_options
 
         async def stop_server() -> None:
             if self.is_running:
@@ -219,9 +218,7 @@ class ScyllaServer:
               "host": self.hostname,
               "seeds": ",".join(self.seeds),
               "workdir": self.workdir,
-              "authenticator": self.authenticator,
-              "authorizer": self.authorizer
-        }
+        } | self.config_options
         with self.config_filename.open('w') as config_file:
             config_file.write(SCYLLA_CONF_TEMPLATE.format(**fmt))
 
