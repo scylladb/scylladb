@@ -14,6 +14,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include "locator/snitch_base.hh"
+#include "locator/production_snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
@@ -873,7 +874,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
         tmptr->remove_endpoint(endpoint);
     }
 
-    tmptr->update_topology(endpoint, {});
+    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
     tmptr->add_bootstrap_tokens(tokens, endpoint);
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
@@ -967,7 +968,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     if (!is_member) {
-        tmptr->update_topology(endpoint, {});
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
     }
     co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
@@ -1017,7 +1018,7 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
-        tmptr->update_topology(endpoint, {});
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
@@ -1315,6 +1316,15 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     auto ret = versioned_value::tokens_from_string(tokens_string);
     slogger.trace("endpoint={}, tokens={}", endpoint, ret);
     return ret;
+}
+
+locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint) {
+    auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
+    auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
+    return locator::endpoint_dc_rack{
+        .dc = dc ? dc->value : locator::production_snitch_base::default_dc,
+        .rack = rack ? rack->value : locator::production_snitch_base::default_rack,
+    };
 }
 
 void endpoint_lifecycle_notifier::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
