@@ -705,7 +705,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), {}, bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
             } else {
@@ -2229,7 +2229,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), {}, bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 
@@ -2664,7 +2664,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                    ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
+                    ss.get_broadcast_address(), locator::endpoint_dc_rack{}, "Rebuild", streaming::stream_reason::rebuild);
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
             if (source_dc != "") {
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -2839,7 +2839,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), locator::endpoint_dc_rack{}, "Removenode", streaming::stream_reason::removenode);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -2866,7 +2866,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             as.request_abort();
         }
     });
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), locator::endpoint_dc_rack{}, "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
     auto status_checker = seastar::async([this, endpoint, &as] {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
@@ -2986,7 +2986,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), locator::endpoint_dc_rack{}, "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
