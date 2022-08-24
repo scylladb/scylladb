@@ -3263,7 +3263,12 @@ future<> storage_service::update_topology(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto& ss) {
         return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
             // re-read local rack and DC info
-            tmptr->update_topology(endpoint, {});
+            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            auto dr = locator::endpoint_dc_rack {
+                .dc = snitch->get_datacenter(endpoint),
+                .rack = snitch->get_rack(endpoint),
+            };
+            tmptr->update_topology(endpoint, std::move(dr));
             return make_ready_future<>();
         });
     });
