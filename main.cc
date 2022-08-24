@@ -1023,10 +1023,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
                 std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
-            // gropu0 client exists only on shard 0
+            // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
-            // desctructiun is has to exists untill raft_gr.stop() completes
-            service::raft_group0_client group0_client(raft_gr.local());
+            // destruction it has to exist until raft_gr.stop() completes.
+            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
 
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
@@ -1079,6 +1079,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // start, but we only have query processor started that late
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+
+            group0_client.init().get();
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 
@@ -1356,7 +1358,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging.local(),
-                    gossiper.local(), qp.local(), mm.local(), group0_client};
+                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), group0_client};
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 group0_service.abort().get();
             });

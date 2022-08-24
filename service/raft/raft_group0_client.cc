@@ -95,12 +95,16 @@ struct group0_guard::impl {
     utils::UUID _observed_group0_state_id;
     utils::UUID _new_group0_state_id;
 
+    rwlock::holder _upgrade_lock_holder;
+    bool _raft_enabled;
+
     impl(const impl&) = delete;
     impl& operator=(const impl&) = delete;
 
-    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id)
-        : _operation_mutex_holder(std::move(operation_mutex_holder)), _read_apply_mutex_holder(std::move(read_apply_mutex_holder)),
-          _observed_group0_state_id(observed_group0_state_id), _new_group0_state_id(new_group0_state_id)
+    impl(semaphore_units<> operation_mutex_holder, semaphore_units<> read_apply_mutex_holder, utils::UUID observed_group0_state_id, utils::UUID new_group0_state_id, rwlock::holder upgrade_lock_holder, bool raft_enabled)
+        : _operation_mutex_holder(std::move(operation_mutex_holder)), _read_apply_mutex_holder(std::move(read_apply_mutex_holder))
+        , _observed_group0_state_id(observed_group0_state_id), _new_group0_state_id(new_group0_state_id)
+        , _upgrade_lock_holder(std::move(upgrade_lock_holder)), _raft_enabled(raft_enabled)
     {}
 
     void release_read_apply_mutex() {
@@ -125,6 +129,10 @@ utils::UUID group0_guard::new_group0_state_id() const {
 
 api::timestamp_type group0_guard::write_timestamp() const {
     return utils::UUID_gen::micros_timestamp(_impl->_new_group0_state_id);
+}
+
+bool group0_guard::with_raft() const {
+    return _impl->_raft_enabled;
 }
 
 
@@ -200,39 +208,56 @@ static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
 }
 
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* as) {
-    if (is_enabled()) {
-        if (this_shard_id() != 0) {
-            on_internal_error(logger, "start_group0_operation: must run on shard 0");
-        }
-
-        auto operation_holder = co_await get_units(_operation_mutex, 1);
-        co_await _raft_gr.group0().read_barrier(as);
-
-        // Take `_group0_read_apply_mutex` *after* read barrier.
-        // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-        auto read_apply_holder = co_await get_units(_read_apply_mutex, 1);
-
-        auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
-        auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
-
-        co_return group0_guard {
-            std::make_unique<group0_guard::impl>(
-                std::move(operation_holder),
-                std::move(read_apply_holder),
-                observed_group0_state_id,
-                new_group0_state_id
-            )
-        };
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "start_group0_operation: must run on shard 0");
     }
 
-    co_return group0_guard {
-        std::make_unique<group0_guard::impl>(
-            semaphore_units<>{},
-            semaphore_units<>{},
-            utils::UUID{},
-            generate_group0_state_id(utils::UUID{})
-        )
-    };
+    auto [upgrade_lock_holder, upgrade_state] = co_await get_group0_upgrade_state();
+    switch (upgrade_state) {
+        case group0_upgrade_state::use_post_raft_procedures: {
+            auto operation_holder = co_await get_units(_operation_mutex, 1);
+            co_await _raft_gr.group0().read_barrier(as);
+
+            // Take `_group0_read_apply_mutex` *after* read barrier.
+            // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
+            auto read_apply_holder = co_await get_units(_read_apply_mutex, 1);
+
+            auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
+            auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
+
+            co_return group0_guard {
+                std::make_unique<group0_guard::impl>(
+                    std::move(operation_holder),
+                    std::move(read_apply_holder),
+                    observed_group0_state_id,
+                    new_group0_state_id,
+                    // Not holding any lock in this case, but move the upgrade lock holder for consistent code
+                    std::move(upgrade_lock_holder),
+                    true
+                )
+            };
+       }
+
+        case group0_upgrade_state::synchronize:
+            throw std::runtime_error{
+                "Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations."
+                " If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck"
+                " if there was a node failure."};
+
+        case group0_upgrade_state::recovery:
+            logger.warn("starting operation in RECOVERY mode (using old procedures)");
+        case group0_upgrade_state::use_pre_raft_procedures:
+            co_return group0_guard {
+                std::make_unique<group0_guard::impl>(
+                    semaphore_units<>{},
+                    semaphore_units<>{},
+                    utils::UUID{},
+                    generate_group0_state_id(utils::UUID{}),
+                    std::move(upgrade_lock_holder),
+                    false
+                )
+            };
+    }
 }
 
 group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description) {
@@ -251,6 +276,60 @@ group0_command raft_group0_client::prepare_command(schema_change change, group0_
     };
 
     return group0_cmd;
+}
+
+raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks)
+        : _raft_gr(raft_gr), _sys_ks(sys_ks) {
+}
+
+future<> raft_group0_client::init() {
+    _upgrade_state = co_await _sys_ks.load_group0_upgrade_state();
+    if (_upgrade_state == group0_upgrade_state::recovery) {
+        logger.warn("RECOVERY mode.");
+    }
+}
+
+future<std::pair<rwlock::holder, group0_upgrade_state>> raft_group0_client::get_group0_upgrade_state() {
+    if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+        auto holder = co_await _upgrade_lock.hold_read_lock();
+
+        if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+            co_return std::pair{std::move(holder), _upgrade_state};
+        }
+    }
+
+    co_return std::pair{rwlock::holder{}, _upgrade_state};
+}
+
+future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state) {
+    // We could explicitly handle abort here but we assume that if someone holds the lock,
+    // they will eventually finish (say, due to abort) and release it.
+    auto holder = co_await _upgrade_lock.hold_write_lock();
+
+    co_await _sys_ks.save_group0_upgrade_state(state);
+    _upgrade_state = state;
+    if (_upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
+        _upgraded.broadcast();
+    }
+}
+
+future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
+    auto sub = as.subscribe([this] () noexcept { _upgraded.broadcast(); });
+    if (!sub) {
+        throw abort_requested_exception{};
+    }
+
+    co_await _upgraded.wait([this, &as, sub = std::move(sub)] {
+        return _upgrade_state == group0_upgrade_state::use_post_raft_procedures || as.abort_requested();
+    });
+
+    if (as.abort_requested()) {
+        throw abort_requested_exception{};
+    }
+}
+
+db::system_keyspace& raft_group0_client::sys_ks() {
+    return _sys_ks;
 }
 
 }

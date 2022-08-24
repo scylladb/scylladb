@@ -174,7 +174,8 @@ enum class messaging_verb : int32_t {
     REPAIR_UPDATE_SYSTEM_TABLE = 59,
     REPAIR_FLUSH_HINTS_BATCHLOG = 60,
     FORWARD_REQUEST = 61,
-    LAST = 62,
+    GET_GROUP0_UPGRADE_STATE = 62,
+    LAST = 63,
 };
 
 } // namespace netw
@@ -483,6 +484,7 @@ public:
     void register_schema_check(std::function<future<table_schema_version>()>&& func);
     future<> unregister_schema_check();
     future<table_schema_version> send_schema_check(msg_addr);
+    future<table_schema_version> send_schema_check(msg_addr, abort_source&);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);

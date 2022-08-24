@@ -13,7 +13,11 @@
 #include <memory>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/rwlock.hh>
+#include <seastar/core/condition-variable.hh>
+
 #include "service/raft/raft_group_registry.hh"
+#include "service/raft/group0_upgrade.hh"
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
@@ -42,6 +46,11 @@ public:
 
     // Use this timestamp when creating group 0 mutations.
     api::timestamp_type write_timestamp() const;
+
+    // Are we *actually* using group 0 yet?
+    // Until the upgrade procedure finishes, we will perform operations such as schema changes using the old way,
+    // but still pass the guard around to synchronize operations with the upgrade procedure.
+    bool with_raft() const;
 };
 
 class group0_concurrent_modification : public std::runtime_error {
@@ -55,21 +64,85 @@ public:
 class raft_group0_client {
     friend class group0_state_machine;
     service::raft_group_registry& _raft_gr;
+    db::system_keyspace& _sys_ks;
+
     // See `group0_guard::impl` for explanation of the purpose of these locks.
     semaphore _read_apply_mutex = semaphore(1);
     semaphore _operation_mutex = semaphore(1);
 
     gc_clock::duration _history_gc_duration = gc_clock::duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})};
+
+    // `_upgrade_state` is a cached (perhaps outdated) version of the upgrade state stored on disk.
+    group0_upgrade_state _upgrade_state{group0_upgrade_state::recovery}; // loaded from disk in `init()`
+    seastar::rwlock _upgrade_lock;
+    seastar::condition_variable _upgraded;
+
 public:
-    raft_group0_client(service::raft_group_registry& raft_gr) : _raft_gr(raft_gr) {}
+    raft_group0_client(service::raft_group_registry&, db::system_keyspace&);
+
+    // Call after `system_keyspace` is initialized.
+    future<> init();
 
     future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as = nullptr);
-    bool is_enabled() {
-        return _raft_gr.is_enabled();
-    }
+
+    // Ensures that all previously finished operations on group 0 are visible on this node;
+    // in particular, performs a Raft read barrier on group 0.
+    //
+    // Keep the guard for the entire duration of your operation:
+    // - if the operation requires reading group 0 state (such as schema state), take the guard before doing any read.
+    // - if the operation finishes with appending an entry to the group 0 log, move the guard to `add_entry`.
+    // - if the operation only consists of reads (it does not append any log entry), release the guard
+    //   only after the last read.
+    //
+    // The guard will ensure that given two operations, either:
+    // 1. they won't overlap (where start and end of an operation is defined by the taking and releasing of the guard),
+    // 2. or if they do, one of them will fail (throw `group0_concurrent_modification`) - the application
+    //    of the entry to the group 0 state machine becomes a no-op.
+    //
+    // All successful operations are therefore strictly serialized.
+    //
+    // Call only on shard 0.
+    // FIXME?: this is kind of annoying for the user.
+    // we could forward the call to shard 0, have group0_guard keep a foreign_ptr to the internal data structures on shard 0,
+    // and add_entry would again forward to shard 0.
     future<group0_guard> start_operation(seastar::abort_source* as = nullptr);
 
     group0_command prepare_command(schema_change change, group0_guard& guard, std::string_view description);
+
+    // Returns the current group 0 upgrade state.
+    //
+    // The possible transitions are: `use_pre_raft_procedures` -> `synchronize` -> `use_post_raft_procedures`.
+    // Once entering a state, we cannot rollback (even after a restart - the state is persisted).
+    //
+    // An exception to these rules is manual recovery, represented by `recovery` state.
+    // It can be entered by the user manually modifying the system.local table through CQL
+    // and restarting the node. In this state the node will not join group 0 or start the group 0 Raft server,
+    // it will perform all operations as in `use_pre_raft_procedures`, and not attempt to perform the upgrade.
+    //
+    // If the returned state is `use_pre_raft_procedures`, the returned `rwlock::holder`
+    // prevents the state from being changed (`set_group0_upgrade_state` will wait).
+    //
+    // When performing an operation that assumes the state to be `use_pre_raft_procedures`
+    // (e.g. a schema change using the old method), keep the holder until your operation finishes.
+    //
+    // Note that we don't need to hold the lock during `synchronize` or `use_post_raft_procedures`:
+    // in `synchronize` group 0 operations are disabled, and `use_post_raft_procedures` is the final
+    // state so it won't change (unless through manual recovery - which should not be required
+    // in the final state anyway). Thus, when `synchronize` or `use_post_raft_procedures` is returned,
+    // the holder does not actually hold any lock.
+    future<std::pair<rwlock::holder, group0_upgrade_state>> get_group0_upgrade_state();
+
+    // Ensures that nobody holds any `rwlock::holder`s returned from `get_group0_upgrade_state()`
+    // then changes the state to `s`.
+    //
+    // Should only be called either by the upgrade algorithm or the bootstrap procedure
+    // and follow the correct sequence of states.
+    future<> set_group0_upgrade_state(group0_upgrade_state s);
+
+    // Wait until group 0 upgrade enters the `use_post_raft_procedures` state.
+    future<> wait_until_group0_upgraded(abort_source&);
+
+    db::system_keyspace& sys_ks();
 
     // for test only
     void set_history_gc_duration(gc_clock::duration d);

@@ -586,9 +586,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
 
-    assert(_group0);
-    co_await _group0->become_voter();
-
     // start participating in the ring.
     co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
 
@@ -600,6 +597,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         throw std::runtime_error(err);
     }
 
+    assert(_group0);
+    co_await _group0->finish_setup_after_join();
     co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
 }
 

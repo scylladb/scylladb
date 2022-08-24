@@ -469,6 +469,7 @@ public:
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
+            // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<compaction_manager> cm;
             sharded<replica::database> db;
@@ -693,7 +694,7 @@ public:
             auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local());
+            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
@@ -757,6 +758,7 @@ public:
                 }
             }).get();
 
+            group0_client.init().get();
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
 
             auto shutdown_db = defer([&db] {
@@ -808,7 +810,7 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms.local(),
-                    gossiper.local(), qp.local(), mm.local(), group0_client};
+                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), group0_client};
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });

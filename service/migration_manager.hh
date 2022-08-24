@@ -156,9 +156,6 @@ public:
     // Requires a quorum of nodes to be available in order to finish.
     future<group0_guard> start_group0_operation();
 
-    // used to check if raft is enabled on the cluster
-    bool is_raft_enabled() { return _group0_client.is_enabled(); }
-
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description = "");
@@ -193,7 +190,7 @@ private:
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
 
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
-    future<> announce_without_raft(std::vector<mutation> schema);
+    future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
 
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);

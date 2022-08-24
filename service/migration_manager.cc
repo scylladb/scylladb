@@ -894,7 +894,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as);
 }
 
-future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
+future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
     auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
 
     try {
@@ -917,14 +917,15 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
-    if (is_raft_enabled()) {
-        co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
+    if (guard.with_raft()) {
+        return announce_with_raft(std::move(schema), std::move(guard), std::move(description));
     } else {
-        co_await announce_without_raft(std::move(schema));
+        return announce_without_raft(std::move(schema), std::move(guard));
     }
 }
 
 future<group0_guard> migration_manager::start_group0_operation() {
+    assert(this_shard_id() == 0);
     return _group0_client.start_operation(&_as);
 }
 

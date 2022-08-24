@@ -25,6 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
+#include "service/raft/group0_upgrade.hh"
 
 namespace service {
 
@@ -342,6 +343,8 @@ public:
      */
     future<std::unordered_map<gms::inet_address, locator::host_id>> load_host_ids();
 
+    future<std::vector<gms::inet_address>> load_peers();
+
     /*
      * Read this node's tokens stored in the LOCAL table.
      * Used to initialize a restarting node.
@@ -454,6 +457,9 @@ public:
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
+
+    future<service::group0_upgrade_state> load_group0_upgrade_state();
+    future<> save_group0_upgrade_state(service::group0_upgrade_state);
 
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
     ~system_keyspace();

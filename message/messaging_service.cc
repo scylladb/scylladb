@@ -41,6 +41,7 @@
 #include "cache_temperature.hh"
 #include "raft/raft.hh"
 #include "service/raft/messaging.hh"
+#include "service/raft/group0_upgrade.hh"
 #include "replica/exceptions.hh"
 #include "serializer.hh"
 #include "full_position.hh"
@@ -464,6 +465,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     // should not be blocked by any data requests.
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
+    case messaging_verb::GET_GROUP0_UPGRADE_STATE:
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -1098,6 +1100,9 @@ future<> messaging_service::unregister_schema_check() {
 }
 future<table_schema_version> messaging_service::send_schema_check(msg_addr dst) {
     return send_message<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst);
+}
+future<table_schema_version> messaging_service::send_schema_check(msg_addr dst, abort_source& as) {
+    return send_message_cancellable<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst, as);
 }
 
 // Wrapper for REPLICATION_FINISHED

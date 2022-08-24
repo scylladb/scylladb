@@ -9,12 +9,13 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/messaging.hh"
+#include "service/raft/group0_upgrade.hh"
 
 namespace cql3 { class query_processor; }
 
 namespace db { class system_keyspace; }
 
-namespace gms { class gossiper; }
+namespace gms { class gossiper; class feature_service; }
 
 namespace service {
 
@@ -69,6 +70,7 @@ class raft_group0 {
     gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
+    gms::feature_service& _feat;
     raft_group0_client& _client;
 
     // Status of leader discovery. Initially there is no group 0,
@@ -78,6 +80,8 @@ class raft_group0 {
     // created.
     std::variant<std::monostate, service::persistent_discovery, raft::group_id> _group0;
 
+    gms::feature::listener_registration _raft_support_listener;
+
 public:
     // Assumes that the provided services are fully started.
     raft_group0(seastar::abort_source& abort_source,
@@ -86,6 +90,7 @@ public:
         gms::gossiper& gs,
         cql3::query_processor& qp,
         migration_manager& mm,
+        gms::feature_service& feat,
         raft_group0_client& client);
 
     // Call before destroying the object.
@@ -100,12 +105,18 @@ public:
     //
     // Cannot be called twice.
     //
+    // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
     // TODO: specify dependencies on other services: where during startup should we setup group 0?
     future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes);
 
-    // After successful bootstrapping, make this node a voting member.
-    // Precondition: `setup_group0` successfully finished earlier.
-    future<> become_voter();
+    // Call at the end of the startup procedure, after the node entered NORMAL state.
+    // `setup_group0()` must have finished earlier.
+    //
+    // If the node has just bootstrapped, causes the group 0 server to become a voter.
+    //
+    // If the node has just upgraded, enables a feature listener for the RAFT feature
+    // which will start a procedure to create group 0 and switch administrative operations to use it.
+    future<> finish_setup_after_join();
 
     // Remove ourselves from group 0.
     //
@@ -162,6 +173,19 @@ private:
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
     future<group0_info> discover_group0(raft::server_address my_addr, const std::vector<raft::server_info>& seeds);
+
+    // Creates or joins group 0 and switches schema/topology changes to use group 0.
+    // Can be restarted after a crash. Does nothing if the procedure was already finished once.
+    //
+    // The main part of the procedure which may block (due to concurrent schema changes or communication with
+    // other nodes) runs in background, so it's safe to call `upgrade_to_group0` and wait for it to finish
+    // from places which must not block.
+    //
+    // Precondition: the SUPPORTS_RAFT cluster feature is enabled.
+    future<> upgrade_to_group0();
+
+    // Blocking part of `upgrade_to_group0`, runs in background.
+    future<> do_upgrade_to_group0(group0_upgrade_state start_state);
 
     // Start a Raft server for the cluster-wide group 0 and join it to the group.
     // Called during bootstrap or upgrade.
