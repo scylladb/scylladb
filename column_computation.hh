@@ -12,11 +12,11 @@
 
 class schema;
 class partition_key;
-class clustering_row;
 struct atomic_cell_view;
 struct tombstone;
 
 namespace db::view {
+struct clustering_or_static_row;
 struct view_key_and_action;
 }
 
@@ -118,7 +118,7 @@ class collection_column_computation final : public column_computation {
     using collection_kv = std::pair<bytes_view, atomic_cell_view>;
     void operate_on_collection_entries(
             std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
-            const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const;
+            const partition_key& key, const db::view::clustering_or_static_row& update, const std::optional<db::view::clustering_or_static_row>& existing) const;
 
 public:
     static collection_column_computation for_keys(const bytes& collection_name) {
@@ -141,5 +141,6 @@ public:
         return true;
     }
 
-    std::vector<db::view::view_key_and_action> compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& row, const std::optional<clustering_row>& existing) const;
+    std::vector<db::view::view_key_and_action> compute_values_with_action(const schema& schema, const partition_key& key,
+            const db::view::clustering_or_static_row& row, const std::optional<db::view::clustering_or_static_row>& existing) const;
 };

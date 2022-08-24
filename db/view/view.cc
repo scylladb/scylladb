@@ -620,7 +620,13 @@ private:
         }
         collection_column_position = column_position - 1;
 
-        for (auto& bwa : collection_computation->compute_values_with_action(_base, _base_key, _update, _existing)) {
+        // TODO: Introduced just for the sake of clear commit history, will be removed in following commits
+        const auto update = clustering_or_static_row(clustering_row(_base, _update));
+        const auto existing = _existing
+                ? std::make_optional<clustering_or_static_row>(clustering_row(_base, *_existing))
+                : std::nullopt;
+
+        for (auto& bwa : collection_computation->compute_values_with_action(_base, _base_key, update, existing)) {
             ret.push_back({std::move(bwa), linearized_values});
         }
         return ret;
