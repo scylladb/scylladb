@@ -833,7 +833,8 @@ class string_view_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def to_string(self):
-        return str(self.val['_M_str'])[0:int(self.val['_M_len'])]
+        inf = gdb.selected_inferior()
+        return str(inf.read_memory(self.val['_M_str'], self.val['_M_len']), encoding='utf-8')
 
     def display_hint(self):
         return 'string'
