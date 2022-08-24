@@ -170,6 +170,14 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     }
 }
 
+static locator::endpoint_dc_rack test_dc_rack(gms::inet_address ep) {
+    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
+    return locator::endpoint_dc_rack {
+        .dc = snitch->get_datacenter(ep),
+        .rack = snitch->get_rack(ep),
+    };
+}
+
 // Run in a seastar thread.
 void simple_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
@@ -208,7 +216,7 @@ void simple_test() {
     // Initialize the token_metadata
     stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
         for (auto&& i : endpoint_tokens) {
-            tm.update_topology(i.first, {});
+            tm.update_topology(i.first, test_dc_rack(i.first));
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -313,7 +321,7 @@ void heavy_origin_test() {
 
     stm.mutate_token_metadata([&tokens] (token_metadata& tm) -> future<> {
         for (auto&& i : tokens) {
-            tm.update_topology(i.first, {});
+            tm.update_topology(i.first, test_dc_rack(i.first));
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -627,7 +635,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         
         stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
             for (auto&& i : endpoint_tokens) {
-                tm.update_topology(i.first, {});
+                tm.update_topology(i.first, test_dc_rack(i.first));
                 co_await tm.update_normal_tokens(std::move(i.second), i.first);
             }
         }).get();
