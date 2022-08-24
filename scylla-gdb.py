@@ -4910,7 +4910,9 @@ class scylla_read_stats(gdb.Command):
             gdb.write("Scylla version doesn't seem to have the permits linked yet, cannot list reads.")
             raise
 
-        permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
+        if not permit_list.type.strip_typedefs().name.startswith('boost::intrusive::list'):
+            # 4.5 compatibility
+            permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
 
         state_prefix_len = len('reader_permit::state::')
 
