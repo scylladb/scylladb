@@ -92,7 +92,7 @@ Glossary
      The unique identifier for a partition, a partition key may be hashed from the first column in the primary key. A partition key may also be hashed from a set of columns, often referred to as a compound primary key. A partition key determines which virtual node gets the first partition replica. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
 
     Partitioner
-     A hash function for computing which data is stored on which node in the cluster. The partitioner takes a partition key as an input, and returns a ring token as an output. By default Scylla uses the 64 bit Murmurhash3 function and this hash range is numerically represented as a signed 64bit integer, see :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
+     A hash function for computing which data is stored on which node in the cluster. The partitioner takes a partition key as an input, and returns a ring token as an output. By default Scylla uses the 64 bit :term:`MurmurHash3` function and this hash range is numerically represented as a signed 64bit integer, see :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
 
     Read Amplification
      Excessive read requests which require many SSTables. RA is calculated by the number of disk reads per query. High RA occurs when there are many pages to read in order to answer a query.  See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
@@ -177,4 +177,9 @@ Glossary
     Workload
       A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_
       ships with a feature that allows you to prioritize one workload over another (e.g., user requests over administrative activities). See `Workload Prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_.
+
+    MurmurHash3
+       A hash function `created by Austin Appleby <https://en.wikipedia.org/wiki/MurmurHash>`_, and used by the :term:`Partitioner` to distribute the partitions between nodes.
+       The name comes from two basic operations, multiply (MU) and rotate (R), used in its inner loop.
+       The MurmurHash3 version used in ScyllaDB originated from `Apache Cassandra <https://commons.apache.org/proper/commons-codec/apidocs/org/apache/commons/codec/digest/MurmurHash3.html>`_, and is **not** identical to the `official MurmurHash3 calculation <https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/utils/MurmurHash.java#L31-L33>`_. More `here <https://github.com/russss/murmur3-cassandra>`_.
 
