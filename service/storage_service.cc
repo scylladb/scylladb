@@ -1396,6 +1396,18 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
+            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info();
+
+            auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
+                if (loaded_dc_rack.contains(ep)) {
+                    return loaded_dc_rack[ep];
+                } else {
+                    return locator::endpoint_dc_rack {
+                        .dc = locator::production_snitch_base::default_dc,
+                        .rack = locator::production_snitch_base::default_rack,
+                    };
+                }
+            };
 
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
@@ -1414,7 +1426,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                     // entry has been mistakenly added, delete it
                     _sys_ks.local().remove_endpoint(ep).get();
                 } else {
-                    tmptr->update_topology(ep, {});
+                    tmptr->update_topology(ep, get_dc_rack(ep));
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
