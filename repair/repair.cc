@@ -1351,7 +1351,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, {}).get0();
             seastar::thread::maybe_yield();
             auto nr_tables = get_nr_tables(db.local(), keyspace_name);
             nr_ranges_total += desired_ranges.size() * nr_tables;
@@ -1367,7 +1367,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, {}).get0();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
             auto replication_factor = erm->get_replication_factor();
