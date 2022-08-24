@@ -1248,21 +1248,18 @@ topology::topology(const topology& other) {
 
 void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 {
-    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
-    sstring dc = snitch->get_datacenter(ep);
-    sstring rack = snitch->get_rack(ep);
     auto current = _current_locations.find(ep);
 
     if (current != _current_locations.end()) {
-        if (current->second.dc == dc && current->second.rack == rack) {
+        if (current->second.dc == dr.dc && current->second.rack == dr.rack) {
             return;
         }
         remove_endpoint(ep);
     }
 
-    _dc_endpoints[dc].insert(ep);
-    _dc_racks[dc][rack].insert(ep);
-    _current_locations[ep] = {dc, rack};
+    _dc_endpoints[dr.dc].insert(ep);
+    _dc_racks[dr.dc][dr.rack].insert(ep);
+    _current_locations[ep] = std::move(dr);
 }
 
 void topology::remove_endpoint(inet_address ep)
