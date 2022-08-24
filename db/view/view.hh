@@ -163,7 +163,7 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
  * @param now the current time in seconds (to decide what is live and what isn't).
  * @return whether the base row matches the view filter.
  */
-bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now);
+bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_or_static_row& update, gc_clock::time_point now);
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
 
@@ -225,24 +225,24 @@ public:
 
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
-    void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+    void generate_update(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
 
     size_t op_count() const;
 
 private:
     mutation_partition& partition_for(partition_key&& key);
-    row_marker compute_row_marker(const clustering_row& base_row) const;
+    row_marker compute_row_marker(const clustering_or_static_row& base_row) const;
     struct view_row_entry {
         deletable_row* _row;
         view_key_and_action::action _action;
     };
-    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing);
-    bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
-    void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
-    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
-    void update_entry_for_computed_column(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing);
+    bool can_skip_view_updates(const clustering_or_static_row& update, const clustering_or_static_row& existing) const;
+    void create_entry(const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now);
+    void update_entry(const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now);
+    void update_entry_for_computed_column(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
 };
 
 class view_update_builder {
