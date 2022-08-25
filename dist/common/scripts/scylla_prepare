@@ -16,31 +16,51 @@ import distro
 from scylla_util import *
 from subprocess import run
 
-def get_mode_cpuset(nic, mode):
-    mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
-    return hex2list(mode_cpu_mask)
-
 def get_cur_cpuset():
     cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
     cpuset = cfg.get('CPUSET')
     return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
 
-def get_tune_mode(nic):
+def get_irq_cpu_mask():
+    """
+    Return an irq_cpu_mask corresponding to a value written in cpuset.conf
+
+    Let's use the "CPU masks invariant": irq_cpu_mask | compute_cpu_mask == cpu_mask.
+
+    This function is called when  we are generating a perftune.yaml meaning that there are no restrictions on
+    cpu_mask defined.
+
+    And this means that in the context of this function call cpu_mask is "all CPUs", or in hwloc-cal lingo - 'all'.
+
+    (For any "special" value of a cpu_mask a user needs to write his/her own perftune.yaml)
+
+    Mentioned above means that in order to calculate an irq_cpu_mask that corresponds to a compute_cpu_mask defined
+    using --cpuset in cpuset.conf and cpu_mask == 'all' we need to invert bits from the compute_cpu_mask in the 'all'
+    mask.
+
+    This can be achieved by running the following hwloc-calc command:
+
+    hwloc-calc --pi all ~PU:X ~PU:Y ~PU:Z ...
+
+    where X,Y,Z,... are either a single CPU index or a CPU range.
+
+    For example, if we have the following cpuset:
+
+    0,2-7,17-24,35
+
+    to get irq_cpu_mask we want to run the following command:
+
+    hwloc-calc --pi all ~PU:0 ~PU:2-7 ~PU:17-24 ~PU:35
+    """
+
     if not os.path.exists('/etc/scylla.d/cpuset.conf'):
         raise Exception('/etc/scylla.d/cpuset.conf not found')
     cur_cpuset = get_cur_cpuset()
-    mq_cpuset = get_mode_cpuset(nic, 'mq')
-    sq_cpuset = get_mode_cpuset(nic, 'sq')
-    sq_split_cpuset = get_mode_cpuset(nic, 'sq_split')
 
-    if cur_cpuset == mq_cpuset:
-        return 'mq'
-    elif cur_cpuset == sq_cpuset:
-        return 'sq'
-    elif cur_cpuset == sq_split_cpuset:
-        return 'sq_split'
-    else:
-        raise Exception('tune mode not found')
+    hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
+        format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
+
+    return out(hwloc_cmd).strip()
 
 def config_updated():
     perftune_mtime = os.path.getmtime('/etc/scylla.d/perftune.yaml')
@@ -65,8 +85,10 @@ def create_perftune_conf(cfg):
         nic = cfg.get('IFNAME')
         if not nic:
             nic = 'eth0'
-        mode = get_tune_mode(nic)
-        params += '--tune net --nic "{nic}" --mode {mode}'.format(nic=nic, mode=mode)
+        irq_cpu_mask = get_irq_cpu_mask()
+        # Note that 'irq_cpu_mask' is a coma separated list of 32-bits wide masks.
+        # Therefore, we need to put it in quotes.
+        params += '--tune net --nic "{nic}" --irq-cpu-mask "{irq_cpu_mask}"'.format(nic=nic, irq_cpu_mask=irq_cpu_mask)
 
     if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
         params += ' --tune system --tune-clock'
