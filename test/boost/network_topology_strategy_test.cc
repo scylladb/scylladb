@@ -206,8 +206,10 @@ void simple_test() {
     }
 
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
-        return tm.update_normal_tokens(endpoint_tokens);
+    stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
+        for (auto&& i : endpoint_tokens) {
+            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+        }
     }).get();
 
     /////////////////////////////////////
@@ -308,8 +310,10 @@ void heavy_origin_test() {
         }
     }
 
-    stm.mutate_token_metadata([&tokens] (token_metadata& tm) {
-        return tm.update_normal_tokens(tokens);
+    stm.mutate_token_metadata([&tokens] (token_metadata& tm) -> future<> {
+        for (auto&& i : tokens) {
+            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+        }
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
@@ -619,8 +623,10 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
             }
         }
         
-        stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
-            return tm.update_normal_tokens(endpoint_tokens);
+        stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
+            for (auto&& i : endpoint_tokens) {
+                co_await tm.update_normal_tokens(std::move(i.second), i.first);
+            }
         }).get();
         test_equivalence(stm, snitch, datacenters);
     }

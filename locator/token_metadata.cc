@@ -80,7 +80,6 @@ public:
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -422,63 +421,46 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
     if (tokens.empty()) {
         co_return;
     }
-    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, std::move(tokens)}});
-    co_return co_await update_normal_tokens(endpoint_tokens);
-}
-
-future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
-    if (endpoint_tokens.empty()) {
-        co_return;
-    }
 
     bool should_sort_tokens = false;
-    for (auto&& i : endpoint_tokens) {
-        inet_address endpoint = i.first;
-        auto tokens = i.second;
 
-        if (tokens.empty()) {
-            auto msg = format("tokens is empty in update_normal_tokens");
-            tlogger.error("{}", msg);
-            throw std::runtime_error(msg);
-        }
-
-        // Phase 1: erase all tokens previously owned by the endpoint.
-        for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
-            co_await coroutine::maybe_yield();
-            if(it->second == endpoint) {
-                auto tokit = tokens.find(it->first);
-                if (tokit == tokens.end()) {
-                    // token no longer owned by endpoint
-                    it = _token_to_endpoint_map.erase(it);
-                    continue;
-                }
-                // token ownership did not change,
-                // no further update needed for it.
-                tokens.erase(tokit);
+    // Phase 1: erase all tokens previously owned by the endpoint.
+    for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
+        co_await coroutine::maybe_yield();
+        if(it->second == endpoint) {
+            auto tokit = tokens.find(it->first);
+            if (tokit == tokens.end()) {
+                // token no longer owned by endpoint
+                it = _token_to_endpoint_map.erase(it);
+                continue;
             }
-            ++it;
+            // token ownership did not change,
+            // no further update needed for it.
+            tokens.erase(tokit);
         }
+        ++it;
+    }
 
-        // Phase 2:
-        // a. Add the endpoint to _topology if needed.
-        // b. update pending _bootstrap_tokens and _leaving_endpoints
-        // c. update _token_to_endpoint_map with the new endpoint->token mappings
-        //    - set `should_sort_tokens` if new tokens were added
-        _topology.add_endpoint(endpoint);
-        remove_by_value(_bootstrap_tokens, endpoint);
-        _leaving_endpoints.erase(endpoint);
-        invalidate_cached_rings();
-        for (const token& t : tokens)
-        {
-            co_await coroutine::maybe_yield();
-            auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
-            should_sort_tokens |= prev.second; // new token inserted -> sort
-            if (prev.first->second != endpoint) {
-                tlogger.debug("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
-                prev.first->second = endpoint;
-            }
+    // Phase 2:
+    // a. Add the endpoint to _topology if needed.
+    // b. update pending _bootstrap_tokens and _leaving_endpoints
+    // c. update _token_to_endpoint_map with the new endpoint->token mappings
+    //    - set `should_sort_tokens` if new tokens were added
+    _topology.add_endpoint(endpoint);
+    remove_by_value(_bootstrap_tokens, endpoint);
+    _leaving_endpoints.erase(endpoint);
+    invalidate_cached_rings();
+    for (const token& t : tokens)
+    {
+        co_await coroutine::maybe_yield();
+        auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
+        should_sort_tokens |= prev.second; // new token inserted -> sort
+        if (prev.first->second != endpoint) {
+            tlogger.debug("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
+            prev.first->second = endpoint;
         }
     }
+
     co_await update_normal_token_owners();
 
     // New tokens were added to _token_to_endpoint_map
@@ -1002,11 +984,6 @@ token_metadata::sorted_tokens() const {
 future<>
 token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
     return _impl->update_normal_tokens(std::move(tokens), endpoint);
-}
-
-future<>
-token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
-    return _impl->update_normal_tokens(endpoint_tokens);
 }
 
 const token&

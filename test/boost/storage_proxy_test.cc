@@ -55,9 +55,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             {
                 // Ring with minimum token
                 auto tmptr = locator::make_token_metadata_ptr();
-                std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> endpoint_tokens;
-                endpoint_tokens[gms::inet_address("10.0.0.1")].insert(dht::minimum_token());
-                tmptr->update_normal_tokens(endpoint_tokens).get();
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), gms::inet_address("10.0.0.1")).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])
@@ -70,10 +68,8 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             {
                 auto tmptr = locator::make_token_metadata_ptr();
-                std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> endpoint_tokens;
-                endpoint_tokens[gms::inet_address("10.0.0.1")].insert(ring[2].token());
-                endpoint_tokens[gms::inet_address("10.0.0.2")].insert(ring[5].token());
-                tmptr->update_normal_tokens(endpoint_tokens).get();
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), gms::inet_address("10.0.0.1")).get();
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), gms::inet_address("10.0.0.2")).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])
