@@ -41,6 +41,11 @@ struct awaited_index {
     optimized_optional<abort_source::subscription> abort;
 };
 
+struct awaited_conf_change {
+    promise<> promise;
+    optimized_optional<abort_source::subscription> abort;
+};
+
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
@@ -102,7 +107,7 @@ private:
     server::configuration _config;
     std::optional<promise<>> _stepdown_promise;
     std::optional<shared_promise<>> _leader_promise;
-    std::optional<promise<>> _non_joint_conf_commit_promise;
+    std::optional<awaited_conf_change> _non_joint_conf_commit_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
     std::list<active_read> _reads;
@@ -890,7 +895,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     for (const auto& e: batch.committed) {
                         const auto* cfg = get_if<raft::configuration>(&e->data);
                         if (cfg != nullptr && !cfg->is_joint()) {
-                            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->set_value();
+                            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
                             break;
                         }
                     }
@@ -1258,7 +1263,7 @@ future<> server_impl::abort() {
     _awaited_commits.clear();
     _awaited_applies.clear();
     if (_non_joint_conf_commit_promise) {
-        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->set_exception(stopped_error());
+        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error());
     }
 
     // Complete all read attempts with not_a_leader
@@ -1303,6 +1308,13 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
     }
 
     _stats.add_config++;
+
+    if (_non_joint_conf_commit_promise) {
+        logger.warn("[{}] set_configuration: a configuration change is still in progress (at index: {}, config: {})",
+            _id, _fsm->log_last_conf_idx(), cfg);
+        throw conf_change_in_progress{};
+    }
+
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
     // We've just submitted a joint configuration to be committed.
@@ -1313,10 +1325,21 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
     // would be the one corresponding to our joint configuration,
     // no matter if the leader changed in the meantime.
 
-    auto f = _non_joint_conf_commit_promise.emplace().get_future();
+    auto f = _non_joint_conf_commit_promise.emplace().promise.get_future();
+    if (as) {
+        _non_joint_conf_commit_promise->abort = as->subscribe([this] () noexcept {
+            // If we're inside this callback, the subscription wasn't destroyed yet.
+            // The subscription is destroyed when the field is reset, so if we're here, the field must be engaged.
+            assert(_non_joint_conf_commit_promise);
+            // Whoever resolves the promise must reset the field. Thus, if we're here, the promise is not resolved.
+            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(request_aborted{});
+        });
+    }
+
     try {
         co_await wait_for_entry({.term = e.term, .idx = e.idx}, wait_type::committed, as);
     } catch (...) {
+        _non_joint_conf_commit_promise.reset();
         // We need to 'observe' possible exceptions in f, otherwise they will be
         // considered unhandled and cause a warning.
         (void)f.handle_exception([id = _id] (auto e) {
