@@ -25,10 +25,11 @@
 import pytest
 import requests
 import re
+import time
 from contextlib import contextmanager
 from botocore.exceptions import ClientError
 
-from alternator_util import random_string, new_test_table
+from alternator_util import random_string, new_test_table, is_aws
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
@@ -96,7 +97,7 @@ def check_increases_metric(metrics, metric_names):
     yield
     the_metrics = get_metrics(metrics)
     for n in metric_names:
-        assert saved_metrics[n] < get_metric(metrics, n, None, the_metrics)
+        assert saved_metrics[n] < get_metric(metrics, n, None, the_metrics), f'metric {n} did not increase'
 
 @contextmanager
 def check_increases_operation(metrics, operation_names):
@@ -225,6 +226,64 @@ def test_unsupported_operation(dynamodb, metrics):
 def test_total_operations(dynamodb, metrics):
     with check_increases_metric(metrics, ['scylla_alternator_total_operations']):
         dynamodb.meta.client.describe_endpoints()
+
+# A fixture to read alternator-ttl-period-in-seconds from Scylla's
+# configuration. If we're testing something which isn't Scylla, or
+# this configuration does not exist, skip this test. If the configuration
+# isn't low enough (it is more than one second), skip this test unless
+# the "--runveryslow" option is used.
+@pytest.fixture(scope="session")
+def alternator_ttl_period_in_seconds(dynamodb, request):
+    # If not running on Scylla, skip the test
+    if is_aws(dynamodb):
+        pytest.skip('Scylla-only test skipped')
+    # In Scylla, we can inspect the configuration via a system table
+    # (which is also visible in Alternator)
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    resp = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': 'alternator_ttl_period_in_seconds'})
+    if not 'Items' in resp:
+        pytest.skip('missing TTL feature, skipping test')
+    period = float(resp['Items'][0]['value'])
+    if period > 1 and not request.config.getoption('runveryslow'):
+        pytest.skip('need --runveryslow option to run')
+    return period
+
+# Test metrics of the background expiration thread run for Alternator's TTL
+# feature. The metrics tested in this test are scylla_expiration_scan_passes,
+# scylla_expiration_scan_table and scylla_expiration_items_deleted. The
+# metric scylla_expiration_secondary_ranges_scanned is not tested in this
+# test - testing it requires a multi-node cluster because it counts the
+# number of times that this node took over another node's expiration duty.
+#
+# Unfortunately, to see TTL expiration in action this test may need to wait
+# up to the setting of alternator_ttl_period_in_seconds. test/alternator/run
+# sets this to 1 second, which becomes the maximum delay of this test, but
+# if it is set higher we skip this test unless --runveryslow is enabled.
+def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
+    print(alternator_ttl_period_in_seconds)
+    with check_increases_metric(metrics, ['scylla_expiration_scan_passes', 'scylla_expiration_scan_table', 'scylla_expiration_items_deleted']):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+            # Insert one already-expired item, and then enable TTL:
+            p0 = random_string()
+            table.put_item(Item={'p': p0, 'expiration': int(time.time())-60})
+            assert 'Item' in table.get_item(Key={'p': p0})
+            client = table.meta.client
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification= {'AttributeName': 'expiration', 'Enabled': True})
+            # After alternator_ttl_period_in_seconds, we expect the metrics
+            # to have increased. Add some time to that, to account for
+            # extremely overloaded test machines.
+            start_time = time.time()
+            while time.time() < start_time + alternator_ttl_period_in_seconds + 60:
+                if not 'Item' in table.get_item(Key={'p': p0}):
+                    break
+                time.sleep(0.1)
+            assert not 'Item' in table.get_item(Key={'p': p0})
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are: latency histograms
