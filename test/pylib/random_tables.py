@@ -176,7 +176,7 @@ class RandomTable():
             ctype = ctype if ctype is not None else TextType
             column = Column(name, ctype=ctype)
         self.columns.append(column)
-        await self.cql.run_async(f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}")
+        self.cql.execute(f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}")
 
     async def drop_column(self, column: Union[Column, str] = None):
         if column is None:
@@ -196,7 +196,7 @@ class RandomTable():
         assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {col.name} from {self.name}"
         self.columns.remove(col)
         self.removed_columns.append(col)
-        await self.cql.run_async(f"ALTER TABLE {self.full_name} DROP {col.name}")
+        self.cql.execute(f"ALTER TABLE {self.full_name} DROP {col.name}")
 
     async def insert_seq(self) -> asyncio.Future:
         """Insert a row of next sequential values"""
