@@ -1405,7 +1405,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
-            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info();
+            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info().get0();
 
             auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
                 if (loaded_dc_rack.contains(ep)) {
