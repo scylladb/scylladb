@@ -611,7 +611,7 @@ public:
 
             token_metadata.invoke_on_all([&snitch] (auto& tm) {
                 auto ep = utils::fb_utilities::get_broadcast_address();
-                tm.init_local_endpoint({ snitch.local()->get_datacenter(ep), snitch.local()->get_rack(ep) });
+                tm.init_local_endpoint({ snitch.local()->get_datacenter(ep), snitch.local()->get_rack() });
             }).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();

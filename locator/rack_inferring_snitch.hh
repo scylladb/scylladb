@@ -26,13 +26,14 @@ using inet_address = gms::inet_address;
 struct rack_inferring_snitch : public snitch_base {
     rack_inferring_snitch(const snitch_config& cfg) {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
-        _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+        _my_rack = get_rack();
 
         // This snitch is ready on creation
         set_snitch_ready();
     }
 
-    virtual sstring get_rack(inet_address endpoint) override {
+    virtual sstring get_rack() override {
+        auto endpoint = utils::fb_utilities::get_broadcast_address();
         return std::to_string(uint8_t(endpoint.bytes()[2]));
     }
 

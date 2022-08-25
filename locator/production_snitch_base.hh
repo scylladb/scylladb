@@ -42,7 +42,7 @@ public:
 
     explicit production_snitch_base(snitch_config);
 
-    virtual sstring get_rack(inet_address endpoint) override;
+    virtual sstring get_rack() override;
     virtual sstring get_datacenter(inet_address endpoint) override;
     virtual void set_backreference(snitch_ptr& d) override;
 

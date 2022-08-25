@@ -104,12 +104,12 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
 
             i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
                 *cpu0_dc =inst->get_datacenter(my_address);
-                *cpu0_rack = inst->get_rack(my_address);
+                *cpu0_rack = inst->get_rack();
             }).get();
 
             i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
                 if (*cpu0_dc != inst->get_datacenter(my_address) ||
-                    *cpu0_rack != inst->get_rack(my_address)) {
+                    *cpu0_rack != inst->get_rack()) {
                     *res = false;
                 }
             }).get();

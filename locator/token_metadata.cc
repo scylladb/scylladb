@@ -1343,7 +1343,7 @@ sstring topology::get_rack() const {
 }
 
 sstring topology::get_rack(inet_address ep) const {
-    return i_endpoint_snitch::get_local_snitch_ptr()->get_rack(ep);
+    return get_location(ep).rack;
 }
 
 sstring topology::get_datacenter() const {

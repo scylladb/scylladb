@@ -3281,7 +3281,7 @@ future<> storage_service::snitch_reconfigured() {
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         auto dr = locator::endpoint_dc_rack {
             .dc = snitch->get_datacenter(endpoint),
-            .rack = snitch->get_rack(endpoint),
+            .rack = snitch->get_rack(),
         };
         tmptr->update_topology(endpoint, std::move(dr));
         return make_ready_future<>();

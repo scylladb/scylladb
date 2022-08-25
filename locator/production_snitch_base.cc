@@ -33,14 +33,8 @@ production_snitch_base::production_snitch_base(snitch_config cfg)
 }
 
 
-sstring production_snitch_base::get_rack(inet_address endpoint) {
-    if (endpoint == utils::fb_utilities::get_broadcast_address()) {
-        return _my_rack;
-    }
-
-    return get_endpoint_info(endpoint,
-                             gms::application_state::RACK,
-                             default_rack);
+sstring production_snitch_base::get_rack() {
+    return _my_rack;
 }
 
 sstring production_snitch_base::get_datacenter(inet_address endpoint) {

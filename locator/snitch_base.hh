@@ -61,9 +61,9 @@ public:
     static future<> reset_snitch(snitch_config cfg);
 
     /**
-     * returns a String representing the rack this endpoint belongs to
+     * returns a String representing the rack local node belongs to
      */
-    virtual sstring get_rack(inet_address endpoint) = 0;
+    virtual sstring get_rack() = 0;
 
     /**
      * returns a String representing the datacenter this endpoint belongs to
@@ -298,7 +298,7 @@ class snitch_base : public i_endpoint_snitch {
 public:
     //
     // Sons have to implement:
-    // virtual sstring get_rack(inet_address endpoint)        = 0;
+    // virtual sstring get_rack()        = 0;
     // virtual sstring get_datacenter(inet_address endpoint)  = 0;
     //
 
