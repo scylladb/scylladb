@@ -91,7 +91,8 @@ void strategy_sanity_check(
 void endpoints_check(
     abstract_replication_strategy::ptr_type ars_ptr,
     const token_metadata& tm,
-    inet_address_vector_replica_set& endpoints) {
+    inet_address_vector_replica_set& endpoints,
+    const locator::topology& topo) {
 
     // Check the total RF
     BOOST_CHECK(endpoints.size() == ars_ptr->get_replication_factor(tm));
@@ -101,10 +102,9 @@ void endpoints_check(
     BOOST_CHECK(endpoints.size() == ep_set.size());
 
     // Check the per-DC RF
-    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
     std::unordered_map<sstring, size_t> dc_rf;
     for (auto ep : endpoints) {
-        sstring dc = snitch->get_datacenter(ep);
+        sstring dc = topo.get_location(ep).dc;
 
         auto rf = dc_rf.find(dc);
         if (rf == dc_rf.end()) {
@@ -140,7 +140,8 @@ auto d2t = [](double d) -> int64_t {
 void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
                      abstract_replication_strategy::ptr_type ars_ptr,
-                     locator::token_metadata_ptr tmptr) {
+                     locator::token_metadata_ptr tmptr,
+                     const locator::topology& topo) {
     auto& tm = *tmptr;
     strategy_sanity_check(ars_ptr, tm, options);
 
@@ -151,7 +152,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
         auto endpoints1 = erm->get_natural_endpoints(t1);
 
-        endpoints_check(ars_ptr, tm, endpoints1);
+        endpoints_check(ars_ptr, tm, endpoints1, topo);
 
         print_natural_endpoints(cur_point1, endpoints1);
 
@@ -164,18 +165,24 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
-        endpoints_check(ars_ptr, tm, endpoints2);
+        endpoints_check(ars_ptr, tm, endpoints2, topo);
         check_ranges_are_sorted(erm, rp.host);
         BOOST_CHECK(endpoints1 == endpoints2);
     }
 }
 
-static locator::endpoint_dc_rack test_dc_rack(gms::inet_address ep) {
-    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
-    return locator::endpoint_dc_rack {
-        .dc = snitch->get_datacenter(ep),
-        .rack = snitch->get_rack(ep),
-    };
+std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_point>& pts) {
+    auto topo = std::make_unique<locator::topology>();
+
+    // This resembles rack_inferring_snitch dc/rack generation which is
+    // still in use by this test via token_metadata internals
+    for (const auto& p : pts) {
+        auto rack = std::to_string(uint8_t(p.host.bytes()[2]));
+        auto dc = std::to_string(uint8_t(p.host.bytes()[1]));
+        topo->update_endpoint(p.host, { dc, rack });
+    }
+
+    return topo;
 }
 
 // Run in a seastar thread.
@@ -208,15 +215,17 @@ void simple_test() {
         { 11.0, inet_address("192.102.40.2") }
     };
 
+    auto topo = generate_topology(ring_points);
+
     std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens;
     for (const auto& [ring_point, endpoint] : ring_points) {
         endpoint_tokens[endpoint].insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
     }
 
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) -> future<> {
+    stm.mutate_token_metadata([&endpoint_tokens, &topo] (token_metadata& tm) -> future<> {
         for (auto&& i : endpoint_tokens) {
-            tm.update_topology(i.first, test_dc_rack(i.first));
+            tm.update_topology(i.first, topo->get_location(i.first));
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -233,7 +242,7 @@ void simple_test() {
         "NetworkTopologyStrategy", options323);
 
 
-    full_ring_check(ring_points, options323, ars_ptr, stm.get());
+    full_ring_check(ring_points, options323, ars_ptr, stm.get(), *topo);
 
     ///////////////
     // Create the replication strategy
@@ -246,7 +255,7 @@ void simple_test() {
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options320);
 
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -258,7 +267,7 @@ void simple_test() {
         tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
 }
 
 // Run in a seastar thread.
@@ -319,9 +328,11 @@ void heavy_origin_test() {
         }
     }
 
-    stm.mutate_token_metadata([&tokens] (token_metadata& tm) -> future<> {
+    auto topo = generate_topology(ring_points);
+
+    stm.mutate_token_metadata([&tokens, &topo] (token_metadata& tm) -> future<> {
         for (auto&& i : tokens) {
-            tm.update_topology(i.first, test_dc_rack(i.first));
+            tm.update_topology(i.first, topo->get_location(i.first));
             co_await tm.update_normal_tokens(std::move(i.second), i.first);
         }
     }).get();
@@ -329,7 +340,7 @@ void heavy_origin_test() {
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", config_options);
 
-    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
+    full_ring_check(ring_points, config_options, ars_ptr, stm.get(), *topo);
 }
 
 
