@@ -1351,7 +1351,7 @@ sstring topology::get_datacenter() const {
 }
 
 sstring topology::get_datacenter(inet_address ep) const {
-    return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
+    return get_location(ep).dc;
 }
 
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {

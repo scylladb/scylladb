@@ -926,8 +926,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // FIXME -- token metadata should get local DC/RACK via constructor,
             // but snitch cannot (yet) start early enough to provide it
-            token_metadata.invoke_on_all([&snitch, &broadcast_addr] (auto& tm) {
-                tm.init_local_endpoint({ snitch.local()->get_datacenter(broadcast_addr), snitch.local()->get_rack() });
+            token_metadata.invoke_on_all([&snitch] (auto& tm) {
+                tm.init_local_endpoint({ snitch.local()->get_datacenter(), snitch.local()->get_rack() });
             }).get();
 
             static direct_fd_clock fd_clock;

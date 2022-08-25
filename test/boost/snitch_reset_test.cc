@@ -64,7 +64,7 @@ future<> one_test(const std::string& property_fname1,
 
             i_endpoint_snitch::snitch_instance().invoke_on(0,
                     [cpu0_dc, cpu0_rack, my_address] (snitch_ptr& inst) {
-                *cpu0_dc =inst->get_datacenter(my_address);
+                *cpu0_dc =inst->get_datacenter();
                 *cpu0_rack = inst->get_rack();
             }).get();
 
@@ -85,7 +85,7 @@ future<> one_test(const std::string& property_fname1,
             // Check that the returned DC and Rack values are different now
             i_endpoint_snitch::snitch_instance().invoke_on(0,
                     [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
-                *cpu0_dc_new =inst->get_datacenter(my_address);
+                *cpu0_dc_new =inst->get_datacenter();
                 *cpu0_rack_new = inst->get_rack();
             }).get();
 
@@ -98,7 +98,7 @@ future<> one_test(const std::string& property_fname1,
             // Check that the new DC and Rack values have been propagated to all CPUs
             i_endpoint_snitch::snitch_instance().invoke_on_all(
                     [cpu0_dc_new, cpu0_rack_new, res, my_address] (snitch_ptr& inst) {
-                if (*cpu0_dc_new != inst->get_datacenter(my_address) ||
+                if (*cpu0_dc_new != inst->get_datacenter() ||
                     *cpu0_rack_new != inst->get_rack()) {
                     *res = false;
                 }
@@ -120,7 +120,7 @@ future<> one_test(const std::string& property_fname1,
                 //
                 i_endpoint_snitch::snitch_instance().invoke_on(0,
                         [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
-                    *cpu0_dc_new =inst->get_datacenter(my_address);
+                    *cpu0_dc_new =inst->get_datacenter();
                     *cpu0_rack_new = inst->get_rack();
                 }).get();
 

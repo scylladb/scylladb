@@ -66,9 +66,9 @@ public:
     virtual sstring get_rack() = 0;
 
     /**
-     * returns a String representing the datacenter this endpoint belongs to
+     * returns a String representing the datacenter local node belongs to
      */
-    virtual sstring get_datacenter(inet_address endpoint) = 0;
+    virtual sstring get_datacenter() = 0;
 
     /**
      * returns whatever info snitch wants to gossip
@@ -299,7 +299,7 @@ public:
     //
     // Sons have to implement:
     // virtual sstring get_rack()        = 0;
-    // virtual sstring get_datacenter(inet_address endpoint)  = 0;
+    // virtual sstring get_datacenter()  = 0;
     //
 
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;

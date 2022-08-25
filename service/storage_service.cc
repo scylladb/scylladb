@@ -3280,7 +3280,7 @@ future<> storage_service::snitch_reconfigured() {
         auto endpoint = utils::fb_utilities::get_broadcast_address();
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         auto dr = locator::endpoint_dc_rack {
-            .dc = snitch->get_datacenter(endpoint),
+            .dc = snitch->get_datacenter(),
             .rack = snitch->get_rack(),
         };
         tmptr->update_topology(endpoint, std::move(dr));

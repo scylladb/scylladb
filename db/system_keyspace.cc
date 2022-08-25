@@ -1267,7 +1267,7 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(cql_serialization_format::latest_version),
-                            snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
+                            snitch->get_datacenter(),
                             snitch->get_rack(),
                             sstring(cfg.partitioner()),
                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
@@ -3368,7 +3368,7 @@ future<> system_keyspace::start() {
     // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
     // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    _cache->_local_dc_rack_info.dc = snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+    _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
     _cache->_local_dc_rack_info.rack = snitch->get_rack();
 
     co_return;

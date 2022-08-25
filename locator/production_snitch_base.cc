@@ -37,14 +37,8 @@ sstring production_snitch_base::get_rack() {
     return _my_rack;
 }
 
-sstring production_snitch_base::get_datacenter(inet_address endpoint) {
-    if (endpoint == utils::fb_utilities::get_broadcast_address()) {
-        return _my_dc;
-    }
-
-    return get_endpoint_info(endpoint,
-                             gms::application_state::DC,
-                             default_dc);
+sstring production_snitch_base::get_datacenter() {
+    return _my_dc;
 }
 
 void production_snitch_base::set_backreference(snitch_ptr& d) {
