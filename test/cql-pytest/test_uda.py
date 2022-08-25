@@ -8,7 +8,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ConfigurationException
 from util import unique_name, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as
@@ -192,3 +192,19 @@ def test_nested_collection_initcond(scylla_only, cql, test_keyspace):
                         with new_aggregate(cql, test_keyspace, aggr_body) as aggr_f:
                             result = cql.execute(f"SELECT {aggr_f}(id) AS result FROM {table}").one()
                             assert result.result == [18/7,8/5,13/7]
+
+def test_drop_keyspace_with_uda(scylla_only, cql):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}")
+    f1 = unique_name()
+    cql.execute(f"CREATE FUNCTION {ks}.{f1}(acc int, val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS $$ return acc $$")
+    f2 = unique_name()
+    cql.execute(f"CREATE FUNCTION {ks}.{f2}(acc int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS $$ return acc $$")
+    agg = unique_name()
+    cql.execute(f"CREATE AGGREGATE {ks}.{agg}(int) SFUNC {f1} STYPE int FINALFUNC {f2} INITCOND 0")
+    aggregates_before = cql.execute(f"SELECT COUNT(*) AS result FROM system_schema.aggregates").one()
+    cql.execute(f"DROP KEYSPACE {ks}")
+    aggregates_after = cql.execute(f"SELECT COUNT(*) AS result FROM system_schema.aggregates").one()
+    assert aggregates_before.result - aggregates_after.result == 1
+    with pytest.raises(ConfigurationException, match="Cannot drop non existing keyspace"):
+        cql.execute(f"DROP KEYSPACE {ks}")
