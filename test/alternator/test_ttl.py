@@ -36,6 +36,39 @@ def passes_or_raises(expected_exception, match=None):
     except Exception as err:
         pytest.fail(f"Got unexpected exception type {type(err).__name__} instead of {expected_exception.__name__}: {err}")
 
+# Some of the TTL tests below can be very slow on DynamoDB, or even in
+# Scylla in some configurations. The following two fixtures allow tests to
+# run when they can be run reasonably quickly, but be skipped otherwise -
+# unless the "--runverslow" option is passed to pytest. This is similar
+# to our @pytest.mark.veryslow, but the latter is a blunter instrument.
+
+# The waits_for_expiration fixture indicates that this test waits for expired
+# items to be deleted. This is always very slow on AWS, and whether it is
+# very slow on Scylla or reasonably fast depends on the
+# alternator_ttl_period_in_seconds configuration - test/alternator/run sets
+# it very low, but Scylla may have been run manually.
+@pytest.fixture(scope="session")
+def waits_for_expiration(dynamodb, request):
+    if is_aws(dynamodb) and not request.config.getoption('runveryslow'):
+        pytest.skip('need --runveryslow option to run')
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    resp = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': 'alternator_ttl_period_in_seconds'})
+    period = float(resp['Items'][0]['value'])
+    if period > 1 and not request.config.getoption('runveryslow'):
+        pytest.skip('need --runveryslow option to run')
+
+# The veryslow_on_aws says that this test is very slow on AWS, but
+# always reasonably fast on Scylla. If fastness on Scylla requires a
+# specific setting of alternator_ttl_period_in_seconds, don't use this
+# fixture - use the above waits_for_expiration instead.
+@pytest.fixture(scope="session")
+def veryslow_on_aws(dynamodb, request):
+    if is_aws(dynamodb) and not request.config.getoption('runveryslow'):
+        pytest.skip('need --runveryslow option to run')
+
 # Test the DescribeTimeToLive operation on a table where the time-to-live
 # feature was *not* enabled.
 def test_describe_ttl_without_ttl(test_table):
@@ -110,12 +143,11 @@ def test_ttl_disable_errors(dynamodb):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})
 
-# Test *sucessful* disabling of TTL. This is an extremely slow test, as
-# DynamoDB refuses to disable TTL if it was enabled in the last half hour
+# Test *sucessful* disabling of TTL. This is an extremely slow test on AWS,
+# as DynamoDB refuses to disable TTL if it was enabled in the last half hour
 # (the documentation suggests a full hour, but in practice it seems 30
-# minutes).
-@pytest.mark.veryslow
-def test_ttl_disable(dynamodb):
+# minutes). But on Scylla it is currently almost instantaneous.
+def test_ttl_disable(dynamodb, veryslow_on_aws):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
@@ -312,12 +344,12 @@ def test_ttl_expiration(dynamodb):
 # such a table as well. This test is simpler than test_ttl_expiration because
 # all we want to check is that the deletion works - not the expiration time
 # parsing and semantics.
-@pytest.mark.veryslow
-def test_ttl_expiration_with_rangekey(dynamodb):
+def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
     # Note that unlike test_ttl_expiration, this test doesn't have a fixed
     # duration - it finishes as soon as the item we expect to be expired
     # is expired.
-    max_duration = 1200 if is_aws(dynamodb) else 10
+    max_duration = 1200 if is_aws(dynamodb) else 120
+    sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -344,7 +376,7 @@ def test_ttl_expiration_with_rangekey(dynamodb):
             if ('Item' in table.get_item(Key={'p': p1, 'c': c1})) and not ('Item' in table.get_item(Key={'p': p2, 'c': c2})):
                 # p2 expired, p1 didn't. We're done
                 break
-            time.sleep(max_duration/15.0)
+            time.sleep(sleep)
         assert 'Item' in table.get_item(Key={'p': p1, 'c': c1})
         assert not 'Item' in table.get_item(Key={'p': p2, 'c': c2})
 
@@ -352,10 +384,10 @@ def test_ttl_expiration_with_rangekey(dynamodb):
 # expiration-time attribute *may* be the hash or range key attributes.
 # So let's test that this indeed works and items indeed expire
 # Just like test_ttl_expiration() above, these tests are extremely slow
-# because DynamoDB delays expiration by around 10 minutes.
-@pytest.mark.veryslow
-def test_ttl_expiration_hash(dynamodb):
-    duration = 1200 if is_aws(dynamodb) else 10
+# on AWS because DynamoDB delays expiration by around 10 minutes.
+def test_ttl_expiration_hash(dynamodb, waits_for_expiration):
+    max_duration = 1200 if is_aws(dynamodb) else 120
+    sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ]) as table:
@@ -373,7 +405,7 @@ def test_ttl_expiration_hash(dynamodb):
         def check_expired():
             return not 'Item' in table.get_item(Key={'p': p1}) and 'Item' in table.get_item(Key={'p': p2})
 
-        while time.time() < start_time + duration:
+        while time.time() < start_time + max_duration:
             print(f"--- {int(time.time()-start_time)} seconds")
             if 'Item' in table.get_item(Key={'p': p1}):
                 print("p1 alive")
@@ -381,13 +413,13 @@ def test_ttl_expiration_hash(dynamodb):
                 print("p2 alive")
             if check_expired():
                 break
-            time.sleep(duration/15)
+            time.sleep(sleep)
         # After the delay, p2 should be alive, p1 should not
         assert check_expired()
 
-@pytest.mark.veryslow
-def test_ttl_expiration_range(dynamodb):
-    duration = 1200 if is_aws(dynamodb) else 10
+def test_ttl_expiration_range(dynamodb, waits_for_expiration):
+    max_duration = 1200 if is_aws(dynamodb) else 120
+    sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ]) as table:
@@ -406,7 +438,7 @@ def test_ttl_expiration_range(dynamodb):
         def check_expired():
             return not 'Item' in table.get_item(Key={'p': p, 'c': c1}) and 'Item' in table.get_item(Key={'p': p, 'c': c2})
 
-        while time.time() < start_time + duration:
+        while time.time() < start_time + max_duration:
             print(f"--- {int(time.time()-start_time)} seconds")
             if 'Item' in table.get_item(Key={'p': p, 'c': c1}):
                 print("c1 alive")
@@ -414,7 +446,7 @@ def test_ttl_expiration_range(dynamodb):
                 print("c2 alive")
             if check_expired():
                 break
-            time.sleep(duration/15)
+            time.sleep(sleep)
         # After the delay, c2 should be alive, c1 should not
         assert check_expired()
 
@@ -442,7 +474,7 @@ def test_ttl_expiration_hash_wrong_type(dynamodb):
             print(f"--- {int(time.time()-start_time)} seconds")
             if 'Item' in table.get_item(Key={'p': p1}):
                 print("p1 alive")
-            time.sleep(duration/15)
+            time.sleep(duration/30)
         # After the delay, p2 should be alive, p1 should not
         assert 'Item' in table.get_item(Key={'p': p1})
 
@@ -453,13 +485,13 @@ def test_ttl_expiration_hash_wrong_type(dynamodb):
 # and can test just one expiring item. This also allows us to finish the
 # test as soon as the item expires, instead of after a fixed "duration" as
 # in the above tests.
-@pytest.mark.veryslow
-def test_ttl_expiration_gsi_lsi(dynamodb):
+def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
     # In our experiments we noticed that when a table has secondary indexes,
     # items are expired with significant delay. Whereas a 10 minute delay
     # for regular tables was typical, in the table we have here we saw
     # a typical delay of 30 minutes before items expired.
-    max_duration = 3600 if is_aws(dynamodb) else 10
+    max_duration = 3600 if is_aws(dynamodb) else 120
+    sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -524,7 +556,7 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
             # test is done - and successful:
             if not base_alive and not gsi_alive and gsi_was_alive and not lsi_alive:
                 return
-            time.sleep(max_duration/15)
+            time.sleep(sleep)
         pytest.fail('base, gsi, or lsi not expired')
 
 # Above in test_ttl_expiration_hash() and test_ttl_expiration_range() we
@@ -541,11 +573,11 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
 # and make their keys regular attributes - to support adding GSIs after a
 # table already exists - so after such a change GSIs will no longer be a
 # special case.
-@pytest.mark.veryslow
-def test_ttl_expiration_lsi_key(dynamodb):
+def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
-    max_duration = 3600 if is_aws(dynamodb) else 10
+    max_duration = 3600 if is_aws(dynamodb) else 120
+    sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -586,7 +618,7 @@ def test_ttl_expiration_lsi_key(dynamodb):
             else:
                 # test is done - and successful:
                 return
-            time.sleep(max_duration/15)
+            time.sleep(max_duration/200)
         pytest.fail('base not expired')
 
 # Check that in the DynamoDB Streams API, an event appears about an item
@@ -702,7 +734,7 @@ def read_entire_stream(dynamodbstreams, table):
 # in more than one page - so verifies that the expiration scanner service
 # does the paging properly.
 @pytest.mark.veryslow
-def test_ttl_expiration_long(dynamodb):
+def test_ttl_expiration_long(dynamodb, waits_for_expiration):
     # Write 100*N items to the table, 1/100th of them are expired. The test
     # completes when all of them are expired (or on timeout).
     # To compilicate matter for the paging that we're trying to test,
@@ -730,19 +762,17 @@ def test_ttl_expiration_long(dynamodb):
                         'p': p, 'c': c, 'expiration': expiration })
         start_time = time.time()
         while time.time() < start_time + max_duration:
-            # We could have used Select=COUNT here, but Alternator doesn't
-            # implement it yet (issue #5058).
             count = 0
-            response = table.scan(ConsistentRead=True)
+            response = table.scan(ConsistentRead=True, Select='COUNT')
             if 'Count' in response:
                 count += response['Count']
             while 'LastEvaluatedKey' in response:
                 response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'],
-                    ConsistentRead=True)
+                    ConsistentRead=True, Select='COUNT')
                 if 'Count' in response:
                     count += response['Count']
             print(count)
             if count == 99*N:
                 break
-            time.sleep(max_duration/15.0)
+            time.sleep(max_duration/100.0)
         assert count == 99*N
