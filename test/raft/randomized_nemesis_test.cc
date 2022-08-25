@@ -2443,18 +2443,20 @@ struct bouncing {
                 if (n_a_l->leader) {
                     if (n_a_l->leader == srv_id || !tried.contains(n_a_l->leader)) {
                         co_await timer.sleep(known_leader_delay);
+                        tlogger.trace("bouncing call: got `not_a_leader` from {}, rerouting to {}", srv_id, n_a_l->leader);
                         srv_id = n_a_l->leader;
-                        tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}", srv_id);
                         continue;
                     }
                 }
 
                 if (!known.empty()) {
+                    auto prev = srv_id;
                     srv_id = *known.begin();
                     if (n_a_l->leader) {
-                        tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}, but already tried it; trying {}", n_a_l->leader, srv_id);
+                        tlogger.trace("bouncing call: got `not_a_leader` from {}, rerouted to {}, but already tried it; trying {}",
+                                prev, n_a_l->leader, srv_id);
                     } else {
-                        tlogger.trace("bouncing call: got `not_a_leader`, no reroute, trying {}", srv_id);
+                        tlogger.trace("bouncing call: got `not_a_leader` from {}, no reroute, trying {}", prev, srv_id);
                     }
                     continue;
                 }
@@ -2633,7 +2635,8 @@ struct reconfiguration {
 
     using result_type = reconfigure_result_t;
 
-    future<result_type> execute_modify_config(state_type& s, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
+    future<result_type> execute_modify_config(
+            state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
         std::vector<std::pair<raft::server_id, bool>> added;
         for (size_t i = 0; i < voters_end; ++i) {
             added.emplace_back(nodes[i], true);
@@ -2643,12 +2646,16 @@ struct reconfiguration {
         }
 
         std::vector<raft::server_id> removed {nodes.begin() + members_end, nodes.end()};
+        auto contact = *s.known.begin();
+
+        tlogger.debug("reconfig modify_config start add {} remove {} start tid {} start time {} current time {} contact {}",
+                added, removed, ctx.thread, ctx.start, s.timer.now(), contact);
 
         assert(s.known.size() > 0);
         auto [res, last] = co_await bouncing{
                 [&added, &removed, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
             return env.modify_config(id, added, removed, timeout, timer);
-        }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
+        }}(s.timer, s.known, contact, 10, 10_t, 10_t);
 
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
@@ -2667,10 +2674,14 @@ struct reconfiguration {
         }
         ), res);
 
+        tlogger.debug("reconfig modify_config end add {} remove {} start tid {} start time {} current time {} last contact {}",
+                added, removed, ctx.thread, ctx.start, s.timer.now(), last);
+
         co_return res;
     }
 
-    future<result_type> execute_reconfigure(state_type& s, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
+    future<result_type> execute_reconfigure(
+            state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
         std::vector<std::pair<raft::server_id, bool>> nodes_voters;
         nodes_voters.reserve(members_end);
         for (size_t i = 0; i < voters_end; ++i) {
@@ -2680,10 +2691,15 @@ struct reconfiguration {
             nodes_voters.emplace_back(nodes[i], false);
         }
 
+        auto contact = *s.known.begin();
+
+        tlogger.debug("reconfig set_configuration start nodes {} start tid {} start time {} current time {} contact {}",
+                nodes_voters, ctx.thread, ctx.start, s.timer.now(), contact);
+
         assert(s.known.size() > 0);
         auto [res, last] = co_await bouncing{[&nodes_voters, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
             return env.reconfigure(id, nodes_voters, timeout, timer);
-        }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
+        }}(s.timer, s.known, contact, 10, 10_t, 10_t);
 
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
@@ -2701,6 +2717,9 @@ struct reconfiguration {
         }
         ), res);
 
+        tlogger.debug("reconfig set_configuration end nodes {} start tid {} start time {} current time {} last contact {}",
+                nodes_voters, ctx.thread, ctx.start, s.timer.now(), last);
+
         co_return res;
     }
 
@@ -2715,9 +2734,9 @@ struct reconfiguration {
         size_t voters_end = std::uniform_int_distribution<size_t>{1, members_end}(s.rnd);
 
         if (bdist(s.rnd)) {
-            return execute_modify_config(s, std::move(nodes), members_end, voters_end);
+            return execute_modify_config(s, ctx, std::move(nodes), members_end, voters_end);
         } else {
-            return execute_reconfigure(s, std::move(nodes), members_end, voters_end);
+            return execute_reconfigure(s, ctx, std::move(nodes), members_end, voters_end);
         }
     }
 

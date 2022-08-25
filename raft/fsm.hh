@@ -369,6 +369,9 @@ public:
     index_t log_last_snapshot_idx() const {
         return _log.get_snapshot().idx;
     }
+    index_t log_last_conf_idx() const {
+        return _log.last_conf_idx();
+    }
 
     // Return the last configuration entry with index smaller than or equal to `idx`.
     // Precondition: `log_last_idx()` >= `idx` >= `log_last_snapshot_idx()`.
