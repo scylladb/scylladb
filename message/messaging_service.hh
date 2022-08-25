@@ -495,6 +495,10 @@ public:
 private:
     bool remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
     void do_start_listen();
+
+    bool is_same_dc(inet_address ep) const;
+    bool is_same_rack(inet_address ep) const;
+
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
