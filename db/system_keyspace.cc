@@ -1297,24 +1297,21 @@ struct local_cache {
 };
 
 future<> system_keyspace::build_dc_rack_info() {
-    return execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
-        return do_for_each(*msg, [this] (auto& row) {
+    auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
+    for (const auto& row : *msg) {
             net::inet_address peer = row.template get_as<net::inet_address>("peer");
             if (!row.has("data_center") || !row.has("rack")) {
-                return make_ready_future<>();
+                continue;
             }
             gms::inet_address gms_addr(std::move(peer));
             sstring dc = row.template get_as<sstring>("data_center");
             sstring rack = row.template get_as<sstring>("rack");
 
             locator::endpoint_dc_rack  element = { dc, rack };
-            return container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
+            co_await container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
                 sys_ks._cache->_cached_dc_rack_info.emplace(gms_addr, element);
             });
-        }).then([msg] {
-            // Keep msg alive.
-        });
-    });
+    }
 }
 
 future<> system_keyspace::build_bootstrap_info() {
