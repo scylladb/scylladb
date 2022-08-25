@@ -45,39 +45,6 @@ void production_snitch_base::set_backreference(snitch_ptr& d) {
     _backreference = &d;
 }
 
-std::optional<sstring> production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key) {
-    gms::gossiper& local_gossiper = local().get_local_gossiper();
-    auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
-    return ep_state ? std::optional(ep_state->value) : std::nullopt;
-}
-
-sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::application_state key,
-                                                  const sstring& default_val) {
-    auto val = get_endpoint_info(endpoint, key);
-    auto& gossiper = local().get_local_gossiper();
-
-    if (val) {
-        return *val;
-    }
-    // ...if not found - look in the SystemTable...
-    if (!_saved_endpoints) {
-        _saved_endpoints = gossiper.get_system_keyspace().local().load_dc_rack_info();
-    }
-
-    auto it = _saved_endpoints->find(endpoint);
-
-    if (it != _saved_endpoints->end()) {
-        if (key == gms::application_state::RACK) {
-            return it->second.rack;
-        } else { // gms::application_state::DC
-            return it->second.dc;
-        }
-    }
-
-    // ...if still not found - return a default value
-    return default_val;
-}
-
 void production_snitch_base::set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) {
     if (!new_dc.empty()) {
         _my_dc = new_dc;
