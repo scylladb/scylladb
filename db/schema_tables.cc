@@ -1829,8 +1829,10 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, sch
             cql3::functions::functions::add_function(create_aggregate(db, *val.first, val.second));
         }
         for (const auto& val : diff.dropped) {
-            auto func = create_aggregate(db, *val.first, val.second);
-            cql3::functions::functions::remove_function(func->name(), func->arg_types());
+            cql3::functions::function_name name{
+                val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
+            auto arg_types = read_arg_types(db, *val.first, name.keyspace);
+            cql3::functions::functions::remove_function(name, arg_types);
         }
     });
 }
