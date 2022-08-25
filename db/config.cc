@@ -1031,12 +1031,13 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
         return opt.get_value();
     };
 
-    return logging::settings{ value(logger_log_level, opts.logger_log_level)
-        , value(default_log_level, opts.default_log_level)
-        , value(log_to_stdout, opts.log_to_stdout)
-        , value(log_to_syslog, opts.log_to_syslog)
-        , opts.logger_stdout_timestamps.get_value()
-        , opts.logger_ostream_type.get_value()
+    return logging::settings{
+        .logger_levels = value(logger_log_level, opts.logger_log_level),
+        .default_level = value(default_log_level, opts.default_log_level),
+        .stdout_enabled = value(log_to_stdout, opts.log_to_stdout),
+        .syslog_enabled = value(log_to_syslog, opts.log_to_syslog),
+        .stdout_timestamp_style =  opts.logger_stdout_timestamps.get_value(),
+        .logger_ostream = opts.logger_ostream_type.get_value(),
     };
 }
 
