@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 #############################################################################
-# Most cql-pytest tests should limit themselves to the CQL API provided by
+# Most cql_pytest tests should limit themselves to the CQL API provided by
 # the Cassandra Python driver, and should work when running against any CQL-
 # compatible database, including Scylla and Cassandra, running locally or
 # remotely. In particular, tests should generally *not* attempt to look at

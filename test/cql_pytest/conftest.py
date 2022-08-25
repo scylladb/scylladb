@@ -103,7 +103,7 @@ def cassandra_bug(cql):
         pytest.xfail('A known Cassandra bug')
 
 # While the raft-based schema modifications are still experimental and only
-# optionally enabled (the "--raft" option to test/cql-pytest/run enables it
+# optionally enabled (the "--raft" option to test/cql_pytest/run enables it
 # in Scylla), some tests are expected to fail on Scylla without this option
 # enabled, and pass with it enabled (and also pass on Cassandra). These tests
 # should use the "fails_without_raft" fixture. When Raft mode becomes the

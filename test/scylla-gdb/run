@@ -4,8 +4,8 @@ import sys
 import os
 import subprocess
 
-# Use the run.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+# Use the run.py library from ../cql_pytest:
+sys.path.insert(1, sys.path[0] + '/../cql_pytest')
 import run
 
 print('Scylla is: ' + run.scylla + '.')

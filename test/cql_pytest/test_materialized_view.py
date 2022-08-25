@@ -75,7 +75,7 @@ def test_mv_empty_string_partition_key(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
             cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, '')")
-            # Note that because cql-pytest runs on a single node, view
+            # Note that because cql_pytest runs on a single node, view
             # updates are synchronous, and we can read the view immediately
             # without retrying. In a general setup, this test would require
             # retries.
@@ -143,7 +143,7 @@ def test_mv_empty_string_partition_key_individual(cassandra_bug, cql, test_keysp
             rows = [[123, ''], [1, 'dog'], [2, 'cat'], [700, 'hello'], [3, 'horse']]
             for row in rows:
                 cql.execute(f"INSERT INTO {table} (p,v) VALUES ({row[0]}, '{row[1]}')")
-            # Note that because cql-pytest runs on a single node, view
+            # Note that because cql_pytest runs on a single node, view
             # updates are synchronous, and we can read the view immediately
             # without retrying. In a general setup, this test would require
             # retries.
@@ -177,7 +177,7 @@ def test_mv_is_not_null(cql, test_keyspace):
         with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
             cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, 'dog')")
             cql.execute(f"INSERT INTO {table} (p,v) VALUES (17, null)")
-            # Note that because cql-pytest runs on a single node, view
+            # Note that because cql_pytest runs on a single node, view
             # updates are synchronous, and we can read the view immediately
             # without retrying. In a general setup, this test would require
             # retries.

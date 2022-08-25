@@ -18,8 +18,8 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+# Use the util.py library from ../cql_pytest:
+sys.path.insert(1, sys.path[0] + '/../cql_pytest')
 from util import unique_name
 
 # By default, tests run against a Scylla server listening

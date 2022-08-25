@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 #############################################################################
-# The cql-pytest framework is about testing CQL functionality, so
+# The cql_pytest framework is about testing CQL functionality, so
 # implementation details like sstables cannot be tested directly. However,
 # we are still able to reproduce some bugs by tricks such as writing some
 # data to the table and then force it to be written to the disk (nodetool

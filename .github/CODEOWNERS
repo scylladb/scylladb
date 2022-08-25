@@ -91,7 +91,7 @@ test/boost/mutation_reader_test.cc @denesb
 test/boost/querier_cache_test.cc @denesb
 
 # PYTEST-BASED CQL TESTS
-test/cql-pytest/* @nyh
+test/cql_pytest/* @nyh
 
 # RAFT
 raft/* @kbr- @gleb-cloudius @kostja

@@ -6,8 +6,8 @@ import pytest
 import sys
 import requests
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+# Use the util.py library from ../cql_pytest:
+sys.path.insert(1, sys.path[0] + '/../cql_pytest')
 from util import new_test_table, unique_name
 
 # "keyspace" function: Creates and returns a temporary keyspace to be

@@ -360,7 +360,7 @@ def fails_without_raft(request, check_pre_raft):
 # InternalServerError) in the *middle* of the table creation or deletion.
 # Such a failure may even leave behind some half-created table.
 #
-# NOTE: This test, like all cql-pytest tests, runs on a single node. So it
+# NOTE: This test, like all cql_pytest tests, runs on a single node. So it
 # doesn't exercise the most general possibility that two concurrent schema
 # modifications from two different coordinators collide. So multi-node
 # tests will be needed to check for that potential problem as well.

@@ -359,7 +359,7 @@ def test_index_empty_string(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 'hello')")
         cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, '')")
         # The following assert fails in #9364:
-        # Note that on a single-node cql-pytest, index updates are
+        # Note that on a single-node cql_pytest, index updates are
         # synchronous so we don't have to retry the SELECT.
         assert_rows(cql.execute(f"SELECT p FROM {table} WHERE v=''"), [2])
 
@@ -532,7 +532,7 @@ def test_filter_and_limit_2(cql, test_keyspace):
 # the issue number #2962 to find them). Unlike the randomized test, the goal
 # here is to try to cover as many corner cases we can think of, explicitly.
 #
-# Note that we can assume that on a single-node cql-pytest, materialized view
+# Note that we can assume that on a single-node cql_pytest, materialized view
 # (and therefore index) updates are synchronous, so none of these tests need
 # loops to wait for a change to be indexed.
 

@@ -130,7 +130,7 @@ down the server when all tests  using it end.
 
 ## Sharing and pooling servers
 
-Since there can be many pytests in a single directory (e.g. cql-pytest)
+Since there can be many pytests in a single directory (e.g. cql_pytest)
 `test.py` creates multiple servers to parallelize their execution.
 Each server is also shared among many tests, to save on setup/teardown
 steps. While this speeds up execution, sharing servers complicates debugging
@@ -160,13 +160,13 @@ To extend `test.py` logging, you can use the standard 'logging' module API.
 Individual pytests are programmed to not gobble stdout, so you can can also
 add prints to pytests, and they will end up in the test' log.
 
-For example, imagine `cql-pytest/test_null.py` fails. The relevant lines
+For example, imagine `cql_pytest/test_null.py` fails. The relevant lines
 in `test.py.log` will be:
 
 ```
 21:53:04.789 INFO> Created cluster {127.101.161.1}
 21:53:04.790 INFO> Leasing Scylla cluster {127.101.161.1} for test test_null.1
-21:53:04.790 INFO> Starting test test_null.1: pytest --host=127.101.161.1 -s ...test/cql-pytest/test_null.py
+21:53:04.790 INFO> Starting test test_null.1: pytest --host=127.101.161.1 -s ...test/cql_pytest/test_null.py
 21:53:05.533 INFO> Test test_null.1 failed
 ```
 To find out the working directory of instance 127.101.161.1 search
