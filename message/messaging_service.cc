@@ -111,7 +111,6 @@
 #include "frozen_mutation.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
-#include "locator/snitch_base.hh"
 #include "idl/partition_checksum.dist.impl.hh"
 #include "idl/forward_request.dist.hh"
 #include "idl/forward_request.dist.impl.hh"
@@ -255,13 +254,28 @@ future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
 }
 
 bool messaging_service::is_same_dc(inet_address addr) const {
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+    // It's a "safety check". The token metadata pointer is nullptr before
+    // the service is start_listen()-ed and after it's being shutdown()-ed.
+    // No new clients should appear in those period, but if they do it's
+    // better to classify them somehow. Telling that all endpoints live in
+    // different DCs/RACKs would make messaging apply the most restrictive
+    // compression/encryption rules which can be sub-optimal but not bad.
+    if (_token_metadata == nullptr) {
+        return false;
+    }
+
+    const auto& topo = _token_metadata->get()->get_topology();
+    return topo.get_datacenter(addr) == topo.get_datacenter();
 }
 
 bool messaging_service::is_same_rack(inet_address addr) const {
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    return snitch->get_rack(addr) == snitch->get_rack(utils::fb_utilities::get_broadcast_address());
+    // See comment in is_same_dc() about this check
+    if (_token_metadata == nullptr) {
+        return false;
+    }
+
+    const auto& topo = _token_metadata->get()->get_topology();
+    return topo.get_rack(addr) == topo.get_rack();
 }
 
 void messaging_service::do_start_listen() {
