@@ -62,16 +62,6 @@ def get_irq_cpu_mask():
 
     return out(hwloc_cmd).strip()
 
-def config_updated():
-    perftune_mtime = os.path.getmtime('/etc/scylla.d/perftune.yaml')
-    cpuset_mtime = os.path.getmtime('/etc/scylla.d/cpuset.conf')
-    sysconfig_mtime = os.path.getmtime(sysconfdir_p() / 'scylla-server')
-    print("perftune_mtime < cpuset_mtime:{}".format(perftune_mtime < cpuset_mtime))
-    print("perftune_mtime < sysconfig_mtime:{}".format(perftune_mtime < sysconfig_mtime))
-    if perftune_mtime < cpuset_mtime or perftune_mtime < sysconfig_mtime:
-        return True
-    return False
-
 def create_perftune_conf(cfg):
     """
     This function checks if a perftune configuration file should be created and
@@ -97,7 +87,7 @@ def create_perftune_conf(cfg):
         params += ' --write-back-cache=false'
 
     if len(params) > 0:
-        if os.path.exists('/etc/scylla.d/perftune.yaml') and not config_updated():
+        if os.path.exists('/etc/scylla.d/perftune.yaml'):
             return True
 
         params += ' --dump-options-file'
