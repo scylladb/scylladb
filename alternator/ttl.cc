@@ -769,11 +769,11 @@ future<> expiration_service::run() {
         // in the next iteration by reducing the scanner's scheduling-group
         // share (if using a separate scheduling group), or introduce
         // finer-grain sleeps into the scanning code.
-        std::chrono::seconds scan_duration(std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start));
-        std::chrono::seconds period(_db.get_config().alternator_ttl_period_in_seconds());
+        std::chrono::milliseconds scan_duration(std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start));
+        std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
         if (scan_duration < period) {
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count());
+                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
                 co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
             } catch(seastar::sleep_aborted&) {}
         }
