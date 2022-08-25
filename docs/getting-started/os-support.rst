@@ -23,7 +23,7 @@ Scylla Open Source
 
 
 +--------------------------+----------------------------------+-----------------------------+---------+-------+
-| Platform                 |       Ubuntu                     |    Debian                   | Centos  | Rocky |
+| Platform                 |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
 |                          |                                  |                             | RHEL    | RHEL  |
 +--------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 | Scylla Version / Version | 14.04| 16.04| 18.04|20.04 |22.04 | 8    | 9    |  10   |  11   | 7       |   8   |
@@ -67,7 +67,7 @@ Scylla Enterprise
    For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
 
 +--------------------------+---------------------------+--------------------+--------+-------+ 
-| Platform                 |  Ubuntu                   | Debian             | Centos | Rocky |
+| Platform                 |  Ubuntu                   | Debian             | CentOS/| Rocky/|
 |                          |                           |                    | RHEL   | RHEL  |
 +--------------------------+------+------+------+------+------+------+------+--------+-------+
 | Scylla Version / Version | 14   | 16   |  18  |  20  | 8    | 9    | 10   |  7     | 8     |
