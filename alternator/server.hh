@@ -15,6 +15,7 @@
 #include <seastar/net/tls.hh>
 #include <optional>
 #include "alternator/auth.hh"
+#include "service/qos/service_level_controller.hh"
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include <seastar/core/units.hh>
@@ -34,6 +35,8 @@ class server {
     executor& _executor;
     service::storage_proxy& _proxy;
     gms::gossiper& _gossiper;
+    auth::service& _auth_service;
+    qos::service_level_controller& _sl_controller;
 
     key_cache _key_cache;
     bool _enforce_authorization;
@@ -65,7 +68,7 @@ class server {
     json_parser _json_parser;
 
 public:
-    server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper);
+    server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
             bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);

@@ -16,6 +16,7 @@
 #include <seastar/util/short_streams.hh>
 #include "seastarx.hh"
 #include "error.hh"
+#include "service/qos/service_level_controller.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
@@ -440,12 +441,14 @@ void server::set_routes(routes& r) {
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gossiper)
+server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& auth_service, qos::service_level_controller& sl_controller)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
         , _proxy(proxy)
         , _gossiper(gossiper)
+        , _auth_service(auth_service)
+        , _sl_controller(sl_controller)
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
         , _enabled_servers{}

@@ -1545,7 +1545,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_rpc_controller(ctx).get();
             });
 
-            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, *cfg);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg);
             sharded<alternator::expiration_service> es;
             std::any stop_expiration_service;
 
