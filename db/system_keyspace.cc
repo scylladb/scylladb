@@ -1299,18 +1299,18 @@ struct local_cache {
 future<> system_keyspace::build_dc_rack_info() {
     auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
     for (const auto& row : *msg) {
-            net::inet_address peer = row.template get_as<net::inet_address>("peer");
-            if (!row.has("data_center") || !row.has("rack")) {
-                continue;
-            }
-            gms::inet_address gms_addr(std::move(peer));
-            sstring dc = row.template get_as<sstring>("data_center");
-            sstring rack = row.template get_as<sstring>("rack");
+        net::inet_address peer = row.template get_as<net::inet_address>("peer");
+        if (!row.has("data_center") || !row.has("rack")) {
+            continue;
+        }
+        gms::inet_address gms_addr(std::move(peer));
+        sstring dc = row.template get_as<sstring>("data_center");
+        sstring rack = row.template get_as<sstring>("rack");
 
-            locator::endpoint_dc_rack  element = { dc, rack };
-            co_await container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
-                sys_ks._cache->_cached_dc_rack_info.emplace(gms_addr, element);
-            });
+        locator::endpoint_dc_rack  element = { dc, rack };
+        co_await container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
+            sys_ks._cache->_cached_dc_rack_info.emplace(gms_addr, element);
+        });
     }
 }
 
