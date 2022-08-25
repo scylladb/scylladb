@@ -235,7 +235,7 @@ protected:
 future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
     if (!_enforce_authorization) {
         slogger.debug("Skipping authorization");
-        return make_ready_future<std::string>("<unauthenticated request>");
+        return make_ready_future<std::string>();
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
@@ -365,7 +365,9 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
         tracing::add_session_param(trace_state, "alternator_op", op);
         tracing::add_query(trace_state, truncated_content_view(query, buf));
         tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
-        tracing::set_username(trace_state, auth::authenticated_user(username));
+        if (!username.empty()) {
+            tracing::set_username(trace_state, auth::authenticated_user(username));
+        }
     }
     return trace_state;
 }
@@ -408,7 +410,11 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
     //FIXME: Client state can provide more context, e.g. client's endpoint address
     // We use unique_ptr because client_state cannot be moved or copied
-    executor::client_state client_state{executor::client_state::internal_tag()};
+    executor::client_state client_state = username.empty()
+        ? service::client_state{service::client_state::internal_tag()}
+        : service::client_state{service::client_state::internal_tag(), _auth_service, _sl_controller, username};
+    co_await client_state.maybe_update_per_service_level_params();
+
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
     tracing::trace(trace_state, op);
     rjson::value json_request = co_await _json_parser.parse(std::move(content));
