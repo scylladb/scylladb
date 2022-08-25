@@ -36,6 +36,9 @@ if __name__ == '__main__':
     except:
         pass
     if cpuset != args.cpuset or smp != args.smp:
+        if os.path.exists('/etc/scylla.d/perftune.yaml'):
+            os.remove('/etc/scylla.d/perftune.yaml')
+
         cfg.set('CPUSET', '{cpuset}{smp}'.format( \
                 cpuset='--cpuset {} '.format(args.cpuset) if args.cpuset else '', \
                 smp='--smp {} '.format(args.smp) if args.smp else '' \
