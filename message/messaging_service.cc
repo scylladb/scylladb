@@ -236,7 +236,8 @@ rpc_resource_limits(size_t memory_limit) {
     return limits;
 }
 
-future<> messaging_service::start_listen() {
+future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
+    _token_metadata = &stm;
     if (_credentials_builder && !_credentials) {
         return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
@@ -429,7 +430,8 @@ future<> messaging_service::stop_client() {
 
 future<> messaging_service::shutdown() {
     _shutting_down = true;
-    return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+    co_await when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+    _token_metadata = nullptr;
 }
 
 future<> messaging_service::stop() {

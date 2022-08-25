@@ -51,6 +51,10 @@ namespace db::view {
 class update_backlog;
 }
 
+namespace locator {
+class shared_token_metadata;
+}
+
 class frozen_mutation;
 class frozen_schema;
 class canonical_mutation;
@@ -291,6 +295,7 @@ private:
     };
 private:
     config _cfg;
+    locator::shared_token_metadata* _token_metadata = nullptr;
     // map: Node broadcast address -> Node internal IP, and the reversed mapping, for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache, _preferred_to_endpoint;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
@@ -317,7 +322,7 @@ public:
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 
-    future<> start_listen();
+    future<> start_listen(locator::shared_token_metadata& stm);
     uint16_t port();
     gms::inet_address listen_address();
     future<> shutdown();
