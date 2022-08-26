@@ -11,6 +11,16 @@ generating a histogram, validating the content of SStables, and more. See `Suppo
 
 Run ``scylla-sstable --help`` for additional information about the tool and the operations.
 
+This tool is similar to SStableDump_, with notable differences:
+
+* Built on the ScyllaDB C++ codebase, it supports all SStable formats and components that ScyllaDB supports.
+* Expanded scope: this tool supports much more than dumping SStable data components (see `Supported Operations`_).
+* More flexible on how schema is obtained and where SStables are located: SStableDump_ only supports dumping SStables located in their native data directory. To dump an SStable, one has to clone the entire ScyllaDB data directory tree, including system table directories and even config files. scylla-sstable can dump sstables from any path with multiple choices on how to obtain the schema, see Schema_.
+
+Currently, SStableDump_ works better on production systems as it automatically loads the schema from the system tables, unlike scylla-sstable, which has to be provided with the schema explicitly. On the other hand scylla-sstable works better for off-line investigations, as it can be used with as little as just a schema definition file and a single sstable. In the future we plan on closing this gap -- adding support for automatic schema-loading for scylla-sstable too -- and completely supplant SStableDump_ with scylla-sstable.
+
+.. _SStableDump: /operating-scylla/admin-tools/sstabledump
+
 Usage
 ------
 
