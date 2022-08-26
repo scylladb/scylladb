@@ -2,7 +2,7 @@
 
 import sys
 
-import run   # run.py in this directory
+import run_lib as run
 
 print('Scylla is: ' + run.scylla + '.')
 

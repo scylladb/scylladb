@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Use the run.py library from ../cql_pytest:
+# Use the run_lib.py library from ../cql_pytest:
 import sys
 sys.path.insert(1, sys.path[0] + '/../cql_pytest')
-import run
+import run_lib as run
 
 import os
 import requests
@@ -47,7 +47,7 @@ def run_alternator_cmd(pid, dir):
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         # We only list here Alternator-specific experimental features - CQL
-        # ones are listed in test/cql_pytest/run.py.
+        # ones are listed in test/cql_pytest/run_lib.py.
         '--experimental-features=alternator-streams',
         '--experimental-features=alternator-ttl',
     ]
