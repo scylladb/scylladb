@@ -58,9 +58,9 @@ def nodetool_cmd():
     if nodetool_cmd.failed:
         pytest.fail(f"Error: Can't find {nodetool_cmd.conf}. Please set the NODETOOL environment variable to the path of the nodetool utility.", pytrace=False)
     return nodetool_cmd.cmd
-nodetool_cmd.cmd = None
-nodetool_cmd.failed = False
-nodetool_cmd.conf = False
+nodetool_cmd.cmd = None # type: ignore
+nodetool_cmd.failed = False # type: ignore
+nodetool_cmd.conf = False # type: ignore
 
 # Run the external "nodetool" executable (can be overridden by the NODETOOL
 # environment variable). Only call this if the REST API doesn't work.

@@ -36,7 +36,7 @@ def unique_name():
         current_ms = unique_name.last_ms + 1
     unique_name.last_ms = current_ms
     return unique_name_prefix + str(current_ms)
-unique_name.last_ms = 0
+unique_name.last_ms = 0 # type: ignore
 
 # Functions for picking a unique key to use when multiple tests want to use
 # the same shared table and need to pick different keys so as not to collide.
@@ -47,12 +47,12 @@ unique_name.last_ms = 0
 def unique_key_string():
     unique_key_string.i += 1
     return 's' + str(unique_key_string.i)
-unique_key_string.i = 0
+unique_key_string.i = 0 # type: ignore
 
 def unique_key_int():
     unique_key_int.i += 1
     return unique_key_int.i
-unique_key_int.i = 0
+unique_key_int.i = 0 # type: ignore
 
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:

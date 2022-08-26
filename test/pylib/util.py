@@ -17,4 +17,4 @@ def unique_name():
     return unique_name_prefix + str(current_ms)
 
 
-unique_name.last_ms = 0
+unique_name.last_ms = 0 # type: ignore

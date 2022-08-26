@@ -23,7 +23,7 @@ if '--raft' in sys.argv:
     def run_with_raft(pid, dir):
         (c, e) = run_with_raft.orig_cmd(pid, dir)
         return (c + ['--experimental-features=raft'], e)
-    run_with_raft.orig_cmd = cmd
+    run_with_raft.orig_cmd = cmd # type: ignore
     cmd = run_with_raft
 
 pid = run.run_with_temporary_dir(cmd)

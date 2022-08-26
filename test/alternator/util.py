@@ -132,7 +132,7 @@ def unique_table_name():
         current_ms = unique_table_name.last_ms + 1
     unique_table_name.last_ms = current_ms
     return test_table_prefix + str(current_ms)
-unique_table_name.last_ms = 0
+unique_table_name.last_ms = 0 # type: ignore
 
 def create_test_table(dynamodb, **kwargs):
     name = unique_table_name()
