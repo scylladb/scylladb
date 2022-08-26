@@ -257,7 +257,6 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 /operating-scylla/admin-tools/perftune/index.html: /stable/operating-scylla/admin-tools/perftune
 /operating-scylla/admin-tools/scylla-sstable/index.html: /stable/operating-scylla/admin-tools/scylla-sstable
 /operating-scylla/admin-tools/scylla-types/index.html: /stable/operating-scylla/admin-tools/scylla-types
-/operating-scylla/admin-tools/sstable-index/index.html: /stable/operating-scylla/admin-tools/sstable-index
 /operating-scylla/admin-tools/sstable2json/index.html: /stable/operating-scylla/admin-tools/sstable2json
 /operating-scylla/admin-tools/sstabledump/index.html: /stable/operating-scylla/admin-tools/sstabledump
 /operating-scylla/admin-tools/sstableloader/index.html: /stable/operating-scylla/admin-tools/sstableloader
