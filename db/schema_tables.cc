@@ -2415,8 +2415,12 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
         }
     }
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::nullopt, std::move(computed_columns_mutation),
-                            std::move(indices_mutation), std::move(dropped_columns_mutation),
+    return schema_mutations{std::move(m),
+                            std::move(columns_mutation),
+                            std::nullopt,
+                            std::move(computed_columns_mutation),
+                            std::move(indices_mutation),
+                            std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
 }
 
@@ -3198,8 +3202,12 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 
     auto scylla_tables_mutation = make_scylla_tables_mutation(view, timestamp);
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(view_virtual_columns_mutation), std::move(computed_columns_mutation),
-                            std::move(indices_mutation), std::move(dropped_columns_mutation),
+    return schema_mutations{std::move(m),
+                            std::move(columns_mutation),
+                            std::move(view_virtual_columns_mutation),
+                            std::move(computed_columns_mutation),
+                            std::move(indices_mutation),
+                            std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
 }
 
