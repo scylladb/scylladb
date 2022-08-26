@@ -67,7 +67,7 @@ Session.run_async = run_async
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[str], port: int, ssl: bool):
+def cluster_con(hosts: List[str], port: int, with_ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
@@ -81,7 +81,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=120)
-    if ssl:
+    if with_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
