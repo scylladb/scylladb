@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pytest
-import rest_api
-import nodetool
-from util import new_test_table
+from . import rest_api
+from . import nodetool
+from .util import new_test_table
 
 # Test inserts `N` rows into table, flushes it 
 # and tries to read `M` non-existing keys.

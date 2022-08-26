@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pytest
-import util
-import nodetool
+from . import util
+from . import nodetool
 import json
 
 def test_snapshots_table(scylla_only, cql, test_keyspace):

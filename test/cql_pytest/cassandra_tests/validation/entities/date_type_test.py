@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import create_table, execute, assert_invalid
+from test.cql_pytest.cassandra_tests.porting import create_table, execute, assert_invalid
 
 # Check dates are correctly recognized and validated,
 # migrated from cql_tests.py:TestCQL.date_test()

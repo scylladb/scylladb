@@ -9,7 +9,7 @@
 import pytest
 from botocore.exceptions import ClientError
 import random
-from util import random_string, full_query, multiset
+from .util import random_string, full_query, multiset
 
 # The test_table_{sn,ss,sb}_with_sorted_partition fixtures are the regular
 # test_table_{sn,ss,sb} fixture with a partition inserted with many items.

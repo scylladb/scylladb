@@ -7,7 +7,7 @@
 # Some metrics cannot be obtained by nodetool, but they are available by API.
 
 import requests
-import nodetool
+from . import nodetool
 import pytest
 
 # Sends GET request to REST API. Response is restured as JSON.

@@ -12,7 +12,7 @@
 
 import pytest
 from cassandra.util import SortedSet, OrderedMapSerializedKey
-from util import unique_name, new_test_table, unique_key_int
+from .util import unique_name, new_test_table, unique_key_int
 
 
 # A test table with a (frozen) nested collection as its primary key.

@@ -11,7 +11,7 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from util import unique_name, new_test_table, unique_key_int
+from .util import unique_name, new_test_table, unique_key_int
 
 from cassandra.protocol import FunctionFailure, InvalidRequest
 

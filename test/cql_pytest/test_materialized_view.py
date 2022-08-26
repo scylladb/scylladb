@@ -7,10 +7,10 @@
 import time
 import pytest
 
-from util import new_test_table, unique_name, new_materialized_view
+from .util import new_test_table, unique_name, new_materialized_view
 from cassandra.protocol import InvalidRequest, SyntaxException
 
-import nodetool
+from . import nodetool
 
 # Test that building a view with a large value succeeds. Regression test
 # for a bug where values larger than 10MB were rejected during building (#9047)

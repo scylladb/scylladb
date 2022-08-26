@@ -40,7 +40,7 @@
 # * testCanQuerySecondaryIndex
 # * testDroppingIndexInvalidatesPreparedStatements
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from uuid import UUID
 

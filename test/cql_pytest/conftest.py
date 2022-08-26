@@ -15,7 +15,7 @@ from cassandra.cluster import Cluster
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import ssl
 
-from util import unique_name, new_test_table, cql_session
+from .util import unique_name, new_test_table, cql_session
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding

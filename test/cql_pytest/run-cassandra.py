@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import re
 
-import run_lib as run
+from . import run_lib as run
 
 def find_cassandra():
     # By default, we assume 'cassandra' is in the user's path. A specific

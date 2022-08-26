@@ -12,8 +12,8 @@
 #############################################################################
 
 import pytest
-from util import unique_name, new_test_table
-import nodetool
+from .util import unique_name, new_test_table
+from . import nodetool
 
 # Reproduces issue #8138, where the sstable reader in a TWCS sstable set
 # had a bug and resulted in no results for queries.

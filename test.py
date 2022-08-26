@@ -746,9 +746,13 @@ class RunTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = (suite.suite_path / shortname).with_suffix('.py')
+        # Run the script as a submodule in the `test` package,
+        # e.g. `python3 -m test.cql_pytest.run`, so it can correctly resolve
+        # imports of other modules in the `test` package.
+        self.path = 'python3'
+        self.module_name = '.'.join((suite.suite_path / shortname).with_suffix('').parts)
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        self.args = ["--junit-xml={}".format(self.xmlout)]
+        self.args = ["-m", self.module_name, "--junit-xml={}".format(self.xmlout)]
         RunTest._reset(self)
 
     def _reset(self):

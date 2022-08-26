@@ -9,7 +9,7 @@
 #############################################################################
 
 import pytest
-from util import unique_name, unique_key_string, random_string, random_bytes
+from .util import unique_name, unique_key_string, random_string, random_bytes
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

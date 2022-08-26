@@ -9,7 +9,7 @@
 import pytest
 import re
 from cassandra.protocol import InvalidRequest
-from util import unique_name, unique_key_string
+from .util import unique_name, unique_key_string
 
 
 @pytest.fixture(scope="module")

@@ -9,7 +9,7 @@
 import pytest
 import time
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
-from util import new_test_table, new_user, new_session, new_test_keyspace, unique_name
+from .util import new_test_table, new_user, new_session, new_test_keyspace, unique_name
 
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation

@@ -6,7 +6,7 @@
 # Various tests for Scylla's ttl feature - USING TTL and DEFAULT_TIME_TO_LIVE
 #############################################################################
 
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 import pytest
 import time
 

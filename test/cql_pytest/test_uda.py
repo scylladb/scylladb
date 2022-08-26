@@ -9,7 +9,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from util import unique_name, new_test_table, new_function, new_aggregate, new_type
+from .util import unique_name, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as
 # the built-in function

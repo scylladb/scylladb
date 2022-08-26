@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 
 def testDropColumnAsPreparedStatement(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:

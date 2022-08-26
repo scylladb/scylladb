@@ -5,7 +5,7 @@
 import pytest
 import redis
 import logging
-from util import random_string, connect
+from .util import random_string, connect
 from packaging.version import Version
 
 logger = logging.getLogger('redis-test')

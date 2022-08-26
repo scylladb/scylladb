@@ -12,8 +12,8 @@
 # for all supported tombstones.
 #############################################################################
 
-from util import new_test_table, config_value_context, unique_key_int
-from conftest import driver_bug_1
+from .util import new_test_table, config_value_context, unique_key_int
+from .conftest import driver_bug_1
 from cassandra.query import SimpleStatement
 import pytest
 

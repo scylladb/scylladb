@@ -28,7 +28,7 @@ import re
 from contextlib import contextmanager
 from botocore.exceptions import ClientError
 
-from util import random_string, new_test_table
+from .util import random_string, new_test_table
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
@@ -216,7 +216,7 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # An unsupported operation also increments the total_operations counter.
 def test_unsupported_operation(dynamodb, metrics):
     with check_increases_metric(metrics, ['scylla_alternator_unsupported_operations', 'scylla_alternator_total_operations']):
-        from test_manual_requests import get_signed_request
+        from .test_manual_requests import get_signed_request
         req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')
         requests.post(req.url, headers=req.headers, data=req.body, verify=False)
 

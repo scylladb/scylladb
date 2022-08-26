@@ -16,6 +16,12 @@ More conveniently, we have two scripts - "run.py" and "run-cassandra.py"
 and run the tests on them. The Scylla or Cassandra process is run in a
 temporary directory which is automatically deleted when the test ends.
 
+The scripts must be run as modules inside the `test` package so imports can be
+resolved correctly:
+`python3 -m test.cql_pytest.run`
+or
+`python3 -m test.cql_pytest.run_cassandra`.
+
 "run.py" automatically picks the most recently compiled version of Scylla in
 `build/*/scylla` - but this choice of Scylla executable can be overridden with
 the `SCYLLA` environment variable. "run-cassandra.py" defaults to running the

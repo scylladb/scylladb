@@ -12,9 +12,9 @@ import pytest
 import os
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
-from cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
+from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
-from util import new_test_table, unique_name
+from .util import new_test_table, unique_name
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there

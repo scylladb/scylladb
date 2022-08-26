@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-# Use the run_lib.py library from ../cql_pytest:
-import sys
-sys.path.insert(1, sys.path[0] + '/../cql_pytest')
-import run_lib as run
 
+import sys
 import os
 import requests
 import time
 import cassandra.cluster
 import cassandra.auth
+
+from test.cql_pytest import run_lib as run
 
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.

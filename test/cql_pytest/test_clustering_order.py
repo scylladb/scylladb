@@ -12,7 +12,7 @@
 
 import pytest
 
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 
 @pytest.fixture(scope="module")
 def table_int_desc(cql, test_keyspace):

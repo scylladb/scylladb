@@ -7,9 +7,9 @@
 #############################################################################
 
 import pytest
-from util import random_string, new_test_table, full_query
+from .util import random_string, new_test_table, full_query
 from botocore.exceptions import ClientError
-from test_gsi import assert_index_query
+from .test_gsi import assert_index_query
 
 #############################################################################
 # The following tests check the limits on attribute name lengths.

@@ -8,10 +8,8 @@ import requests
 import threading
 import time
 
-# Use the util.py library from ../cql_pytest:
-sys.path.insert(1, sys.path[0] + '/../cql_pytest')
-from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
-from rest_util import new_test_snapshot, scylla_inject_error
+from test.cql_pytest.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
+from .rest_util import new_test_snapshot, scylla_inject_error
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,

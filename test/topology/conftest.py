@@ -11,19 +11,15 @@ import pathlib
 import ssl
 import sys
 from typing import List
-# Also pylib modules
-sys.path.append(sys.path[0] + '/../pylib')
-from random_tables import RandomTables       # type: ignore # pylint: disable=import-error
-from util import unique_name                 # type: ignore # pylint: disable=import-error
-from manager_client import ManagerClient     # type: ignore # pylint: disable=import-error
+from test.pylib.random_tables import RandomTables
+from test.pylib.util import unique_name
+from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 
-# Add test.pylib to the search path
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,

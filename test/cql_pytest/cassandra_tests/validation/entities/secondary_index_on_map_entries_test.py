@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 
 def assertIndexInvalidForColumn(cql, table, colname):
     assert_invalid(cql, table, f"CREATE INDEX ON %s(ENTRIES({colname}))")

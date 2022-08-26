@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 
 from cassandra.protocol import SyntaxException
 from cassandra.util import datetime_from_uuid1

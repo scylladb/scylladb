@@ -5,8 +5,8 @@
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-from util import new_test_table
-from nodetool import flush
+from .util import new_test_table
+from .nodetool import flush
 
 def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation

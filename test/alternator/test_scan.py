@@ -7,7 +7,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from util import random_string, random_bytes, full_scan, full_scan_and_count, multiset, new_test_table
+from .util import random_string, random_bytes, full_scan, full_scan_and_count, multiset, new_test_table
 from boto3.dynamodb.conditions import Attr
 
 # Test that scanning works fine with/without pagination

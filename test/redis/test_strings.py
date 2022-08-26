@@ -10,7 +10,7 @@ import redis
 import logging
 import re
 import time
-from util import random_string, connect
+from .util import random_string, connect
 
 logger = logging.getLogger('redis-test')
 

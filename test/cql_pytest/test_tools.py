@@ -9,13 +9,13 @@
 import contextlib
 import glob
 import json
-import nodetool
+from . import nodetool
 import os
 import pytest
 import subprocess
 import tempfile
 import random
-import util
+from . import util
 
 # To run the Scylla tools, we need to run Scylla executable itself, so we
 # need to find the path of the executable that was used to run Scylla for

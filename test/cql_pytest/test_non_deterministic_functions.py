@@ -12,7 +12,7 @@
 #############################################################################
 
 from time import sleep
-from util import new_test_table
+from .util import new_test_table
 
 def lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, pk_type, fn):
     with new_test_table(cql, test_keyspace, f"pk {pk_type} PRIMARY KEY") as table:

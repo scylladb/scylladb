@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 
 @pytest.mark.xfail(reason="Issue #9082")
 def testNonExistingOnes(cql, test_keyspace):

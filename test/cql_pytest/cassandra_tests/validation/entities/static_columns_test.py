@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from test.cql_pytest.cassandra_tests.porting import *
 
 #Migrated from cql_tests.py:TestCQL.static_columns_test()
 def testStaticColumns(cql, test_keyspace):

@@ -19,7 +19,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import random_string
+from .util import random_string
 from sys import version_info
 
 # A helper function for changing write isolation policies

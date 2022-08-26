@@ -9,7 +9,7 @@
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
 from cassandra.util import Date
-from util import unique_name, new_test_table, project
+from .util import unique_name, new_test_table, project
 
 # Regression-test for #7729.
 def test_timeuuid(cql, test_keyspace):

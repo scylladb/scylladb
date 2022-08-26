@@ -79,7 +79,7 @@ def test_authorization_no_whitespace(dynamodb, test_table):
     # Unlike the above tests which checked error cases so didn't need to
     # calculate a real signature, in this test we really a correct signature,
     # so we use a function we already have in test_manual_requests.py.
-    from test_manual_requests import get_signed_request
+    from .test_manual_requests import get_signed_request
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
     req = get_signed_request(dynamodb, 'PutItem', payload)
     # Boto3 separates the components of the Authorization header by spaces.

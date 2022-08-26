@@ -2,9 +2,7 @@
 
 import sys
 
-# Use the run_lib.py library from ../cql_pytest:
-sys.path.insert(1, sys.path[0] + '/../cql_pytest')
-import run_lib as run
+from test.cql_pytest import run_lib as run
 
 print('Scylla is: ' + run.scylla + '.')
 

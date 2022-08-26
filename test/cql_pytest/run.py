@@ -2,7 +2,7 @@
 
 import sys
 
-import run_lib as run
+from . import run_lib as run
 
 print('Scylla is: ' + run.scylla + '.')
 

@@ -8,7 +8,7 @@
 #############################################################################
 from cassandra import InvalidRequest
 
-from util import new_test_table
+from .util import new_test_table
 
 import pytest
 
