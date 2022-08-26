@@ -143,7 +143,7 @@ def test_item_operations(test_table_s, metrics):
         test_table_s.update_item(Key={'p': p})
 
 # Test counters for Query and Scan:
-def test_item_operations(test_table_s, metrics):
+def test_query_scan(test_table_s, metrics):
     with check_increases_operation(metrics, ['Query', 'Scan']):
         # We don't care whether test_table_s contains any content when we scan
         # it. We just want the scan to be counted
