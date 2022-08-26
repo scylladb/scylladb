@@ -433,6 +433,16 @@ private:
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 
+    /**
+     * Returns whether for a range query doing a query against merged is likely
+     * to be faster than 2 sequential queries, one against l1 followed by one
+     * against l2.
+     */
+    bool is_worth_merging_for_range_query(
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) const;
+
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);

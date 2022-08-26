@@ -85,31 +85,6 @@ int snitch_base::compare_endpoints(
     return 0;
 }
 
-bool snitch_base::is_worth_merging_for_range_query(
-    inet_address_vector_replica_set& merged,
-    inet_address_vector_replica_set& l1,
-    inet_address_vector_replica_set& l2) {
-    //
-    // Querying remote DC is likely to be an order of magnitude slower than
-    // querying locally, so 2 queries to local nodes is likely to still be
-    // faster than 1 query involving remote ones
-    //
-    bool merged_has_remote = has_remote_node(merged);
-    return merged_has_remote
-        ? (has_remote_node(l1) || has_remote_node(l2))
-        : true;
-}
-
-bool snitch_base::has_remote_node(inet_address_vector_replica_set& l) {
-    for (auto&& ep : l) {
-        if (_my_dc != get_datacenter(ep)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::list<std::pair<gms::application_state, gms::versioned_value>> snitch_base::get_app_states() const {
     return {
         {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
