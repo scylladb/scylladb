@@ -713,10 +713,19 @@ public:
     size_t idx_from_segment(const segment* seg) const noexcept {
         return seg - reinterpret_cast<segment*>(_segments_base);
     }
-    size_t new_idx_for_segment(segment* seg) noexcept {
-        return idx_from_segment(seg);
+    std::pair<segment*, size_t> allocate_segment() noexcept {
+        auto p = aligned_alloc(segment::size, segment::size);
+        if (!p) {
+            return {nullptr, 0};
+        }
+        auto seg = new (p) segment;
+        poison(seg, sizeof(segment));
+        return {seg, idx_from_segment(seg)};
     }
-    void free_segment(segment *seg) noexcept { }
+    void free_segment(segment *seg) noexcept {
+        seg->~segment();
+        ::free(seg);
+    }
     size_t max_segments() const noexcept {
         return (_layout.end - _segments_base) / segment::size;
     }
@@ -759,15 +768,23 @@ public:
         }
         return i->second;
     }
-    size_t new_idx_for_segment(segment* seg) noexcept {
+    std::pair<segment*, size_t> allocate_segment() noexcept {
+        auto p = aligned_alloc(segment::size, segment::size);
+        if (!p) {
+            return {nullptr, 0};
+        }
+        auto seg = new (p) segment;
+        poison(seg, sizeof(segment));
         auto i = find_empty();
         assert(i != _segments.end());
         *i = seg;
         size_t ret = i - _segments.begin();
         _segment_indexes[seg] = ret;
-        return ret;
+        return {seg, ret};
     }
     void free_segment(segment *seg) noexcept {
+        seg->~segment();
+        ::free(seg);
         size_t i = idx_from_segment(seg);
         assert(i != 0);
         _segment_indexes.erase(seg);
@@ -1064,8 +1081,6 @@ size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
         _lsa_free_segments_bitmap.clear(src_idx);
         _lsa_owned_segments_bitmap.clear(src_idx);
         _store.free_segment(src);
-        src->~segment();
-        ::free(src);
         ++reclaimed_segments;
         --_free_segments;
         if (preempt && need_preempt()) {
@@ -1104,13 +1119,10 @@ segment* segment_pool::allocate_segment(size_t reserve)
         }
         if (can_allocate_more_segments()) {
             memory::disable_abort_on_alloc_failure_temporarily dfg;
-            auto p = aligned_alloc(segment::size, segment::size);
-            if (!p) {
+            auto [seg, idx] = _store.allocate_segment();
+            if (!seg) {
                 continue;
             }
-            auto seg = new (p) segment;
-            poison(seg, sizeof(segment));
-            auto idx = _store.new_idx_for_segment(seg);
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
