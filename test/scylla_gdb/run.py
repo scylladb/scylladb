@@ -64,7 +64,7 @@ def run_pytest_in_gdb(pytest_dir, additional_parameters):
 # command line, saves it as "initialpaths", and uses it to print what it
 # thinks are nice (but are really incorrect) relative paths for "nodes" (test
 # source files).
-success = run_pytest_in_gdb(sys.path[0], ['--scylla-pid='+str(pid), '--scylla-tmp-dir='+run.pid_to_dir(pid)] + sys.argv[1:])
+success = run_pytest_in_gdb(run.get_file_dir(__file__), ['--scylla-pid='+str(pid), '--scylla-tmp-dir='+run.pid_to_dir(pid)] + sys.argv[1:])
 
 run.summary = 'Scylla GDB tests pass' if success else 'Scylla GDB tests failure'
 

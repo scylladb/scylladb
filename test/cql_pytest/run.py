@@ -33,7 +33,7 @@ run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
     lambda: check_cql(ip)
 ])
-success = run.run_pytest(sys.path[0], ['--host=' + ip] + sys.argv[1:])
+success = run.run_pytest(run.get_file_dir(__file__), ['--host=' + ip] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'
 

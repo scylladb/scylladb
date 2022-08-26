@@ -13,7 +13,7 @@ import cassandra.auth
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.
 if '--aws' in sys.argv:
-    success = run.run_pytest(sys.path[0], sys.argv[1:])
+    success = run.run_pytest(run.get_file_dir(__file__), sys.argv[1:])
     exit(0 if success else 1)
 
 # check_alternator() below uses verify=False to accept self-signed SSL
@@ -94,7 +94,7 @@ cluster.connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VAL
 cluster.shutdown()
 
 # Finally run pytest:
-success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
+success = run.run_pytest(run.get_file_dir(__file__), ['--url', alternator_url] + sys.argv[1:])
 
 run.summary = 'Alternator tests pass' if success else 'Alternator tests failure'
 

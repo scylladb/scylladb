@@ -162,7 +162,7 @@ pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
 run.wait_for_services(pid, [lambda: check_cql(ip)])
-success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
+success = run.run_pytest(run.get_file_dir(__file__), ['--host', ip] + sys.argv[1:])
 
 run.summary = 'Cassandra tests pass' if success else 'Cassandra tests failure'
 

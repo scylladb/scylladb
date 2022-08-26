@@ -40,7 +40,7 @@ run.wait_for_services(pid, [
 ])
 
 # Finally run pytest:
-success = run.run_pytest(sys.path[0], ['--redis-host', ip, '--redis-port', str(REDIS_PORT)] + sys.argv[1:])
+success = run.run_pytest(run.get_file_dir(__file__), ['--redis-host', ip, '--redis-port', str(REDIS_PORT)] + sys.argv[1:])
 
 run.summary = 'Redis tests pass' if success else 'Redis tests failure'
 

@@ -9,6 +9,7 @@ import signal
 import atexit
 import tempfile
 import requests
+import pathlib
 
 # run_with_temporary_dir() is a utility function for running a process, such
 # as Scylla, Cassandra or Redis, inside its own new temporary directory,
@@ -342,6 +343,9 @@ def wait_for_services(pid, checkers):
 
 def wait_for_cql(pid, ip):
     wait_for_services(pid, [lambda: check_cql(ip)])
+
+def get_file_dir(file_path: str) -> pathlib.Path:
+    return pathlib.Path(file_path).parent.resolve()
 
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids
