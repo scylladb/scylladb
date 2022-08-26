@@ -21,6 +21,8 @@
 
 namespace query {
 
+extern logging::logger qrlogger;
+
 /// Consume a page worth of data from the reader.
 ///
 /// Uses `compaction_state` for compacting the fragments and `consumer` for
@@ -51,6 +53,14 @@ auto consume_page(flat_mutation_reader_v2& reader,
 class querier_base {
     friend class querier_utils;
 
+public:
+    struct querier_config {
+        uint32_t tombstone_warn_threshold {0}; // 0 disabled
+        querier_config() = default;
+        explicit querier_config(uint32_t warn)
+            : tombstone_warn_threshold(warn) {}
+    };
+
 protected:
     schema_ptr _schema;
     reader_permit _permit;
@@ -58,6 +68,7 @@ protected:
     std::unique_ptr<const query::partition_slice> _slice;
     std::variant<flat_mutation_reader_v2, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
+    querier_config _qr_config;
 
 public:
     querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
@@ -71,13 +82,15 @@ public:
     { }
 
     querier_base(schema_ptr schema, reader_permit permit, dht::partition_range range,
-            query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr)
+            query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr,
+            querier_config config)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, pc, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _query_ranges(*_range)
+        , _qr_config(std::move(config))
     { }
 
     querier_base(querier_base&&) = default;
@@ -141,8 +154,9 @@ public:
             dht::partition_range range,
             query::partition_slice slice,
             const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr)
-        : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr))
+            tracing::trace_state_ptr trace_ptr,
+            querier_config config = {})
+        : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr), std::move(config))
         , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
@@ -169,6 +183,17 @@ public:
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
                     cstats.range_tombstones);
+            auto dead = cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones;
+            if (_qr_config.tombstone_warn_threshold > 0 && dead >= _qr_config.tombstone_warn_threshold) {
+                auto live = cstats.static_rows.live + cstats.clustering_rows.live;
+                if (_range->is_singular()) {
+                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
+                } else {
+                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), (*_range));
+                }
+            }
             return std::move(fut);
         });
     }

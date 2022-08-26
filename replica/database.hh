@@ -382,6 +382,7 @@ public:
         utils::updateable_value<bool> enable_optimized_reversed_reads{true};
         // Can be updated by a schema change:
         bool enable_optimized_twcs_queries{true};
+        uint32_t tombstone_warn_threshold{0};
     };
     struct no_commitlog {};
 

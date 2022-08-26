@@ -18,6 +18,7 @@
 namespace query {
 
 logging::logger qlogger("querier_cache");
+logging::logger qrlogger("querier");
 
 enum class can_use {
     yes,
