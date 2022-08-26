@@ -9,6 +9,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "task_manager.hh"
+#include "test_module.hh"
 
 namespace tasks {
 

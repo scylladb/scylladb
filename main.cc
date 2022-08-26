@@ -1346,7 +1346,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             api::set_server_task_manager(ctx).get();
-
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+            api::set_server_task_manager_test(ctx, cfg).get();
+#endif
             supervisor::notify("starting sstables loader");
             sst_loader.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging)).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {

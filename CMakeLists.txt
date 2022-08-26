@@ -304,6 +304,7 @@ set(scylla_sources
     api/stream_manager.cc
     api/system.cc
     api/task_manager.cc
+    api/task_manager_test.cc
     atomic_cell.cc
     auth/allow_all_authenticator.cc
     auth/allow_all_authorizer.cc

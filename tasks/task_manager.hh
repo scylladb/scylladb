@@ -258,6 +258,8 @@ public:
         void unregister_task() noexcept {
             _impl->_module->unregister_task(id());
         }
+
+        friend class test_task;
     };
 
     class module : public enable_shared_from_this<module> {

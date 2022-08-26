@@ -30,6 +30,7 @@
 #include "system.hh"
 #include "api/config.hh"
 #include "task_manager.hh"
+#include "task_manager_test.hh"
 
 logging::logger apilog("api");
 
@@ -255,6 +256,20 @@ future<> set_server_task_manager(http_context& ctx) {
         set_task_manager(ctx, r);
     });
 }
+
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+
+future<> set_server_task_manager_test(http_context& ctx, lw_shared_ptr<db::config> cfg) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx, &cfg = *cfg](routes& r) mutable {
+        rb->register_function(r, "task_manager_test",
+                "The task manager test API");
+        set_task_manager_test(ctx, r, cfg);
+    });
+}
+
+#endif
 
 void req_params::process(const request& req) {
     // Process mandatory parameters
