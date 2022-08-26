@@ -15,7 +15,7 @@ import os
 try:
     import gdb as gdb_library
 except:
-    print('This test must be run inside gdb. Run ./run instead.')
+    print('This test must be run inside gdb. Run ./run.py instead.')
     exit(1)
 
 try:

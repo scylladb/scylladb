@@ -93,7 +93,7 @@ def with_slow_query_logging(rest_api):
 # This approach is inefficient on a real production system (we don't even have
 # a way to clear the sessions table after we use it so it grows longer and
 # longer), but is good enough for tests on a throwable boot of Scylla as in
-# test/alternator/run.
+# test/alternator/run.py.
 last_scan = None
 def find_tracing_session(dynamodb, str):
     # The tracing session table does not get updated immediately - we may need

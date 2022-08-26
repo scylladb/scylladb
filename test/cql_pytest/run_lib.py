@@ -232,7 +232,7 @@ def run_scylla_cmd(pid, dir):
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         # Note that Alternator-specific experimental features are listed in
-        # test/alternator/run.
+        # test/alternator/run.py.
         '--experimental-features=udf',
         '--experimental-features=keyspace-storage-options',
         '--enable-user-defined-functions', '1',

@@ -3,7 +3,7 @@ Tests for the Scylla REST API.
 Tests use the requests library and the pytest frameworks
 (both are available from Linux distributions, or with "pip install").
 
-To run all tests using test.py, just run `./test.py api/run`.
+To run all tests using test.py, just run `./test.py rest_api`.
 
 To run all tests against an already-running local installation of Scylla,
 just run `pytest`. The "--host" and "--api-port"

@@ -64,7 +64,7 @@ def try_connect(orig_cluster, ssl_version):
 # Note that Cassandra can be configured (with "optional: true") to allow both
 # SSL and non-SSL on the same port. But Scylla doesn't support this, and
 # Cassandra also won't if configured with the recommended (but not default)
-# "optional: false" - as we do in the run-cassandra script.
+# "optional: false" - as we do in the run-cassandra.py script.
 def test_non_tls_on_tls(cql):
     if not cql.cluster.ssl_context:
         pytest.skip("SSL-specific tests are skipped without the '--ssl' option")

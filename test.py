@@ -429,7 +429,7 @@ class TopologyTestSuite(PythonTestSuite):
 
 
 class RunTestSuite(TestSuite):
-    """TestSuite for test directory with a 'run' script """
+    """TestSuite for test directory with a 'run.py' script """
 
     def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -446,7 +446,7 @@ class RunTestSuite(TestSuite):
 
     @property
     def pattern(self) -> str:
-        return "run"
+        return "run.py"
 
 
 class Test:
@@ -746,7 +746,7 @@ class RunTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = suite.suite_path / shortname
+        self.path = (suite.suite_path / shortname).with_suffix('.py')
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
         RunTest._reset(self)

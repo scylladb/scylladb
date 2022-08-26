@@ -81,7 +81,7 @@ def test_keyspace(cql, this_dc):
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
-# skipped if running with "run-cassandra".
+# skipped if running with "run-cassandra.py".
 @pytest.fixture(scope="session")
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
@@ -103,7 +103,7 @@ def cassandra_bug(cql):
         pytest.xfail('A known Cassandra bug')
 
 # While the raft-based schema modifications are still experimental and only
-# optionally enabled (the "--raft" option to test/cql_pytest/run enables it
+# optionally enabled (the "--raft" option to test/cql_pytest/run.py enables it
 # in Scylla), some tests are expected to fail on Scylla without this option
 # enabled, and pass with it enabled (and also pass on Cassandra). These tests
 # should use the "fails_without_raft" fixture. When Raft mode becomes the

@@ -319,7 +319,7 @@ def test_update_table_non_existent(dynamodb, test_table):
         client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
 
 # While the raft-based schema modifications are still experimental and only
-# optionally enabled (use the "--raft" option to test/alternator/run to
+# optionally enabled (use the "--raft" option to test/alternator/run.py to
 # enable it), some tests are expected to fail on Scylla without this option
 # enabled, and pass with it enabled (and also pass on DynamoDB). These tests
 # should use the "fails_without_raft" fixture. When Raft mode becomes the
