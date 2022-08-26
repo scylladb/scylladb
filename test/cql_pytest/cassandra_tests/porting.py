@@ -28,7 +28,7 @@ from test.cql_pytest import nodetool
 # reuse one of these names when possible.
 # This function can be used in a "with", as:
 #   with create_table(cql, test_keyspace, '...') as table:
-previously_used_table_names = []
+previously_used_table_names: list[str] = []
 @contextmanager
 def create_table(cql, keyspace, schema):
     global previously_used_table_names

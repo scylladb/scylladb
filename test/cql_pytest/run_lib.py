@@ -71,7 +71,7 @@ def run_with_temporary_dir(run_cmd_generator):
 # by run_with_temporary_dir(). On exit, the processes listed here are
 # cleaned up. Note that there is a known mapping (pid_to_dir()) from each
 # pid to the temporary directory - which will also be removed.
-run_with_temporary_dir_pids = set()
+run_with_temporary_dir_pids = set[int]()
 
 # abort_run_with_temporary_dir() kills a process started earlier by
 # run_with_temporary_directory, and and removes its temporary directory.
@@ -100,7 +100,7 @@ def abort_run_with_temporary_dir(pid):
     return f
 
 summary=''
-run_pytest_pids = set()
+run_pytest_pids = set[int]()
 
 def cleanup_all():
     global summary

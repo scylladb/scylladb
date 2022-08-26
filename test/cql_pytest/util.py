@@ -74,7 +74,7 @@ def new_test_keyspace(cql, opts):
 # reuse one of these names when possible.
 # This function can be used in a "with", as:
 #   with create_table(cql, test_keyspace, '...') as table:
-previously_used_table_names = []
+previously_used_table_names: list[str] = []
 @contextmanager
 def new_test_table(cql, keyspace, schema, extra=""):
     global previously_used_table_names
