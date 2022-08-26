@@ -137,7 +137,9 @@ if __name__ == '__main__':
     # stalling. The minimum block size for crc enabled filesystems is 1024,
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
+    run('udevadm settle', shell=True, check=True)
     run(f'mkfs.xfs -b size={block_size} {fsdev} -f -K', shell=True, check=True)
+    run('udevadm settle', shell=True, check=True)
 
     if is_debian_variant():
         confpath = '/etc/mdadm/mdadm.conf'
@@ -152,17 +154,15 @@ if __name__ == '__main__':
 
     os.makedirs(mount_at, exist_ok=True)
 
-    uuid = get_partition_uuid(fsdev)
-    uuidpath = f'/dev/disk/by-uuid/{uuid}'
-
+    uuid = out(f'blkid -s UUID -o value {fsdev}')
     if not uuid:
         raise Exception(f'Failed to get UUID of {fsdev}')
+
+    uuidpath = f'/dev/disk/by-uuid/{uuid}'
     if not os.path.exists(uuidpath):
         raise Exception(f'{uuidpath} is not found')
     if not stat.S_ISBLK(os.stat(uuidpath).st_mode):
         raise Exception(f'{uuidpath} is not block device')
-    if not is_unused_disk(uuidpath):
-        raise Exception(f'{uuidpath} is busy')
 
     after = 'local-fs.target'
     wants = ''
