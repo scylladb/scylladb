@@ -9,7 +9,6 @@
 * :doc:`SSTabledump - Scylla 3.0, Scylla Enterprise 2019.1 and newer versions </operating-scylla/admin-tools/sstabledump>`
 * :doc:`SSTable2JSON - Scylla 2.3 and older </operating-scylla/admin-tools/sstable2json>`
 * sstablelevelreset - Reset level to 0 on a selected set of SSTables that use LeveledCompactionStrategy (LCS).
-* :doc:`SSTable-Index </operating-scylla/admin-tools/sstable-index>` - A tool which lists all partitions contained in an SSTable index.
 * sstablemetadata - Prints metadata about a specified SSTable.
 * sstablerepairedset - Mark specific SSTables as repaired or unrepaired.
 * configuration_encryptor - :doc:`encrypt at rest </operating-scylla/security/encryption-at-rest>` sensitive scylla configuration entries using system key.
