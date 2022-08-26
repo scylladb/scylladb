@@ -41,6 +41,10 @@ public:
         // add_entry()/modify_config() never throws not_a_leader,
         // but makes timed_out_error more likely.
         bool enable_forwarding = true;
+
+        // Max size of a single command, add_entry with a bigger command will throw command_is_too_big_error.
+        // The value of zero means no limit.
+        size_t max_command_size = 0;
     };
 
     virtual ~server() {}

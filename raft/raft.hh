@@ -294,6 +294,16 @@ struct intermittent_connection_error: public error {
     intermittent_connection_error() : error("Intermittent connection error") {}
 };
 
+struct command_is_too_big_error: public error {
+    size_t command_size;
+    size_t limit;
+
+    command_is_too_big_error(size_t command_size, size_t limit)
+        : error(fmt::format("Command size {} is greater than the configured limit {}", command_size, limit))
+        , command_size(command_size)
+        , limit(limit) {}
+};
+
 struct no_other_voting_member : public error {
     no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
 };
