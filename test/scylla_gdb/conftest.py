@@ -63,7 +63,7 @@ def gdb(request, scylla_gdb):
     # https://sourceware.org/bugzilla/show_bug.cgi?id=27886) and untested
     # on anything else. So skip them.
     if os.uname().machine != 'x86_64':
-        pytest.skip('test/scylla-gdb/conftest.py: gdb tests skipped for non-x86_64')
+        pytest.skip('test/scylla_gdb/conftest.py: gdb tests skipped for non-x86_64')
     gdb_library.execute('set python print-stack full')
     scylla_pid = request.config.getoption('scylla_pid')
     gdb_library.execute(f'attach {scylla_pid}')
