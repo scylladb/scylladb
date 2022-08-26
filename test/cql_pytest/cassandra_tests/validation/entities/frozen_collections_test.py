@@ -7,8 +7,8 @@
 
 from test.cql_pytest.cassandra_tests.porting import *
 
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
-from cassandra.util import OrderedMap
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException # type: ignore
+from cassandra.util import OrderedMap # type: ignore
 
 
 # Porting note: The original Java test used ByteOrderedPartitioner so could

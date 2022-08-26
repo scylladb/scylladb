@@ -12,7 +12,7 @@
 import pytest
 import re
 import random
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure # type: ignore
 from .util import unique_name, unique_key_int, new_test_table
 
 @pytest.fixture(scope="module")
@@ -169,7 +169,7 @@ def test_validation_utf8_as_blob(scylla_only, cql, table1):
 # (see comment above listing the relevant cases), so this test, as all tests
 # using the bad_utf8 array, will fail on Cassandra.
 def test_validation_utf8_bound_column(scylla_only, cql, table1):
-    import cassandra.cqltypes
+    import cassandra.cqltypes # type: ignore
     orig_serialize = cassandra.cqltypes.UTF8Type.serialize
     def myserialize(ustr, protocol_version):
         return ustr.encode('utf-8', errors='surrogateescape')
@@ -292,7 +292,7 @@ def test_validation_ascii_bound_column(cql, table1):
     # Unfortunately, the Python CQL driver checks the ASCII encoding itself
     # in cassandra.cqltypes.AsciiType.serialize, so we need to monkey-patch
     # this function to avoid the client-side checking.
-    import cassandra.cqltypes
+    import cassandra.cqltypes # type: ignore
     orig_serialize = cassandra.cqltypes.AsciiType.serialize
     def myserialize(ustr, protocol_version):
         # The original implementation has encode('ascii') here

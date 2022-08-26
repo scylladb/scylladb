@@ -15,9 +15,9 @@ import struct
 import time
 from ..util import unique_name
 from contextlib import contextmanager
-from cassandra.protocol import SyntaxException, InvalidRequest
-from cassandra.protocol import ConfigurationException
-from cassandra.util import SortedSet, OrderedMapSerializedKey
+from cassandra.protocol import SyntaxException, InvalidRequest # type: ignore
+from cassandra.protocol import ConfigurationException # type: ignore
+from cassandra.util import SortedSet, OrderedMapSerializedKey # type: ignore
 
 from test.cql_pytest import nodetool
 

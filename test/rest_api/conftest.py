@@ -14,9 +14,9 @@ import requests
 import ssl
 import sys
 
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.policies import RoundRobinPolicy
+from cassandra.auth import PlainTextAuthProvider # type: ignore
+from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT # type: ignore
+from cassandra.policies import RoundRobinPolicy # type: ignore
 
 from test.cql_pytest.util import unique_name
 

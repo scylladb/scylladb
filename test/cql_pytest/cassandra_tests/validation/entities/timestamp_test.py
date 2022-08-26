@@ -8,7 +8,7 @@
 from test.cql_pytest.cassandra_tests.porting import *
 
 import time
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE # type: ignore
 
 
 def testNegativeTimestamps(cql, test_keyspace):

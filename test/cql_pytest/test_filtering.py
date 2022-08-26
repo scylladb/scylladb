@@ -13,8 +13,8 @@
 import pytest
 import re
 from .util import new_test_table, new_type, user_type
-from cassandra.protocol import InvalidRequest
-from cassandra.query import UNSET_VALUE
+from cassandra.protocol import InvalidRequest # type: ignore
+from cassandra.query import UNSET_VALUE # type: ignore
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.

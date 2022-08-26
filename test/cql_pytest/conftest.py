@@ -11,8 +11,8 @@
 
 import pytest
 
-from cassandra.cluster import Cluster
-from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+from cassandra.cluster import Cluster # type: ignore
+from cassandra.connection import DRIVER_NAME, DRIVER_VERSION # type: ignore
 import ssl
 
 from .util import unique_name, new_test_table, cql_session

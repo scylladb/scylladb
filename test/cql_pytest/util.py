@@ -15,9 +15,9 @@ import collections
 import ssl
 from contextlib import contextmanager
 
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.policies import RoundRobinPolicy
+from cassandra.auth import PlainTextAuthProvider # type: ignore
+from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT # type: ignore
+from cassandra.policies import RoundRobinPolicy # type: ignore
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))

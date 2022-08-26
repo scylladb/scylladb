@@ -30,7 +30,7 @@ import io
 import time
 import re
 
-from cassandra import InvalidRequest
+from cassandra import InvalidRequest # type: ignore
 
 from .util import new_test_table, local_process_id
 from .test_batch import generate_big_batch

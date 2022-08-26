@@ -7,8 +7,8 @@
 
 from test.cql_pytest.cassandra_tests.porting import *
 from uuid import UUID
-from cassandra.query import UNSET_VALUE
-from cassandra.util import Duration
+from cassandra.query import UNSET_VALUE # type: ignore
+from cassandra.util import Duration # type: ignore
 
 REQUIRES_ALLOW_FILTERING_MESSAGE = "Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
 

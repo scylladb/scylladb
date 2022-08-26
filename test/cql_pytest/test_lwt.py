@@ -10,7 +10,7 @@
 
 import re
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest # type: ignore
 
 from .util import new_test_table, unique_key_int
 

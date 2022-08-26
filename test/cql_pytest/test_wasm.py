@@ -7,8 +7,8 @@
 # Tests for user defined functions defined with WebAssembly backend
 #############################################################################
 
-from cassandra.protocol import InvalidRequest
-from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import InvalidRequest # type: ignore
+from cassandra.cluster import NoHostAvailable # type: ignore
 from .util import new_test_table, unique_name, new_function, new_aggregate
 
 import pytest

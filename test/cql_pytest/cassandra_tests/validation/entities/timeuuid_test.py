@@ -7,8 +7,8 @@
 
 from test.cql_pytest.cassandra_tests.porting import *
 
-from cassandra.protocol import SyntaxException
-from cassandra.util import datetime_from_uuid1
+from cassandra.protocol import SyntaxException # type: ignore
+from cassandra.util import datetime_from_uuid1 # type: ignore
 from datetime import timezone
 
 # Migrated from cql_tests.py:TestCQL.timeuuid_test()

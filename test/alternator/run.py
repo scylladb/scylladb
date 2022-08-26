@@ -4,8 +4,8 @@ import sys
 import os
 import requests
 import time
-import cassandra.cluster
-import cassandra.auth
+import cassandra.cluster # type: ignore
+import cassandra.auth # type: ignore
 
 from test.cql_pytest import run_lib as run
 

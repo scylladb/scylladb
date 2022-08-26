@@ -7,8 +7,8 @@
 
 from test.cql_pytest.cassandra_tests.porting import *
 
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
-from cassandra.query import UNSET_VALUE
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException # type: ignore
+from cassandra.query import UNSET_VALUE # type: ignore
 
 # Test for the validation bug of CASSANDRA-4706,
 # migrated from cql_tests.py:TestCQL.validate_counter_regular_test()

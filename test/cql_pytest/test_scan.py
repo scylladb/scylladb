@@ -13,8 +13,8 @@
 
 import pytest
 from .util import new_test_table, new_type, user_type
-from cassandra.protocol import InvalidRequest
-from cassandra.query import SimpleStatement
+from cassandra.protocol import InvalidRequest # type: ignore
+from cassandra.query import SimpleStatement # type: ignore
 
 # Test that in a table with multiple clustering-key columns, we can have
 # multi-column restrictions on involving various legal combinations of

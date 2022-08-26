@@ -8,7 +8,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest, ConfigurationException
+from cassandra.protocol import InvalidRequest, ConfigurationException # type: ignore
 from .util import unique_name, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as

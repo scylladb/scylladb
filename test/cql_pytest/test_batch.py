@@ -6,7 +6,7 @@
 #############################################################################
 # Tests for batch operations
 #############################################################################
-from cassandra import InvalidRequest
+from cassandra import InvalidRequest # type: ignore
 
 from .util import new_test_table
 

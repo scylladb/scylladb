@@ -8,7 +8,7 @@ import time
 import pytest
 
 from .util import new_test_table, unique_name, new_materialized_view
-from cassandra.protocol import InvalidRequest, SyntaxException
+from cassandra.protocol import InvalidRequest, SyntaxException # type: ignore
 
 from . import nodetool
 

@@ -10,8 +10,8 @@ import time
 import tempfile
 import pytest
 import os
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
-from cassandra.query import SimpleStatement
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure # type: ignore
+from cassandra.query import SimpleStatement # type: ignore
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
 from .util import new_test_table, unique_name

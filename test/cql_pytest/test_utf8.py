@@ -11,7 +11,7 @@
 
 import pytest
 import unicodedata
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure # type: ignore
 from .util import unique_name, unique_key_string
 
 

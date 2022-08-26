@@ -11,7 +11,7 @@
 #############################################################################
 
 import pytest
-from cassandra.util import SortedSet, OrderedMapSerializedKey
+from cassandra.util import SortedSet, OrderedMapSerializedKey # type: ignore
 from .util import unique_name, new_test_table, unique_key_int
 
 

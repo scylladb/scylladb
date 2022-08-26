@@ -8,7 +8,7 @@
 
 import pytest
 import re
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest # type: ignore
 from .util import unique_name
 
 

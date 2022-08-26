@@ -7,8 +7,8 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from cassandra.util import Date
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure # type: ignore
+from cassandra.util import Date # type: ignore
 from .util import unique_name, new_test_table, project
 
 # Regression-test for #7729.

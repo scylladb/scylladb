@@ -13,7 +13,7 @@
 
 from .util import unique_name, new_test_table, unique_key_int
 
-from cassandra.protocol import FunctionFailure, InvalidRequest
+from cassandra.protocol import FunctionFailure, InvalidRequest # type: ignore
 
 import pytest
 import json

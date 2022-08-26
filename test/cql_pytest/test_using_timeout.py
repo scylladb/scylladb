@@ -6,8 +6,8 @@
 
 from .util import new_test_keyspace, unique_name, unique_key_int
 import pytest
-from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout
-from cassandra.util import Duration
+from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout # type: ignore
+from cassandra.util import Duration # type: ignore
 
 def r(regex):
     return re.compile(regex, re.IGNORECASE)

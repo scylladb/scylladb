@@ -7,8 +7,8 @@
 
 from test.cql_pytest.cassandra_tests.porting import *
 
-from cassandra.protocol import FunctionFailure
-from cassandra.util import Date, Time, Duration
+from cassandra.protocol import FunctionFailure # type: ignore
+from cassandra.util import Date, Time, Duration # type: ignore
 
 from decimal import Decimal
 from uuid import UUID

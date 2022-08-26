@@ -9,7 +9,7 @@
 
 import argparse
 import json
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # type: ignore
 
 cmdline_parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 cmdline_parser.add_argument('results', nargs=1, help='JSON file with full perf_fast_forward results')

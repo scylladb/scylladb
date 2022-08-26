@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-from cassandra.cluster import ConsistencyLevel
-from cassandra.query import SimpleStatement
+from cassandra.cluster import ConsistencyLevel # type: ignore
+from cassandra.query import SimpleStatement # type: ignore
 
 from .util import new_test_table
 from .nodetool import flush

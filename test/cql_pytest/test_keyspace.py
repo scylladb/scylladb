@@ -7,7 +7,7 @@
 
 from .util import new_test_keyspace, unique_name
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException # type: ignore
 from threading import Thread
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE

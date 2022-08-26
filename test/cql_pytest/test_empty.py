@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest # type: ignore
 from .util import unique_name, unique_key_string, unique_key_int, new_test_table
 
 

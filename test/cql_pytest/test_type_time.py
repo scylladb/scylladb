@@ -10,7 +10,7 @@ from .util import unique_name, unique_key_int
 
 import pytest
 
-from cassandra.util import Time
+from cassandra.util import Time # type: ignore
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

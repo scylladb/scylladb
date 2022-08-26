@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from test.cql_pytest.cassandra_tests.porting import *
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE # type: ignore
 
 def testInvalidCollectionEqualityRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:

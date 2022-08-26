@@ -28,7 +28,7 @@ import pytest
 import re
 import time
 
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure # type: ignore
 
 from .util import unique_name, new_test_table
 

@@ -156,7 +156,7 @@ def pid_to_ip(pid):
 
 # Specific code for running *Scylla*:
 
-import cassandra.cluster
+import cassandra.cluster # type: ignore
 import ssl
 
 # Find a Scylla executable. By default, we take the latest build/*/scylla

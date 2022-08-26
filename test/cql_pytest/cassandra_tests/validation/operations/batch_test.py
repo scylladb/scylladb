@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from test.cql_pytest.cassandra_tests.porting import *
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE # type: ignore
 
 # Test batch statements
 # migrated from cql_tests.py:TestCQL.batch_test()

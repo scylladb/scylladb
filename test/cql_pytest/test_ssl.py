@@ -11,7 +11,7 @@
 import pytest
 
 import ssl
-import cassandra.cluster
+import cassandra.cluster # type: ignore
 
 # Test that TLS 1.2 is supported (because this is what "cqlsh --ssl" uses
 # by default), and that other TLS version are either supported - or if
