@@ -2422,6 +2422,16 @@ class pointer_metadata(object):
 
         return msg
 
+def get_segment_base(segment_pool):
+    try:
+        segment_store = segment_pool["_store"]
+        try:
+            return int(std_unique_ptr(segment_store["_backend"]).get()["_segments_base"])
+        except gdb.error:
+            return int(segment_store["_segments_base"])
+    except gdb.error:
+        return int(segment_pool["_segments_base"])
+
 
 class scylla_ptr(gdb.Command):
     _is_seastar_allocator_used = None
@@ -2503,7 +2513,7 @@ class scylla_ptr(gdb.Command):
 
         # FIXME: handle debug-mode build
         segment_pool = get_lsa_segment_pool()
-        segments_base = int(segment_pool["_store"]["_segments_base"])
+        segments_base = get_segment_base(segment_pool)
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
         index = int((int(ptr) - segments_base) / segment_size)
         desc = std_vector(segment_pool["_segments"])[index]
@@ -2544,13 +2554,7 @@ class scylla_segment_descs(gdb.Command):
     def invoke(self, arg, from_tty):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         segment_pool = get_lsa_segment_pool()
-        try:
-            base = int(segment_pool["_store"]["_segments_base"])
-        except gdb.error:
-            try:
-                base = int(segment_pool["_segments_base"])
-            except gdb.error:
-                base = None
+        base = get_segment_base(segment_pool)
 
         def print_desc(seg_addr, desc):
             if desc.is_lsa():
@@ -2606,7 +2610,7 @@ class scylla_lsa_check(gdb.Command):
         #  - detect segments owned by cache which are not in cache region's _segment_descs
         #  - compute segment occupancy statistics for comparison with region's stored ones
         segment_pool = get_lsa_segment_pool()
-        base = int(segment_pool["_store"]["_segments_base"])
+        base = get_segment_base(segment_pool)
         desc_free_space = 0
         desc_total_space = 0
         for desc in std_vector(segment_pool["_segments"]):
