@@ -61,6 +61,16 @@ void set_system(http_context& ctx, routes& r) {
         return json::json_void();
     });
 
+    hs::write_log_message.set(r, [](const_req req) {
+        try {
+            logging::log_level level = boost::lexical_cast<logging::log_level>(std::string(req.get_query_param("level")));
+            apilog.log(level, "/system/log: {}", std::string(req.get_query_param("message")));
+        } catch (boost::bad_lexical_cast& e) {
+            throw bad_param_exception("Unknown logging level " + req.get_query_param("level"));
+        }
+        return json::json_void();
+    });
+
     hs::drop_sstable_caches.set(r, [&ctx](std::unique_ptr<request> req) {
         apilog.info("Dropping sstable caches");
         return ctx.db.invoke_on_all([] (replica::database& db) {
