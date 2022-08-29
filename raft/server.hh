@@ -136,7 +136,7 @@ public:
     // to know if they succeeded or not. If this server was
     // a leader it will relinquish its leadership and cease
     // replication.
-    virtual future<> abort() = 0;
+    virtual future<> abort(sstring reason = "") = 0;
 
     // Return Raft protocol current term.
     virtual term_t get_current_term() const = 0;

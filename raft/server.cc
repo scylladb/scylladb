@@ -80,7 +80,7 @@ public:
     future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
-    future<> abort() override;
+    future<> abort(sstring reason) override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as = nullptr) override;
     void wait_until_candidate() override;
@@ -113,8 +113,8 @@ private:
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
 
-    // Set to true when abort() is called
-    bool _aborted = false;
+    // Set to abort reason when abort() is called
+    std::optional<sstring> _aborted;
 
     // Signaled when apply index is changed
     condition_variable _applied_index_changed;
@@ -273,6 +273,8 @@ private:
     // term.
     future<> wait_for_apply(index_t idx, abort_source*);
 
+    void check_not_aborted();
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -389,9 +391,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
         }
     }
 
-    if (_aborted) {
-        throw stopped_error();
-    }
+    check_not_aborted();
 
     if (as && as->abort_requested()) {
         throw request_aborted();
@@ -501,6 +501,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
@@ -600,6 +601,7 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
@@ -1125,9 +1127,7 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
 }
 
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
-    if (_aborted) {
-        throw stopped_error();
-    }
+    check_not_aborted();
 
     logger.trace("[{}] execute_read_barrier start", _id);
 
@@ -1176,6 +1176,7 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         logger.trace("[{}] read_barrier forward to  {}", _id, leader);
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
@@ -1233,8 +1234,14 @@ void server_impl::abort_snapshot_transfers() {
     _snapshot_transfers.clear();
 }
 
-future<> server_impl::abort() {
-    _aborted = true;
+void server_impl::check_not_aborted() {
+    if (_aborted) {
+        throw stopped_error(*_aborted);
+    }
+}
+
+future<> server_impl::abort(sstring reason) {
+    _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
 
@@ -1260,15 +1267,15 @@ future<> server_impl::abort() {
     // since the RPC implementation may wait for forwarded `modify_config` calls to finish
     // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
     for (auto& ac: _awaited_commits) {
-        ac.second.done.set_exception(stopped_error());
+        ac.second.done.set_exception(stopped_error(*_aborted));
     }
     for (auto& aa: _awaited_applies) {
-        aa.second.done.set_exception(stopped_error());
+        aa.second.done.set_exception(stopped_error(*_aborted));
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
     if (_non_joint_conf_commit_promise) {
-        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error());
+        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error(*_aborted));
     }
 
     // Complete all read attempts with not_a_leader
@@ -1279,14 +1286,14 @@ future<> server_impl::abort() {
 
     // Abort all read_barriers with an exception
     for (auto& i : _awaited_indexes) {
-        i.second.promise.set_exception(stopped_error());
+        i.second.promise.set_exception(stopped_error(*_aborted));
     }
     _awaited_indexes.clear();
 
     co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
 
     if (_leader_promise) {
-        _leader_promise->set_exception(stopped_error());
+        _leader_promise->set_exception(stopped_error(*_aborted));
     }
 
     abort_snapshot_transfers();
@@ -1301,6 +1308,7 @@ future<> server_impl::abort() {
 }
 
 future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_source* as) {
+    check_not_aborted();
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server

@@ -313,7 +313,8 @@ public:
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
-    future<> stop_server(size_t id);
+    raft::server& get_server(size_t id);
+    future<> stop_server(size_t id, sstring reason = "");
     future<> reset_server(size_t id, initial_state state); // Reset a stopped server
     size_t size() {
         return _servers.size();
@@ -830,9 +831,14 @@ void raft_cluster<Clock>::init_tick_delays(size_t n) {
 }
 
 template <typename Clock>
-future<> raft_cluster<Clock>::stop_server(size_t id) {
+raft::server& raft_cluster<Clock>::get_server(size_t id) {
+    return *_servers[id].server;
+}
+
+template <typename Clock>
+future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     cancel_ticker(id);
-    co_await _servers[id].server->abort();
+    co_await _servers[id].server->abort(std::move(reason));
     if (_snapshots->contains(to_raft_id(id))) {
         BOOST_CHECK((*_snapshots)[to_raft_id(id)].size() <= 2);
         _snapshots->erase(to_raft_id(id));
