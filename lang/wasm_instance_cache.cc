@@ -121,6 +121,33 @@ seastar::future<instance_cache::value_type> instance_cache::get(const db::functi
             .it = _lru.end(),
         }));
     }
+    if (!it->second->instance && it->second->mutex.try_lock()) {
+        // No instance exists for the current scheduling group, but we will try to find an unused
+        // one for another group. We can take over that instance, because if this UDF is not used
+        // in that group, we will now save ourselves the cost of creating a new instance, and if
+        // it is used, we will have had to create a new instance anyway for the current group.
+        it->second->mutex.unlock();
+        // The range could have changed due to the previous if.
+        auto [search_it, end_it] = _cache.equal_range(name);
+        auto found_it = end_it;
+        while (search_it != end_it) {
+            if (search_it->second->arg_types == arg_types && search_it->second->instance && search_it->second->mutex.try_lock()) {
+                search_it->second->mutex.unlock();
+                if (found_it == end_it || found_it->second->it->instance_size < search_it->second->it->instance_size) {
+                    // We pick the unused instance with the smallest memory, to avoid using more memory than necessary.
+                    // If the instance needs more memory, it will grow as needed.
+                    found_it = search_it;
+                }
+            }
+            ++search_it;
+        }
+        if (found_it != end_it) {
+            // To avoid problems with the LRU, we take over the entire entry with the instance and give up the current one.
+            // (Scheduling group is the only field that lets us differentiate between the two entries.)
+            std::swap(it->second->scheduling_group, found_it->second->scheduling_group);
+            it = found_it;
+        }
+    }
     auto& entry = it->second;
     auto f = entry->mutex.lock();
     if (!f.available()) {

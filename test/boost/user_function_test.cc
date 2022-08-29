@@ -8,6 +8,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include "seastar/core/metrics_api.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "types/list.hh"
@@ -1117,5 +1118,61 @@ SEASTAR_TEST_CASE(test_wasm) {
                     (data $.rodata (i32.const 1024) \"\\01\"))';").get0();
         assert_that(e.execute_cql("SELECT myfunc(val) FROM my_table;").get0())
             .is_rows().with_rows({{serialized(42)}});
+    });
+}
+
+uint64_t get_misses_metric() {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto misses_group = find_if(cbegin(all_metadata), cend(all_metadata),
+        [](const auto& x) { return x.mf.name == "user_functions_cache_misses"; });
+    BOOST_REQUIRE(misses_group != cend(all_metadata));
+    const auto values = all_metrics->values[distance(cbegin(all_metadata), misses_group)];
+    return values[0].ui();
+}
+
+SEASTAR_TEST_CASE(test_instance_reuse_across_scheduling_groups) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 7);").get();
+        e.execute_cql("CREATE FUNCTION myfunc(val int) \
+                RETURNS NULL ON NULL INPUT \
+                RETURNS int \
+                LANGUAGE xwasm \
+                AS '(module\
+                    (func $myfunc (param $n i32) (result i32)(return i32.const 42))\
+                    (memory (;0;) 2)\
+                    (export \"memory\" (memory 0))\
+                    (export \"myfunc\" (func $myfunc))\
+                    (global (;0;) i32 (i32.const 1024))\
+                    (export \"_scylla_abi\" (global 0))\
+                    (data $.rodata (i32.const 1024) \"\\01\"))';").get0();
+
+        auto& db = e.local_db();
+
+        auto result = with_scheduling_group(db.get_statement_scheduling_group(), [&e] () {
+            return e.execute_cql("SELECT myfunc(val) FROM my_table;");}).get0();
+        assert_that(result).is_rows().with_rows({{serialized(42)}});
+
+        auto misses_before = get_misses_metric();
+
+        result = with_scheduling_group(db.get_streaming_scheduling_group(), [&e] () {
+            return e.execute_cql("SELECT myfunc(val) FROM my_table;");}).get0();
+        assert_that(result).is_rows().with_rows({{serialized(42)}});
+
+        result = with_scheduling_group(default_scheduling_group(), [&e] () {
+            return e.execute_cql("SELECT myfunc(val) FROM my_table;");}).get0();
+        assert_that(result).is_rows().with_rows({{serialized(42)}});
+
+        result = with_scheduling_group(db.get_statement_scheduling_group(), [&e] () {
+            return e.execute_cql("SELECT myfunc(val) FROM my_table;");}).get0();
+        assert_that(result).is_rows().with_rows({{serialized(42)}});
+
+        result = with_scheduling_group(db.get_streaming_scheduling_group(), [&e] () {
+            return e.execute_cql("SELECT myfunc(val) FROM my_table;");}).get0();
+        assert_that(result).is_rows().with_rows({{serialized(42)}});
+
+        auto misses_after = get_misses_metric();
+        BOOST_REQUIRE_EQUAL(misses_before, misses_after);
     });
 }
