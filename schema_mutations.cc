@@ -145,7 +145,20 @@ std::ostream& operator<<(std::ostream& out, const schema_mutations& sm) {
     out << " scylla_tables=" << sm.scylla_tables() << ",\n";
     out << " columns=" << sm.columns_mutation() << ",\n";
     out << " dropped_columns=" << sm.dropped_columns_mutation() << ",\n";
-    out << " indices=" << sm.indices_mutation() << "\n";
+    out << " indices=" << sm.indices_mutation() << ",\n";
+    out << " computed_columns=" << sm.computed_columns_mutation() << ",\n";
+    out << " view_virtual_columns=" << sm.view_virtual_columns_mutation() << "\n";
     out << "}";
     return out;
+}
+
+schema_mutations& schema_mutations::operator+=(schema_mutations&& sm) {
+    _columnfamilies += std::move(sm._columnfamilies);
+    _columns += std::move(sm._columns);
+    apply(_computed_columns, std::move(sm._computed_columns));
+    apply(_view_virtual_columns, std::move(sm._view_virtual_columns));
+    apply(_indices, std::move(sm._indices));
+    apply(_dropped_columns, std::move(sm._dropped_columns));
+    apply(_scylla_tables, std::move(sm._scylla_tables));
+    return *this;
 }

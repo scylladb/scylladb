@@ -364,6 +364,50 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
     });
 }
 
+// Tests behavior when incompatible CREATE TABLE statements are
+// issued concurrently in the cluster.
+// Relevant only for the pre-raft schema management, with raft the scenario should not happen.
+SEASTAR_TEST_CASE(test_concurrent_table_creation_with_different_schema) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            service::migration_manager& mm = e.migration_manager().local();
+
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            auto s1 = schema_builder("ks", "table1")
+                    .with_column("pk1", bytes_type, column_kind::partition_key)
+                    .with_column("pk2", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            auto s2 = schema_builder("ks", "table1")
+                    .with_column("pk1", bytes_type, column_kind::partition_key)
+                    .with_column("pk3", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            auto ann1 = mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get();
+            auto ann2 = mm.prepare_new_column_family_announcement(s2, api::new_timestamp()).get();
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                mm.announce(std::move(ann1), std::move(group0_guard)).get();
+            }
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                mm.announce(std::move(ann2), std::move(group0_guard)).get();
+            }
+
+            auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
+
+            // s2 should win because it has higher timestamp
+            auto new_schema = e.db().local().find_schema(s2->id());
+            BOOST_REQUIRE(*new_schema == *s2);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {

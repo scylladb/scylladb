@@ -458,6 +458,20 @@ void apply(mutation_opt& dst, mutation_opt&& src) {
     }
 }
 
+inline
+void apply(mutation& dst, mutation_opt&& src) {
+    if (src) {
+        dst.apply(std::move(*src));
+    }
+}
+
+inline
+void apply(mutation& dst, const mutation_opt& src) {
+    if (src) {
+        dst.apply(*src);
+    }
+}
+
 // Returns a range into partitions containing mutations covered by the range.
 // partitions must be sorted according to decorated key.
 // range must not wrap around.
