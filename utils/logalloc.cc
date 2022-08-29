@@ -693,6 +693,107 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
+class segment_store_backend {
+protected:
+    memory::memory_layout _layout;
+    // Whether freeing segments actually increases availability of non-lsa memory.
+    bool _freed_segment_increases_general_memory_availability;
+    // Aligned (to segment::size) address of the first segment.
+    uintptr_t _segments_base;
+
+public:
+    explicit segment_store_backend(memory::memory_layout layout, bool freed_segment_increases_general_memory_availability) noexcept
+        : _layout(layout)
+        , _freed_segment_increases_general_memory_availability(freed_segment_increases_general_memory_availability)
+        , _segments_base(align_up(_layout.start, static_cast<uintptr_t>(segment::size)))
+    { }
+    memory::memory_layout memory_layout() const noexcept { return _layout; }
+    uintptr_t segments_base() const noexcept { return _segments_base; }
+    virtual void* alloc_segment_memory() noexcept = 0;
+    virtual void free_segment_memory(void* seg) noexcept = 0;
+    virtual size_t free_memory() const noexcept = 0;
+    bool can_allocate_more_segments(size_t non_lsa_reserve) const noexcept {
+        if (_freed_segment_increases_general_memory_availability) {
+            return free_memory() >= non_lsa_reserve + segment::size;
+        } else {
+            return free_memory() >= segment::size;
+        }
+    }
+};
+
+// Segments are allocated from the seastar allocator.
+// The entire memory area of the local shard is used as a segment store, i.e.
+// segments are allocated from the same memory area regular objeces are.
+class seastar_memory_segment_store_backend : public segment_store_backend {
+public:
+    seastar_memory_segment_store_backend()
+        : segment_store_backend(memory::get_memory_layout(), true)
+    { }
+    virtual void* alloc_segment_memory() noexcept override {
+        return aligned_alloc(segment::size, segment::size);
+    }
+    virtual void free_segment_memory(void* seg) noexcept override {
+        ::free(seg);
+    }
+    virtual size_t free_memory() const noexcept override {
+        return memory::stats().free_memory();
+    }
+};
+
+// Segments are allocated from the standard allocator.
+// Allocates a dedicated memory area for segments.
+// This area cannot be shrunk or enlarged, so freeing segments doesn't increase
+// memory availability.
+class standard_memory_segment_store_backend : public segment_store_backend {
+    struct free_segment {
+        free_segment* next = nullptr;
+    };
+
+private:
+    uintptr_t _segments_offset = 0;
+    free_segment* _freelist = nullptr;
+    size_t _available_segments; // for fast free_memory()
+
+private:
+    static memory::memory_layout allocate_memory(size_t segments) {
+        const auto size = segments * segment_size;
+        auto p = aligned_alloc(size, segment::size);
+        auto start = reinterpret_cast<uintptr_t>(p);
+        return {start, start + size};
+    }
+public:
+    standard_memory_segment_store_backend(size_t segments)
+        : segment_store_backend(allocate_memory(segments), false)
+        , _available_segments((_layout.end - _segments_base) / segment_size)
+    { }
+    ~standard_memory_segment_store_backend() {
+        ::free(reinterpret_cast<void*>(_layout.start));
+    }
+    virtual void* alloc_segment_memory() noexcept override {
+        auto seg = _segments_base + _segments_offset * segment_size;
+        if (seg + segment_size > _layout.end) {
+            if (_freelist) {
+                --_available_segments;
+                return std::exchange(_freelist, _freelist->next);
+            }
+            return nullptr;
+        }
+        ++_segments_offset;
+        --_available_segments;
+        return reinterpret_cast<void*>(seg);
+    }
+    virtual void free_segment_memory(void* seg) noexcept override {
+        unpoison(reinterpret_cast<char*>(seg), sizeof(free_segment));
+        auto fs = new (seg) free_segment;
+        fs->next = _freelist;
+        _freelist = fs;
+        ++_available_segments;
+    }
+    virtual size_t free_memory() const noexcept override {
+        return _available_segments * segment_size;
+    }
+};
+
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 class segment_store {
     memory::memory_layout _layout;
