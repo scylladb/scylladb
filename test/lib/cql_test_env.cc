@@ -63,6 +63,7 @@
 #include "db/schema_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "lang/wasm_instance_cache.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -716,6 +717,18 @@ public:
 
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            sharded<wasm::instance_cache> wasm_instance_cache;
+            auto udf_enabled = cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF);
+            auto stop_udf_cache_handlers = defer([&wasm_instance_cache] { wasm_instance_cache.stop().get(); });
+            if (udf_enabled) {
+                wasm_instance_cache.start(128*1024*1024, std::chrono::seconds(5)).get();
+                qp.invoke_on_all([&] (cql3::query_processor& qp) {
+                    qp.set_wasm_instance_cache(&wasm_instance_cache.local());
+                }).get();
+            } else {
+                stop_udf_cache_handlers.cancel();
+            }
 
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
 

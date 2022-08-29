@@ -1098,3 +1098,24 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
                                 std::runtime_error, message_contains("User function cannot be executed in this context"));
     });
 }
+
+SEASTAR_TEST_CASE(test_wasm) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
+        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 7);").get();
+        e.execute_cql("CREATE FUNCTION myfunc(val int) \
+                RETURNS NULL ON NULL INPUT \
+                RETURNS int \
+                LANGUAGE xwasm \
+                AS '(module\
+                    (func $myfunc (param $n i32) (result i32)(return i32.const 42))\
+                    (memory (;0;) 2)\
+                    (export \"memory\" (memory 0))\
+                    (export \"myfunc\" (func $myfunc))\
+                    (global (;0;) i32 (i32.const 1024))\
+                    (export \"_scylla_abi\" (global 0))\
+                    (data $.rodata (i32.const 1024) \"\\01\"))';").get0();
+        assert_that(e.execute_cql("SELECT myfunc(val) FROM my_table;").get0())
+            .is_rows().with_rows({{serialized(42)}});
+    });
+}
