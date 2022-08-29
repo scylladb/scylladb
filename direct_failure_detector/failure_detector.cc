@@ -554,7 +554,7 @@ future<> endpoint_worker::ping_fiber() noexcept {
                 logger.debug("ping to endpoint {} timed out after {} clock ticks", _id, clock.now() - start);
             } catch (...) {
                 // Unexpected exception, probably from `pinger.ping(...)`. Log and continue.
-                logger.error("unexpected exception when pinging {}: {}", _id, std::current_exception());
+                logger.warn("unexpected exception when pinging {}: {}", _id, std::current_exception());
             }
         } else {
             // We have a listener which already timed out.
