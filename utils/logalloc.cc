@@ -736,32 +736,36 @@ public:
         ::free(seg);
     }
     virtual size_t free_memory() const noexcept override {
-        return memory::stats().free_memory();
+        return memory::free_memory();
     }
 };
 
+static constexpr size_t segment_npos = size_t(-1);
+
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 class segment_store {
-    memory::memory_layout _layout;
-    uintptr_t _segments_base; // The address of the first segment
+    std::unique_ptr<segment_store_backend> _backend;
 
 public:
     size_t non_lsa_reserve = 0;
     segment_store()
-        : _layout(memory::get_memory_layout())
-        , _segments_base(align_down(_layout.start, (uintptr_t)segment::size)) {
-    }
+        : _backend(std::make_unique<seastar_memory_segment_store_backend>())
+    { }
     const segment* segment_from_idx(size_t idx) const noexcept {
-        return reinterpret_cast<segment*>(_segments_base) + idx;
+        return reinterpret_cast<segment*>(_backend->segments_base()) + idx;
     }
     segment* segment_from_idx(size_t idx) noexcept {
-        return reinterpret_cast<segment*>(_segments_base) + idx;
+        return reinterpret_cast<segment*>(_backend->segments_base()) + idx;
     }
     size_t idx_from_segment(const segment* seg) const noexcept {
-        return seg - reinterpret_cast<segment*>(_segments_base);
+        const auto seg_uint = reinterpret_cast<uintptr_t>(seg);
+        if (seg_uint < _backend->memory_layout().start || seg_uint > _backend->memory_layout().end) [[unlikely]] {
+            return segment_npos;
+        }
+        return seg - reinterpret_cast<segment*>(_backend->segments_base());
     }
     std::pair<segment*, size_t> allocate_segment() noexcept {
-        auto p = aligned_alloc(segment::size, segment::size);
+        auto p = _backend->alloc_segment_memory();
         if (!p) {
             return {nullptr, 0};
         }
@@ -771,13 +775,13 @@ public:
     }
     void free_segment(segment *seg) noexcept {
         seg->~segment();
-        ::free(seg);
+        _backend->free_segment_memory(seg);
     }
     size_t max_segments() const noexcept {
-        return (_layout.end - _segments_base) / segment::size;
+        return (_backend->memory_layout().end - _backend->segments_base()) / segment::size;
     }
     bool can_allocate_more_segments() const noexcept {
-        return memory::free_memory() >= non_lsa_reserve + segment::size;
+        return _backend->can_allocate_more_segments(non_lsa_reserve);
     }
 };
 #else
@@ -786,12 +790,10 @@ class segment_store {
     std::unordered_map<segment*, size_t> _segment_indexes;
     static constexpr size_t _std_memory_available = size_t(1) << 30; // emulate 1GB per shard
     std::vector<segment*>::iterator find_empty() noexcept {
-        // segment 0 is a marker for no segment
-        return std::find(_segments.begin() + 1, _segments.end(), nullptr);
+        return std::find(_segments.begin(), _segments.end(), nullptr);
     }
     std::vector<segment*>::const_iterator find_empty() const noexcept {
-        // segment 0 is a marker for no segment
-        return std::find(_segments.cbegin() + 1, _segments.cend(), nullptr);
+        return std::find(_segments.cbegin(), _segments.cend(), nullptr);
     }
 
 public:
@@ -808,10 +810,9 @@ public:
         return _segments[idx];
     }
     size_t idx_from_segment(const segment* seg) const noexcept {
-        // segment 0 is a marker for no segment
         auto i = _segment_indexes.find(const_cast<segment*>(seg));
         if (i == _segment_indexes.end()) {
-            return 0;
+            return segment_npos;
         }
         return i->second;
     }
@@ -833,7 +834,6 @@ public:
         seg->~segment();
         ::free(seg);
         size_t i = idx_from_segment(seg);
-        assert(i != 0);
         _segment_indexes.erase(seg);
         _segments[i] = nullptr;
     }
@@ -1201,6 +1201,9 @@ segment_pool::containing_segment(const void* obj) noexcept {
     auto offset = addr & (segment::size - 1);
     auto seg = reinterpret_cast<segment*>(addr - offset);
     auto index = idx_from_segment(seg);
+    if (index == segment_npos) {
+        return nullptr;
+    }
     auto& desc = _segments[index];
     if (desc._region) {
         return seg;
