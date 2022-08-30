@@ -755,7 +755,8 @@ public:
                 std::ref(repair),
                 std::ref(stream_manager),
                 std::ref(elc_notif),
-                std::ref(bm)).get();
+                std::ref(bm),
+                std::ref(snitch)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, *cfg, db::table_selector::all()).get();
