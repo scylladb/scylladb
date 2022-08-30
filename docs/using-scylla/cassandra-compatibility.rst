@@ -1,15 +1,15 @@
 
-Scylla and Apache Cassandra Compatibility 
-=========================================
+ScyllaDB and Apache Cassandra Compatibility 
+=============================================
 
-Latest update: Scylla 5.0
+Latest update: ScyllaDB 5.0
 
 ScyllaDB is a drop-in replacement for Apache Cassandra 3.11, with additional features from Apache Cassandra 4.0.
 This page contains information about ScyllaDB compatibility with Apache Cassandra. 
 
 The tables on this page include information about ScyllaDB Open Source support for Apache Cassandra features. 
 They do not include the ScyllaDB Enterprise-only features or ScyllaDB-specific features with no match in 
-Apache Cassandra.  See :doc:`Scylla Features </using-scylla/features>` for more information about ScyllaDB features.
+Apache Cassandra.  See :doc:`ScyllaDB Features </using-scylla/features>` for more information about ScyllaDB features.
 
 How to Read the Tables on This Page
 -------------------------------------
@@ -96,7 +96,7 @@ Consistency Level (read and write)
 | LOCAL_SERIAL                        | |v|:sup:`*`  |
 +-------------------------------------+--------------+
 
-:sup:`*` From Scylla 4.0. See `Scylla LWT`_
+:sup:`*` From ScyllaDB 4.0. See `Scylla LWT`_
 
 
 Snitches
@@ -139,7 +139,7 @@ Partitioners
 | CollatingOrderPreservingPartitioner |    |x|       |
 +-------------------------------------+--------------+
 
-:sup:`*` Removed in Scylla 4.0
+:sup:`*` Removed in ScyllaDB 4.0
 
 Protocol Options
 ^^^^^^^^^^^^^^^^
@@ -197,7 +197,7 @@ Repair and Consistency
 +-------------------------------------+--------------+
 
 
-:sup:`*` From Scylla 4.0. See `Scylla LWT`_
+:sup:`*` From ScyllaDB 4.0. See `Scylla LWT`_
 
 Replica Replacement Strategy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -235,7 +235,7 @@ Indexing and Caching
 |`Materialized Views`_                |  |v|:sup:`*`                            |
 +-------------------------------------+-----------------------------------------+
 
-:sup:`*` In Scylla Open Source and Scylla Enterprise from 2019.1
+:sup:`*` In ScyllaDB Open Source and ScyllaDB Enterprise from 2019.1
 
 Additional Features
 ^^^^^^^^^^^^^^^^^^^
@@ -391,7 +391,7 @@ Create Table Compaction
 |TimeWindowCompactionStrategy_ (TWCS)    | |v|                                 |
 +----------------------------------------+-------------------------------------+
 
-:sup:`*`  Deprecated in Scylla 4.0, use TWCS instead
+:sup:`*`  Deprecated in ScyllaDB 4.0, use TWCS instead
 
 Create Table Compression
 ........................
