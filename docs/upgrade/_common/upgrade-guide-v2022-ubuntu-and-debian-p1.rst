@@ -75,30 +75,5 @@ Download and install the new release
 ------------------------------------
 Before upgrading, check what version you are running now using ``dpkg -l scylla\*server``. You should use the same version in case you want to |ROLLBACK|_ the upgrade. If you are not running a 2021.1.x version, stop right here! This guide only covers 2021.1.x to 2022.1.y upgrades.
 
-**To upgrade ScyllaDB:**
 
-#. Update the |APT|_ to **2022.1** and enable scylla/ppa repo.
-
-   .. code:: sh
-
-       Ubuntu 16:
-       sudo add-apt-repository -y ppa:scylladb/ppa
-
-#. Configure Java 1.8, which is requested by ScyllaDB Enterprise 2022.1.
-
-   .. code:: sh
- 
-      sudo apt-get update
-      sudo apt-get install -y openjdk-8-jre-headless
-      sudo update-java-alternatives -s java-1.8.0-openjdk-amd64
-
-#. Install:
-
-   .. code:: sh
-
-      sudo apt-get clean all
-      sudo apt-get update
-      sudo apt-get dist-upgrade scylla-enterprise
-
-Answer ‘y’ to the first two questions.
 

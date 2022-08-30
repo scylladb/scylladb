@@ -1,3 +1,30 @@
+**To upgrade ScyllaDB:**
+
+#. Update the |APT|_ to **2022.1** and enable scylla/ppa repo.
+
+   .. code:: sh
+
+       Ubuntu 16:
+       sudo add-apt-repository -y ppa:scylladb/ppa
+
+#. Configure Java 1.8, which is requested by ScyllaDB Enterprise 2022.1.
+
+   .. code:: sh
+ 
+      sudo apt-get update
+      sudo apt-get install -y openjdk-8-jre-headless
+      sudo update-java-alternatives -s java-1.8.0-openjdk-amd64
+
+#. Install:
+
+   .. code:: sh
+
+      sudo apt-get clean all
+      sudo apt-get update
+      sudo apt-get dist-upgrade scylla-enterprise
+
+Answer ‘y’ to the first two questions.
+
 Start the node
 --------------
 
