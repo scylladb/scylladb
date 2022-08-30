@@ -92,8 +92,10 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         gms::feature_service& feat,
         raft_group0_client& client)
     : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _client(client)
+    , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
 {
     init_rpc_verbs();
+    register_metrics();
 }
 
 void raft_group0::init_rpc_verbs() {
@@ -182,6 +184,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                 .max_command_size = cl ? cl->max_record_size() / 2 : 0,
                 .on_background_error = [gid, this](std::exception_ptr e) {
                     _raft_gr.abort_server(gid, fmt::format("background error, {}", e));
+                    _status_for_monitoring = status_for_monitoring::aborted;
                 }
             });
 
@@ -1433,6 +1436,14 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
     }
 
     upgrade_log.info("Schema synchronized.");
+}
+
+void raft_group0::register_metrics() {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("raft_group0", {
+        sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
+            sm::description("status of the raft group, 0 - disabled, 1 - normal, 2 - aborted"))
+    });
 }
 
 std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
