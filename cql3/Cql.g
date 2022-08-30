@@ -44,7 +44,7 @@ options {
 #include "cql3/statements/drop_aggregate_statement.hh"
 #include "cql3/statements/drop_service_level_statement.hh"
 #include "cql3/statements/detach_service_level_statement.hh"
-#include "cql3/statements/truncate_statement.hh"
+#include "cql3/statements/raw/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
@@ -1072,10 +1072,18 @@ dropIndexStatement returns [std::unique_ptr<drop_index_statement> expr]
     ;
 
 /**
-  * TRUNCATE <CF>;
+  * TRUNCATE [TABLE] <CF>
+  * [USING TIMEOUT <duration>];
   */
-truncateStatement returns [std::unique_ptr<truncate_statement> stmt]
-    : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName { $stmt = std::make_unique<truncate_statement>(cf); }
+truncateStatement returns [std::unique_ptr<raw::truncate_statement> stmt]
+    @init {
+        auto attrs = std::make_unique<cql3::attributes::raw>();
+    }
+    : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName
+      ( usingTimeoutClause[attrs] )?
+      {
+        $stmt = std::make_unique<raw::truncate_statement>(std::move(cf), std::move(attrs));
+      }
     ;
 
 /**

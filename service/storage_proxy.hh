@@ -585,8 +585,9 @@ public:
      * the column family cfname
      * @param keyspace
      * @param cfname
+     * @param timeout (default: use truncate_request_timeout_in_ms config)
      */
-    future<> truncate_blocking(sstring keyspace, sstring cfname);
+    future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
 
     /*
      * Executes data query on the whole cluster.
