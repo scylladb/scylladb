@@ -833,7 +833,8 @@ class string_view_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def to_string(self):
-        return str(self.val['_M_str'])[0:int(self.val['_M_len'])]
+        inf = gdb.selected_inferior()
+        return str(inf.read_memory(self.val['_M_str'], self.val['_M_len']), encoding='utf-8')
 
     def display_hint(self):
         return 'string'
@@ -4909,7 +4910,9 @@ class scylla_read_stats(gdb.Command):
             gdb.write("Scylla version doesn't seem to have the permits linked yet, cannot list reads.")
             raise
 
-        permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
+        if not permit_list.type.strip_typedefs().name.startswith('boost::intrusive::list'):
+            # 4.5 compatibility
+            permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
 
         state_prefix_len = len('reader_permit::state::')
 

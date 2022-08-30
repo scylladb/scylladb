@@ -156,4 +156,7 @@ def test_sstable_summary(gdb, sstable):
 def test_sstable_summary(gdb, sstable):
     scylla(gdb, f'sstable-index-cache {sstable}')
 
+def test_read_stats(gdb, sstable):
+    scylla(gdb, f'read-stats')
+
 # FIXME: need a simple test for lsa-segment
