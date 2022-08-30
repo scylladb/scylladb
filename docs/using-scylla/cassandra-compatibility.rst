@@ -2,51 +2,63 @@
 Scylla and Apache Cassandra Compatibility 
 =========================================
 
-Latest update: Scylla 4.0
+Latest update: Scylla 5.0
 
-Scylla is a drop-in replacement for Apache Cassandra 3.11, supporting both the data format (SSTable) and all relevant external interfaces, with many features from more advanced Apache Cassandra releases.
-The following page detailed the level of support for each interface. For more on Cassandra features which are not available yet `see here <http://www.scylladb.com/technology/status/#road-map>`_
+ScyllaDB is a drop-in replacement for Apache Cassandra 3.11, with additional features from Apache Cassandra 4.0.
+This page contains information about ScyllaDB compatibility with Apache Cassandra. 
 
-.. note::
+The tables on this page include information about ScyllaDB Open Source support for Apache Cassandra features. 
+They do not include the ScyllaDB Enterprise-only features or ScyllaDB-specific features with no match in 
+Apache Cassandra.  See :doc:`Scylla Features </using-scylla/features>` for more information about ScyllaDB features.
 
-   This table includes Apache Cassandra features and the corresponding Scylla Open Source status. It does **not** include Scylla Enterprise features or Scylla Open Source features with no match in Apache Cassandra.
-   More on :doc:`Scylla Features </using-scylla/features>`
+How to Read the Tables on This Page
+-------------------------------------
 
-For all tables below, the following convention is used:
-
-* |x| - Not Available in Scylla
-* NC - Available in Scylla, but not compatible with Apache Cassandra
-* |v| - Available and compatible with Apache Cassandra
+* |v| - Available in ScyllaDB and compatible with Apache Cassandra.
+* |x| - Not available in ScyllaDB.
+* **NC** - Available in ScyllaDB, but not compatible with Apache Cassandra.
 
 Interfaces
 ----------
 
-==============================  =====================================================  =============
-Apache Cassandra                Version                                                Comments
-==============================  =====================================================  =============
-CQL                             CQL spec |cql-version|, Native protocol v4 (C* 3.11)   More below
-------------------------------  -----------------------------------------------------  -------------
-Thrift                          Compatible with Cassandra 2.1
-------------------------------  -----------------------------------------------------  -------------
-SSTable format (all versions)   3.11(mc / md ), 2.2(la), 2.1.8 (ka)                    md format is supported in Scylla 4.3, 2021.1.0 and later
-------------------------------  -----------------------------------------------------  -------------
-JMX                             3.11                                                   More Below
-------------------------------  -----------------------------------------------------  -------------
-Configuration (cassandra.yaml)	3.11
-------------------------------  -----------------------------------------------------  -------------
-Log                             NC
-------------------------------  -----------------------------------------------------  -------------
-Gossip and internal streaming	NC
-------------------------------  -----------------------------------------------------  -------------
-SSL                             NC
-==============================  =====================================================  =============
+.. list-table::
+   :widths: 25 45 30
+   :header-rows: 1
+
+   * - Apache Cassandra Interface
+     - Version Supported by ScyllaDB
+     - Comments
+   * - CQL
+     - | Fully compatible with version 3.3.1, with additional features from later CQL versions (for example, :ref:`Duration type <durations>`).
+       | Fully compatible with protocol v4, with additional features from v5.
+     - More below
+   * - Thrift 
+     - Compatible with Cassandra 2.1
+     - 
+   * - SSTable format (all versions)
+     - 3.11(mc / md ), 2.2(la), 2.1.8 (ka)
+     - ``md`` format is supported in ScyllaDB Open Source 4.3 and later, and ScyllaDB Enterprise 2021.1.0 and later
+   * - JMX   
+     - 3.11
+     - More below
+   * - Configuration (cassandra.yaml)
+     - 3.11
+     - 
+   * - Log
+     - NC
+     - 
+   * - Gossip and internal streaming
+     - NC
+     - 
+   * - SSL
+     - NC
+     - 
+
 
 ..  _3.3.1: https://github.com/apache/cassandra/blob/cassandra-2.2/doc/cql3/CQL.textile#changes
 
 Supported Tools
 ---------------
-(based on Apache Cassandra 3.11 release)
-
 
 .. include:: /operating-scylla/_common/tools_index.rst
 
