@@ -107,6 +107,10 @@ public:
 
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    void disable_proximity_sorting() noexcept {
+        _sort_by_proximity = false;
+    }
+
 private:
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
@@ -121,6 +125,8 @@ private:
 
     /** reverse-lookup map: endpoint -> current known dc/rack assignment */
     std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
+
+    bool _sort_by_proximity = true;
 };
 
 class token_metadata_impl;

@@ -44,19 +44,6 @@ struct simple_snitch : public snitch_base {
 
     virtual int compare_endpoints(inet_address& target, inet_address& a1,
                                   inet_address& a2) override {
-        //
-        // "Making all endpoints equal ensures we won't change the original
-        // ordering." - quote from C* code.
-        //
-        // Effectively this would return 0 even in the following case:
-        //
-        // compare_endpoints(NodeA, NodeA, NodeB) // -1 should be returned
-        //
-        // The snitch_base implementation would handle the above case correctly.
-        //
-        // I'm leaving the this implementation anyway since it's the C*'s
-        // implementation and some installations may depend on it.
-        //
         return 0;
     }
 
