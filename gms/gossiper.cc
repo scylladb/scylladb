@@ -41,7 +41,6 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "utils/generation-number.hh"
 #include "locator/token_metadata.hh"
-#include "locator/snitch_base.hh"
 #include "utils/exceptions.hh"
 
 namespace gms {
@@ -2477,16 +2476,15 @@ void gossiper::check_knows_remote_features(std::set<std::string_view>& local_fea
     }
 }
 
-void gossiper::check_snitch_name_matches() const {
-    const auto& my_snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+void gossiper::check_snitch_name_matches(sstring local_snitch_name) const {
     for (const auto& [address, state] : _endpoint_state_map) {
         const auto remote_snitch_name = state.get_application_state_ptr(application_state::SNITCH_NAME);
         if (!remote_snitch_name) {
             continue;
         }
 
-        if (remote_snitch_name->value != my_snitch_name) {
-            throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", my_snitch_name, remote_snitch_name->value));
+        if (remote_snitch_name->value != local_snitch_name) {
+            throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", local_snitch_name, remote_snitch_name->value));
         }
     }
 }
