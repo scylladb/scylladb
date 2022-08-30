@@ -179,7 +179,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                 // Dividing by two is to protect against paddings that the
                 // commit log can add for each mutation, as well as
                 // against different commit log limits on different nodes.
-                .max_command_size = cl ? cl->max_record_size() / 2 : 0
+                .max_command_size = cl ? cl->max_record_size() / 2 : 0,
+                .on_background_error = [gid, this](std::exception_ptr e) {
+                    _raft_gr.abort_server(gid, fmt::format("background error, {}", e));
+                }
             });
 
     // initialize the corresponding timer to tick the raft server instance

@@ -13,6 +13,7 @@
 #include "test/lib/log.hh"
 
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
 
@@ -25,6 +26,33 @@ static future<utils::chunked_vector<std::vector<bytes_opt>>> fetch_rows(cql_test
 
 static future<size_t> get_history_size(cql_test_env& e) {
     co_return (co_await fetch_rows(e, "select * from system.group0_history")).size();
+}
+
+SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return make_ready_future<>();
+#else
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        utils::get_local_injector().enable("store_log_entries/test-failure", true);
+
+        auto perform_schema_change = [&, has_ks = false] () mutable -> future<> {
+            if (has_ks) {
+                co_await e.execute_cql("drop keyspace new_ks");
+            } else {
+                co_await e.execute_cql("create keyspace new_ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}");
+            }
+            has_ks = !has_ks;
+        };
+
+        auto check_error = [](const raft::stopped_error& e) {
+            return e.what() == sstring("Raft instance is stopped, reason: \"background error, store_log_entries/test-failure\"");
+        };
+        BOOST_CHECK_EXCEPTION(co_await perform_schema_change(), raft::stopped_error, check_error);
+        BOOST_CHECK_EXCEPTION(co_await perform_schema_change(), raft::stopped_error, check_error);
+        BOOST_CHECK_EXCEPTION(co_await perform_schema_change(), raft::stopped_error, check_error);
+    }, raft_cql_test_config());
+#endif
 }
 
 SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {

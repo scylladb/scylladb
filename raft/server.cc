@@ -7,6 +7,7 @@
  */
 #include "server.hh"
 
+#include "utils/error_injection.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -854,6 +855,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     co_await _persistence->truncate_log(entries[0]->idx);
                     _stats.truncate_persisted_log++;
                 }
+
+                utils::get_local_injector().inject("store_log_entries/test-failure",
+                    [] { throw std::runtime_error("store_log_entries/test-failure"); });
 
                 // Combine saving and truncating into one call?
                 // will require persistence to keep track of last idx
