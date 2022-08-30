@@ -15,7 +15,7 @@
 
 namespace api {
 
-void set_endpoint_snitch(http_context& ctx, routes& r) {
+void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_ptr>& snitch) {
     static auto host_or_broadcast = [](const_req req) {
         auto host = req.get_query_param("host");
         return host.empty() ? gms::inet_address(utils::fb_utilities::get_broadcast_address()) : gms::inet_address(host);
@@ -43,8 +43,8 @@ void set_endpoint_snitch(http_context& ctx, routes& r) {
         return topology.get_rack(ep);
     });
 
-    httpd::endpoint_snitch_info_json::get_snitch_name.set(r, [] (const_req req) {
-        return locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+    httpd::endpoint_snitch_info_json::get_snitch_name.set(r, [&snitch] (const_req req) {
+        return snitch.local()->get_name();
     });
 }
 

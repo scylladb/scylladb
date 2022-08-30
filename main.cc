@@ -1259,7 +1259,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }).get();
             api::set_server_gossip(ctx, gossiper).get();
-            api::set_server_snitch(ctx).get();
+            api::set_server_snitch(ctx, snitch).get();
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
                 api::unset_server_snitch(ctx).get();
             });
