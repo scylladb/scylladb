@@ -145,9 +145,11 @@ seastar::future<instance_cache::value_type> instance_cache::get(const db::functi
 
 void instance_cache::recycle(instance_cache::value_type val) noexcept {
     val->mutex.unlock();
-    size_t size;
+    size_t size = 0;
     try {
-        size = get_instance_size(val->instance.value());
+        if (val->instance) {
+            size = get_instance_size(val->instance.value());
+        }
         if (size > 1 * MB) {
             val->instance = std::nullopt;
             return;
