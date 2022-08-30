@@ -652,6 +652,17 @@ class ScyllaCluster:
         self.removed.add(server_id)
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} removed")
 
+    async def start_stopped(self) -> ActionReturn:
+        """Start a stopped server"""
+        logging.info("Cluster %s starting all stopped servers", self)
+        if not self.stopped:
+            return ScyllaCluster.ActionReturn(success=True, msg=f"No stopped servers")
+        ids = list(self.stopped.keys())
+        await asyncio.gather(*(server.start() for server in self.stopped.values()))
+        self.running.update(self.stopped)
+        self.stopped.clear()
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Re-started servers {','.join(ids)}")
+
 
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
@@ -728,6 +739,7 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
         self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
+        self.app.router.add_get('/cluster/start_stopped', self._cluster_start_stopped)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -811,6 +823,15 @@ class ScyllaClusterManager:
         if not await self.cluster.server_remove(server_id):
             return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
         return aiohttp.web.Response(text="OK")
+
+    async def _cluster_start_stopped(self, _request) -> aiohttp.web.Response:
+        """Start all previously stopped servers"""
+        assert self.cluster
+        resp = await self.cluster.start_stopped()
+        if not resp.success:
+            return aiohttp.web.Response(status=500, text="Error")
+        return aiohttp.web.Response(status=200, text="OK")
+
 
 @asynccontextmanager
 async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
