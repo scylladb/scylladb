@@ -98,8 +98,8 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
             }
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
-                inet_address_vector_replica_set& addresses = x.second;
-                auto preferred = snitch->get_sorted_list_by_proximity(_address, addresses);
+                inet_address_vector_replica_set preferred(x.second.begin(), x.second.end());
+                snitch->sort_by_proximity(_address, preferred);
                 for (inet_address& p : preferred) {
                     range_sources[desired_range].push_back(p);
                 }

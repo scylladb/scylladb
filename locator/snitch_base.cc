@@ -13,17 +13,6 @@
 #include "gms/application_state.hh"
 
 namespace locator {
-inet_address_vector_replica_set snitch_base::get_sorted_list_by_proximity(
-    inet_address address,
-    inet_address_vector_replica_set& unsorted_address) {
-
-    inet_address_vector_replica_set
-        preferred(unsorted_address.begin(), unsorted_address.end());
-
-    sort_by_proximity(address, preferred);
-    return preferred;
-}
-
 void snitch_base::sort_by_proximity(
     inet_address address, inet_address_vector_replica_set& addresses) {
 

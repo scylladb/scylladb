@@ -3083,14 +3083,14 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
 
     // find alive sources for our new ranges
     for (auto r : ranges) {
-        inet_address_vector_replica_set possible_nodes;
+        inet_address_vector_replica_set sources;
         auto it = range_addresses.find(r);
         if (it != range_addresses.end()) {
-            possible_nodes = it->second;
+            sources = it->second;
         }
 
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        inet_address_vector_replica_set sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
+        snitch->sort_by_proximity(my_address, sources);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = format("get_new_source_ranges: sources={}, my_address={}", sources, my_address);
