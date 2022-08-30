@@ -733,7 +733,9 @@ public:
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
-            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
+            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
+                return sys_ks.start(snitch.local());
+            }).get();
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;

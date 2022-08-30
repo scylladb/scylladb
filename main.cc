@@ -1128,7 +1128,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // FIXME -- this sys_ks start should really be up above, where its instance
             // start, but we only have query processor started that late
-            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
+            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
+                return sys_ks.start(snitch.local());
+            }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
             group0_client.init().get();
@@ -1165,7 +1167,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 1. messaging is on the way with its preferred ip cache
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
-            sys_ks.local().setup(messaging).get();
+            sys_ks.local().setup(snitch, messaging).get();
 
             supervisor::notify("starting schema commit log");
 
