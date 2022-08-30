@@ -33,11 +33,11 @@ production_snitch_base::production_snitch_base(snitch_config cfg)
 }
 
 
-sstring production_snitch_base::get_rack() {
+sstring production_snitch_base::get_rack() const {
     return _my_rack;
 }
 
-sstring production_snitch_base::get_datacenter() {
+sstring production_snitch_base::get_datacenter() const {
     return _my_dc;
 }
 

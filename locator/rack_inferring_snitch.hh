@@ -32,12 +32,12 @@ struct rack_inferring_snitch : public snitch_base {
         set_snitch_ready();
     }
 
-    virtual sstring get_rack() override {
+    virtual sstring get_rack() const override {
         auto endpoint = utils::fb_utilities::get_broadcast_address();
         return std::to_string(uint8_t(endpoint.bytes()[2]));
     }
 
-    virtual sstring get_datacenter() override {
+    virtual sstring get_datacenter() const override {
         auto endpoint = utils::fb_utilities::get_broadcast_address();
         return std::to_string(uint8_t(endpoint.bytes()[1]));
     }

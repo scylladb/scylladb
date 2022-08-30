@@ -29,11 +29,11 @@ struct simple_snitch : public snitch_base {
         set_snitch_ready();
     }
 
-    virtual sstring get_rack() override {
+    virtual sstring get_rack() const override {
         return "rack1";
     }
 
-    virtual sstring get_datacenter() override {
+    virtual sstring get_datacenter() const override {
         return "datacenter1";
     }
 

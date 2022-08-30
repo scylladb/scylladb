@@ -63,12 +63,12 @@ public:
     /**
      * returns a String representing the rack local node belongs to
      */
-    virtual sstring get_rack() = 0;
+    virtual sstring get_rack() const = 0;
 
     /**
      * returns a String representing the datacenter local node belongs to
      */
-    virtual sstring get_datacenter() = 0;
+    virtual sstring get_datacenter() const = 0;
 
     /**
      * returns whatever info snitch wants to gossip

@@ -42,8 +42,8 @@ public:
 
     explicit production_snitch_base(snitch_config);
 
-    virtual sstring get_rack() override;
-    virtual sstring get_datacenter() override;
+    virtual sstring get_rack() const override;
+    virtual sstring get_datacenter() const override;
     virtual void set_backreference(snitch_ptr& d) override;
 
 private:
