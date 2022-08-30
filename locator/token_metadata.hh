@@ -105,6 +105,8 @@ public:
         return std::count_if(endpoints.begin(), endpoints.end(), filter);
     }
 
+    void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
+
 private:
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,

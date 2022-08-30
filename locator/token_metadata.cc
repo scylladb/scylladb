@@ -1319,6 +1319,10 @@ std::function<bool(inet_address)> topology::get_local_dc_filter() const noexcept
     };
 }
 
+void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
+    i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(address, addresses);
+}
+
 /////////////////// class topology end /////////////////////////////////////////
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {

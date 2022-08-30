@@ -3082,6 +3082,7 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
+    auto tmptr = erm->get_token_metadata_ptr();
     for (auto r : ranges) {
         inet_address_vector_replica_set sources;
         auto it = range_addresses.find(r);
@@ -3089,8 +3090,7 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
             sources = it->second;
         }
 
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        snitch->sort_by_proximity(my_address, sources);
+        tmptr->get_topology().sort_by_proximity(my_address, sources);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = format("get_new_source_ranges: sources={}, my_address={}", sources, my_address);
