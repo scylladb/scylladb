@@ -68,20 +68,6 @@ public:
     virtual sstring get_datacenter(inet_address endpoint) = 0;
 
     /**
-     * This method will sort the <tt>List</tt> by proximity to the given
-     * address.
-     */
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) = 0;
-
-    /**
-     * compares two endpoints in relation to the target endpoint, returning as
-     * Comparator.compare would
-     */
-    virtual int compare_endpoints(
-        inet_address& target, inet_address& a1, inet_address& a2) = 0;
-
-    /**
      * returns whatever info snitch wants to gossip
      */
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
@@ -312,12 +298,6 @@ public:
     // virtual sstring get_rack(inet_address endpoint)        = 0;
     // virtual sstring get_datacenter(inet_address endpoint)  = 0;
     //
-
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) override;
-
-    virtual int compare_endpoints(
-        inet_address& address, inet_address& a1, inet_address& a2) override;
 
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
 

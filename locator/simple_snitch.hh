@@ -37,16 +37,6 @@ struct simple_snitch : public snitch_base {
         return "datacenter1";
     }
 
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) override {
-        // Optimization to avoid walking the list
-    }
-
-    virtual int compare_endpoints(inet_address& target, inet_address& a1,
-                                  inet_address& a2) override {
-        return 0;
-    }
-
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.SimpleSnitch";
     }

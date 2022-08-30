@@ -105,6 +105,10 @@ public:
         return std::count_if(endpoints.begin(), endpoints.end(), filter);
     }
 
+    /**
+     * This method will sort the <tt>List</tt> by proximity to the given
+     * address.
+     */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
     void disable_proximity_sorting() noexcept {
@@ -112,6 +116,12 @@ public:
     }
 
 private:
+    /**
+     * compares two endpoints in relation to the target endpoint, returning as
+     * Comparator.compare would
+     */
+    int compare_endpoints(inet_address& address, inet_address& a1, inet_address& a2) const;
+
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
                        std::unordered_set<inet_address>>
