@@ -3,8 +3,6 @@
 Data Manipulation
 -----------------
 
-.. include:: /rst_include/cql-version-index.rst
-
 This section describes the statements supported by CQL to insert, update, delete, and query data.
 
 :ref:`SELECT <select-statement>`

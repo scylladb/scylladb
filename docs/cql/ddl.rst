@@ -3,9 +3,6 @@
 Data Definition
 ===============
 
-
-.. include:: /rst_include/cql-version-index.rst
-
 CQL stores data in *tables*, whose schema defines the layout of said data in the table, and those tables are grouped in
 *keyspaces*. A keyspace defines a number of options that apply to all the tables it contains, most prominently of
 which is the replication strategy used by the keyspace. An application can have only one keyspace. However, it is also possible to 
