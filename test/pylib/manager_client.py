@@ -144,3 +144,8 @@ class ManagerClient():
         """Remove a specified node"""
         await self._request(f"/cluster/removenode/{server_id}")
         self._driver_update()
+
+    async def start_stopped(self) -> None:
+        """Start all previously stopped servers"""
+        await self._request(f"/cluster/start_stopped")
+        self._driver_update()
