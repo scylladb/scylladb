@@ -1,3 +1,23 @@
+**To upgrade ScyllaDB:**
+
+1. Update the |SCYLLA_REPO|_ to |NEW_VERSION|
+
+2. Install
+
+.. code-block::
+   
+   sudo apt-get clean all
+   sudo apt-get update
+   sudo apt-get dist-upgrade |PKG_NAME|
+
+
+Answer ‘y’ to the first two questions.
+
+.. note::
+
+   Alternator users upgrading from Scylla 4.0 to 4.1 need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`.
+
+
 Start the node
 --------------
 
