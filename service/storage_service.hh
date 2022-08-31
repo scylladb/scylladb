@@ -89,10 +89,6 @@ class raft_group0;
 
 enum class disk_error { regular, commit };
 
-struct storage_service_config {
-    size_t available_memory;
-};
-
 class node_ops_meta_data {
     utils::UUID _ops_uuid;
     gms::inet_address _coordinator;
@@ -173,7 +169,6 @@ public:
         gms::gossiper& gossiper,
         sharded<db::system_keyspace>&,
         gms::feature_service& feature_service,
-        storage_service_config config,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
         locator::effective_replication_map_factory& erm_factory,
