@@ -889,12 +889,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("initializing storage service");
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks),
-                std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
+                std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm)).get();
 

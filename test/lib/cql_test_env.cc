@@ -729,12 +729,10 @@ public:
             });
 
             sharded<service::storage_service> ss;
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
                 std::ref(sys_ks),
-                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(feature_service), std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(repair),
                 std::ref(stream_manager),
