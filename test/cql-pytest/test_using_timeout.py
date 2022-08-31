@@ -6,7 +6,7 @@
 
 from util import new_test_keyspace, unique_name, unique_key_int
 import pytest
-from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout
+from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException
 from cassandra.util import Duration
 
 def r(regex):
@@ -146,9 +146,14 @@ def test_invalid_timeout(scylla_only, cql, table1):
     # Scylla only supports ms granularity for timeouts
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s5ns")
     invalid(f"SELECT * FROM {table} USING TIMEOUT -10ms")
+
+    def invalid_syntax(stmt):
+        with pytest.raises(SyntaxException):
+            cql.execute(stmt)
+
     # For select statements, it's not allowed to specify timestamp or ttl,
     # since they bear no meaning
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
-    invalid (f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")
+    invalid_syntax(f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")

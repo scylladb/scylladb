@@ -518,6 +518,15 @@ usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     | K_TIMEOUT to=term { attrs->timeout = to; }
     ;
 
+usingTimestampTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING usingTimestampTimeoutClauseObjective[attrs] ( K_AND usingTimestampTimeoutClauseObjective[attrs] )*
+    ;
+
+usingTimestampTimeoutClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
+    | K_TIMEOUT to=term { attrs->timeout = to; }
+    ;
+
 /**
  * UPDATE <CF>
  * USING TIMESTAMP <long>
@@ -552,7 +561,7 @@ updateConditions returns [conditions_type conditions]
 /**
  * DELETE name1, name2
  * FROM <CF>
- * USING TIMESTAMP <long>
+ * [USING (TIMESTAMP <long> | TIMEOUT <duration>) [AND ...]]
  * WHERE KEY = keyname
    [IF (EXISTS | name = value, ...)];
  */
@@ -564,7 +573,7 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
-      ( usingClause[attrs] )?
+      ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
       {
