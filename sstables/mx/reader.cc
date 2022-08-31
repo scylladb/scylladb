@@ -1754,9 +1754,7 @@ public:
         _monitor.on_read_started(_context->reader_position());
     }
 public:
-    void on_out_of_clustering_range() override {
-        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end()));
-    }
+    void on_out_of_clustering_range() override { }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         on_internal_error(sstlog, "mx_crawling_sstable_mutation_reader: doesn't support fast_forward_to(const dht::partition_range&)");
     }
