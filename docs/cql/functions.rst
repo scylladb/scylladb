@@ -261,6 +261,10 @@ It also can be used to count the non-null value of a given column::
 
     SELECT COUNT (scores) FROM plays;
 
+.. note::
+    Counting all rows in a table may be time-consuming and exceed the default timeout. In such a case, 
+    see :doc:`Counting all rows in a table is slow </kb/count-all-rows>` for instructions.
+
 Max and Min
 ```````````
 
