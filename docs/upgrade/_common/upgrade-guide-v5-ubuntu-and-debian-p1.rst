@@ -81,27 +81,4 @@ Download and install the new release
 ------------------------------------
 Before upgrading, check what version you are running now using ``dpkg -s scylla-server``. You should use the same version in case you want to |ROLLBACK|_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
-**To upgrade ScyllaDB:**
-
-1. Update the |SCYLLA_REPO|_ to |NEW_VERSION|
-
-2. Install
-
-.. code-block::
-   
-   sudo apt-get clean all
-   sudo apt-get update
-   sudo apt-get dist-upgrade |PKG_NAME|
-
-
-Answer ‘y’ to the first two questions.
-
-**To upgrade ScyllaDB and update 3rd party and OS packages:**
-
-.. include:: /upgrade/_common/upgrade-image.rst
-
-
-.. note::
-
-   Alternator users upgrading from Scylla 4.0 to 4.1 need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`.
 
