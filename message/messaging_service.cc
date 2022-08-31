@@ -40,7 +40,6 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "cache_temperature.hh"
 #include "raft/raft.hh"
-#include "service/raft/messaging.hh"
 #include "service/raft/group0_fwd.hh"
 #include "replica/exceptions.hh"
 #include "serializer.hh"

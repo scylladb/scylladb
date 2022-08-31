@@ -7,8 +7,10 @@
  */
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_rpc.hh"
+#include "service/raft/raft_address_map.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
 
@@ -20,13 +22,12 @@ namespace service {
 
 logging::logger rslog("raft_group_registry");
 
-class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
+// {{{ direct_fd_proxy
+
+class direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
     std::unordered_set<raft::server_id> _alive_set;
 
 public:
-    direct_fd_proxy() {
-    }
-
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
         static const auto msg = "marking Raft server {} as alive for raft groups";
 
@@ -65,11 +66,82 @@ public:
     }
 };
 
-raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map<>& address_map,
+// }}} direct_fd_proxy
+
+// {{{ gossiper_state_change_subscriber_proxy
+
+class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_change_subscriber {
+    raft_address_map& _address_map;
+
+    future<>
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+        auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
+        if (app_state_ptr) {
+            raft::server_id id(utils::UUID(app_state_ptr->value));
+            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
+            _address_map.add_or_update_entry(id, endpoint);
+        }
+        return make_ready_future<>();
+    }
+
+public:
+    gossiper_state_change_subscriber_proxy(raft_address_map& address_map)
+            : _address_map(address_map)
+    {}
+
+    virtual future<>
+    on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+
+    virtual future<>
+    before_change(gms::inet_address endpoint,
+        gms::endpoint_state current_state, gms::application_state new_statekey,
+        const gms::versioned_value& newvalue) override {
+        // Raft server ID never changes - do nothing
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_change(gms::inet_address endpoint,
+        gms::application_state state, const gms::versioned_value& value) override {
+        // Raft server ID never changes - do nothing
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+
+    virtual future<>
+    on_dead(gms::inet_address endpoint, gms::endpoint_state state) override {
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_remove(gms::inet_address endpoint) override {
+        // The mapping is removed when the server is removed from
+        // Raft configuration, not when it's dead or alive, or
+        // removed
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_restart(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+};
+
+// }}} gossiper_state_change_subscriber_proxy
+
+raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map& address_map,
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
-    , _srv_address_mappings{address_map}
+    , _gossiper(gossiper)
+    , _gossiper_proxy(make_shared<gossiper_state_change_subscriber_proxy>(address_map))
+    , _address_map{address_map}
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>())
 {
@@ -85,8 +157,11 @@ void raft_group_registry::init_rpc_verbs() {
             // in case the sender is encountered for the first time
             auto& rpc = self.get_rpc(gid);
             // The address learnt from a probably unknown server should
-            // eventually expire
-            self._srv_address_mappings.set(from, std::move(addr), true);
+            // eventually expire. Do not use it to update
+            // a previously learned gossiper address: otherwise an RPC from
+            // a node outside of the config could permanently
+            // change the address map of a healthy cluster.
+            self._address_map.opt_add_entry(from, std::move(addr));
             // Execute the actual message handling code
             return handler(rpc);
         });
@@ -220,6 +295,7 @@ seastar::future<> raft_group_registry::start() {
     if (!_is_enabled) {
         co_return;
     }
+    _gossiper.register_(_gossiper_proxy);
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
@@ -235,6 +311,8 @@ seastar::future<> raft_group_registry::stop() {
     }
     co_await drain_on_shutdown();
     co_await uninit_rpc_verbs();
+    _direct_fd_subscription.reset();
+    co_await _gossiper.unregister_(_gossiper_proxy);
 }
 
 seastar::future<> raft_group_registry::drain_on_shutdown() noexcept {
@@ -281,7 +359,8 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         co_await new_grp.server->start();
         new_grp.server->register_metrics();
     } catch (...) {
-        on_internal_error(rslog, std::current_exception());
+        on_internal_error(rslog, format("Failed to start a Raft group {}: {}", gid,
+                std::current_exception()));
     }
 
     std::exception_ptr ex;

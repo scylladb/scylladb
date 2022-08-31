@@ -11,33 +11,27 @@
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
-#include "service/raft/raft_address_map.hh"
-#include "service/raft/raft_state_machine.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace service {
+
+class raft_state_machine;
 
 // Scylla-specific implementation of raft RPC module.
 //
 // Uses `netw::messaging_service` as an underlying implementation for
 // actually sending RPC messages.
 class raft_rpc : public raft::rpc {
+protected:
     raft_state_machine& _sm;
     raft::group_id _group_id;
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
-    raft_address_map<>& _address_map;
-    noncopyable_function<void(raft::server_id, bool added)> _on_server_update;
+    raft_address_map& _address_map;
     seastar::gate _shutdown_gate;
-
-    raft_ticker_type::time_point timeout() {
-        return raft_ticker_type::clock::now() + raft_tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
-    }
-
 public:
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-            raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
-            // Called when a server is added or removed from the RPC configuration.
-            noncopyable_function<void(raft::server_id, bool added)> on_server_update);
+            raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;
@@ -53,8 +47,6 @@ public:
         const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) override;
 
-    virtual void on_configuration_change(raft::server_address_set add,
-        raft::server_address_set del) override;
     future<> abort() override;
 
     // Dispatchers to the `rpc_server` upon receiving an rpc message

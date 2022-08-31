@@ -14,6 +14,9 @@
 
 namespace service {
 
+template <typename C> class raft_address_map_t;
+using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
+
 // Address of a discovery peer
 struct discovery_peer {
     raft::server_id id;

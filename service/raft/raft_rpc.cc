@@ -5,26 +5,29 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include <seastar/core/coroutine.hh>
-#include "service/raft/messaging.hh"
 #include "service/raft/raft_rpc.hh"
+#include <seastar/core/coroutine.hh>
 #include "gms/inet_address.hh"
-#include "gms/inet_address_serializer.hh"
 #include "serializer_impl.hh"
 #include "message/msg_addr.hh"
 #include "message/messaging_service.hh"
 #include "db/timeout_clock.hh"
 #include "idl/raft.dist.hh"
+#include "service/raft/raft_address_map.hh"
+#include "service/raft/raft_state_machine.hh"
 
 namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
+raft_ticker_type::time_point timeout() {
+    return raft_ticker_type::clock::now() + raft_tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
+}
+
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-        raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
-        noncopyable_function<void(raft::server_id, bool)> on_server_update)
+        raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id)
     : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms)
-    , _address_map(address_map), _on_server_update(std::move(on_server_update))
+    , _address_map(address_map)
 {}
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
@@ -79,7 +82,7 @@ void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_
                     rlogger.error("Failed to send vote reply {}: {}", id, ex);
                 }
             });
-    }); 
+    });
 }
 
 void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
@@ -94,7 +97,7 @@ void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& tim
                     rlogger.error("Failed to send timeout now {}: {}", id, ex);
                 }
             });
-    }); 
+    });
 }
 
 void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
@@ -156,24 +159,6 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
             rlogger.trace(std::string_view(message));
             return make_exception_future<raft::read_barrier_reply>(raft::transport_error(message));
         });
-}
-
-void
-raft_rpc::on_configuration_change(raft::server_address_set add, raft::server_address_set del) {
-    for (const auto& addr: add) {
-        auto inet_addr = raft_addr_to_inet_addr(addr.info);
-        // Entries explicitly managed via `rpc::on_configuration_change() should NOT be
-        // expirable.
-        _address_map.set(addr.id, inet_addr, false);
-        _on_server_update(addr.id, true);
-    }
-    for (const auto& addr: del) {
-        // RPC 'send' may yield before resolving IP address,
-        // e.g. on _shutdown_gate, so keep the deleted
-        // entries in the map for a bit.
-        _address_map.set_expiring_flag(addr.id);
-        _on_server_update(addr.id, false);
-    }
 }
 
 future<> raft_rpc::abort() {
@@ -242,18 +227,6 @@ future<raft::add_entry_reply> raft_rpc::execute_modify_config(raft::server_id fr
     return raft_with_gate(_shutdown_gate, [&] {
         return _client->execute_modify_config(from, std::move(add), std::move(del), nullptr);
     });
-}
-
-gms::inet_address raft_addr_to_inet_addr(const raft::server_info& info) {
-    return ser::deserialize_from_buffer(info, boost::type<gms::inet_address>());
-}
-
-gms::inet_address raft_addr_to_inet_addr(const raft::server_address& addr) {
-    return raft_addr_to_inet_addr(addr.info);
-}
-
-raft::server_info inet_addr_to_raft_addr(const gms::inet_address& addr) {
-    return ser::serialize_to_buffer<bytes>(addr);
 }
 
 } // end of namespace service

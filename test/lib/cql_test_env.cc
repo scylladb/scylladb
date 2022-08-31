@@ -624,7 +624,7 @@ public:
             sharded<streaming::stream_manager> stream_manager;
             sharded<service::forward_service> forward_service;
             sharded<direct_failure_detector::failure_detector> fd;
-            sharded<service::raft_address_map<>> raft_address_map;
+            sharded<service::raft_address_map> raft_address_map;
 
             raft_address_map.start().get();
             auto stop_address_map = defer([&raft_address_map] {
