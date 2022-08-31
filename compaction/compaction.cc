@@ -1249,17 +1249,20 @@ private:
         uint64_t& _validation_errors;
 
     private:
-        void maybe_abort_scrub() {
+        void maybe_abort_scrub(std::function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
+                report_error();
                 throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
             ++_validation_errors;
         }
 
         void on_unexpected_partition_start(const mutation_fragment_v2& ps) {
-            maybe_abort_scrub();
-            report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
-                    "Rectifying by adding assumed missing partition-end");
+            auto report_fn = [this, &ps] (std::string_view action = "") {
+                report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(), action);
+            };
+            maybe_abort_scrub(report_fn);
+            report_fn("Rectifying by adding assumed missing partition-end");
 
             auto pe = mutation_fragment_v2(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
@@ -1279,20 +1282,26 @@ private:
         }
 
         skip on_invalid_partition(const dht::decorated_key& new_key) {
-            maybe_abort_scrub();
+            auto report_fn = [this, &new_key] (std::string_view action = "") {
+                report_invalid_partition(compaction_type::Scrub, _validator, new_key, action);
+            };
+            maybe_abort_scrub(report_fn);
             if (_scrub_mode == compaction_type_options::scrub::mode::segregate) {
-                report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Detected");
+                report_fn("Detected");
                 _validator.reset(new_key);
                 // Let the segregating interposer consumer handle this.
                 return skip::no;
             }
-            report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Skipping");
+            report_fn("Skipping");
             _skip_to_next_partition = true;
             return skip::yes;
         }
 
         skip on_invalid_mutation_fragment(const mutation_fragment_v2& mf) {
-            maybe_abort_scrub();
+            auto report_fn = [this, &mf] (std::string_view action = "") {
+                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "");
+            };
+            maybe_abort_scrub(report_fn);
 
             const auto& key = _validator.previous_partition_key();
 
@@ -1307,8 +1316,7 @@ private:
             // The only case a partition end is invalid is when it comes after
             // another partition end, and we can just drop it in that case.
             if (!mf.is_end_of_partition() && _scrub_mode == compaction_type_options::scrub::mode::segregate) {
-                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf,
-                        "Injecting partition start/end to segregate out-of-order fragment");
+                report_fn("Injecting partition start/end to segregate out-of-order fragment");
                 push_mutation_fragment(*_schema, _permit, partition_end{});
 
                 // We loose the partition tombstone if any, but it will be
@@ -1321,16 +1329,19 @@ private:
                 return skip::no;
             }
 
-            report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "Skipping");
+            report_fn("Skipping");
 
             return skip::yes;
         }
 
         void on_invalid_end_of_stream() {
-            maybe_abort_scrub();
+            auto report_fn = [this] (std::string_view action = "") {
+                report_invalid_end_of_stream(compaction_type::Scrub, _validator, action);
+            };
+            maybe_abort_scrub(report_fn);
             // Handle missing partition_end
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
-            report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
+            report_fn("Rectifying by adding missing partition-end to the end of the stream");
         }
 
         void fill_buffer_from_underlying() {
