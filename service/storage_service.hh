@@ -293,7 +293,10 @@ private:
     future<> shutdown_protocol_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::unordered_set<token>;
+    struct replacement_info {
+        std::unordered_set<token> tokens;
+        locator::endpoint_dc_rack dc_rack;
+    };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
@@ -491,6 +494,7 @@ private:
     future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
+    locator::endpoint_dc_rack get_dc_rack_for(inet_address endpoint);
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;

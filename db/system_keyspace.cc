@@ -1275,6 +1275,7 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 // updates are propagated correctly.
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
+    locator::endpoint_dc_rack _local_dc_rack_info;
     system_keyspace::bootstrap_state _state;
 };
 
@@ -2783,6 +2784,10 @@ system_keyspace::load_dc_rack_info() {
     return _cache->_cached_dc_rack_info;
 }
 
+locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {
+    return _cache->_local_dc_rack_info;
+}
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     replica::database& db = proxy.local().get_db().local();
@@ -3332,6 +3337,14 @@ future<> system_keyspace::start() {
     if (this_shard_id() == 0) {
         qctx = std::make_unique<query_context>(_qp);
     }
+
+    // FIXME
+    // This should be coupled with setup_version()'s part committing these values into
+    // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
+    // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    _cache->_local_dc_rack_info.dc = snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+    _cache->_local_dc_rack_info.rack = snitch->get_rack(utils::fb_utilities::get_broadcast_address());
 
     co_return;
 }

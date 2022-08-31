@@ -53,18 +53,12 @@ public:
     /**
      * Stores current DC/rack assignment for ep
      */
-    void add_endpoint(const inet_address& ep);
+    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
 
     /**
      * Removes current DC/rack assignment for ep
      */
     void remove_endpoint(inet_address ep);
-
-    /**
-     * Re-reads the DC/rack info for the given endpoint
-     * @param ep endpoint in question
-     */
-    void update_endpoint(inet_address ep);
 
     /**
      * Returns true iff contains given endpoint
@@ -174,7 +168,7 @@ public:
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
-    void update_topology(inet_address ep);
+    void update_topology(inet_address ep, endpoint_dc_rack dr);
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.

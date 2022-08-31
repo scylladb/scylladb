@@ -39,7 +39,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
     try {
-        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, description, reason);
+        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason);
         auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));
@@ -51,7 +51,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
             auto& strategy = erm->get_replication_strategy();
             // We took a strategy ptr to keep it alive during the `co_await`.
             // The keyspace may be dropped in the meantime.
-            dht::token_range_vector ranges = co_await strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address);
+            dht::token_range_vector ranges = co_await strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address, _dr);
             blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
             co_await streamer->add_ranges(keyspace_name, erm, ranges, gossiper, reason == streaming::stream_reason::replace);
         }
