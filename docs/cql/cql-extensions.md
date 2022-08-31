@@ -1,6 +1,6 @@
 # ScyllaDB CQL Extensions
 
-Scylla extends the CQL language to provide a few extra features. This document
+ScyllaDB extends the CQL language to provide a few extra features. This document
 lists those extensions.
 
 ## BYPASS CACHE clause
@@ -109,7 +109,7 @@ Storage options can be inspected by checking the new system schema table: `syste
 A special statement is dedicated for pruning ghost rows from materialized views.
 Ghost row is an inconsistency issue which manifests itself by having rows
 in a materialized view which do not correspond to any base table rows.
-Such inconsistencies should be prevented altogether and Scylla is striving to avoid
+Such inconsistencies should be prevented altogether and ScyllaDB is striving to avoid
 them, but *if* they happen, this statement can be used to restore a materialized view
 to a fully consistent state without rebuilding it from scratch.
 
@@ -281,7 +281,7 @@ that the rate of requests exceeds configured limit, the cluster will start
 rejecting some of them in order to bring the throughput back to the configured
 limit. Rejected requests are less costly which can help reduce overload.
 
-_NOTE_: Due to Scylla's distributed nature, tracking per-partition request rates
+_NOTE_: Due to ScyllaDB's distributed nature, tracking per-partition request rates
 is not perfect and the actual rate of accepted requests may be higher up to
 a factor of keyspace's `RF`. This feature should not be used to enforce precise
 limits but rather serve as an overload protection feature.
