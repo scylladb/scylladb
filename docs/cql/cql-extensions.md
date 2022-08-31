@@ -1,6 +1,6 @@
 # ScyllaDB CQL Extensions
 
-Scylla extends the CQL language to provide a few extra features. This document
+ScyllaDB extends the CQL language to provide a few extra features. This document
 lists those extensions.
 
 ## BYPASS CACHE clause
@@ -109,7 +109,7 @@ Storage options can be inspected by checking the new system schema table: `syste
 A special statement is dedicated for pruning ghost rows from materialized views.
 Ghost row is an inconsistency issue which manifests itself by having rows
 in a materialized view which do not correspond to any base table rows.
-Such inconsistencies should be prevented altogether and Scylla is striving to avoid
+Such inconsistencies should be prevented altogether and ScyllaDB is striving to avoid
 them, but *if* they happen, this statement can be used to restore a materialized view
 to a fully consistent state without rebuilding it from scratch.
 
@@ -133,21 +133,35 @@ token ranges.
 
 ## Synchronous materialized views
 
-Materialized view updates can be applied synchronously (with errors propagated
-back to the user) or asynchronously, in the background. Historically, in order
-to use synchronous updates, the materialized view had to be local,
-which could be achieved e.g. by using the same partition key definition
-as the one present in the base table.
-Scylla also allows explicitly marking the view as synchronous, which forces
-all its view updates to be updated synchronously. Such views tend to reduce
-observed availability of the base table, because a base table write would only
-succeed if all synchronous view updates also succeed. On the other hand,
-failed view updates would be detected immediately, and appropriate action
-can be taken (e.g. pruning the materialized view, as mentioned in the paragraph
-above).
+Usually, when a table with materialized views is updated, the update to the
+views happens _asynchronously_, i.e., in the background. This means that
+the user cannot know when the view updates have all finished - or even be
+sure that they succeeded.
 
-In order to mark a materialized view as synchronous, one can use the following
-syntax:
+However, there are circumstances where ScyllaDB does view updates
+_synchronously_ - i.e., the user's write returns only after the views
+were updated. This happens when the materialized-view replica is on the
+same node as the base-table replica. For example, if the base table and
+the view have the same partition key. Note that only ScyllaDB guarantees
+synchronous view updates in this case - they are asynchronous in Cassandra.
+
+ScyllaDB also allows explicitly marking a view as synchronous. When a view
+is marked synchronous, base-table updates will wait for that view to be
+updated before returning. A base table may have multiple views marked
+synchronous, and will wait for all of them. The consistency level of a
+write applies to synchronous views as well as to the base table: For
+example, writing with QUORUM consistency level returns only after a
+quorum of the base-table replicas were updated *and* also a quorum of
+each synchronous view table was also updated.
+
+Synchronous views tend to reduce the observed availability of the base table,
+because a base-table write would only succeed if enough synchronous view
+updates also succeed. On the other hand, failed view updates would be
+detected immediately, and appropriate action can be taken, such as retrying
+the write or pruning the materialized view (as mentioned in the previous
+section). This can improve the consistency of the base table with its views.
+
+To create a new materialized view with synchronous updates, use:
 
 ```cql
 CREATE MATERIALIZED VIEW main.mv
@@ -157,12 +171,18 @@ CREATE MATERIALIZED VIEW main.mv
   WITH synchronous_updates = true;
 ```
 
+To make an existing materialized view synchronous, use:
+
 ```cql
 ALTER MATERIALIZED VIEW main.mv WITH synchronous_updates = true;
 ```
 
-Synchronous updates can also be dynamically turned off by setting
-the value of `synchronous_updates` to `false`.
+To return a materialized view to the default behavior (which, as explained
+above, _usually_ means asynchronous updates), use:
+
+```cql
+ALTER MATERIALIZED VIEW main.mv WITH synchronous_updates = false;
+```
 
 ### Synchronous global secondary indexes
 
@@ -261,7 +281,7 @@ that the rate of requests exceeds configured limit, the cluster will start
 rejecting some of them in order to bring the throughput back to the configured
 limit. Rejected requests are less costly which can help reduce overload.
 
-_NOTE_: Due to Scylla's distributed nature, tracking per-partition request rates
+_NOTE_: Due to ScyllaDB's distributed nature, tracking per-partition request rates
 is not perfect and the actual rate of accepted requests may be higher up to
 a factor of keyspace's `RF`. This feature should not be used to enforce precise
 limits but rather serve as an overload protection feature.
