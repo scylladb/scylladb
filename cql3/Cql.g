@@ -371,7 +371,8 @@ useStatement returns [std::unique_ptr<raw::use_statement> stmt]
  * SELECT [JSON] <expression>
  * FROM <CF>
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
- * LIMIT <NUMBER>;
+ * LIMIT <NUMBER>
+ * [USING TIMEOUT <duration>];
  */
 selectStatement returns [std::unique_ptr<raw::select_statement> expr]
     @init {
@@ -398,7 +399,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingClause[attrs] )?
+      ( usingTimeoutClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -525,6 +526,10 @@ usingTimestampTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
 usingTimestampTimeoutClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     | K_TIMEOUT to=term { attrs->timeout = to; }
+    ;
+
+usingTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING K_TIMEOUT to=term { attrs->timeout = to; }
     ;
 
 /**

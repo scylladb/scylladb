@@ -153,7 +153,7 @@ def test_invalid_timeout(scylla_only, cql, table1):
 
     # For select statements, it's not allowed to specify timestamp or ttl,
     # since they bear no meaning
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
     invalid_syntax(f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")
