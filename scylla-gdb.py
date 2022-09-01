@@ -5136,25 +5136,9 @@ class scylla_repairs(gdb.Command):
 
     Example:
 
-       (repair_meta*) for masters: addr = 0x600005abf830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.3->repair_state::get_sync_boundary_finished'], repair_meta = {
-         db = @0x7fffe538c9f0,
-         _messaging = @0x7fffe538ca90,
-         _cf = @0x6000066f0000,
-
-       ....
-
-       (repair_meta*) for masters: addr = 0x60000521f830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::get_sync_boundary_started'], repair_meta = {
-         _db = @0x7fffe538c9f0,
-         _messaging = @0x7fffe538ca90,
-        _cf = @0x6000066f0000,
-
-       ....
-
-      (repair_meta*) for follower: addr = 0x60000432a808, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::unknown'], repair_meta = {
-        db = @0x7fffe538c9f0,
-        messaging = @0x7fffe538ca90,
-        _cf = @0x6000066f0000,
-
+       (repair_meta*) for masters: addr = 0x600005abf830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.3->repair_state::get_sync_boundary_finished'], repair_meta = (repair_meta*) 0x60400af3f8e0
+       (repair_meta*) for masters: addr = 0x60000521f830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::get_sync_boundary_started'], repair_meta = (repair_meta*) 0x6040103df8e0
+       (repair_meta*) for follower: addr = 0x60000432a808, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::unknown'], repair_meta = (repair_meta*) 0x60400d73f8e0
     """
 
     def __init__(self):
@@ -5167,7 +5151,7 @@ class scylla_repairs(gdb.Command):
         ip = str(rm['_myip']).replace('"', '')
         for n in std_vector(rm['_all_node_states']):
             all_nodes_state.append(str(n['node']).replace('"', '') + "->" + str(n['state']))
-        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm))
+        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = (repair_meta*) %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm.address))
 
     def invoke(self, arg, for_tty):
         for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas'), link='_tracker_link'):
