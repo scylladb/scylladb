@@ -1,5 +1,5 @@
-Scylla SSTable - 3.x
-====================
+ScyllaDB SSTable - 3.x
+=======================
 
 .. toctree::
    :hidden:
@@ -12,9 +12,9 @@ Scylla SSTable - 3.x
 
 .. include:: ../_common/sstable_what_is.rst
 
-* In Scylla 4.3 and above, the ``md`` format is enabled by default (the ``enable_sstables_md_format`` option is set to ``true``).
-* In Scylla 3.1 to 4.2, the ``mc`` format is enabled by default. 
-* In Scylla 3.0, the ``mc`` format is disabled by default. You can enable it by adding the ``enable_sstables_mc_format`` parameter set to ``true`` in the ``scylla.yaml`` file.
+* In ScyllaDB 4.3 and above, the ``md`` format is enabled by default (the ``enable_sstables_md_format`` option is set to ``true``).
+* In ScyllaDB 3.1 to 4.2, the ``mc`` format is enabled by default. 
+* In ScyllaDB 3.0, the ``mc`` format is disabled by default. You can enable it by adding the ``enable_sstables_mc_format`` parameter set to ``true`` in the ``scylla.yaml`` file.
 
 For example: 
 
@@ -23,10 +23,10 @@ For example:
    enable_sstables_mc_format: true
 
 
-For more information on Scylla 3.x SSTable formats, see below:
+For more information on ScyllaDB 3.x SSTable formats, see below:
 
 * :doc:`SSTable 3.0 Data File Format <sstables-3-data-file-format>`
 * :doc:`SSTable 3.0 Statistics <sstables-3-statistics>` 
 * :doc:`SSTable 3.0 Summary <sstables-3-summary>`
 * :doc:`SSTable 3.0 Index <sstables-3-index>`
-* :doc:`SSTable 3.0 Format in Scylla <sstable-format>`
+* :doc:`SSTable 3.0 Format in ScyllaDB <sstable-format>`
