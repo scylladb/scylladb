@@ -138,6 +138,15 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         std::vector<managed_ref<int>> allocated1;
         std::vector<managed_ref<int>> allocated2;
 
+        auto clear_vectors = defer([&] {
+            with_allocator(reg1.allocator(), [&] {
+                allocated1.clear();
+            });
+            with_allocator(reg2.allocator(), [&] {
+                allocated2.clear();
+            });
+        });
+
         int count = 32 * 1024 * 4 * 2;
         
         with_allocator(reg1.allocator(), [&] {
@@ -189,14 +198,6 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) >= quarter);
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) < quarter);
-
-        with_allocator(reg2.allocator(), [&] () mutable {
-            allocated2.clear();
-        });
-
-        with_allocator(reg1.allocator(), [&] () mutable {
-            allocated1.clear();
-        });
     });
 }
 
