@@ -13,10 +13,8 @@ Scylla SSTable - 3.x
 .. include:: ../_common/sstable_what_is.rst
 
 * In Scylla 4.3 and above, the ``md`` format is enabled by default (the ``enable_sstables_md_format`` option is set to ``true``).
-
-* In Scylla 3.1 to 4.2, mc format is enabled by default. 
-
-* In Scylla 3.0, mc format is disabled by default and can be enabled by adding the ``enable_sstables_mc_format`` parameter as 'true' in ``scylla.yaml`` file.
+* In Scylla 3.1 to 4.2, the ``mc`` format is enabled by default. 
+* In Scylla 3.0, the ``mc`` format is disabled by default. You can enable it by adding the ``enable_sstables_mc_format`` parameter set to ``true`` in the ``scylla.yaml`` file.
 
 For example: 
 
