@@ -1,4 +1,4 @@
-scylla-types
+Scylla Types
 ==============
 
 .. versionadded:: 5.0
@@ -26,7 +26,7 @@ The command syntax is as follows:
 * Provide the values in the hex form without a leading 0x prefix.
 * You must specify the type of the provided values. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * The number of provided values depends on the operation. See :ref:`Supported Operations <scylla-types-operations>` for details.
-* The scylla-types operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
+* The ``scylla types`` operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
 
 .. _scylla-types-type:
 
