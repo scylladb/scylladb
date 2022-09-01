@@ -44,10 +44,11 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
-future<> fsm::wait_max_log_size(seastar::abort_source* as) {
+future<> fsm::consume_memory(seastar::abort_source* as, size_t size) {
     check_is_leader();
 
-    return as ? leader_state().log_limiter_semaphore->wait(*as) : leader_state().log_limiter_semaphore->wait();
+    auto& sm = *leader_state().log_limiter_semaphore;
+    return as ? sm.wait(*as, size) : sm.wait(size);
 }
 
 const configuration& fsm::get_configuration() const {
@@ -156,7 +157,20 @@ void fsm::reset_election_timeout() {
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     _state.emplace<leader>(_config.max_log_size, *this);
-    leader_state().log_limiter_semaphore->consume(_log.in_memory_size());
+
+    // The semaphore is not used on the follower, so the limit could
+    // be temporarily exceeded here, and the value of
+    // the counter in the semaphore could become negative.
+    // This is not a problem though as applier_fiber triggers a snapshot
+    // if memory usage approaches the limit.
+    // As _applied_idx moves forward, snapshots will eventually release
+    // sufficient memory for at least one waiter (add_entry) to proceed.
+    // The amount of memory used by log::apply_snapshot for trailing items
+    // is limited by the condition
+    // _config.snapshot_trailing_size <= _config.max_log_size - max_command_size,
+    // which means that at least one command will eventually return from semaphore::wait.
+    leader_state().log_limiter_semaphore->consume(_log.memory_usage());
+
     _last_election_time = _clock.now();
     _ping_leader = false;
     // a new leader needs to commit at lease one entry to make sure that
@@ -976,7 +990,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-bool fsm::apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local) {
+bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, size_t max_trailing_bytes, bool local) {
     logger.trace("apply_snapshot[{}]: current term: {}, term: {}, idx: {}, id: {}, local: {}",
             _my_id, _current_term, snp.term, snp.idx, snp.id, local);
     // If the snapshot is locally generated, all entries up to its index must have been locally applied,
@@ -1002,7 +1016,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local) {
     // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
     _output.snp.emplace(fsm_output::applied_snapshot{snp, local});
-    size_t units = _log.apply_snapshot(std::move(snp), trailing);
+    size_t units = _log.apply_snapshot(std::move(snp), max_trailing_entries, max_trailing_bytes);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
         leader_state().log_limiter_semaphore->signal(units);

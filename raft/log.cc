@@ -17,6 +17,14 @@ const log_entry_ptr& log::get_entry(index_t i) const {
     return _log[i - _first_idx];
 }
 
+size_t log::range_memory_usage(log_entries::iterator first, log_entries::iterator last) const {
+    size_t result = 0;
+    for (auto it = first; it != last; ++it) {
+        result += memory_usage_of(**it, _max_command_size);
+    }
+    return result;
+}
+
 log_entry_ptr& log::operator[](size_t i) {
     assert(!_log.empty() && index_t(i) >= _first_idx);
     return get_entry(index_t(i));
@@ -24,6 +32,7 @@ log_entry_ptr& log::operator[](size_t i) {
 
 void log::emplace_back(log_entry_ptr&& e) {
     _log.emplace_back(std::move(e));
+    _memory_usage += memory_usage_of(*_log.back(), _max_command_size);
     if (std::holds_alternative<configuration>(_log.back()->data)) {
         _prev_conf_idx = _last_conf_idx;
         _last_conf_idx = last_idx();
@@ -55,7 +64,9 @@ index_t log::next_idx() const {
 void log::truncate_uncommitted(index_t idx) {
     assert(idx >= _first_idx);
     auto it = _log.begin() + (idx - _first_idx);
+    const auto released_memory = range_memory_usage(it, _log.end());
     _log.erase(it, _log.end());
+    _memory_usage -= released_memory;
     stable_to(std::min(_stable_idx, last_idx()));
     if (_last_conf_idx > last_idx()) {
         // If _prev_conf_idx is 0, this log does not contain any
@@ -215,24 +226,33 @@ const configuration* log::get_prev_configuration() const {
     return nullptr;
 }
 
-size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t trailing) {
+size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries, size_t max_trailing_bytes) {
     assert (snp.idx > _snapshot.idx);
 
-    size_t removed;
+    size_t released_memory;
     auto idx = snp.idx;
 
     if (idx > last_idx()) {
-        // Remove all entries ignoring the 'trailing' argument,
+        // Remove all entries ignoring 'trailing' arguments,
         // since otherwise there would be a gap between old
         // entries and the next entry index.
-        removed = _log.size();
+        released_memory = std::exchange(_memory_usage, 0);
         _log.clear();
         _first_idx = idx + index_t{1};
     } else {
-        removed = _log.size() - (last_idx() - idx);
-        removed -= std::min(trailing, removed);
-        _log.erase(_log.begin(), _log.begin() + removed);
-        _first_idx = _first_idx + index_t{removed};
+        auto entries_to_remove = _log.size() - (last_idx() - idx);
+        size_t trailing_bytes = 0;
+        for (int i = 0; i < max_trailing_entries && entries_to_remove > 0; ++i) {
+            trailing_bytes += memory_usage_of(*_log[entries_to_remove - 1], _max_command_size);
+            if (trailing_bytes > max_trailing_bytes) {
+                break;
+            }
+            --entries_to_remove;
+        }
+        released_memory = range_memory_usage(_log.begin(), _log.begin() + entries_to_remove);
+        _log.erase(_log.begin(), _log.begin() + entries_to_remove);
+        _memory_usage -= released_memory;
+        _first_idx = _first_idx + index_t{entries_to_remove};
     }
 
     _stable_idx = std::max(idx, _stable_idx);
@@ -250,7 +270,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t trailing) {
 
     _snapshot = std::move(snp);
 
-    return removed;
+    return released_memory;
 }
 
 std::ostream& operator<<(std::ostream& os, const log& l) {

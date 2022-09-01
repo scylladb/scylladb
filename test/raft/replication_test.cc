@@ -158,7 +158,20 @@ RAFT_TEST_CASE(take_snapshot, (test_case{
 // 2 nodes doing simple replication/snapshoting while leader's log size is limited
 RAFT_TEST_CASE(backpressure, (test_case{
          .nodes = 2,
-         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_size = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
+         .config = {
+             {
+                 .snapshot_threshold = 10,
+                 .snapshot_threshold_log_size = 200,
+                 .snapshot_trailing = 5,
+                 .snapshot_trailing_size = 100,
+                 .max_log_size = 450,
+                 .max_command_size = 150
+             },
+             {
+                 .snapshot_threshold = 20,
+                 .snapshot_trailing = 10
+            }
+         },
          .updates = {entries{100}}}));
 
 // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]

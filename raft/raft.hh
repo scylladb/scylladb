@@ -471,8 +471,10 @@ using rpc_message = std::variant<append_request,
       read_quorum,
       read_quorum_reply>;
 
-// we need something that can be truncated form both sides.
+// we need something that can be truncated from both sides.
 // std::deque move constructor is not nothrow hence cannot be used
+// also, boost::deque deallocates blocks when items are removed,
+// we don't want to hold on to memory we don't use.
 using log_entries = boost::container::deque<log_entry_ptr>;
 
 // 3.4 Leader election
