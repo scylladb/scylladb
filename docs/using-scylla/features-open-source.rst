@@ -25,8 +25,8 @@ Scylla Open Source Features
     the implementation of Raft, schema changes in ScyllaDB are safe, including concurrent schema updates. 
     This feature is experimental in version 5.0 and needs to be explicitly enabled.
 
-  * :doc:`scylla-sstable tool </operating-scylla/admin-tools/scylla-sstable/>` - An admin tool that allows you to examine the content of SStables by performing operations such as dumping the content of SStables, generating a histogram, validating the content of SStables, and more.
-  * :doc:`scylla-types tool </operating-scylla/admin-tools/scylla-types/>` - An admin tool that allows you to examine raw values obtained from SStables, logs, coredumps, etc., by printing, validating or comparing the values.
+  * :doc:`Scylla SStable tool </operating-scylla/admin-tools/scylla-sstable/>` - An admin tool that allows you to examine the content of SStables by performing operations such as dumping the content of SStables, generating a histogram, validating the content of SStables, and more.
+  * :doc:`Scylla Types tool </operating-scylla/admin-tools/scylla-types/>` - An admin tool that allows you to examine raw values obtained from SStables, logs, coredumps, etc., by printing, validating or comparing the values.
   * :doc:`Virtual Tables </operating-scylla/admin-tools/virtual-tables/>` - Tables that retrieve system-level information by generating their contents on-the-fly when queried.
 
 		* Virtual table for configuration - ``system.config``, allows you to query and update configuration over CQL.

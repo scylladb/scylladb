@@ -9,8 +9,8 @@ Admin Tools
    CQLSh </cql/cqlsh>
    REST </operating-scylla/rest>
    Tracing </using-scylla/tracing>
-   scylla-sstable
-   scylla-types </operating-scylla/admin-tools/scylla-types/>
+   Scylla SStable </operating-scylla/admin-tools/scylla-sstable/>
+   Scylla Types </operating-scylla/admin-tools/scylla-types/>
    sstableloader
    cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>
    sstabledump
