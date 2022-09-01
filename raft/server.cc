@@ -283,8 +283,18 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
-    if (_config.snapshot_threshold > _config.max_log_size) {
-        throw config_error("snapshot_threshold has to be smaller than max_log_size");
+    if (_config.max_snapshot_trailing_bytes >= _config.max_log_size) {
+        throw config_error(fmt::format("[{}] max_snapshot_trailing_bytes ({}) must be smaller than max_log_size ({})",
+            _id, _config.max_snapshot_trailing_bytes, _config.max_log_size));
+    }
+    if (_config.max_command_memory_usage() > _config.max_log_size - _config.max_snapshot_trailing_bytes) {
+        throw config_error(fmt::format(
+            "[{}] max_command_size + log_entry size ({} + {} = {}) must not be greater than "
+            "max_log_size - max_snapshot_trailing_bytes ({} - {} = {})",
+            _id,
+            _config.max_command_size, sizeof(log_entry), _config.max_command_size + sizeof(log_entry),
+            _config.max_log_size, _config.max_snapshot_trailing_bytes,
+            _config.max_log_size - _config.max_snapshot_trailing_bytes));
     }
 }
 
@@ -454,9 +464,9 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 }
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
-    // Wait for a new slot to become available
+    // Wait for sufficient memory to become available
     try {
-        co_await _fsm->wait_max_log_size(as);
+        co_await _fsm->consume_memory(as, log::memory_usage_of(cmd));
     } catch (semaphore_aborted&) {
         throw request_aborted();
     }
@@ -482,7 +492,7 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
 }
 
 future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as) {
-    if (_config.max_command_size > 0 && command.size() > _config.max_command_size) {
+    if (command.size() > _config.max_command_size) {
         logger.trace("[{}] add_entry command size exceeds the limit: {} > {}",
                      id(), command.size(), _config.max_command_size);
         throw command_is_too_big_error(command.size(), _config.max_command_size);
@@ -1039,7 +1049,7 @@ future<> server_impl::applier_fiber() {
                     try {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber stopped because state machine was aborter: {}", _id, e);
+                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
                         co_return;
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
@@ -1055,7 +1065,16 @@ future<> server_impl::applier_fiber() {
                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                auto last_snap_idx = _fsm->log_last_snapshot_idx();
-               if (_applied_idx >= last_snap_idx && _applied_idx - last_snap_idx >= _config.snapshot_threshold) {
+
+               // Having additional room of max_command_memory_usage() ensures
+               // that consume_memory won't get stuck because the last applier_fiber interation
+               // skipped taking a snapshot.
+               const auto memory_limit_approached =
+                   _fsm->log_memory_usage() >= (_config.max_log_size - _config.max_command_memory_usage());
+
+               if (_applied_idx > last_snap_idx &&
+                   (_applied_idx - last_snap_idx >= _config.snapshot_threshold || memory_limit_approached))
+               {
                    snapshot_descriptor snp;
                    snp.term = last_term;
                    snp.idx = _applied_idx;
@@ -1065,7 +1084,7 @@ future<> server_impl::applier_fiber() {
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, true)) {
+                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, _config.max_snapshot_trailing_bytes, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                        _state_machine->drop_snapshot(snp.id);
@@ -1428,7 +1447,9 @@ void server_impl::register_metrics() {
              sm::description("how many time the user's state machine was snapshotted"), {server_id_label(_id)}),
 
         sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
-             sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
+                       sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
+        sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
+                       sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
     });
 }
 

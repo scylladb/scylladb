@@ -23,17 +23,19 @@ public:
         // automatically snapshot state machine after applying
         // this number of entries
         size_t snapshot_threshold = 1024;
-        // how many entries to leave in the log after tacking a snapshot
+        // how many entries to leave in the log after taking a snapshot
         size_t snapshot_trailing = 200;
+        // limit on the total number of bytes, consumed by snapshot trailing entries,
+        // must be smaller than max_log_size
+        size_t max_snapshot_trailing_bytes = 1 * 1024 * 1024;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
-        // Max number of entries of in-memory part of the log after
+        // Limit in bytes on the size of in-memory part of the log after
         // which requests are stopped to be admitted until the log
-        // is shrunk back by a snapshot. Should be greater than
-        // whatever the default number of trailing log entries
-        // is configured by the snapshot, otherwise the state
-        // machine will deadlock on attempt to submit a new entry.
-        size_t max_log_size = 5000;
+        // is shrunk back by a snapshot.
+        // The following condition must be satisfied:
+        // max_command_memory_usage() <= max_log_size - max_snapshot_trailing_bytes
+        size_t max_log_size = 4 * 1024 * 1024;
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
         // If set to true, forward configuration and entries from
@@ -43,8 +45,16 @@ public:
         bool enable_forwarding = true;
 
         // Max size of a single command, add_entry with a bigger command will throw command_is_too_big_error.
-        // The value of zero means no limit.
-        size_t max_command_size = 0;
+        // The following condition must be satisfied:
+        // max_command_memory_usage() <= max_log_size - max_snapshot_trailing_bytes
+        // A snapshot will be triggered if memory_usage reaches _config.max_log_size - _config.max_command_memory_usage(),
+        // therefore, to avoid too frequent snapshots, it makes sense to make
+        // max_log_size several times larger than max_command_size.
+        size_t max_command_size = 100 * 1024;
+
+        size_t max_command_memory_usage() const {
+            return max_command_size + sizeof(log_entry);
+        }
     };
 
     virtual ~server() {}

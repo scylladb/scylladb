@@ -3165,12 +3165,15 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         bool nemesis_crashes = true;
 
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
+        const auto max_command_size = 30;
         auto srv_cfg = frequent_snapshotting
             ? raft::server::configuration {
                 .snapshot_threshold{10},
                 .snapshot_trailing{5},
-                .max_log_size{20},
+                .max_snapshot_trailing_bytes{2 * (max_command_size + sizeof(raft::log_entry))},
+                .max_log_size{5 * (max_command_size + sizeof(raft::log_entry))},
                 .enable_forwarding{forwarding},
+                .max_command_size{max_command_size}
             }
             : raft::server::configuration {
                 .enable_forwarding{forwarding},
