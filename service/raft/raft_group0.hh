@@ -9,7 +9,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/messaging.hh"
-#include "service/raft/group0_upgrade.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace cql3 { class query_processor; }
 
