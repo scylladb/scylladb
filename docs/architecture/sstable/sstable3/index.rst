@@ -16,6 +16,8 @@ ScyllaDB SSTable - 3.x
 * In ScyllaDB 3.1 to 4.2, the ``mc`` format is enabled by default. 
 * In ScyllaDB 3.0, the ``mc`` format is disabled by default. You can enable it by adding the ``enable_sstables_mc_format`` parameter set to ``true`` in the ``scylla.yaml`` file.
 
+.. REMOVE IN FUTURE VERSIONS - Remove the note above in version 5.1.
+
 For example: 
 
 .. code-block:: shell
