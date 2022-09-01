@@ -3,7 +3,7 @@
 * :doc:`REST - Scylla REST/HTTP Admin API</operating-scylla/rest>`.
 * :doc:`Tracing </using-scylla/tracing>` - a ScyllaDB tool for debugging and analyzing internal flows in the server. 
 * :doc:`SSTableloader </operating-scylla/admin-tools/sstableloader>` - Bulk load the sstables found in the directory to a Scylla cluster
-* :doc:`scylla-sstable </operating-scylla/admin-tools/scylla-sstable>` - Validates and dumps the content of SStables, generates a histogram, dumps the content of the SStable index.
+* :doc:`Scylla SStable </operating-scylla/admin-tools/scylla-sstable>` - Validates and dumps the content of SStables, generates a histogram, dumps the content of the SStable index.
 * :doc:`scylla-types </operating-scylla/admin-tools/scylla-types/>` - Examines raw values obtained from SStables, logs, coredumps, etc.
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a Scylla and Cassandra clusters.
 * :doc:`SSTabledump - Scylla 3.0, Scylla Enterprise 2019.1 and newer versions </operating-scylla/admin-tools/sstabledump>`
