@@ -1982,7 +1982,7 @@ future<> storage_service::decommission() {
                     throw std::runtime_error(msg);
                 }
                 if (!nodes_down.empty()) {
-                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool decommission --ignore-dead-nodes <list_of_dead_nodes>. E.g., nodetool decommission --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
                     slogger.warn("{}", msg);
                     throw std::runtime_error(msg);
                 }
@@ -2126,7 +2126,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
             throw std::runtime_error(msg);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
             slogger.warn("{}", msg);
             throw std::runtime_error(msg);
         }
