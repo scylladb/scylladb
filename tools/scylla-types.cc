@@ -17,6 +17,8 @@
 
 using namespace seastar;
 
+namespace bpo = boost::program_options;
+
 namespace {
 
 using type_variant = std::variant<
@@ -58,13 +60,13 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
     return std::visit(printing_visitor{value}, type);
 }
 
-void print_handler(type_variant type, std::vector<bytes> values) {
+void print_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     for (const auto& value : values) {
         fmt::print("{}\n", to_printable_string(type, value));
     }
 }
 
-void compare_handler(type_variant type, std::vector<bytes> values) {
+void compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("compare_handler(): expected 2 values, got {}", values.size()));
     }
@@ -96,7 +98,7 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
     fmt::print("{} {} {}\n", to_printable_string(type, values[0]), res_str, to_printable_string(type, values[1]));
 }
 
-void validate_handler(type_variant type, std::vector<bytes> values) {
+void validate_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     struct validate_visitor {
         bytes_view value;
 
@@ -138,7 +140,7 @@ schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::
     return builder.build();
 }
 
-void tokenof_handler(type_variant type, std::vector<bytes> values) {
+void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     struct tokenof_visitor {
         bytes_view value;
 
@@ -161,7 +163,7 @@ void tokenof_handler(type_variant type, std::vector<bytes> values) {
     }
 }
 
-using action_handler_func = void(*)(type_variant, std::vector<bytes>);
+using action_handler_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
 
 class action_handler {
     std::string _name;
@@ -178,8 +180,8 @@ public:
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
-    void operator()(type_variant type, std::vector<bytes> values) const {
-        _func(std::move(type), std::move(values));
+    void operator()(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) const {
+        _func(std::move(type), std::move(values), vm);
     }
 };
 
@@ -240,8 +242,6 @@ $ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType
 namespace tools {
 
 int scylla_types_main(int argc, char** argv) {
-    namespace bpo = boost::program_options;
-
     const action_handler* found_ah = nullptr;
     if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
         found_ah = &tools::utils::get_selected_operation(argc, argv, action_handlers, "action");
@@ -324,7 +324,7 @@ $ scylla types {{action}} --help
         auto values = boost::copy_range<std::vector<bytes>>(
                 app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-        handler(std::move(type), std::move(values));
+        handler(std::move(type), std::move(values), app.configuration());
 
         return make_ready_future<>();
     });
