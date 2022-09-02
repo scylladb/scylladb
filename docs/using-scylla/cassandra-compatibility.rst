@@ -22,7 +22,7 @@ Interfaces
 ----------
 
 .. list-table::
-   :widths: 25 45 30
+   :widths: 23 42 35
    :header-rows: 1
 
    * - Apache Cassandra Interface
@@ -36,8 +36,11 @@ Interfaces
      - Compatible with Cassandra 2.1
      - 
    * - SSTable format (all versions)
-     - 3.11(mc / md ), 2.2(la), 2.1.8 (ka)
-     - ``md`` format is supported in ScyllaDB Open Source 4.3 and later, and ScyllaDB Enterprise 2021.1.0 and later
+     - 3.11(mc / md / me), 2.2(la), 2.1.8 (ka)
+     - | ``me`` - supported in ScyllaDB Open Source 5.1 and ScyllaDB Enterprise 2022.1.0 (and later)
+       | ``md`` - supported in ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1.0 (and later)
+       
+
    * - JMX   
      - 3.11
      - More below
