@@ -23,24 +23,33 @@ using type_variant = std::variant<
         compound_type<allow_prefixes::yes>,
         compound_type<allow_prefixes::no>>;
 
+sstring to_printable_string(const data_type& type, bytes_view value) {
+    return type->to_string(value);
+}
+
+template <allow_prefixes AllowPrefixes>
+sstring to_printable_string(const compound_type<AllowPrefixes>& type, bytes_view value) {
+    std::vector<sstring> printable_values;
+    printable_values.reserve(type.types().size());
+
+    const auto types = type.types();
+    const auto values = type.deserialize_value(value);
+
+    for (size_t i = 0; i != values.size(); ++i) {
+        printable_values.emplace_back(types.at(i)->to_string(values.at(i)));
+    }
+    return format("({})", boost::algorithm::join(printable_values, ", "));
+}
+
 struct printing_visitor {
     bytes_view value;
 
     sstring operator()(const data_type& type) {
-        return type->to_string(value);
+        return to_printable_string(type, value);
     }
     template <allow_prefixes AllowPrefixes>
     sstring operator()(const compound_type<AllowPrefixes>& type) {
-        std::vector<sstring> printable_values;
-        printable_values.reserve(type.types().size());
-
-        const auto types = type.types();
-        const auto values = type.deserialize_value(value);
-
-        for (size_t i = 0; i != values.size(); ++i) {
-            printable_values.emplace_back(types.at(i)->to_string(values.at(i)));
-        }
-        return format("({})", boost::algorithm::join(printable_values, ", "));
+        return to_printable_string(type, value);
     }
 };
 
