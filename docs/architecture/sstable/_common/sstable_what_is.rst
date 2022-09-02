@@ -12,9 +12,12 @@ SSTable 3.0 (mc format) is more efficient and requires less disk space than the 
    * - SSTable Version
      - ScyllaDB Enterprise Version
      - ScyllaDB Open Source Version
+   * - 3.x ('me')
+     - 2022.2
+     - 5.1 and above
    * - 3.x ('md')
      - 2021.1
-     - 4.3 and above
+     - 4.3, 4.4, 4.5, 4.6, 5.0
    * - 3.0 ('mc')
      - 2019.1, 2020.1
      - 3.x, 4.1, 4.2
