@@ -12,6 +12,7 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "log.hh"
+#include "schema_builder.hh"
 #include "tools/utils.hh"
 
 using namespace seastar;
@@ -125,6 +126,41 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
     }
 }
 
+schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::no>& type) {
+    schema_builder builder("ks", "dummy");
+    unsigned i = 0;
+    for (const auto& t : type.types()) {
+        const auto col_name = format("pk{}", i);
+        builder.with_column(bytes(to_bytes_view(col_name)), t, column_kind::partition_key);
+    }
+    builder.with_column("v", utf8_type, column_kind::regular_column);
+
+    return builder.build();
+}
+
+void tokenof_handler(type_variant type, std::vector<bytes> values) {
+    struct tokenof_visitor {
+        bytes_view value;
+
+        void operator()(const data_type& type) {
+            throw std::invalid_argument("tokenof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::yes>& type) {
+            throw std::invalid_argument("tokenof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::no>& type) {
+            auto s = build_dummy_partition_key_schema(type);
+            auto pk = partition_key::from_bytes(value);
+            auto dk = dht::decorate_key(*s, pk);
+            fmt::print("{}: {}\n", to_printable_string(type, value), dk.token());
+        }
+    };
+
+    for (const auto& value : values) {
+        std::visit(tokenof_visitor{value}, type);
+    }
+}
+
 using action_handler_func = void(*)(type_variant, std::vector<bytes>);
 
 class action_handler {
@@ -184,6 +220,18 @@ Examples:
 
 $  scylla types validate -t Int32Type b34b62d4
 b34b62d4: VALID - -1286905132
+)"},
+    {"tokenof", "tokenof (calculate the token of) the partition-key", tokenof_handler,
+R"(
+Decorate the key, that is calculate its token.
+Only supports --full-compound.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+(file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
 )"},
 };
 
