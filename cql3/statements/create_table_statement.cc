@@ -490,6 +490,21 @@ std::optional<sstring> check_restricted_table_properties(
                                                    "by the twcs_max_window_count ({}) parameter. Note that default_time_to_live=0 is also "
                                                    "highly discouraged.", ttl, twcs_options.get_sstable_window_size().count(), window_count, max_windows));
             }
+        } else {
+              switch (qp.db().get_config().restrict_twcs_without_default_ttl()) {
+              case db::tri_mode_restriction_t::mode::TRUE:
+                  throw exceptions::configuration_exception(
+                      "TimeWindowCompactionStrategy tables without a strict default_time_to_live setting "
+                      "are forbidden. You may override this restriction by setting restrict_twcs_without_default_ttl "
+                      "configuration option to false.");
+              case db::tri_mode_restriction_t::mode::WARN:
+                  return format("TimeWindowCompactionStrategy tables without a default_time_to_live "
+                      "may potentially introduce too many windows. Ensure that insert statements specify a "
+                      "TTL (via USING TTL), when inserting data to this table. The restrict_twcs_without_default_ttl "
+                      "configuration option can be changed to silence this warning or make it into an error");
+              case db::tri_mode_restriction_t::mode::FALSE:
+                  break;
+              }
         }
    }
     return std::nullopt;
