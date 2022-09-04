@@ -449,12 +449,13 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, sstrin
             return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(std::move(sstables_to_compact),
                 default_priority_class()), *cf, new_sstable).then([generation] (auto) {});
         } else if (strategy == compaction_strategy_type::leveled) {
+            std::vector<sstables::shared_sstable> candidates;
+            candidates.reserve(sstables->size());
             for (auto& sst : *sstables) {
                 BOOST_REQUIRE(sst->get_sstable_level() == 0);
                 BOOST_REQUIRE(sst->data_size() >= min_sstable_size);
-                column_family_test(cf).add_sstable(sst);
+                candidates.push_back(sst);
             }
-            auto candidates = get_candidates_for_leveled_strategy(*cf);
             sstables::size_tiered_compaction_strategy_options stcs_options;
             auto table_s = make_table_state_for_test(cf, env);
             leveled_manifest manifest = leveled_manifest::create(*table_s, candidates, 1, stcs_options);
