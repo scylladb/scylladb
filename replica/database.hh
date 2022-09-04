@@ -318,6 +318,7 @@ struct table_stats;
 using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
+class compaction_group;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
@@ -409,11 +410,15 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
 
+    compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
     // SSTable set which contains all non-maintenance sstables
     lw_shared_ptr<sstables::sstable_set> _main_sstables;
     // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
     lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
+    // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
+    //  will be able to hold more than one group.
+    std::unique_ptr<compaction_group> _compaction_group;
     // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
@@ -438,7 +443,6 @@ private:
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     bool _durable_writes;
-    compaction_manager& _compaction_manager;
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
@@ -491,9 +495,6 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
-
-    class table_state;
-    std::unique_ptr<table_state> _table_state;
 public:
     data_dictionary::table as_data_dictionary() const;
 
@@ -1106,6 +1107,8 @@ public:
     void enable_off_strategy_trigger();
 
     compaction::table_state& as_table_state() const noexcept;
+
+    friend class compaction_group;
 };
 
 using user_types_metadata = data_dictionary::user_types_metadata;

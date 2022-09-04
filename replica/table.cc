@@ -17,6 +17,7 @@
 
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
+#include "replica/compaction_group.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
@@ -809,7 +810,7 @@ table::stop() {
     } catch (...) {
         err = std::current_exception();
     }
-    co_await _compaction_manager.remove(as_table_state());
+    co_await _compaction_group->stop();
     co_await _sstable_deletion_gate.close();
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
         _main_sstables = _compaction_strategy.make_sstable_set(_schema);
@@ -1219,6 +1220,21 @@ table::make_memtable_list() {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
+compaction_group::compaction_group(table& t)
+    : _t(t)
+    , _table_state(std::make_unique<table_state>(t))
+{
+    _t._compaction_manager.add(as_table_state());
+}
+
+future<> compaction_group::stop() noexcept {
+    try {
+        return _t._compaction_manager.remove(as_table_state());
+    } catch (...) {
+        return current_exception_as_future<>();
+    }
+}
+
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
@@ -1228,18 +1244,18 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                          column_family_label(_schema->cf_name())
                         )
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
+    , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _main_sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
     , _maintenance_sstables(make_maintenance_sstable_set())
+    , _compaction_group(std::make_unique<compaction_group>(*this))
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
     , _durable_writes(true)
-    , _compaction_manager(compaction_manager)
     , _sstables_manager(sst_manager)
     , _index_manager(this->as_data_dictionary())
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
-    , _table_state(std::make_unique<table_state>(*this))
     , _row_locker(_schema)
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
@@ -1247,7 +1263,6 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
         tlogger.warn("Writes disabled, column family no durable.");
     }
     set_metrics();
-    _compaction_manager.add(as_table_state());
 
     update_optimized_twcs_queries_flag();
 }
@@ -2385,7 +2400,7 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
     });
 }
 
-class table::table_state : public compaction::table_state {
+class compaction_group::table_state : public compaction::table_state {
     table& _t;
 public:
     explicit table_state(table& t) : _t(t) {}
@@ -2463,8 +2478,12 @@ public:
     }
 };
 
-compaction::table_state& table::as_table_state() const noexcept {
+compaction::table_state& compaction_group::as_table_state() const noexcept {
     return *_table_state;
+}
+
+compaction::table_state& table::as_table_state() const noexcept {
+    return _compaction_group->as_table_state();
 }
 
 data_dictionary::table
