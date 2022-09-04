@@ -244,7 +244,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
-        column_family_test(cf).add_sstable(sst);
+        column_family_test(cf).add_sstable(sst).get();
     }
 
     BOOST_REQUIRE(cf->sstables_count() == generations.size());
@@ -565,6 +565,7 @@ SEASTAR_TEST_CASE(compact_02) {
 
 // Leveled compaction strategy tests
 
+// NOTE: must run in a thread.
 static void add_sstable_for_leveled_test(test_env& env, lw_shared_ptr<replica::column_family> cf, int64_t gen, uint64_t fake_data_size,
                                          uint32_t sstable_level, sstring first_key, sstring last_key, int64_t max_timestamp = 0) {
     auto sst = env.make_sstable(cf->schema(), "", gen, la, big);
@@ -573,13 +574,14 @@ static void add_sstable_for_leveled_test(test_env& env, lw_shared_ptr<replica::c
     assert(sst->get_sstable_level() == sstable_level);
     assert(sst->get_stats_metadata().max_timestamp == max_timestamp);
     assert(generation_value(sst->generation()) == gen);
-    column_family_test(cf).add_sstable(sst);
+    column_family_test(cf).add_sstable(sst).get();
 }
 
+// NOTE: must run in a thread.
 static shared_sstable add_sstable_for_overlapping_test(test_env& env, lw_shared_ptr<replica::column_family> cf, int64_t gen, sstring first_key, sstring last_key, stats_metadata stats = {}) {
     auto sst = env.make_sstable(cf->schema(), "", gen, la, big);
     sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
-    column_family_test(cf).add_sstable(sst);
+    column_family_test(cf).add_sstable(sst).get();
     return sst;
 }
 static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key, uint32_t level = 0) {
@@ -616,7 +618,7 @@ static bool sstable_overlaps(const lw_shared_ptr<replica::column_family>& cf, in
 
 SEASTAR_TEST_CASE(leveled_01) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -654,13 +656,13 @@ SEASTAR_TEST_CASE(leveled_01) {
     }
     BOOST_REQUIRE(gens.empty());
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_02) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -708,13 +710,13 @@ SEASTAR_TEST_CASE(leveled_02) {
     }
     BOOST_REQUIRE(gens.empty());
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_03) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -766,13 +768,13 @@ SEASTAR_TEST_CASE(leveled_03) {
     }
     BOOST_REQUIRE(gen_and_level.empty());
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_04) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -832,7 +834,7 @@ SEASTAR_TEST_CASE(leveled_04) {
     }
     BOOST_REQUIRE(levels.empty());
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -858,7 +860,7 @@ SEASTAR_TEST_CASE(leveled_05) {
 
 SEASTAR_TEST_CASE(leveled_06) {
     // Test that we can compact a single L1 compaction into an empty L2.
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto max_sstable_size_in_mb = 1;
@@ -886,12 +888,12 @@ SEASTAR_TEST_CASE(leveled_06) {
     BOOST_REQUIRE(sst->get_sstable_level() == 1);
     BOOST_REQUIRE(generation_value(sst->generation()) == 1);
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_07) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     for (auto i = 0; i < leveled_manifest::MAX_COMPACTING_L0*2; i++) {
@@ -911,12 +913,12 @@ SEASTAR_TEST_CASE(leveled_07) {
         BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp < leveled_manifest::MAX_COMPACTING_L0);
     }
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_invariant_fix) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto sstables_no = cf.schema()->max_compaction_threshold();
@@ -948,12 +950,12 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
         return generation_value(sst->generation()) != 0;
     }));
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     builder.set_min_compaction_threshold(4);
@@ -999,12 +1001,12 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
         BOOST_REQUIRE(candidate.sstables.empty());
     }
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(5);
@@ -1033,12 +1035,12 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(check_overlapping) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
     auto key_and_token_pair = token_generation_for_current_shard(4);
@@ -1058,7 +1060,7 @@ SEASTAR_TEST_CASE(check_overlapping) {
     BOOST_REQUIRE(overlapping_sstables.size() == 1);
     BOOST_REQUIRE(generation_value(overlapping_sstables.front()->generation()) == 4);
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -1120,7 +1122,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             column_family_for_tests cf(env.manager(), s);
             auto stop_cf = deferred_stop(cf);
             for (auto&& sst : all) {
-                column_family_test(cf).add_sstable(sst);
+                column_family_test(cf).add_sstable(sst).get();
             }
             return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(to_compact, default_priority_class()), *cf, sst_gen).get0().new_sstables;
         };
@@ -1505,7 +1507,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 }
 
 SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     builder.set_min_compaction_threshold(4);
@@ -1539,12 +1541,12 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
         BOOST_REQUIRE(generation_value(sst->generation()) != (min_threshold + 1));
     }
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     builder.set_min_compaction_threshold(4);
@@ -1594,7 +1596,7 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     BOOST_REQUIRE(gens.contains(min_threshold + 1));
     BOOST_REQUIRE(!gens.contains(min_threshold + 2));
 
-    return cf.stop_and_keep_alive();
+    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -3098,7 +3100,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 BOOST_REQUIRE(!sstables.contains(new_sst));
                 sstables.insert(new_sst);
             }
-            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables);
+            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables).get();
             compaction_manager_test(cf.get_compaction_manager()).propagate_replacement(&*cf, old_sstables, new_sstables);
         };
 
@@ -3171,7 +3173,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             auto sst = make_sstable_containing(sst_gen, { make_insert(tokens[i]) });
             sst->set_sstable_level(1);
             BOOST_REQUIRE(sst->get_sstable_level() == 1);
-            column_family_test(cf).add_sstable(sst);
+            column_family_test(cf).add_sstable(sst).get();
             sstables.insert(std::move(sst));
             do_compaction(4, 4);
         }
@@ -3325,7 +3327,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         sst_cfg.run_identifier = partial_sstable_run_identifier;
         auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
 
-        column_family_test(cf).add_sstable(partial_sstable_run_sst);
+        column_family_test(cf).add_sstable(partial_sstable_run_sst).get();
         column_family_test::update_sstables_known_generation(*cf, generation_value(partial_sstable_run_sst->generation()));
 
         auto generation_exists = [&cf] (int64_t generation) {
@@ -3606,7 +3608,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
                     .produces(mut2)
                     .produces_end_of_stream();
             }
-            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables);
+            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables).get();
             // force compaction failure after sstable containing expired tombstone is removed from set.
             throw std::runtime_error("forcing compaction failure on early replacement");
         };
@@ -4598,7 +4600,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             auto cf = tables[idx];
             auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
             auto sst = make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts);
-            column_family_test(cf).add_sstable(sst);
+            column_family_test(cf).add_sstable(sst).get();
         };
 
         for (auto i = 0; i < num_tables; i++) {
@@ -4647,7 +4649,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             auto cft = column_family_test(cf);
             for (auto i = 0; i < num_sstables; i++) {
                 auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
-                cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts));
+                cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts)).get();
             }
         };
 
