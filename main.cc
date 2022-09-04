@@ -1362,7 +1362,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return messaging.invoke_on_all(&netw::messaging_service::start_listen);
+                return messaging.invoke_on_all([&token_metadata] (auto& netw) {
+                    return netw.start_listen(token_metadata.local());
+                });
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {

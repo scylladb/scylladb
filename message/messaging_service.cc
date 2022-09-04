@@ -111,7 +111,6 @@
 #include "frozen_mutation.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
-#include "locator/snitch_base.hh"
 #include "idl/partition_checksum.dist.impl.hh"
 #include "idl/forward_request.dist.hh"
 #include "idl/forward_request.dist.impl.hh"
@@ -236,7 +235,8 @@ rpc_resource_limits(size_t memory_limit) {
     return limits;
 }
 
-future<> messaging_service::start_listen() {
+future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
+    _token_metadata = &stm;
     if (_credentials_builder && !_credentials) {
         return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
@@ -251,6 +251,31 @@ future<> messaging_service::start_listen() {
     }
     do_start_listen();
     return make_ready_future<>();
+}
+
+bool messaging_service::is_same_dc(inet_address addr) const {
+    // It's a "safety check". The token metadata pointer is nullptr before
+    // the service is start_listen()-ed and after it's being shutdown()-ed.
+    // No new clients should appear in those period, but if they do it's
+    // better to classify them somehow. Telling that all endpoints live in
+    // different DCs/RACKs would make messaging apply the most restrictive
+    // compression/encryption rules which can be sub-optimal but not bad.
+    if (_token_metadata == nullptr) {
+        return false;
+    }
+
+    const auto& topo = _token_metadata->get()->get_topology();
+    return topo.get_datacenter(addr) == topo.get_datacenter();
+}
+
+bool messaging_service::is_same_rack(inet_address addr) const {
+    // See comment in is_same_dc() about this check
+    if (_token_metadata == nullptr) {
+        return false;
+    }
+
+    const auto& topo = _token_metadata->get()->get_topology();
+    return topo.get_rack(addr) == topo.get_rack();
 }
 
 void messaging_service::do_start_listen() {
@@ -279,17 +304,15 @@ void messaging_service::do_start_listen() {
                 case encrypt_what::none:
                     break;
                 case encrypt_what::dc:
-                    so.filter_connection = [](const seastar::socket_address& addr) {
-                        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                        return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+                    so.filter_connection = [this](const seastar::socket_address& caddr) {
+                        auto addr = get_public_endpoint_for(caddr);
+                        return is_same_dc(addr);
                     };
                     break;
                 case encrypt_what::rack:
-                    so.filter_connection = [](const seastar::socket_address& addr) {
-                        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                        return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address())
-                            && snitch->get_rack(addr) == snitch->get_rack(utils::fb_utilities::get_broadcast_address())
-                            ;
+                    so.filter_connection = [this](const seastar::socket_address& caddr) {
+                        auto addr = get_public_endpoint_for(caddr);
+                        return is_same_dc(addr) && is_same_rack(addr);
                     };
                     break;
             }
@@ -421,7 +444,8 @@ future<> messaging_service::stop_client() {
 
 future<> messaging_service::shutdown() {
     _shutting_down = true;
-    return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+    co_await when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+    _token_metadata = nullptr;
 }
 
 future<> messaging_service::stop() {
@@ -626,10 +650,7 @@ gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
     auto it = _preferred_ip_cache.find(ep);
 
     if (it != _preferred_ip_cache.end()) {
-        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        auto my_addr = utils::fb_utilities::get_broadcast_address();
-
-        if (snitch_ptr->get_datacenter(ep) == snitch_ptr->get_datacenter(my_addr)) {
+        if (is_same_dc(ep)) {
             return it->second;
         }
     }
@@ -675,7 +696,6 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_error_rpc_client(verb, id);
     }
 
-    auto addr = get_preferred_ip(id.addr);
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
@@ -695,30 +715,29 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-
         // either rack/dc need to be in same dc to use non-tls
-        auto my_dc = snitch_ptr->get_datacenter(broadcast_address);
-        if (snitch_ptr->get_datacenter(addr) != my_dc) {
+        if (!is_same_dc(id.addr)) {
             return true;
         }
+
         // #9653 - if our idea of dc for bind address differs from our official endpoint address,
         // we cannot trust downgrading. We need to ensure either (local) bind address is same as
         // broadcast or that the dc info we get for it is the same.
-        if (broadcast_address != laddr && snitch_ptr->get_datacenter(laddr) != my_dc) {
+        if (broadcast_address != laddr && !is_same_dc(laddr)) {
             return true;
         }
         // if cross-rack tls, check rack.
         if (_cfg.encrypt == encrypt_what::dc) {
             return false;
         }
-        auto my_rack = snitch_ptr->get_rack(broadcast_address);
-        if (snitch_ptr->get_rack(addr) != my_rack) {
+
+        if (!is_same_rack(id.addr)) {
             return true;
         }
+
         // See above: We need to ensure either (local) bind address is same as
         // broadcast or that the rack info we get for it is the same.
-        return broadcast_address != laddr && snitch_ptr->get_rack(laddr) != my_rack;
+        return broadcast_address != laddr && !is_same_rack(laddr);
     }();
 
     auto must_compress = [&id, this] {
@@ -727,9 +746,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         }
 
         if (_cfg.compress == compress_what::dc) {
-            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            return snitch_ptr->get_datacenter(id.addr)
-                            != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+            return !is_same_dc(id.addr);
         }
 
         return true;
@@ -740,13 +757,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true; // gossip
         }
         if (_cfg.tcp_nodelay == tcp_nodelay_what::local) {
-            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            return snitch_ptr->get_datacenter(id.addr)
-                            == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+            return is_same_dc(id.addr);
         }
         return true;
     }();
 
+    auto addr = get_preferred_ip(id.addr);
     auto remote_addr = socket_address(addr, must_encrypt ? _cfg.ssl_port : _cfg.port);
 
     rpc::client_options opts;
