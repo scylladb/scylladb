@@ -13,6 +13,7 @@
 
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/column_identifier.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace cql3 {
 

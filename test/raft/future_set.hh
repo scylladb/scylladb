@@ -11,6 +11,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/condition-variable.hh>
+#include "raft/raft.hh"
+#include "test/raft/logical_timer.hh"
 
 using namespace seastar;
 

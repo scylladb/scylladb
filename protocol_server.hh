@@ -10,6 +10,7 @@
 
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
+#include <seastar/net/socket_defs.hh>
 #include <vector>
 
 // Abstraction for a server serving some kind of user-facing protocol.

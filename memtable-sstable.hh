@@ -15,6 +15,7 @@
 #include "sstables/shared_sstable.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/io_priority_class.hh>
+#include "reader_permit.hh"
 
 class memtable;
 class flat_mutation_reader;

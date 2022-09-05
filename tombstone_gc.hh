@@ -12,6 +12,9 @@
 #include "gc_clock.hh"
 #include "dht/token.hh"
 #include "schema_fwd.hh"
+#include "range.hh"
+#include "tombstone_gc_options.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace dht {
 
