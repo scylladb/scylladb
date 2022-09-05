@@ -12,8 +12,8 @@ ScyllaDB SSTable - 3.x
 
 .. include:: ../_common/sstable_what_is.rst
 
-* In ScyllaDB 5.1 and above, the ``me`` format is enabled by default (the ``enable_sstables_me_format`` option is set to ``true``).
-* In ScyllaDB 4.3, 4.4, 4.5, 4.6, and 5.0, the ``md`` format is enabled by default (the ``enable_sstables_md_format`` option is set to ``true``).
+* In ScyllaDB 5.1 and above, the ``me`` format is enabled by default.
+* In ScyllaDB 4.3 to 5.0, the ``md`` format is enabled by default.
 * In ScyllaDB 3.1 to 4.2, the ``mc`` format is enabled by default. 
 * In ScyllaDB 3.0, the ``mc`` format is disabled by default. You can enable it by adding the ``enable_sstables_mc_format`` parameter set to ``true`` in the ``scylla.yaml`` file. For example: 
     
