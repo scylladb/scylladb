@@ -20,7 +20,7 @@ This installation upgrade method allows you to upgrade your ScyllaDB version and
     
     The file is included in the ScyllaDB packages downloaded in the previous step. The file location is:
 
-     * ScyllaDB Enterprise: ``http://downloads.scylladb.com/downloads/scylla-enterprise/aws/manifest/scylla-packages-<version>-<arch>.txt``
+     * ScyllaDB Enterprise: ``http://downloads.scylladb.com/downloads/scylla-enterprise/aws/manifest/scylla-enterprise-packages-<version>-<arch>.txt``
      * ScyllaDB Open Source: ``http://downloads.scylladb.com/downloads/scylla/aws/manifest/scylla-packages-<version>-<arch>.txt``
 
     Example:
