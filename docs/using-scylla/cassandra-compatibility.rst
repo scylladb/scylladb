@@ -63,6 +63,8 @@ Interfaces
 Supported Tools
 ---------------
 
+The tools are based on Apache Cassandra 3.11.
+
 .. include:: /operating-scylla/_common/tools_index.rst
 
 Features
