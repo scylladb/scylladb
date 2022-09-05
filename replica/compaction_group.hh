@@ -30,6 +30,8 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
+    // Holds list of memtables for this group
+    lw_shared_ptr<memtable_list> _memtables;
     // SSTable set which contains all non-maintenance sstables
     lw_shared_ptr<sstables::sstable_set> _main_sstables;
     // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
@@ -42,6 +44,15 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+
+    // Clear memtable(s) content
+    future<> clear_memtables();
+
+    future<> flush();
+    bool can_flush() const;
+    lw_shared_ptr<memtable_list>& memtables() noexcept;
+    // Returns minimum timestamp from memtable list
+    api::timestamp_type min_memtable_timestamp() const;
 
     // Add sstable to main set
     void add_sstable(sstables::shared_sstable sstable);

@@ -55,7 +55,8 @@ public:
     }
 
     auto try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
-        return _cf->try_flush_memtable_to_sstable(mt, sstable_write_permit::unconditional());
+        // FIXME: for multiple groups, rewrite this without directly referencing replica::table::_compaction_group.
+        return _cf->try_flush_memtable_to_sstable(*_cf->_compaction_group, mt, sstable_write_permit::unconditional());
     }
 };
 

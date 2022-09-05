@@ -171,7 +171,7 @@ table::make_reader_v2(schema_ptr s,
     auto& slice = unreversed_slice ? *unreversed_slice : query_slice;
 
     std::vector<flat_mutation_reader_v2> readers;
-    readers.reserve(_memtables->size() + 1);
+    readers.reserve(_compaction_group->memtables()->size() + 1);
 
     // We're assuming that cache and memtables are both read atomically
     // for single-key queries, so we don't need to special case memtable
@@ -193,7 +193,7 @@ table::make_reader_v2(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/309
     // https://github.com/scylladb/scylla/issues/185
 
-    for (auto&& mt : *_memtables) {
+    for (auto&& mt : *_compaction_group->memtables()) {
         if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -244,8 +244,8 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
     auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         std::vector<flat_mutation_reader_v2> readers;
-        readers.reserve(_memtables->size() + 1);
-        for (auto&& mt : *_memtables) {
+        readers.reserve(_compaction_group->memtables()->size() + 1);
+        for (auto&& mt : *_compaction_group->memtables()) {
             if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
                 readers.emplace_back(std::move(*reader_opt));
             }
@@ -264,8 +264,8 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
     const auto fwd = streamed_mutation::forwarding::no;
 
     std::vector<flat_mutation_reader_v2> readers;
-    readers.reserve(_memtables->size() + 1);
-    for (auto&& mt : *_memtables) {
+    readers.reserve(_compaction_group->memtables()->size() + 1);
+    for (auto&& mt : *_compaction_group->memtables()) {
         if (auto reader_opt = mt->make_flat_reader_opt(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -290,7 +290,11 @@ future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
 
-api::timestamp_type table::min_memtable_timestamp() const {
+memtable& table::active_memtable() {
+    return _compaction_group->memtables()->active_memtable();
+}
+
+api::timestamp_type compaction_group::min_memtable_timestamp() const {
     if (_memtables->empty()) {
         return api::max_timestamp;
     }
@@ -301,6 +305,10 @@ api::timestamp_type table::min_memtable_timestamp() const {
             [](const shared_memtable& m) { return m->get_min_timestamp(); }
         )
     );
+}
+
+api::timestamp_type table::min_memtable_timestamp() const {
+    return _compaction_group->min_memtable_timestamp();
 }
 
 // Not performance critical. Currently used for testing only.
@@ -464,6 +472,22 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
+compaction_group* table::single_compaction_group_if_available() const noexcept {
+    return &*_compaction_group;
+}
+
+compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+    return *_compaction_group;
+}
+
+compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
+    // fast path when table owns a single compaction group, to avoid overhead of calculating token.
+    if (auto cg = single_compaction_group_if_available()) {
+        return *cg;
+    }
+    return compaction_group_for_token(dht::get_token(*s, key));
+}
+
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept {
     // FIXME: implement it once multiple groups are supported.
     return *_compaction_group;
@@ -504,7 +528,7 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
 }
 
 future<>
-table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
+table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     mutation_source_opt ms_opt;
     if (ssts.size() == 1) {
@@ -517,9 +541,8 @@ table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_ssta
         }
         ms_opt = make_combined_mutation_source(std::move(sources));
     }
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt)] () mutable {
+    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
         for (auto& sst : ssts) {
-            auto& cg = compaction_group_for_sstable(sst);
             add_sstable(cg, sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
@@ -608,8 +631,8 @@ public:
 // The function never fails.
 // It either succeeds eventually after retrying or aborts.
 future<>
-table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
-    auto old = _memtables->back();
+table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) noexcept {
+    auto old = cg.memtables()->back();
     tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
 
     if (old->empty()) {
@@ -676,7 +699,7 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
             throw std::bad_alloc();
         });
 
-        _memtables->add_memtable();
+        cg.memtables()->add_memtable();
 
         // no exceptions allowed (nor expected) from this point on
         _stats.memtable_switch_count++;
@@ -725,7 +748,7 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
         utils::get_local_injector().inject("table_seal_active_memtable_try_flush", []() {
             throw std::system_error(ENOSPC, std::system_category(), "Injected error");
         });
-        co_return co_await this->try_flush_memtable_to_sstable(old, std::move(write_permit));
+        co_return co_await this->try_flush_memtable_to_sstable(cg, old, std::move(write_permit));
     });
 
     undo_stats.reset();
@@ -741,8 +764,8 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
 }
 
 future<>
-table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
-    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit))] () mutable -> future<> {
+table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
         // Note that due to our sharded architecture, it is possible that
         // in the face of a value change some shards will backup sstables
         // while others won't.
@@ -795,7 +818,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
-        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f)] () mutable -> future<> {
+        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
             try {
                 co_await std::move(f);
                 co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
@@ -803,10 +826,10 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
                 });
 
-                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs] {
-                    return update_cache(old, newtabs);
+                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
+                    return update_cache(cg, old, newtabs);
                 });
-                _memtables->erase(old);
+                cg.memtables()->erase(old);
                 tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
                 co_return;
             } catch (const std::exception& e) {
@@ -839,12 +862,6 @@ table::stop() {
     }
     co_await _async_gate.close();
     co_await await_pending_ops();
-    std::exception_ptr err;
-    try {
-        co_await _memtables->flush();
-    } catch (...) {
-        err = std::current_exception();
-    }
     co_await _compaction_group->stop();
     co_await _sstable_deletion_gate.close();
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
@@ -853,10 +870,6 @@ table::stop() {
     }));
     _compaction_strategy.get_backlog_tracker().disable();
     _cache.refresh_snapshot();
-
-    if (err) {
-        co_await coroutine::return_exception_ptr(std::move(err));
-    }
 }
 
 void table::set_metrics() {
@@ -1250,9 +1263,9 @@ table::make_memory_only_memtable_list() {
 }
 
 lw_shared_ptr<memtable_list>
-table::make_memtable_list() {
-    auto seal = [this] (flush_permit&& permit) {
-        return seal_active_memtable(std::move(permit));
+table::make_memtable_list(compaction_group& cg) {
+    auto seal = [this, &cg] (flush_permit&& permit) {
+        return seal_active_memtable(cg, std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
@@ -1261,6 +1274,7 @@ table::make_memtable_list() {
 compaction_group::compaction_group(table& t)
     : _t(t)
     , _table_state(std::make_unique<table_state>(t, *this))
+    , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
     , _main_sstables(make_lw_shared<sstables::sstable_set>(t._compaction_strategy.make_sstable_set(t.schema())))
     , _maintenance_sstables(t.make_maintenance_sstable_set())
 {
@@ -1269,7 +1283,10 @@ compaction_group::compaction_group(table& t)
 
 future<> compaction_group::stop() noexcept {
     try {
-        return _t._compaction_manager.remove(as_table_state());
+        // FIXME: make memtable_list::flush() noexcept too.
+        return _memtables->flush().finally([this] {
+            return _t._compaction_manager.remove(as_table_state());
+        });
     } catch (...) {
         return current_exception_as_future<>();
     }
@@ -1288,7 +1305,6 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
                         )
-    , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _compaction_group(std::make_unique<compaction_group>(*this))
@@ -1360,7 +1376,7 @@ table::~table() {
 
 logalloc::occupancy_stats table::occupancy() const {
     logalloc::occupancy_stats res;
-    for (auto m : *_memtables) {
+    for (auto m : *_compaction_group->memtables()) {
         res += m->region().occupancy();
     }
     return res;
@@ -1565,31 +1581,49 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     });
 }
 
+future<> compaction_group::flush() {
+    return _memtables->flush();
+}
+
+bool compaction_group::can_flush() const {
+    return _memtables->can_flush();
+}
+
+lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
+    return _memtables;
+}
+
 future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
         return make_ready_future<>();
     }
     auto op = _pending_flushes_phaser.start();
-    return _memtables->flush().then([this, op = std::move(op), fp = _highest_rp] {
+    return _compaction_group->flush().then([this, op = std::move(op), fp = _highest_rp] {
         _flush_rp = std::max(_flush_rp, fp);
     });
 }
 
 bool table::can_flush() const {
-    return _memtables->can_flush();
+    return _compaction_group->can_flush();
 }
 
-future<> table::clear() {
-    auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
-    if (_commitlog) {
+future<> compaction_group::clear_memtables() {
+    if (_t.commitlog()) {
         for (auto& t : *_memtables) {
-            _commitlog->discard_completed_segments(_schema->id(), t->get_and_discard_rp_set());
+            _t.commitlog()->discard_completed_segments(_t.schema()->id(), t->get_and_discard_rp_set());
         }
     }
     auto old_memtables = _memtables->clear_and_add();
     for (auto& smt : old_memtables) {
         co_await smt->clear_gently();
     }
+}
+
+future<> table::clear() {
+    auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
+
+    co_await _compaction_group->clear_memtables();
+
     co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 
@@ -1660,7 +1694,7 @@ void table::set_schema(schema_ptr s) {
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 
-    for (auto& m : *_memtables) {
+    for (auto& m : *_compaction_group->memtables()) {
         m->set_schema(s);
     }
 
@@ -1985,7 +2019,7 @@ db::replay_position table::set_low_replay_position_mark() {
 }
 
 template<typename... Args>
-void table::do_apply(db::rp_handle&& h, Args&&... args) {
+void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     if (_async_gate.is_closed()) {
         on_internal_error(tlogger, "Table async_gate is closed");
     }
@@ -1995,7 +2029,7 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     db::replay_position rp = h;
     check_valid_rp(rp);
     try {
-        _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        cg.memtables()->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
@@ -2006,11 +2040,11 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h)] () mutable {
-        do_apply(std::move(h), m);
+        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }, timeout);
 }
 
-template void table::do_apply(db::rp_handle&&, const mutation&);
+template void table::do_apply(compaction_group& cg, db::rp_handle&&, const mutation&);
 
 future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
@@ -2018,11 +2052,11 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
-        do_apply(std::move(h), m, m_schema);
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
     }, timeout);
 }
 
-template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
+template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
 future<>
 write_memtable_to_sstable(flat_mutation_reader_v2 reader,
@@ -2296,9 +2330,9 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
     std::vector<flat_mutation_reader_v2> readers;
-    readers.reserve(_memtables->size() + 1);
+    readers.reserve(_compaction_group->memtables()->size() + 1);
 
-    for (auto&& mt : *_memtables) {
+    for (auto&& mt : *_compaction_group->memtables()) {
         if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -2497,7 +2531,7 @@ public:
         return _t.get_sstables_manager().configure_writer(std::move(origin));
     }
     api::timestamp_type min_memtable_timestamp() const override {
-        return _t.min_memtable_timestamp();
+        return _cg.min_memtable_timestamp();
     }
     future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) override {
         // FIXME: add support to merged_rows. merged_rows is a histogram that

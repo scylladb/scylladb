@@ -403,12 +403,10 @@ private:
     uint64_t _failed_counter_applies_to_memtable = 0;
 
     template<typename... Args>
-    void do_apply(db::rp_handle&&, Args&&... args);
-
-    lw_shared_ptr<memtable_list> _memtables;
+    void do_apply(compaction_group& cg, db::rp_handle&&, Args&&... args);
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
-    lw_shared_ptr<memtable_list> make_memtable_list();
+    lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
@@ -533,6 +531,12 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    // Return compaction group if table owns a single one. Otherwise, null is returned.
+    compaction_group* single_compaction_group_if_available() const noexcept;
+    // Select a compaction group from a given token.
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept;
+    // Select a compaction group from a given key.
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
 
@@ -558,9 +562,9 @@ private:
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
-    future<> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
+    future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
-    future<> update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
+    future<> update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -722,7 +726,9 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    memtable& active_memtable() { return _memtables->active_memtable(); }
+    // FIXME: for supporting multiple compaction groups, this interface will need to return
+    // as many active sstables as there are groups.
+    memtable& active_memtable();
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;
@@ -770,10 +776,10 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m, m_schema);
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m);
+        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }
 
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
@@ -1075,7 +1081,7 @@ private:
     //
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
-    future<> seal_active_memtable(flush_permit&&) noexcept;
+    future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 public:
