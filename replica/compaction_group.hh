@@ -7,6 +7,8 @@
  */
 
 #include "database_fwd.hh"
+#include "compaction/compaction_descriptor.hh"
+#include "sstables/sstable_set.hh"
 
 #pragma once
 
@@ -28,11 +30,27 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
+    // SSTable set which contains all non-maintenance sstables
+    lw_shared_ptr<sstables::sstable_set> _main_sstables;
 public:
     compaction_group(table& t);
 
     // Will stop ongoing compaction on behalf of this group, etc.
     future<> stop() noexcept;
+
+    // Clear sstable sets
+    void clear_sstables();
+
+    // Add sstable to main set
+    void add_sstable(sstables::shared_sstable sstable);
+
+    // Update main sstable set based on info in completion descriptor, where input sstables
+    // will be replaced by output ones, row cache ranges are possibly invalidated and
+    // statistics are updated.
+    future<> update_main_sstable_list_on_compaction_completion(sstables::compaction_completion_desc desc);
+
+    const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
+    void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 
     compaction::table_state& as_table_state() const noexcept;
 };

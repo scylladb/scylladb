@@ -412,8 +412,6 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    // SSTable set which contains all non-maintenance sstables
-    lw_shared_ptr<sstables::sstable_set> _main_sstables;
     // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
     lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
     // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
@@ -537,6 +535,9 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    // Select a compaction group from a given sstable based on its token range.
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
@@ -551,7 +552,8 @@ private:
     lw_shared_ptr<sstables::sstable_set>
     do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker);
-    void add_sstable(sstables::shared_sstable sstable);
+    // Helper which adds sstable on behalf of a compaction group and refreshes compound set.
+    void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
@@ -588,9 +590,6 @@ private:
     // be inserted into the main set.
     future<>
     update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
-
-    // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
-    future<> update_main_sstable_list_on_compaction_completion(sstables::compaction_completion_desc desc);
 private:
     void rebuild_statistics();
 
