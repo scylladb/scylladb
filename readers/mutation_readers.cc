@@ -1457,12 +1457,11 @@ private:
 public:
     compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
-            // FIXME: pass to _compactor
             const tombstone_gc_state& gc_state,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : impl(source.schema(), source.permit())
         , _reader(std::move(source))
-        , _compactor(*_schema, compaction_time, get_max_purgeable)
+        , _compactor(*_schema, compaction_time, get_max_purgeable, gc_state)
         , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{})
         , _fwd(fwd) {
     }
