@@ -3300,7 +3300,8 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range);
-    return ::get_gc_before_for_range(s, range, compaction_time).max_gc_before;
+    auto gc_state = tombstone_gc_state(); // FIXME: for now
+    return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
 }
 
 // If the sstable contains any regular live cells, we can not drop the sstable.
@@ -3325,7 +3326,8 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, query",
             get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count());
-    auto res = ::get_gc_before_for_range(s, range, compaction_time);
+    auto gc_state = tombstone_gc_state(); // FIXME: for now
+    auto res = gc_state.get_gc_before_for_range(s, range, compaction_time);
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
 

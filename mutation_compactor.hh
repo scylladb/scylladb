@@ -140,6 +140,7 @@ class compact_mutation_state {
     uint64_t _row_limit{};
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
+    tombstone_gc_state _tombstone_gc_state; // FIXME: default-constructed for now
 
     tombstone _partition_tombstone;
 
@@ -239,7 +240,7 @@ private:
             return _gc_before.value();
         } else {
             if (_dk) {
-                _gc_before = ::get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
+                _gc_before = _tombstone_gc_state.get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
                 return _gc_before.value();
             } else {
                 return gc_clock::time_point::min();

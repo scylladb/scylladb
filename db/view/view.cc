@@ -1169,7 +1169,8 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    auto gc_before = ::get_gc_before_for_key(_schema, dk, _now);
+    auto gc_state = tombstone_gc_state(); // FIXME: for now
+    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {

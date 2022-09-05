@@ -32,6 +32,7 @@
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
 #include "utils/immutable-collection.hh"
+#include "tombstone_gc.hh"
 
 class mutation_fragment;
 class mutation_partition_view;
@@ -1317,7 +1318,8 @@ private:
         bool reverse,
         uint64_t row_limit,
         can_gc_fn&,
-        bool drop_tombstones_unconditionally);
+        bool drop_tombstones_unconditionally,
+        const tombstone_gc_state& gc_state);
 
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
     // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
