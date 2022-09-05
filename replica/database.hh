@@ -415,7 +415,7 @@ private:
     // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
     //  will be able to hold more than one group.
     std::unique_ptr<compaction_group> _compaction_group;
-    // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
+    // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
     // have not been deleted yet, so must not GC any tombstones in other sstables

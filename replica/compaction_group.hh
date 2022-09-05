@@ -64,6 +64,9 @@ public:
     const lw_shared_ptr<sstables::sstable_set>& maintenance_sstables() const noexcept;
     void set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables);
 
+    // Makes a compound set, which includes main and maintenance sets
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+
     compaction::table_state& as_table_state() const noexcept;
 };
 

@@ -92,10 +92,12 @@ table::make_sstable_reader(schema_ptr s,
     }
 }
 
+lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set() {
+    return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
+}
+
 lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
-    // FIXME: once _maintenance_sstables goes to compaction_group, then table::make_compound_sstable_set()
-    // will call compaction_group::make_compound_sstable_set().
-    return make_lw_shared(sstables::make_compound_sstable_set(_schema, { _compaction_group->main_sstables(), _compaction_group->maintenance_sstables() }));
+    return _compaction_group->make_compound_sstable_set();
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
