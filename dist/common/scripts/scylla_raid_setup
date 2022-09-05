@@ -152,18 +152,7 @@ if __name__ == '__main__':
 
     os.makedirs(mount_at, exist_ok=True)
 
-    uuid = get_partition_uuid(fsdev)
-    uuidpath = f'/dev/disk/by-uuid/{uuid}'
-
-    if not uuid:
-        raise Exception(f'Failed to get UUID of {fsdev}')
-    if not os.path.exists(uuidpath):
-        raise Exception(f'{uuidpath} is not found')
-    if not stat.S_ISBLK(os.stat(uuidpath).st_mode):
-        raise Exception(f'{uuidpath} is not block device')
-    if not is_unused_disk(uuidpath):
-        raise Exception(f'{uuidpath} is busy')
-
+    uuid = out(f'blkid -s UUID -o value {fsdev}')
     after = 'local-fs.target'
     wants = ''
     if raid and args.raid_level != '0':
@@ -180,7 +169,7 @@ After={after}{wants}
 DefaultDependencies=no
 
 [Mount]
-What={uuidpath}
+What=/dev/disk/by-uuid/{uuid}
 Where={mount_at}
 Type=xfs
 Options=noatime{opt_discard}
