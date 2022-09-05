@@ -16,6 +16,7 @@
 #include "db/view/row_locking.hh"
 #include <seastar/core/abort_source.hh>
 #include "mutation.hh"
+#include <seastar/core/circular_buffer.hh>
 
 class evictable_reader_handle;
 

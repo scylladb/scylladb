@@ -8,6 +8,7 @@
 #pragma once
 
 #include <optional>
+#include <seastar/core/sharded.hh>
 
 #include "timestamp.hh"
 

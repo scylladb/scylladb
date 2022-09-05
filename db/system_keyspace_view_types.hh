@@ -10,6 +10,7 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/reactor.hh>
 #include <utility>
 #include <optional>
 #include "dht/token.hh"

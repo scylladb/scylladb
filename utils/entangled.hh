@@ -9,6 +9,7 @@
 #pragma once
 
 #include <boost/intrusive/parent_from_member.hpp>
+#include <cassert>
 
 //  A movable pointer-like object paired with exactly one other object of the same type. 
 //  The two objects which are paired with each other point at each other.

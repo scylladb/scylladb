@@ -8,6 +8,7 @@
 
 #pragma once
 #include <type_traits>
+#include <utility>
 #include <seastar/util/concepts.hh>
 
 namespace utils {

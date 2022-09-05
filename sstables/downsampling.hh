@@ -16,6 +16,7 @@
 #include <list>
 #include <map>
 #include <vector>
+#include <array>
 #include <algorithm>
 #include <iterator>
 #include <cassert>
