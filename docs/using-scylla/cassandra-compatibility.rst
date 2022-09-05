@@ -38,7 +38,7 @@ Interfaces
    * - SSTable format (all versions)
      - 3.11(mc / md / me), 2.2(la), 2.1.8 (ka)
      - | ``me`` - supported in ScyllaDB Open Source 5.1 and ScyllaDB Enterprise 2022.2.0 (and later)
-       | ``md`` - supported in ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021..0 (and later)
+       | ``md`` - supported in ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1.0 (and later)
        
 
    * - JMX   
