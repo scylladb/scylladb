@@ -8,6 +8,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include "utils/error_injection.hh"
 
 namespace raft {
 
@@ -49,6 +50,12 @@ future<> fsm::consume_memory(seastar::abort_source* as, size_t size) {
 
     auto& sm = *leader_state().log_limiter_semaphore;
     return as ? sm.wait(*as, size) : sm.wait(size);
+}
+
+void fsm::release_memory(size_t size) {
+    check_is_leader();
+
+    leader_state().log_limiter_semaphore->signal(size);
 }
 
 const configuration& fsm::get_configuration() const {
@@ -99,6 +106,9 @@ const log_entry& fsm::add_entry(T command) {
 
         logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), command);
     }
+
+    utils::get_local_injector().inject("fsm::add_entry/test-failure",
+                                       [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
 
     _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();

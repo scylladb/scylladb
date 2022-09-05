@@ -465,16 +465,23 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
+    const auto memory_usage = log::memory_usage_of(cmd);
     try {
-        co_await _fsm->consume_memory(as, log::memory_usage_of(cmd));
+        co_await _fsm->consume_memory(as, memory_usage);
     } catch (semaphore_aborted&) {
         throw request_aborted();
     }
     logger.trace("[{}] adding entry after log size limit check", id());
 
-    const log_entry& e = _fsm->add_entry(std::move(cmd));
-
-    co_return entry_id{.term = e.term, .idx = e.idx};
+    try {
+        const log_entry& e = _fsm->add_entry(std::move(cmd));
+        co_return entry_id{.term = e.term, .idx = e.idx};
+    } catch (...) {
+        if (_fsm->is_leader()) {
+            _fsm->release_memory(memory_usage);
+        }
+        throw;
+    }
 }
 
 future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd, seastar::abort_source* as) {

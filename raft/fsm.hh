@@ -400,6 +400,8 @@ public:
     // On abort throws `semaphore_aborted`.
     future<> consume_memory(seastar::abort_source* as, size_t size);
 
+    void release_memory(size_t size);
+
     // Return current configuration.
     const configuration& get_configuration() const;
 
