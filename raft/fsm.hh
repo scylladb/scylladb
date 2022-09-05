@@ -400,7 +400,7 @@ public:
     // go below max_log_size.
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
-    future<> consume_memory(seastar::abort_source* as, size_t size);
+    future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
 
     // Return current configuration.
     const configuration& get_configuration() const;

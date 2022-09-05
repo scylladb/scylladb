@@ -472,16 +472,23 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
+    semaphore_units<> memory_permit;
     try {
-        co_await _fsm->consume_memory(as, log::memory_usage_of(cmd, _config.max_command_size));
+        memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
     } catch (semaphore_aborted&) {
         throw request_aborted();
     }
-    logger.trace("[{}] adding entry after log size limit check", id());
+    logger.trace("[{}] adding entry after waiting for memory permit", id());
 
-    const log_entry& e = _fsm->add_entry(std::move(cmd));
-
-    co_return entry_id{.term = e.term, .idx = e.idx};
+    try {
+        const log_entry& e = _fsm->add_entry(std::move(cmd));
+        memory_permit.release();
+        co_return entry_id{.term = e.term, .idx = e.idx};
+    } catch (const not_a_leader&) {
+        // the semaphore is already destroyed, prevent memory_permit from accessing it
+        memory_permit.release();
+        throw;
+    }
 }
 
 future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd, seastar::abort_source* as) {

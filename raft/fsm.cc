@@ -8,6 +8,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include "utils/error_injection.hh"
 
 namespace raft {
 
@@ -44,11 +45,11 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
-future<> fsm::consume_memory(seastar::abort_source* as, size_t size) {
+future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
     check_is_leader();
 
     auto& sm = *leader_state().log_limiter_semaphore;
-    return as ? sm.wait(*as, size) : sm.wait(size);
+    return as ? get_units(sm, size, *as) : get_units(sm, size);
 }
 
 const configuration& fsm::get_configuration() const {
@@ -99,6 +100,9 @@ const log_entry& fsm::add_entry(T command) {
 
         logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), command);
     }
+
+    utils::get_local_injector().inject("fsm::add_entry/test-failure",
+                                       [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
 
     _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();
