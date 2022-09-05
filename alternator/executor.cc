@@ -1358,11 +1358,27 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
 // s_default_timeout is overwritten in alternator::controller::start_server()
 // based on the "alternator_timeout_in_ms" configuration parameter.
 db::timeout_clock::duration executor::s_default_timeout = 10s;
+db::timeout_clock::duration executor::default_getitem_timeout = 3s;
+db::timeout_clock::duration executor::default_putitem_nonlwt_timeout = 2s;
+db::timeout_clock::duration executor::default_putitem_lwt_timeout = 5s;
+db::timeout_clock::duration executor::default_query_timeout = 10s;
 void executor::set_default_timeout(db::timeout_clock::duration timeout) {
     s_default_timeout = timeout;
 }
-db::timeout_clock::time_point executor::default_timeout() {
-    return db::timeout_clock::now() + s_default_timeout;
+void executor::set_default_getitem_timeout(db::timeout_clock::duration timeout) {
+    default_getitem_timeout = timeout;
+}
+void executor::set_default_putitem_nonlwt_timeout(db::timeout_clock::duration timeout) {
+    default_putitem_nonlwt_timeout = timeout;
+}
+void executor::set_default_putitem_lwt_timeout(db::timeout_clock::duration timeout) {
+    default_putitem_lwt_timeout = timeout;
+}
+void executor::set_default_query_timeout(db::timeout_clock::duration timeout) {
+    default_query_timeout = timeout;
+}
+db::timeout_clock::time_point executor::default_timeout(db::timeout_clock::duration timeout) {
+    return db::timeout_clock::now() + timeout;
 }
         
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -1509,7 +1525,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(executor::default_getitem_timeout), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
         if (previous_item) {
@@ -1540,7 +1556,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(executor::default_putitem_nonlwt_timeout), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
                 });
             });
@@ -1548,13 +1564,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(executor::default_putitem_nonlwt_timeout), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
     }
     // If we're still here, we need to do this write using LWT:
     stats.write_using_lwt++;
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::default_timeout(executor::default_putitem_lwt_timeout);
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
@@ -1835,7 +1851,7 @@ public:
 
 static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::default_timeout(executor::default_putitem_lwt_timeout);
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -1891,7 +1907,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
-                executor::default_timeout(),
+                executor::default_timeout(executor::default_putitem_nonlwt_timeout),
                 trace_state,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes);
@@ -3104,7 +3120,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
-            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(executor::default_getitem_timeout), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
@@ -3255,7 +3271,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     query::tombstone_limit(_proxy.get_tombstone_limit()));
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(executor::default_getitem_timeout), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
                 return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get));
@@ -3674,7 +3690,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     auto p = service::pager::query_pagers::pager(proxy, schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    return p->fetch_page(limit, gc_clock::now(), executor::default_timeout()).then(
+    return p->fetch_page(limit, gc_clock::now(), executor::default_timeout(executor::default_query_timeout)).then(
             [p = std::move(p), schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
              attrs_to_get = std::move(attrs_to_get),

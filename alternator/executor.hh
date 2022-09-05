@@ -202,10 +202,17 @@ public:
     future<> stop() { return make_ready_future<>(); }
 
     static sstring table_name(const schema&);
-    static db::timeout_clock::time_point default_timeout();
+    static db::timeout_clock::time_point default_timeout(db::timeout_clock::duration timeout = executor::s_default_timeout);
     static void set_default_timeout(db::timeout_clock::duration timeout);
-private:
+    static void set_default_getitem_timeout(db::timeout_clock::duration timeout);
+    static void set_default_putitem_nonlwt_timeout(db::timeout_clock::duration timeout);
+    static void set_default_putitem_lwt_timeout(db::timeout_clock::duration timeout);
+    static void set_default_query_timeout(db::timeout_clock::duration timeout);
     static db::timeout_clock::duration s_default_timeout;
+    static db::timeout_clock::duration default_getitem_timeout;
+    static db::timeout_clock::duration default_putitem_nonlwt_timeout;
+    static db::timeout_clock::duration default_putitem_lwt_timeout;
+    static db::timeout_clock::duration default_query_timeout;
 public:
     static schema_ptr find_table(service::storage_proxy&, const rjson::value& request);
 

@@ -77,6 +77,10 @@ future<> controller::start_server() {
 
         rmw_operation::set_default_write_isolation(_config.alternator_write_isolation());
         executor::set_default_timeout(std::chrono::milliseconds(_config.alternator_timeout_in_ms()));
+        executor::set_default_getitem_timeout(std::chrono::milliseconds(_config.alternator_getitem_timeout_in_ms()));
+        executor::set_default_putitem_nonlwt_timeout(std::chrono::milliseconds(_config.alternator_putitem_nonlwt_timeout_in_ms()));
+        executor::set_default_putitem_lwt_timeout(std::chrono::milliseconds(_config.alternator_putitem_lwt_timeout_in_ms()));
+        executor::set_default_query_timeout(std::chrono::milliseconds(_config.alternator_query_timeout_in_ms()));
 
         net::inet_address addr = utils::resolve(_config.alternator_address, family).get0();
 
