@@ -91,6 +91,40 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
     });
 }
 
+SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Create a TWCS table with no TTL defined
+        e.execute_cql("UPDATE system.config SET value='warn' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
+        e.require_table_exists("ks", "tbl").get();
+        // Ensure ALTER TABLE works
+        e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=60;").get();
+        // LiveUpdate and enforce TTL to be defined
+        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
+        assert_that_failed(e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};"));
+        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'} AND "
+                      "default_time_to_live=60").get();
+        e.require_table_exists("ks", "tbl2").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;"));
+        // LiveUpdate and disable the check, then try table creation again
+        e.execute_cql("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("CREATE TABLE tbl3 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
+        // LiveUpdate back, and ensure that unrelated CQL requests are able to get through 
+        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("ALTER TABLE tbl3 WITH gc_grace_seconds=0;").get();
+
+        e.require_table_exists("ks", "tbl3").get();
+    });
+}
+
 SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&e] {
