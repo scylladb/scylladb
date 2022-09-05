@@ -2441,9 +2441,8 @@ private:
 
     inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
         auto myip = utils::fb_utilities::get_broadcast_address();
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
-        snitch->sort_by_proximity(myip, sorted_nodes);
+        _ri.db.local().get_token_metadata().get_topology().sort_by_proximity(myip, sorted_nodes);
         return sorted_nodes;
     }
 

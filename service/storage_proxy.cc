@@ -3003,8 +3003,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        snitch->sort_by_proximity(my_address, live_endpoints);
+        erm->get_topology().sort_by_proximity(my_address, live_endpoints);
         return live_endpoints[0];
     } else {
         static thread_local std::default_random_engine re{std::random_device{}()};
@@ -5202,6 +5201,32 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas), repair_decision);
 }
 
+bool storage_proxy::is_worth_merging_for_range_query(
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) const {
+    const auto& topo = get_token_metadata_ptr()->get_topology();
+    auto has_remote_node = [&topo, my_dc = topo.get_datacenter()] (inet_address_vector_replica_set& l) {
+        for (auto&& ep : l) {
+            if (my_dc != topo.get_datacenter(ep)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    //
+    // Querying remote DC is likely to be an order of magnitude slower than
+    // querying locally, so 2 queries to local nodes is likely to still be
+    // faster than 1 query involving remote ones
+    //
+
+    bool merged_has_remote = has_remote_node(merged);
+    return merged_has_remote
+        ? (has_remote_node(l1) || has_remote_node(l2))
+        : true;
+}
+
 future<result<query_partition_key_range_concurrent_result>>
 storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout,
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
@@ -5308,7 +5333,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
 
             // Estimate whether merging will be a win or not
-            if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
+            if (!is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
@@ -5833,8 +5858,8 @@ inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator:
     return eps;
 }
 
-void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) {
-    locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const {
+    get_token_metadata_ptr()->get_topology().sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
     auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
     if (it != eps.end() && it != eps.begin()) {

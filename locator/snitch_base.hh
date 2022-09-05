@@ -68,40 +68,9 @@ public:
     virtual sstring get_datacenter(inet_address endpoint) = 0;
 
     /**
-     * returns a new <tt>List</tt> sorted by proximity to the given endpoint
-     */
-    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
-        inet_address address,
-        inet_address_vector_replica_set& unsorted_address) = 0;
-
-    /**
-     * This method will sort the <tt>List</tt> by proximity to the given
-     * address.
-     */
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) = 0;
-
-    /**
-     * compares two endpoints in relation to the target endpoint, returning as
-     * Comparator.compare would
-     */
-    virtual int compare_endpoints(
-        inet_address& target, inet_address& a1, inet_address& a2) = 0;
-
-    /**
      * returns whatever info snitch wants to gossip
      */
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
-
-    /**
-     * Returns whether for a range query doing a query against merged is likely
-     * to be faster than 2 sequential queries, one against l1 followed by one
-     * against l2.
-     */
-    virtual bool is_worth_merging_for_range_query(
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) = 0;
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
@@ -330,25 +299,7 @@ public:
     // virtual sstring get_datacenter(inet_address endpoint)  = 0;
     //
 
-    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
-        inet_address address,
-        inet_address_vector_replica_set& unsorted_address) override;
-
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) override;
-
-    virtual int compare_endpoints(
-        inet_address& address, inet_address& a1, inet_address& a2) override;
-
-    virtual bool is_worth_merging_for_range_query(
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) override;
-
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
-
-private:
-    bool has_remote_node(inet_address_vector_replica_set& l);
 
 protected:
     sstring _my_dc;

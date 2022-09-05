@@ -332,7 +332,7 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
+    void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const;
     inet_address_vector_replica_set get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
@@ -432,6 +432,16 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+
+    /**
+     * Returns whether for a range query doing a query against merged is likely
+     * to be faster than 2 sequential queries, one against l1 followed by one
+     * against l2.
+     */
+    bool is_worth_merging_for_range_query(
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) const;
 
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
