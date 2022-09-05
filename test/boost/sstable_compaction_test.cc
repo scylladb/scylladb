@@ -145,7 +145,7 @@ public:
         return _t->get_sstable_set();
     }
     const sstables::sstable_set& maintenance_sstable_set() const override {
-        return _t->maintenance_sstable_set();
+        return _t->as_table_state().maintenance_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return sstables::get_fully_expired_sstables(_t->as_table_state(), sstables, query_time);
