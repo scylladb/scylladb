@@ -65,23 +65,10 @@ public:
      */
     bool has_endpoint(inet_address) const;
 
-    std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>&
-    get_datacenter_endpoints() {
-        return _dc_endpoints;
-    }
-
     const std::unordered_map<sstring,
                            std::unordered_set<inet_address>>&
     get_datacenter_endpoints() const {
         return _dc_endpoints;
-    }
-
-    std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
-    get_datacenter_racks() {
-        return _dc_racks;
     }
 
     const std::unordered_map<sstring,
