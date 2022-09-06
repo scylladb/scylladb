@@ -94,6 +94,18 @@ thread_local disk_error_signal_type sstable_write_error;
 
 namespace sstables {
 
+// The below flag governs the mode of index file page caching used by the index
+// reader.
+//
+// If set to true, the reader will read and/or populate a common global cache,
+// which shares its capacity with the row cache. If false, the reader will use
+// BYPASS CACHE semantics for index caching.
+//
+// This flag is intended to be a temporary hack. The goal is to eventually
+// solve index caching problems via a smart cache replacement policy.
+//
+thread_local utils::updateable_value<bool> global_cache_index_pages(false);
+
 logging::logger sstlog("sstable");
 
 // Because this is a noop and won't hold any state, it is better to use a global than a
