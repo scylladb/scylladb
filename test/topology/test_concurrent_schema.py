@@ -6,7 +6,7 @@
 import asyncio
 import logging
 import pytest
-from pylib.random_tables import Column, UUIDType, IntType         # type: ignore
+from test.pylib.random_tables import Column, UUIDType, IntType
 
 
 logger = logging.getLogger('schema-test')
