@@ -168,7 +168,7 @@ def test_gsi_empty_value(test_table_gsi_2):
         test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
 
 # Verify that a GSI is correctly listed in describe_table
-@pytest.mark.xfail(reason="DescribeTable for GSI misses IndexSizeBytes, ItemCount, Projection, IndexStatus")
+@pytest.mark.xfail(reason="issues #7550, #11466, #11470, #11471")
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     assert 'Table' in desc
