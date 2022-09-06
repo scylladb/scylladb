@@ -1,9 +1,17 @@
+There are two alternative upgrade procedures:
+
+* :ref:`Upgrading ScyllaDB and simultaneously updating 3rd party and OS packages <upgrade-image-recommended-procedure>`. It is recommended if you are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04.
+
+* :ref:`Upgrading ScyllaDB without updating any external packages<upgrade-guide-regular-procedure>`.
+
+.. _upgrade-image-recommended-procedure:
+
 **To upgrade ScyllaDB and update 3rd party and OS packages (RECOMMENDED):**
 
-.. versionadded:: Scylla 5.0
-.. versionadded:: Scylla Enterprise 2021.1.10
+.. versionadded:: ScyllaDB 5.0
+.. versionadded:: ScyllaDB Enterprise 2021.1.10
 
-This installation upgrade method allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command. This method is recommended if you run a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04.
+Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command. 
 
 #. Update the |SCYLLA_REPO|_ to |NEW_VERSION|.
 
