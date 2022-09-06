@@ -24,9 +24,6 @@ Materialized Views
 ------------------
 Production ready in Scylla Open Source 3.0 and Scylla Enterprise 2019.1.x
 
-.. include:: /rst_include/cql-version-index.rst
-
-
 Materialized views names are defined by:
 
 .. code-block:: cql

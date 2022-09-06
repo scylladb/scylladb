@@ -8,12 +8,6 @@ Data Types
 .. _UUID: https://en.wikipedia.org/wiki/Universally_unique_identifier
 
 
-
-
-.. include:: /rst_include/cql-version-index.rst
-
-
-
 CQL is a typed language and supports a rich set of data types, including :ref:`native types <native-types>` and
 :ref:`collection types <collections>`.
 

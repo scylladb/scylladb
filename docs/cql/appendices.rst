@@ -21,8 +21,6 @@
 Appendices
 ----------
 
-.. include:: /rst_include/cql-version-index.rst
-
 .. _appendix-A:
 
 Appendix A: CQL Keywords
