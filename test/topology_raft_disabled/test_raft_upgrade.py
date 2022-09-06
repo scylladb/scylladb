@@ -50,8 +50,6 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
     manager.driver_close()
     await manager.driver_connect()
     cql = manager.cql
-    assert(cql)
-    random_tables.set_cql(cql)
 
     deadline = time.time() + 300
     # Using `servers` doesn't work for the `host` parameter in `cql.run_async` (we need objects of type `Host`).
