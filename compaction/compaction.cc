@@ -705,6 +705,7 @@ private:
                     using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
+                        _table_s.get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
                         get_gc_compacted_fragments_writer());
 
@@ -714,6 +715,7 @@ private:
                 using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
+                    _table_s.get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));

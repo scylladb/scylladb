@@ -2328,6 +2328,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             schema,
             query_time,
             get_max_purgeable,
+            tombstone_gc_state(nullptr),
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 

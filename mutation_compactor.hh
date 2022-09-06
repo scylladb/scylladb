@@ -573,15 +573,20 @@ class compact_mutation_v2 {
     GCConsumer _gc_consumer;
 
 public:
+    // Can only be used for compact_for_sstables::no
     compact_mutation_v2(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit, Consumer consumer, GCConsumer gc_consumer = GCConsumer())
+              uint32_t partition_limit,
+              Consumer consumer, GCConsumer gc_consumer = GCConsumer())
         : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
 
+    // Can only be used for compact_for_sstables::yes
     compact_mutation_v2(const schema& s, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            // FIXME: pass to compact_mutation_state if compact_for_sstables
+            const tombstone_gc_state& gc_state,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer())
         : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable))
         , _consumer(std::move(consumer))

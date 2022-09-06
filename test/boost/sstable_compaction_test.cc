@@ -3406,7 +3406,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             auto gc_grace_seconds = s->gc_grace_seconds();
 
             auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
-                *s, gc_now, max_purgeable_func, std::move(cr), std::move(purged_cr));
+                *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
             auto compacting = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s));
