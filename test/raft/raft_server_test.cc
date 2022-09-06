@@ -41,7 +41,8 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
                 .nodes = 1,
                 .config = std::vector<raft::server::configuration>({
                     raft::server::configuration {
-                        .max_snapshot_trailing_bytes = 1,
+                        .snapshot_threshold_log_size = 0,
+                        .snapshot_trailing_size = 0,
                         .max_log_size = command_size,
                         .max_command_size = command_size
                     }
