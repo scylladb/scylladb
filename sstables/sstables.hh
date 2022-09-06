@@ -50,6 +50,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
+#include "utils/updateable_value.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -57,6 +58,8 @@ class sstable_assertions;
 class cached_file;
 
 namespace sstables {
+
+extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
 namespace mc {
 class writer;
