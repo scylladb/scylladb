@@ -2454,6 +2454,9 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+        return _t.get_compaction_manager().get_tombstone_gc_state();
+    }
 };
 
 compaction::table_state& table::as_table_state() const noexcept {

@@ -124,10 +124,12 @@ class table_state_for_test : public table_state {
     column_family_for_tests& _t;
     test_env& _env;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
+    tombstone_gc_state _tombstone_gc_state;
 public:
     explicit table_state_for_test(column_family_for_tests& t, test_env& env)
         : _t(t)
         , _env(env)
+        , _tombstone_gc_state(nullptr)
     {
     }
     const schema_ptr& schema() const noexcept override {
@@ -178,6 +180,9 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return false;
+    }
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+        return _tombstone_gc_state;
     }
 };
 

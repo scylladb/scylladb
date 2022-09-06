@@ -43,6 +43,7 @@ public:
     virtual future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) = 0;
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
+    virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
 };
 
 }
