@@ -154,11 +154,6 @@ class ManagerClient():
         await self._get_text(f"/cluster/removeserver/{server_id}")
         self._driver_update()
 
-    async def start_stopped(self) -> None:
-        """Start all previously stopped servers"""
-        await self._get_text(f"/cluster/start_stopped")
-        self._driver_update()
-
     async def server_get_config(self, server_id: str) -> dict[str, object]:
         resp = await self._get(f"/cluster/server/{server_id}/get_config")
         if resp.status != 200:

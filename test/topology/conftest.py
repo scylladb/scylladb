@@ -188,9 +188,7 @@ def fails_without_raft(request, check_pre_raft):
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, manager):
+def random_tables(request, cql):
     tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
-    # NOTE: to avoid occasional timeouts on keyspace teardown, start stopped servers
-    await manager.start_stopped()
     tables.drop_all()
