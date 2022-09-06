@@ -12,9 +12,12 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "log.hh"
+#include "schema_builder.hh"
 #include "tools/utils.hh"
 
 using namespace seastar;
+
+namespace bpo = boost::program_options;
 
 namespace {
 
@@ -23,24 +26,33 @@ using type_variant = std::variant<
         compound_type<allow_prefixes::yes>,
         compound_type<allow_prefixes::no>>;
 
+sstring to_printable_string(const data_type& type, bytes_view value) {
+    return type->to_string(value);
+}
+
+template <allow_prefixes AllowPrefixes>
+sstring to_printable_string(const compound_type<AllowPrefixes>& type, bytes_view value) {
+    std::vector<sstring> printable_values;
+    printable_values.reserve(type.types().size());
+
+    const auto types = type.types();
+    const auto values = type.deserialize_value(value);
+
+    for (size_t i = 0; i != values.size(); ++i) {
+        printable_values.emplace_back(types.at(i)->to_string(values.at(i)));
+    }
+    return format("({})", boost::algorithm::join(printable_values, ", "));
+}
+
 struct printing_visitor {
     bytes_view value;
 
     sstring operator()(const data_type& type) {
-        return type->to_string(value);
+        return to_printable_string(type, value);
     }
     template <allow_prefixes AllowPrefixes>
     sstring operator()(const compound_type<AllowPrefixes>& type) {
-        std::vector<sstring> printable_values;
-        printable_values.reserve(type.types().size());
-
-        const auto types = type.types();
-        const auto values = type.deserialize_value(value);
-
-        for (size_t i = 0; i != values.size(); ++i) {
-            printable_values.emplace_back(types.at(i)->to_string(values.at(i)));
-        }
-        return format("({})", boost::algorithm::join(printable_values, ", "));
+        return to_printable_string(type, value);
     }
 };
 
@@ -48,13 +60,13 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
     return std::visit(printing_visitor{value}, type);
 }
 
-void print_handler(type_variant type, std::vector<bytes> values) {
+void print_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     for (const auto& value : values) {
         fmt::print("{}\n", to_printable_string(type, value));
     }
 }
 
-void compare_handler(type_variant type, std::vector<bytes> values) {
+void compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("compare_handler(): expected 2 values, got {}", values.size()));
     }
@@ -86,7 +98,7 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
     fmt::print("{} {} {}\n", to_printable_string(type, values[0]), res_str, to_printable_string(type, values[1]));
 }
 
-void validate_handler(type_variant type, std::vector<bytes> values) {
+void validate_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     struct validate_visitor {
         bytes_view value;
 
@@ -116,7 +128,71 @@ void validate_handler(type_variant type, std::vector<bytes> values) {
     }
 }
 
-using action_handler_func = void(*)(type_variant, std::vector<bytes>);
+schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::no>& type) {
+    schema_builder builder("ks", "dummy");
+    unsigned i = 0;
+    for (const auto& t : type.types()) {
+        const auto col_name = format("pk{}", i);
+        builder.with_column(bytes(to_bytes_view(col_name)), t, column_kind::partition_key);
+    }
+    builder.with_column("v", utf8_type, column_kind::regular_column);
+
+    return builder.build();
+}
+
+void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+    struct tokenof_visitor {
+        bytes_view value;
+
+        void operator()(const data_type& type) {
+            throw std::invalid_argument("tokenof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::yes>& type) {
+            throw std::invalid_argument("tokenof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::no>& type) {
+            auto s = build_dummy_partition_key_schema(type);
+            auto pk = partition_key::from_bytes(value);
+            auto dk = dht::decorate_key(*s, pk);
+            fmt::print("{}: {}\n", to_printable_string(type, value), dk.token());
+        }
+    };
+
+    for (const auto& value : values) {
+        std::visit(tokenof_visitor{value}, type);
+    }
+}
+
+void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+    struct shardof_visitor {
+        bytes_view value;
+        const bpo::variables_map& vm;
+
+        void operator()(const data_type& type) {
+            throw std::invalid_argument("shardof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::yes>& type) {
+            throw std::invalid_argument("shardof action requires full-compound input");
+        }
+        void operator()(const compound_type<allow_prefixes::no>& type) {
+            auto s = build_dummy_partition_key_schema(type);
+            auto pk = partition_key::from_bytes(value);
+            auto dk = dht::decorate_key(*s, pk);
+            auto shard = dht::shard_of(vm["shards"].as<unsigned>(), vm["ignore-msb-bits"].as<unsigned>(), dk.token());
+            fmt::print("{}: token: {}, shard: {}\n", to_printable_string(type, value), dk.token(), shard);
+        }
+    };
+
+    if (!vm.count("shards")) {
+        throw std::invalid_argument("error: missing mandatory argument --shards");
+    }
+
+    for (const auto& value : values) {
+        std::visit(shardof_visitor{value, vm}, type);
+    }
+}
+
+using action_handler_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
 
 class action_handler {
     std::string _name;
@@ -133,8 +209,8 @@ public:
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
-    void operator()(type_variant type, std::vector<bytes> values) const {
-        _func(std::move(type), std::move(values));
+    void operator()(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) const {
+        _func(std::move(type), std::move(values), vm);
     }
 };
 
@@ -176,6 +252,31 @@ Examples:
 $  scylla types validate -t Int32Type b34b62d4
 b34b62d4: VALID - -1286905132
 )"},
+    {"tokenof", "tokenof (calculate the token of) the partition-key", tokenof_handler,
+R"(
+Decorate the key, that is calculate its token.
+Only supports --full-compound.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+(file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
+)"},
+    {"shardof", "calculate which shard the partition-key belongs to", shardof_handler,
+R"(
+Decorate the key and calculate which shard its token belongs to.
+Only supports --full-compound. Use --shards and --ignore-msb-bits to specify
+sharding parameters.
+
+Arguments: 1 or more serialized values.
+
+Examples:
+
+$ scylla types shardof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType --shards=7 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+(file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): token: -5043005771368701888, shard: 1
+)"},
 };
 
 }
@@ -183,8 +284,6 @@ b34b62d4: VALID - -1286905132
 namespace tools {
 
 int scylla_types_main(int argc, char** argv) {
-    namespace bpo = boost::program_options;
-
     const action_handler* found_ah = nullptr;
     if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
         found_ah = &tools::utils::get_selected_operation(argc, argv, action_handlers, "action");
@@ -234,6 +333,8 @@ $ scylla types {{action}} --help
                 "note that the order of the types on the command line will be their order in the compound too")
         ("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types")
         ("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types")
+        ("shards", bpo::value<unsigned>(), "number of shards (only relevant for shardof action)")
+        ("ignore-msb-bits", bpo::value<unsigned>()->default_value(12), "number of shards (only relevant for shardof action)")
         ;
 
     app.add_positional_options({
@@ -267,7 +368,7 @@ $ scylla types {{action}} --help
         auto values = boost::copy_range<std::vector<bytes>>(
                 app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-        handler(std::move(type), std::move(values));
+        handler(std::move(type), std::move(values), app.configuration());
 
         return make_ready_future<>();
     });
