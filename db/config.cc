@@ -899,6 +899,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Ignore truncation record stored in system tables as if tables were never truncated.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
+    , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
+        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
