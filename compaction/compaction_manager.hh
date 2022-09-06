@@ -33,6 +33,7 @@
 #include "backlog_controller.hh"
 #include "seastarx.hh"
 #include "sstables/exceptions.hh"
+#include "tombstone_gc.hh"
 
 class compacting_sstable_registration;
 
@@ -294,6 +295,8 @@ private:
 
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
+
+    tombstone_gc_state _tombstone_gc_state;
 private:
     future<compaction_stats_opt> perform_task(shared_ptr<task>);
 
@@ -507,6 +510,14 @@ public:
     static sstables::compaction_data create_compaction_data();
 
     compaction::strategy_control& get_strategy_control() const noexcept;
+
+    tombstone_gc_state& get_tombstone_gc_state() noexcept {
+        return _tombstone_gc_state;
+    };
+
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
+        return _tombstone_gc_state;
+    };
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
