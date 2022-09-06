@@ -569,6 +569,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             cfg->broadcast_to_all_shards().get();
 
+            // We pass this piece of config through a global as a temporary hack.
+            // See the comment at the definition of sstables::global_cache_index_pages.
+            smp::invoke_on_all([&cfg] {
+                sstables::global_cache_index_pages = cfg->cache_index_pages.operator utils::updateable_value<bool>();
+            }).get();
+
             ::sighup_handler sighup_handler(opts, *cfg);
             auto stop_sighup_handler = defer_verbose_shutdown("sighup", [&] {
                 sighup_handler.stop().get();
