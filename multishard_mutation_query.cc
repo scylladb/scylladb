@@ -781,7 +781,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
 
     try {
-        auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
+        auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed, cmd.query_uuid);
 
         auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout,
                 [result_builder_factory, accounter = std::move(accounter)] (const compact_for_query_state_v2& compaction_state) mutable {

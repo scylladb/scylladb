@@ -59,18 +59,18 @@ public:
     // Reserves minimum_result_size and creates new memory accounter for
     // mutation query. Uses the specified maximum result size and may be
     // stopped before reaching it due to memory pressure on shard.
-    future<result_memory_accounter> new_mutation_read(query::max_result_size max_result_size, short_read short_read_allowed);
+    future<result_memory_accounter> new_mutation_read(query::max_result_size max_result_size, short_read short_read_allowed, query_id id);
 
     // Reserves minimum_result_size and creates new memory accounter for
     // data query. Uses the specified maximum result size, result will *not*
     // be stopped due to on shard memory pressure in order to avoid digest
     // mismatches.
-    future<result_memory_accounter> new_data_read(query::max_result_size max_result_size, short_read short_read_allowed);
+    future<result_memory_accounter> new_data_read(query::max_result_size max_result_size, short_read short_read_allowed, query_id id);
 
     // Creates a memory accounter for digest reads. Such accounter doesn't
     // contribute to the shard memory usage, but still stops producing the
     // result after individual limit has been reached.
-    future<result_memory_accounter> new_digest_read(query::max_result_size max_result_size, short_read short_read_allowed);
+    future<result_memory_accounter> new_digest_read(query::max_result_size max_result_size, short_read short_read_allowed, query_id id);
 
     // Checks whether the result can grow any more, takes into account only
     // the per shard limit.
@@ -113,37 +113,41 @@ class result_memory_accounter {
     query::max_result_size _maximum_result_size;
     stop_iteration _stop_on_global_limit;
     short_read _short_read_allowed;
+    query_id _query_id;
     mutable bool _below_soft_limit = true;
 private:
     // Mutation query accounter. Uses provided individual result size limit and
     // will stop when shard memory pressure grows too high.
     struct mutation_query_tag { };
-    explicit result_memory_accounter(mutation_query_tag, result_memory_limiter& limiter, query::max_result_size max_size, short_read short_read_allowed) noexcept
+    explicit result_memory_accounter(mutation_query_tag, result_memory_limiter& limiter, query::max_result_size max_size, short_read short_read_allowed, query_id id) noexcept
         : _limiter(&limiter)
         , _blocked_bytes(result_memory_limiter::minimum_result_size)
         , _maximum_result_size(max_size)
         , _stop_on_global_limit(true)
         , _short_read_allowed(short_read_allowed)
+        , _query_id(id)
     { }
 
     // Data query accounter. Uses provided individual result size limit and
     // will *not* stop even though shard memory pressure grows too high.
     struct data_query_tag { };
-    explicit result_memory_accounter(data_query_tag, result_memory_limiter& limiter, query::max_result_size max_size, short_read short_read_allowed) noexcept
+    explicit result_memory_accounter(data_query_tag, result_memory_limiter& limiter, query::max_result_size max_size, short_read short_read_allowed, query_id id) noexcept
         : _limiter(&limiter)
         , _blocked_bytes(result_memory_limiter::minimum_result_size)
         , _maximum_result_size(max_size)
         , _short_read_allowed(short_read_allowed)
+        , _query_id(id)
     { }
 
     // Digest query accounter. Uses provided individual result size limit and
     // will *not* stop even though shard memory pressure grows too high. This
     // accounter does not contribute to the shard memory limits.
     struct digest_query_tag { };
-    explicit result_memory_accounter(digest_query_tag, result_memory_limiter&, query::max_result_size max_size, short_read short_read_allowed) noexcept
+    explicit result_memory_accounter(digest_query_tag, result_memory_limiter&, query::max_result_size max_size, short_read short_read_allowed, query_id id) noexcept
         : _blocked_bytes(0)
         , _maximum_result_size(max_size)
         , _short_read_allowed(short_read_allowed)
+        , _query_id(id)
     { }
 
     stop_iteration check_local_limit() const;
@@ -163,6 +167,7 @@ public:
         , _maximum_result_size(other._maximum_result_size)
         , _stop_on_global_limit(other._stop_on_global_limit)
         , _short_read_allowed(other._short_read_allowed)
+        , _query_id(other._query_id)
         , _below_soft_limit(other._below_soft_limit)
     { }
 
@@ -224,20 +229,20 @@ public:
     }
 };
 
-inline future<result_memory_accounter> result_memory_limiter::new_mutation_read(query::max_result_size max_size, short_read short_read_allowed) {
-    return _memory_limiter.wait(minimum_result_size).then([this, max_size, short_read_allowed] {
-        return result_memory_accounter(result_memory_accounter::mutation_query_tag(), *this, max_size, short_read_allowed);
+inline future<result_memory_accounter> result_memory_limiter::new_mutation_read(query::max_result_size max_size, short_read short_read_allowed, query_id id) {
+    return _memory_limiter.wait(minimum_result_size).then([this, max_size, short_read_allowed, id] {
+        return result_memory_accounter(result_memory_accounter::mutation_query_tag(), *this, max_size, short_read_allowed, id);
     });
 }
 
-inline future<result_memory_accounter> result_memory_limiter::new_data_read(query::max_result_size max_size, short_read short_read_allowed) {
-    return _memory_limiter.wait(minimum_result_size).then([this, max_size, short_read_allowed] {
-        return result_memory_accounter(result_memory_accounter::data_query_tag(), *this, max_size, short_read_allowed);
+inline future<result_memory_accounter> result_memory_limiter::new_data_read(query::max_result_size max_size, short_read short_read_allowed, query_id id) {
+    return _memory_limiter.wait(minimum_result_size).then([this, max_size, short_read_allowed, id] {
+        return result_memory_accounter(result_memory_accounter::data_query_tag(), *this, max_size, short_read_allowed, id);
     });
 }
 
-inline future<result_memory_accounter> result_memory_limiter::new_digest_read(query::max_result_size max_size, short_read short_read_allowed) {
-    return make_ready_future<result_memory_accounter>(result_memory_accounter(result_memory_accounter::digest_query_tag(), *this, max_size, short_read_allowed));
+inline future<result_memory_accounter> result_memory_limiter::new_digest_read(query::max_result_size max_size, short_read short_read_allowed, query_id id) {
+    return make_ready_future<result_memory_accounter>(result_memory_accounter(result_memory_accounter::digest_query_tag(), *this, max_size, short_read_allowed, id));
 }
 
 enum class result_request {

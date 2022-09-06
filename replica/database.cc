@@ -1567,7 +1567,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
-    auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
+    auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed, cmd.query_uuid);
     column_family& cf = find_column_family(cmd.cf_id);
 
     std::optional<query::querier> querier_opt;
