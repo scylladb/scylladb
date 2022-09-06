@@ -17,5 +17,8 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
                                                      data_dictionary::database db,
                                                      schema_ptr schema,
                                                      prepare_context& ctx);
+
+void validate_collection_column_relation(const expression& col_expr,
+                                         oper_t oper);
 } // namespace expr
 } // namespace cql3

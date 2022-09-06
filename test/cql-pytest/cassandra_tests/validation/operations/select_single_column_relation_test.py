@@ -20,6 +20,33 @@ def testInvalidCollectionEqualityRelation(cql, test_keyspace):
         assert_invalid_message(cql, table, "Collection column 'd' (map<int, int>) cannot be restricted by a '=' relation",
                              "SELECT * FROM %s WHERE a = 0 AND d=?", {0: 0})
 
+def testInvalidCollectionIntegerArgumentEqualityRelation(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (b)")
+        execute(cql, table, "CREATE INDEX ON %s (c)")
+        execute(cql, table, "CREATE INDEX ON %s (d)")
+        assert_invalid_message(cql, table, "Collection column 'b' (set<int>) cannot be restricted by a '=' relation",
+                             "SELECT * FROM %s WHERE a = 0 AND b=?", 1)
+        assert_invalid_message(cql, table, "Collection column 'c' (list<int>) cannot be restricted by a '=' relation",
+                             "SELECT * FROM %s WHERE a = 0 AND c=?", 1)
+        assert_invalid_message(cql, table, "Collection column 'd' (map<int, int>) cannot be restricted by a '=' relation",
+                             "SELECT * FROM %s WHERE a = 0 AND d=?", 1)
+
+def testInvalidCollectionIntegerArgumentNonEQRelation(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c int)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (c)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, {0}, 0)")
+
+        # non-EQ operators
+        assert_invalid_message(cql, table, "Collection column 'b' (set<int>) cannot be restricted by a '>' relation",
+                             "SELECT * FROM %s WHERE c = 0 AND b > ?", 1)
+        assert_invalid_message(cql, table, "Collection column 'b' (set<int>) cannot be restricted by a '>=' relation",
+                             "SELECT * FROM %s WHERE c = 0 AND b >= ?", 1)
+        assert_invalid_message(cql, table, "Collection column 'b' (set<int>) cannot be restricted by a '<' relation",
+                             "SELECT * FROM %s WHERE c = 0 AND b < ?", 1)
+        assert_invalid_message(cql, table, "Collection column 'b' (set<int>) cannot be restricted by a '<=' relation",
+                             "SELECT * FROM %s WHERE c = 0 AND b <= ?", 1)
+
 def testInvalidCollectionNonEQRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c int)") as table:
         execute(cql, table, "CREATE INDEX ON %s (c)")

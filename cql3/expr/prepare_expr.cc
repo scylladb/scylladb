@@ -12,6 +12,7 @@
 #include "cql3/constants.hh"
 #include "cql3/abstract_marker.hh"
 #include "cql3/lists.hh"
+#include "cql3/expr/restrictions.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
 #include "types/list.hh"
@@ -1183,6 +1184,8 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     }
     auto& prepared_lhs = *prepared_lhs_opt;
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, *schema);
+
+    validate_collection_column_relation(prepared_lhs, binop.op);
 
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
     expression prepared_rhs = prepare_expression(binop.rhs, db, schema->ks_name(), schema.get(), rhs_receiver);
