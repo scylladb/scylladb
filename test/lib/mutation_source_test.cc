@@ -953,7 +953,7 @@ void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& sem
     for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
-        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time);
+        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time, tombstone_gc_state(nullptr));
         assert_that(ms.make_reader_v2(m.schema(), semaphore.make_permit())).produces_compacted(copy, query_time);
     });
 }
@@ -1584,7 +1584,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         const auto query_time = gc_clock::now();
 
         mutation m_compacted(m);
-        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time);
+        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time, tombstone_gc_state(nullptr));
 
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());

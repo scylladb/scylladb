@@ -1475,7 +1475,8 @@ mutation_partition::compact_for_query(
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
-    can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time)
+    can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time,
+    const tombstone_gc_state& gc_state)
 {
     check_schema(s);
     static const std::vector<query::clustering_range> all_rows = {
@@ -1483,7 +1484,6 @@ void mutation_partition::compact_for_compaction(const schema& s,
     };
 
     bool drop_tombstones_unconditionally = false;
-    auto gc_state = tombstone_gc_state(); // FIXME: for now
     do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_state);
 }
 
