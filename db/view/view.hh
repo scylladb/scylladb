@@ -206,10 +206,7 @@ private:
 };
 
 class view_update_builder {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-private-field"
     const replica::table& _base;
-#pragma GCC diagnostic pop
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
     flat_mutation_reader_v2 _updates;
