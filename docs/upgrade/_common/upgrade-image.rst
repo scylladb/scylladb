@@ -15,7 +15,7 @@ This installation upgrade method allows you to upgrade your ScyllaDB version and
     
     Where:
 
-      * ``<version>`` - The Scylla version to which you are upgrading ( |NEW_VERSION| ).
+      * ``<version>`` - The ScyllaDB version to which you are upgrading ( |NEW_VERSION| ).
       * ``<arch>`` - Architecture type: ``x86_64`` or ``aarch64``.
     
     The file is included in the ScyllaDB packages downloaded in the previous step. The file location is:
