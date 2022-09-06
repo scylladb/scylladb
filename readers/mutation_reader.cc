@@ -183,7 +183,7 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
     , _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
     , _validation_level(level)
 {
-    if (mrlog.level() <= log_level::debug) {
+    if (mrlog.is_enabled(log_level::debug)) {
         std::string_view what;
         switch (_validation_level) {
             case mutation_fragment_stream_validation_level::partition_region:
