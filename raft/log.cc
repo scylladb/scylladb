@@ -66,6 +66,7 @@ void log::truncate_uncommitted(index_t idx) {
     auto it = _log.begin() + (idx - _first_idx);
     const auto released_memory = range_memory_usage(it, _log.end());
     _log.erase(it, _log.end());
+    _log.shrink_to_fit();
     _memory_usage -= released_memory;
     stable_to(std::min(_stable_idx, last_idx()));
     if (_last_conf_idx > last_idx()) {
@@ -238,6 +239,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
         // entries and the next entry index.
         released_memory = std::exchange(_memory_usage, 0);
         _log.clear();
+        _log.shrink_to_fit();
         _first_idx = idx + index_t{1};
     } else {
         auto entries_to_remove = _log.size() - (last_idx() - idx);
@@ -251,6 +253,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
         }
         released_memory = range_memory_usage(_log.begin(), _log.begin() + entries_to_remove);
         _log.erase(_log.begin(), _log.begin() + entries_to_remove);
+        _log.shrink_to_fit();
         _memory_usage -= released_memory;
         _first_idx = _first_idx + index_t{entries_to_remove};
     }
