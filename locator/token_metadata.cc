@@ -1327,7 +1327,7 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
     }
 }
 
-int topology::compare_endpoints(inet_address& address, inet_address& a1, inet_address& a2) const {
+int topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
     //
     // if one of the Nodes IS the Node we are comparing to and the other one
     // IS NOT - then return the appropriate result.

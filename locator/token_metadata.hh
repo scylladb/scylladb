@@ -107,7 +107,7 @@ private:
      * compares two endpoints in relation to the target endpoint, returning as
      * Comparator.compare would
      */
-    int compare_endpoints(inet_address& address, inet_address& a1, inet_address& a2) const;
+    int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
