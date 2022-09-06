@@ -120,7 +120,10 @@ struct entries {
     size_t n;
     // If provided, use this server to add entries.
     std::optional<size_t> server;
-    entries(size_t n_arg, std::optional<size_t> server_arg = {}) :n(n_arg), server(server_arg) {}
+    // Don't wait for previous requests to finish before issuing a new one.
+    bool concurrent;
+    entries(size_t n_arg, std::optional<size_t> server_arg = {}, bool concurrent_arg = false)
+        :n(n_arg), server(server_arg), concurrent(concurrent_arg) {}
 };
 struct new_leader {
     size_t id;
@@ -243,6 +246,7 @@ struct test_case {
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
+    const size_t max_snapshots = 2;
     size_t get_first_val();
 };
 
@@ -301,6 +305,7 @@ class raft_cluster {
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
     typename Clock::duration _tick_delta;
+    size_t _max_snapshots;
     rpc_net _rpc_net;
     // Tick phase delay for each node, uniformly spread across tick delta
     std::vector<typename Clock::duration> _tick_delays;
@@ -332,7 +337,9 @@ public:
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
     void init_tick_delays(size_t n);
+    future<> add_entry(size_t val, std::optional<size_t> server);
     future<> add_entries(size_t n, std::optional<size_t> server = std::nullopt);
+    future<> add_entries_concurrent(size_t n, std::optional<size_t> server = std::nullopt);
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log(::wait_log followers);
@@ -785,8 +792,8 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     size_t apply_entries, size_t first_val, size_t first_leader,
     bool prevote, typename Clock::duration tick_delta,
     rpc_config rpc_config)
-        : _connected(std::make_unique<struct connected>(test.nodes)),
-        _snapshots(std::make_unique<snapshots>())
+        : _connected(std::make_unique<struct connected>(test.nodes))
+        , _snapshots(std::make_unique<snapshots>())
         , _persisted_snapshots(std::make_unique<persisted_snapshots>())
         , _apply_entries(apply_entries)
         , _next_val(first_val)
@@ -794,7 +801,8 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         , _prevote(prevote)
         , _apply(apply)
         , _leader(first_leader)
-        , _tick_delta(tick_delta) {
+        , _tick_delta(tick_delta)
+        , _max_snapshots(test.max_snapshots) {
 
     auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
@@ -834,7 +842,7 @@ future<> raft_cluster<Clock>::stop_server(size_t id) {
     cancel_ticker(id);
     co_await _servers[id].server->abort();
     if (_snapshots->contains(to_raft_id(id))) {
-        BOOST_CHECK((*_snapshots)[to_raft_id(id)].size() <= 2);
+        BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), _max_snapshots);
         _snapshots->erase(to_raft_id(id));
     }
     _persisted_snapshots->erase(to_raft_id(id));
@@ -888,10 +896,32 @@ template <typename Clock>
 future<> raft_cluster<Clock>::add_entries(size_t n, std::optional<size_t> server) {
     size_t end = _next_val + n;
     while (_next_val != end) {
+        co_await add_entry(_next_val, server);
+        _next_val++;
+    }
+}
+
+// Add consecutive integer entries to a leader concurrently
+template <typename Clock>
+future<> raft_cluster<Clock>::add_entries_concurrent(size_t n, std::optional<size_t> server) {
+    size_t end = _next_val + n;
+    std::vector<future<>> futures;
+    futures.reserve(n);
+    while (_next_val != end) {
+        futures.push_back(add_entry(_next_val++, server));
+    }
+    for (auto& f: futures) {
+        co_await std::move(f);
+    }
+}
+
+template <typename Clock>
+future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server) {
+    while (true) {
         try {
             auto& at = _servers[server ? *server : _leader].server;
-            co_await at->add_entry(create_command(_next_val), raft::wait_type::committed);
-            _next_val++;
+            co_await at->add_entry(create_command(val), raft::wait_type::committed);
+            break;
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
             // retry if an entry is dropped because the leader have changed after it was submitted
@@ -1378,7 +1408,9 @@ struct run_test {
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
-                co_await rafts.add_entries(update.n, update.server);
+                co_await (update.concurrent
+                        ? rafts.add_entries_concurrent(update.n, update.server)
+                        : rafts.add_entries(update.n, update.server));
             },
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);

@@ -159,19 +159,23 @@ RAFT_TEST_CASE(take_snapshot, (test_case{
 RAFT_TEST_CASE(backpressure, (test_case{
          .nodes = 2,
          .config = {
-             {
-                 .snapshot_threshold = 10,
-                 .snapshot_trailing = 5,
-                 .max_snapshot_trailing_bytes = 150,
-                 .max_log_size = 450,
-                 .max_command_size = 150
-             },
+             []() {
+                 const auto max_command_size = sizeof(size_t);
+                 return raft::server::configuration {
+                     .snapshot_threshold = 10,
+                     .snapshot_trailing = 5,
+                     .max_snapshot_trailing_bytes = 0,
+                     .max_log_size = 5 * (max_command_size + sizeof(raft::log_entry)),
+                     .max_command_size = max_command_size
+                 };
+             }(),
              {
                  .snapshot_threshold = 20,
                  .snapshot_trailing = 10
-            }
+             }
          },
-         .updates = {entries{100}}}));
+         .updates = {entries{100, {}, true}},
+         .max_snapshots = std::numeric_limits<size_t>::max()}));
 
 // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
 RAFT_TEST_CASE(drops_01, (test_case{
