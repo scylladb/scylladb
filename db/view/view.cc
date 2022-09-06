@@ -2261,7 +2261,9 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             batch_size,
             query::max_partitions,
             view_builder::consumer{*this, step, now});
-    consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
+    if (auto mfp = step.reader.peek().get(); mfp && !mfp->is_partition_start()) {
+        consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
+    }
     auto built = step.reader.consume_in_thread(std::move(consumer));
 
     _as.check();
