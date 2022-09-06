@@ -206,6 +206,10 @@ private:
 };
 
 class view_update_builder {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-private-field"
+    const replica::table& _base;
+#pragma GCC diagnostic pop
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
     flat_mutation_reader_v2 _updates;
@@ -220,12 +224,13 @@ class view_update_builder {
     partition_key _key = partition_key::make_empty();
 public:
 
-    view_update_builder(schema_ptr s,
+    view_update_builder(const replica::table& base, schema_ptr s,
         std::vector<view_updates>&& views_to_update,
         flat_mutation_reader_v2&& updates,
         flat_mutation_reader_v2_opt&& existings,
         gc_clock::time_point now)
-            : _schema(std::move(s))
+            : _base(base)
+            , _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
             , _updates(std::move(updates))
             , _existings(std::move(existings))
@@ -249,7 +254,8 @@ private:
 };
 
 view_update_builder make_view_update_builder(
-        const schema_ptr& base,
+        const replica::table& base_table,
+        const schema_ptr& base_schema,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader_v2&& updates,
         flat_mutation_reader_v2_opt&& existings,
