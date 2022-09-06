@@ -2497,7 +2497,7 @@ future<> database::truncate(column_family& cf, const table_truncate_state& st, d
     cf.cache_truncation_record(truncated_at);
     co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
 
-    auto gc_state = tombstone_gc_state(); // FIXME: for now
+    auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
     gc_state.drop_repair_history_map_for_table(uuid);
 }
 
