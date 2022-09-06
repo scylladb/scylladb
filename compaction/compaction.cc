@@ -684,7 +684,8 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func()));
+        const auto& gc_state = _table_s.get_tombstone_gc_state();
+        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
     }
 
     future<> consume() {

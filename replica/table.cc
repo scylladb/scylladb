@@ -1284,6 +1284,7 @@ table::sstables_as_snapshot_source() {
                 std::move(reader),
                 gc_clock::now(),
                 [](const dht::decorated_key&) { return api::min_timestamp; },
+                _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
