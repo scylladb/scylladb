@@ -25,10 +25,14 @@
 
 namespace sstables {
 
+// See the comment at the definition of sstables::global_cache_index_pages
+// for a discussion of these caching modes.
 enum class use_caching {
     cache_globally,
+    cache_locally,
     bypass_cache,
 };
+
 using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
 using promoted_index_block_position = std::variant<composite, position_in_partition>;
 

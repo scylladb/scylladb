@@ -92,7 +92,25 @@ namespace sstables {
 //
 // If set to true, the reader will read and/or populate a common global cache,
 // which shares its capacity with the row cache. If false, the reader will use
-// BYPASS CACHE semantics for index caching.
+// a local cache, which caches the index file pages only for the lifetime of
+// the reader.
+//
+// Global index caching was introduced as a general opportunistic optimization,
+// but it backfired by stealing too much space from the row cache in some
+// workloads. See #11202.
+//
+// BYPASS CACHE eliminates the above problem, but is more conservative than
+// necessary. To prevent cache pollution, BYPASS CACHE doesn't cache file pages
+// even for the lifetime of the reader. (Although it does cache them for the
+// lifetime of an promoted index binary search). This is the right approach,
+// because BYPASS CACHE is used also for large scans, which can read an
+// unbounded number of pages (to get data file bounds from the promoted index
+// for each partition).
+//
+// Therefore, a middle-ground mode was added, which caches index file pages for
+// the lifetime of the reader. Compared to BYPASS CACHE, it can save some I/O,
+// particularly on partition skips and the first step of each promoted index
+// search.
 //
 // This flag is intended to be a temporary hack. The goal is to eventually
 // solve index caching problems via a smart cache replacement policy.

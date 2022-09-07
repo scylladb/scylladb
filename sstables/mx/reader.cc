@@ -1320,8 +1320,10 @@ private:
     index_reader& get_index_reader() {
         if (!_index_reader) {
             use_caching caching;
-            if (!global_cache_index_pages || _slice.options.contains(query::partition_slice::option::bypass_cache)) {
+            if (_slice.options.contains(query::partition_slice::option::bypass_cache)) {
                 caching = use_caching::bypass_cache;
+            } else if (!global_cache_index_pages) {
+                caching = use_caching::cache_locally;
             } else {
                 caching = use_caching::cache_globally;
             }

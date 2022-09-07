@@ -388,6 +388,7 @@ class index_reader {
     tracing::trace_state_ptr _trace_state;
     std::unique_ptr<partition_index_cache> _local_index_cache; // Used when caching is disabled
     partition_index_cache& _index_cache;
+    seastar::shared_ptr<cached_file> _local_cached_file;
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
     use_caching _use_caching;
@@ -427,6 +428,8 @@ class index_reader {
     seastar::file get_tracked_file() {
         if (_use_caching == use_caching::cache_globally) {
             return make_tracked_index_file(_sstable->index_file());
+        } else if (_use_caching == use_caching::cache_locally) {
+            return seastar::file(make_shared<cached_file_impl>(*get_local_cached_file(), _trace_state));
         } else {
             return make_tracked_index_file(_sstable->uncached_index_file());
         }
@@ -441,9 +444,18 @@ class index_reader {
                 _sstable->_index_file_size);
     }
 
+    seastar::shared_ptr<cached_file> get_local_cached_file() {
+        if (!_local_cached_file) {
+            _local_cached_file = make_cached_file(make_tracked_index_file(_sstable->uncached_index_file()));
+        }
+        return _local_cached_file;
+    }
+
     seastar::shared_ptr<cached_file> get_cached_file() {
         if (_use_caching == use_caching::cache_globally) {
             return _sstable->_cached_index_file;
+        } else if (_use_caching == use_caching::cache_locally) {
+            return get_local_cached_file();
         } else {
             return make_cached_file(make_tracked_index_file(_sstable->uncached_index_file()));
         }
