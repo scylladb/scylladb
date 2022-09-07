@@ -85,6 +85,9 @@ class ManagerClient():
         resp = await self._get(resource)
         return await resp.text()
 
+    async def _put_json(self, resource: str, json: dict) -> aiohttp.ClientResponse:
+        return await self.session.request(method='PUT', url=self._resource_uri(resource), json=json)
+
     def _resource_uri(self, resource: str) -> str:
         return f"http+unix://{self.sock_name}{resource}"
 
