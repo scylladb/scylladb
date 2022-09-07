@@ -23,6 +23,12 @@ from cassandra.policies import RoundRobinPolicy                          # type:
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
+    parser.addoption('--host', action='store', default='localhost',
+                     help='CQL server host to connect to')
+    parser.addoption('--port', action='store', default='9042',
+                     help='CQL server port to connect to')
+    parser.addoption('--ssl', action='store_true',
+                     help='Connect to CQL via an encrypted TLSv1.2 connection')
 
 # Change default pytest-asyncio event_loop fixture scope to session to
 # allow async fixtures with scope larger than function. (e.g. manager fixture)
