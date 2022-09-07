@@ -1232,6 +1232,32 @@ def test_index_paging_match_partition(cql, test_keyspace):
             # Finally check that altogether, we read the right rows.
             assert sorted(all_rows) == [(i,) for i in range(10)]
 
+# Currently, paging of queries that uses secondary indexes on static columns
+# is unable to page through partitions of the base table and must return them
+# in whole. Related to #7432.
+@pytest.mark.xfail(reason="issue #7432")
+def test_index_paging_static_column(cql, test_keyspace):
+    schema = 'p int, c int, s int static, PRIMARY KEY(p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        insert = cql.prepare(f"INSERT INTO {table}(p,c,s) VALUES (?,?,?)")
+        for p in range(5):
+            for c in range(5):
+                cql.execute(insert, [p, c, 42])
+        for page_size in [1, 2, 3, 4, 100]:
+            stmt = SimpleStatement(f"SELECT p, c FROM {table} WHERE s = 42", fetch_size=page_size)
+
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(p,c) for p in range(5) for c in range(5)]
+
 # If, in contrast with test_index_paging_match_partition above which indexed
 # a partition key column, we index a clustering key column, paging does work
 # as expected and stops at the right page size. However, as was noted in
