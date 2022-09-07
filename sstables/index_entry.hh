@@ -201,6 +201,7 @@ public:
 
 // Allocated inside LSA.
 class promoted_index {
+    friend class index_reader;
     deletion_time _del_time;
     uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
@@ -219,14 +220,6 @@ public:
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
-
-    // Call under allocating_section.
-    // For sstable versions >= mc the returned cursor will be of type `bsearch_clustered_cursor`.
-    std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
-        reader_permit,
-        tracing::trace_state_ptr,
-        file_input_stream_options,
-        use_caching);
 };
 
 // A partition index element.
