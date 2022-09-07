@@ -123,29 +123,25 @@ class ManagerClient():
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self._get("/cluster/mark-dirty")
+        await self._get_text("/cluster/mark-dirty")
 
-    async def server_stop(self, server_id: str) -> bool:
+    async def server_stop(self, server_id: str) -> None:
         """Stop specified server"""
-        ret = await self._get_text(f"/cluster/server/{server_id}/stop")
-        return ret == "OK"
+        await self._get_text(f"/cluster/server/{server_id}/stop")
 
-    async def server_stop_gracefully(self, server_id: str) -> bool:
+    async def server_stop_gracefully(self, server_id: str) -> None:
         """Stop specified server gracefully"""
-        ret = await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
-        return ret == "OK"
+        await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
 
-    async def server_start(self, server_id: str) -> bool:
+    async def server_start(self, server_id: str) -> None:
         """Start specified server"""
-        ret = await self._get_text(f"/cluster/server/{server_id}/start")
+        await self._get_text(f"/cluster/server/{server_id}/start")
         self._driver_update()
-        return ret == "OK"
 
-    async def server_restart(self, server_id: str) -> bool:
+    async def server_restart(self, server_id: str) -> None:
         """Restart specified server"""
-        ret = await self._get_text(f"/cluster/server/{server_id}/restart")
+        await self._get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
-        return ret == "OK"
 
     async def server_add(self) -> str:
         """Add a new server"""
@@ -155,12 +151,12 @@ class ManagerClient():
 
     async def server_remove(self, server_id: str) -> None:
         """Remove a specified server"""
-        await self._get(f"/cluster/removeserver/{server_id}")
+        await self._get_text(f"/cluster/removeserver/{server_id}")
         self._driver_update()
 
     async def start_stopped(self) -> None:
         """Start all previously stopped servers"""
-        await self._get(f"/cluster/start_stopped")
+        await self._get_text(f"/cluster/start_stopped")
         self._driver_update()
 
     async def server_get_config(self, server_id: str) -> dict[str, object]:
