@@ -79,7 +79,11 @@ class ManagerClient():
     async def _get(self, resource: str) -> aiohttp.ClientResponse:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        return await self.session.get(self._resource_uri(resource))
+        resp = await self.session.get(self._resource_uri(resource))
+        if resp.status != 200:
+            text = await resp.text()
+            raise Exception(f'status code: {resp.status}, body text: {text}')
+        return resp
 
     async def _get_text(self, resource: str) -> str:
         resp = await self._get(resource)
