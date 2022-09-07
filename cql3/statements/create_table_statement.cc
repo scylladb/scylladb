@@ -426,6 +426,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 // in the table's options are done elsewhere.
 std::optional<sstring> check_restricted_table_properties(
     query_processor& qp,
+    std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops)
 {
@@ -457,7 +458,7 @@ std::optional<sstring> check_restricted_table_properties(
 
 future<::shared_ptr<messages::result_message>>
 create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp, keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp, std::nullopt, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
