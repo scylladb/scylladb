@@ -866,7 +866,7 @@ public:
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
     bool equal(column_kind, const schema& s, const deletable_row& other, const schema& other_schema) const;
-    bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+    bool is_live(const schema& s, column_kind kind, tombstone base_tombstone = tombstone(), gc_clock::time_point query_time = gc_clock::time_point::min()) const;
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 

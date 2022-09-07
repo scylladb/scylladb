@@ -63,7 +63,7 @@ public:
     bool empty() const { return _row.empty(); }
 
     bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
-        return _row.is_live(s, std::move(base_tombstone), std::move(now));
+        return _row.is_live(s, column_kind::regular_column, std::move(base_tombstone), std::move(now));
     }
 
     void apply(const schema& s, clustering_row&& cr) {
