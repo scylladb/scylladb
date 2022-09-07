@@ -111,6 +111,11 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    connect_timeout = 60,
                    control_connection_timeout = 60,
                    max_schema_agreement_wait=60,
+                   # The default timeout for heartbeat timeout is 30 seconds.  This should
+                   # have been more than enough, but in some extreme cases with a very
+                   # slow debug build running on a very busy machine, it may not be.
+                   # Increase it to 60 seconds. See issue #11289.
+                   idle_heartbeat_timeout=60,
                    )
 
 
