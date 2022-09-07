@@ -9,6 +9,7 @@
 import asyncio
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
+from collections import ChainMap
 import itertools
 import logging
 import os
@@ -23,6 +24,7 @@ from test.pylib.pool import Pool
 import aiohttp
 import aiohttp.web
 import yaml
+import signal
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -213,6 +215,18 @@ class ScyllaServer:
         self._write_config_file()
 
         self.log_file = self.log_filename.open("wb")
+
+    def get_config(self) -> dict[str, object]:
+        """Return the contents of conf/scylla.yaml as a dict."""
+        return self.config
+
+    def update_config(self, key: str, value: object) -> None:
+        """Update conf/scylla.yaml by setting `value` under `key`.
+           If we're running, reload the config with a SIGHUP."""
+        self.config[key] = value
+        self._write_config_file()
+        if self.cmd:
+            self.cmd.send_signal(signal.SIGHUP)
 
     def take_log_savepoint(self) -> None:
         """Save the server current log size when a test starts so that if
@@ -655,6 +669,29 @@ class ScyllaCluster:
         self.stopped.clear()
         return ScyllaCluster.ActionReturn(success=True, msg=f"Re-started servers {','.join(ids)}")
 
+    def get_config(self, server_id: str) -> ActionReturn:
+        """Get conf/scylla.yaml of the given server as a dictionary.
+           Fails if the server cannot be found."""
+        server = self._find_server(server_id)
+        if not server:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        return ScyllaCluster.ActionReturn(success=True, data=server.get_config())
+
+    def update_config(self, server_id: str, key: str, value: object) -> ActionReturn:
+        """Update conf/scylla.yaml of the given server by setting `value` under `key`.
+           If the server is running, reload the config with a SIGHUP.
+           Marks the cluster as dirty.
+           Fails if the server cannot be found."""
+        server = self._find_server(server_id)
+        if not server:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        self.is_dirty = True
+        server.update_config(key, value)
+        return ScyllaCluster.ActionReturn(success=True)
+
+    def _find_server(self, id: str) -> Optional[ScyllaServer]:
+        return ChainMap(self.running, self.stopped).get(id)
+
 
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
@@ -731,6 +768,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
         self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
         self.app.router.add_get('/cluster/start_stopped', self._cluster_start_stopped)
+        self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
+        self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -822,6 +861,25 @@ class ScyllaClusterManager:
         if not resp.success:
             return aiohttp.web.Response(status=500, text="Error")
         return aiohttp.web.Response(status=200, text="OK")
+
+    async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Get conf/scylla.yaml of the given server as a dictionary."""
+        assert self.cluster
+        ret = self.cluster.get_config(request.match_info['id'])
+        if not ret.success:
+            return aiohttp.web.Response(status=404, text=ret.msg)
+        return aiohttp.web.json_response(ret.data)
+
+    async def _server_update_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Update conf/scylla.yaml of the given server by setting `value` under `key`.
+           If the server is running, reload the config with a SIGHUP.
+           Marks the cluster as dirty."""
+        assert self.cluster
+        data = await request.json()
+        ret = self.cluster.update_config(request.match_info['id'], data['key'], data['value'])
+        if not ret.success:
+            return aiohttp.web.Response(status=404, text=ret.msg)
+        return aiohttp.web.Response()
 
 
 @asynccontextmanager

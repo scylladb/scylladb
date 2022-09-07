@@ -158,3 +158,14 @@ class ManagerClient():
         """Start all previously stopped servers"""
         await self._get(f"/cluster/start_stopped")
         self._driver_update()
+
+    async def server_get_config(self, server_id: str) -> dict[str, object]:
+        resp = await self._get(f"/cluster/server/{server_id}/get_config")
+        if resp.status != 200:
+            raise Exception(await resp.text())
+        return await resp.json()
+
+    async def server_update_config(self, server_id: str, key: str, value: object) -> None:
+        resp = await self._put_json(f"/cluster/server/{server_id}/update_config", {'key': key, 'value': value})
+        if resp.status != 200:
+            raise Exception(await resp.text())
