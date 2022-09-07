@@ -8,6 +8,7 @@
 Pytest fixtures for CQL repl tests.
 """
 
+import logging
 import ssl
 import uuid
 import pytest
@@ -17,6 +18,13 @@ from cassandra.cluster import ConsistencyLevel     # type: ignore # pylint: disa
 from cassandra.cluster import ExecutionProfile     # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import RoundRobinPolicy    # type: ignore # pylint: disable=no-name-in-module
+from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
+from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+
+
+logger = logging.getLogger(__name__)
+logger.warning("Driver name %s", DRIVER_NAME)
+logger.warning("Driver version %s", DRIVER_VERSION)
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
