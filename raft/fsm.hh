@@ -394,13 +394,9 @@ public:
         _ping_leader = true;
     }
 
-    // Call this function to wait for the total size in bytes of log entries to
-    // go below max_log_size.
+    // Returns the semaphore, which can be used to throttle incoming command entries.
     // Can only be called on a leader.
-    // On abort throws `semaphore_aborted`.
-    future<> consume_memory(seastar::abort_source* as, size_t size);
-
-    void release_memory(size_t size);
+    seastar::semaphore& get_log_limiter_semaphore();
 
     // Return current configuration.
     const configuration& get_configuration() const;

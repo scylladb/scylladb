@@ -20,6 +20,7 @@
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include <absl/container/flat_hash_map.h>
 
 #include "fsm.hh"
@@ -49,6 +50,71 @@ struct awaited_conf_change {
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
+
+class serializing_invoker {
+    using func_t = noncopyable_function<future<>()>;
+
+    struct wait_entry {
+        func_t func;
+        promise<> promise;
+    };
+
+    bool _has_pending_invocation{false};
+    std::queue<wait_entry> _waiters;
+
+    future<> do_invoke(func_t func, std::optional<promise<>> p) {
+        return futurize_invoke(std::move(func)).then_wrapped([this, p = std::move(p)](future<> f) mutable {
+            const auto has_promise = p.has_value();
+            if (has_promise) {
+                f.forward_to(std::move(*p));
+            }
+            if (_waiters.empty()) {
+                _has_pending_invocation = false;
+            } else {
+                auto waiter = std::move(_waiters.front());
+                _waiters.pop();
+                // this is waited on through the promise's future
+                (void)do_invoke(std::move(waiter.func), std::move(waiter.promise));
+            }
+            return has_promise ? make_ready_future<>() : std::move(f);
+        });
+    }
+
+public:
+    future<> invoke(func_t func) {
+        if (_has_pending_invocation) {
+            _waiters.push({std::move(func), promise<>{}});
+            return _waiters.back().promise.get_future();
+        }
+        _has_pending_invocation = true;
+        return do_invoke(std::move(func), {});
+    }
+};
+
+template <typename T>
+class mpsc_queue {
+    queue<T> _queue;
+    serializing_invoker _ser_invoker;
+public:
+    explicit mpsc_queue(size_t size)
+        : _queue(size)
+    {
+    }
+
+    future<> push_eventually(T&& data) noexcept {
+        return _ser_invoker.invoke([this, data = std::move(data)]() mutable {
+            return _queue.push_eventually(std::move(data));
+        });
+    }
+
+    future<T> pop_eventually() noexcept {
+        return _queue.pop_eventually();
+    }
+
+    void abort(std::exception_ptr ex) noexcept {
+        _queue.abort(ex);
+    }
+};
 
 class server_impl : public rpc_server, public server {
 public:
@@ -110,6 +176,7 @@ private:
     std::optional<awaited_conf_change> _non_joint_conf_commit_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    bool _snapshot_forced = false;
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
 
@@ -122,11 +189,13 @@ private:
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
 
     struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
+    struct force_snapshot{};
     using applier_fiber_message = std::variant<
         std::vector<log_entry_ptr>,
         snapshot_descriptor,
-        removed_from_config>;
-    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
+        removed_from_config,
+        force_snapshot>;
+    mpsc_queue<applier_fiber_message> _apply_entries = mpsc_queue<applier_fiber_message>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -465,12 +534,25 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
-    const auto memory_usage = log::memory_usage_of(cmd);
-    try {
-        co_await _fsm->consume_memory(as, memory_usage);
-    } catch (semaphore_aborted&) {
-        throw request_aborted();
+    const auto requested_memory = log::memory_usage_of(cmd);
+    auto& sm = _fsm->get_log_limiter_semaphore();
+    if (!sm.try_wait(requested_memory)) {
+        if (_applied_idx == _fsm->log_last_idx() && !_snapshot_forced) {
+            _snapshot_forced = true;
+            try {
+                co_await _apply_entries.push_eventually(force_snapshot{});
+            } catch (const stop_apply_fiber&) {
+                throw request_aborted();
+            }
+        }
+
+        try {
+            co_await (as ? sm.wait(*as, requested_memory) : sm.wait(requested_memory));
+        } catch (semaphore_aborted&) {
+            throw request_aborted();
+        }
     }
+
     logger.trace("[{}] adding entry after log size limit check", id());
 
     try {
@@ -478,7 +560,7 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
         co_return entry_id{.term = e.term, .idx = e.idx};
     } catch (...) {
         if (_fsm->is_leader()) {
-            _fsm->release_memory(memory_usage);
+            sm.signal(requested_memory);
         }
         throw;
     }
@@ -1024,8 +1106,10 @@ future<> server_impl::applier_fiber() {
         while (true) {
             auto v = co_await _apply_entries.pop_eventually();
 
+            bool need_regular_snapshot = false;
+            bool need_forced_snapshot = false;
             co_await std::visit(make_visitor(
-            [this] (std::vector<log_entry_ptr>& batch) -> future<> {
+            [this, &need_regular_snapshot, &need_forced_snapshot] (std::vector<log_entry_ptr>& batch) -> future<> {
                 if (batch.empty()) {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
                     co_return;
@@ -1068,36 +1152,16 @@ future<> server_impl::applier_fiber() {
                _applied_index_changed.broadcast();
                notify_waiters(_awaited_applies, batch);
 
-               // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
-               // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
-               // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
-               auto last_snap_idx = _fsm->log_last_snapshot_idx();
+                // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
+                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
+                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
+                auto last_snap_idx = _fsm->log_last_snapshot_idx();
 
-               // Having additional room of max_command_memory_usage() ensures
-               // that consume_memory won't get stuck because the last applier_fiber interation
-               // skipped taking a snapshot.
-               const auto memory_limit_approached =
-                   _fsm->log_memory_usage() >= (_config.max_log_size - _config.max_command_memory_usage());
-
-               if (_applied_idx > last_snap_idx &&
-                   (_applied_idx - last_snap_idx >= _config.snapshot_threshold || memory_limit_approached))
-               {
-                   snapshot_descriptor snp;
-                   snp.term = last_term;
-                   snp.idx = _applied_idx;
-                   snp.config = _fsm->log_last_conf_for(_applied_idx);
-                   logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
-                   snp.id = co_await _state_machine->take_snapshot();
-                   // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
-                   // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
-                   // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, _config.max_snapshot_trailing_bytes, true)) {
-                       logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
-                              " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                       _state_machine->drop_snapshot(snp.id);
-                   }
-                   _stats.snapshots_taken++;
-               }
+                need_regular_snapshot = _applied_idx - last_snap_idx >= _config.snapshot_threshold ||
+                    _fsm->log_memory_usage() > _config.max_log_size;
+                need_forced_snapshot = (_applied_idx == _fsm->log_last_idx()) &&
+                    _fsm->is_leader() &&
+                    (_fsm->get_log_limiter_semaphore().waiters() > 0);
             },
             [this] (snapshot_descriptor& snp) -> future<> {
                 assert(snp.idx >= _applied_idx);
@@ -1114,8 +1178,34 @@ future<> server_impl::applier_fiber() {
                 // it may never know the status of entries it submitted.
                 drop_waiters();
                 co_return;
+            },
+            [this, &need_forced_snapshot] (const force_snapshot&) -> future<> {
+                need_forced_snapshot = true;
+                co_return;
             }
             ), v);
+
+            if (need_regular_snapshot || need_forced_snapshot) {
+                snapshot_descriptor snp;
+                snp.term = *_fsm->log_term_for(_applied_idx);
+                snp.idx = _applied_idx;
+                snp.config = _fsm->log_last_conf_for(_applied_idx);
+                logger.trace("[{}] taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
+                // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
+                // a later snapshot from the queue.
+                if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, _config.max_snapshot_trailing_bytes, true)) {
+                    logger.trace("[{}] while taking snapshot term={} idx={} id={},"
+                                 " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                    _state_machine->drop_snapshot(snp.id);
+                }
+                _stats.snapshots_taken++;
+
+                if (need_forced_snapshot) {
+                    _snapshot_forced = false;
+                }
+            }
 
             signal_applied();
         }

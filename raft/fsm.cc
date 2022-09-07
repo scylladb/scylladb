@@ -45,17 +45,9 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
-future<> fsm::consume_memory(seastar::abort_source* as, size_t size) {
+seastar::semaphore& fsm::get_log_limiter_semaphore() {
     check_is_leader();
-
-    auto& sm = *leader_state().log_limiter_semaphore;
-    return as ? sm.wait(*as, size) : sm.wait(size);
-}
-
-void fsm::release_memory(size_t size) {
-    check_is_leader();
-
-    leader_state().log_limiter_semaphore->signal(size);
+    return *leader_state().log_limiter_semaphore;
 }
 
 const configuration& fsm::get_configuration() const {

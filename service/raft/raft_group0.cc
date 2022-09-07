@@ -179,7 +179,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         // against different commit log limits on different nodes.
         .max_command_size = cl ? cl->max_record_size() / 2 : 0
     };
-    config.max_log_size = std::max(3 * config.max_command_memory_usage() + config.max_snapshot_trailing_bytes,
+    config.max_log_size = std::max(config.max_command_memory_usage() + config.max_snapshot_trailing_bytes,
         config.max_log_size);
     auto server = raft::create_server(my_addr.id, std::move(rpc), std::move(state_machine),
         std::move(storage), _raft_gr.failure_detector(),
