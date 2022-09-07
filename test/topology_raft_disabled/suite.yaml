@@ -1,5 +1,5 @@
 type: Topology
-pool_size: 1
+pool_size: 4
 topology:
     class: Simple
     replication_factor: 3
