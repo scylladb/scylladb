@@ -778,7 +778,7 @@ storage_service::get_range_to_address_map_in_local_dc(
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
-        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), local_dc_filter);
+        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), std::cref(local_dc_filter));
         co_await coroutine::maybe_yield();
     }
 

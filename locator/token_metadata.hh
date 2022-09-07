@@ -84,12 +84,15 @@ public:
     sstring get_datacenter() const;
     sstring get_datacenter(inet_address ep) const;
 
-    std::function<bool(inet_address)> get_local_dc_filter() const noexcept;
+    auto get_local_dc_filter() const noexcept {
+        return [ this, local_dc = get_datacenter() ] (inet_address ep) {
+            return get_datacenter(ep) == local_dc;
+        };
+    };
 
     template <std::ranges::range Range>
     inline size_t count_local_endpoints(const Range& endpoints) const {
-        auto filter = get_local_dc_filter();
-        return std::count_if(endpoints.begin(), endpoints.end(), filter);
+        return std::count_if(endpoints.begin(), endpoints.end(), get_local_dc_filter());
     }
 
     /**
