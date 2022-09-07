@@ -282,6 +282,7 @@ public:
     size_t count_normal_token_owners() const;
 private:
     future<> update_normal_token_owners();
+    void init_local_endpoint(endpoint_dc_rack) noexcept;
 
 public:
     // returns empty vector if keyspace_name not found.
@@ -1421,6 +1422,22 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     tm.invalidate_cached_rings();
     co_await func(tm);
     set(make_token_metadata_ptr(std::move(tm)));
+}
+
+void shared_token_metadata::init_local_endpoint(endpoint_dc_rack dr) noexcept {
+    _shared->init_local_endpoint(std::move(dr));
+}
+
+void token_metadata::init_local_endpoint(endpoint_dc_rack dr) noexcept {
+    _impl->init_local_endpoint(std::move(dr));
+}
+
+void token_metadata_impl::init_local_endpoint(endpoint_dc_rack dr) noexcept {
+    _topology.init_local_endpoint(std::move(dr));
+}
+
+void topology::init_local_endpoint(endpoint_dc_rack dr) noexcept {
+    _pending_locations[utils::fb_utilities::get_broadcast_address()] = std::move(dr);
 }
 
 } // namespace locator

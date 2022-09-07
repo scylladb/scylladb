@@ -109,6 +109,8 @@ public:
         _sort_by_proximity = false;
     }
 
+    void init_local_endpoint(endpoint_dc_rack) noexcept;
+
 private:
     /**
      * compares two endpoints in relation to the target endpoint, returning as
@@ -166,8 +168,10 @@ private:
 
         friend class token_metadata_impl;
     };
+
 public:
     token_metadata(config cfg);
+    void init_local_endpoint(endpoint_dc_rack) noexcept;
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
@@ -380,6 +384,9 @@ public:
     future<token_metadata_lock> get_lock() noexcept {
         return _lock_func();
     }
+
+    // FIXME -- snitch should start early and provide this info via constructor
+    void init_local_endpoint(endpoint_dc_rack) noexcept;
 
     // mutate_token_metadata acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)

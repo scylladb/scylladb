@@ -609,6 +609,11 @@ public:
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
+            token_metadata.invoke_on_all([&snitch] (auto& tm) {
+                auto ep = utils::fb_utilities::get_broadcast_address();
+                tm.init_local_endpoint({ snitch.local()->get_datacenter(ep), snitch.local()->get_rack(ep) });
+            }).get();
+
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
