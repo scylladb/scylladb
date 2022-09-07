@@ -409,7 +409,8 @@ class index_reader {
                 promoted_index_cache_metrics, _permit,
                 *ck_values_fixed_lengths, cached_file_ptr, get_file_input_stream_options(_pc).io_priority_class, pi._num_blocks, _trace_state);
         }
-        auto file = get_tracked_file();
+        auto file = (_use_caching == use_caching::cache_globally) ? _sstable->index_file() : _sstable->uncached_index_file();
+        file = make_tracked_index_file(std::move(file));
         auto promoted_index_stream = make_file_input_stream(std::move(file), pi._promoted_index_start, pi._promoted_index_size,get_file_input_stream_options(_pc));
         return std::make_unique<scanning_clustered_index_cursor>(*_sstable->get_schema(), _permit,
             std::move(promoted_index_stream), pi._promoted_index_size, pi._num_blocks, ck_values_fixed_lengths);
@@ -424,7 +425,7 @@ class index_reader {
     }
 
     seastar::file get_tracked_file() {
-        if (_use_caching) {
+        if (_use_caching == use_caching::cache_globally) {
             return make_tracked_index_file(_sstable->index_file());
         } else {
             return make_tracked_index_file(_sstable->uncached_index_file());
@@ -441,7 +442,7 @@ class index_reader {
     }
 
     seastar::shared_ptr<cached_file> get_cached_file() {
-        if (_use_caching) {
+        if (_use_caching == use_caching::cache_globally) {
             return _sstable->_cached_index_file;
         } else {
             return make_cached_file(make_tracked_index_file(_sstable->uncached_index_file()));
@@ -769,10 +770,10 @@ public:
         , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
-        , _local_index_cache(caching ? nullptr
+        , _local_index_cache((caching == use_caching::cache_globally) ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
                                                       _sstable->manager().get_cache_tracker().region()))
-        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _index_cache(_local_index_cache ? *_local_index_cache : *_sstable->_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
         , _use_caching(caching)
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
