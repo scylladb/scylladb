@@ -403,13 +403,7 @@ class index_reader {
         }
 
         if (_sstable->get_version() >= sstable_version_types::mc) {
-            seastar::shared_ptr<cached_file> cached_file_ptr = _use_caching
-                    ? _sstable->_cached_index_file
-                    : seastar::make_shared<cached_file>(get_tracked_file(),
-                                                        index_page_cache_metrics,
-                                                        _sstable->manager().get_cache_tracker().get_lru(),
-                                                        _sstable->manager().get_cache_tracker().region(),
-                                                        _sstable->_index_file_size);
+            seastar::shared_ptr<cached_file> cached_file_ptr = get_cached_file();
             return std::make_unique<mc::bsearch_clustered_cursor>(*_sstable->get_schema(),
                 pi._promoted_index_start, pi._promoted_index_size,
                 promoted_index_cache_metrics, _permit,
@@ -434,6 +428,23 @@ class index_reader {
             return make_tracked_index_file(_sstable->index_file());
         } else {
             return make_tracked_index_file(_sstable->uncached_index_file());
+        }
+    }
+
+    seastar::shared_ptr<cached_file> make_cached_file(file orig) {
+        return seastar::make_shared<cached_file>(
+                std::move(orig),
+                index_page_cache_metrics,
+                _sstable->manager().get_cache_tracker().get_lru(),
+                _sstable->manager().get_cache_tracker().region(),
+                _sstable->_index_file_size);
+    }
+
+    seastar::shared_ptr<cached_file> get_cached_file() {
+        if (_use_caching) {
+            return _sstable->_cached_index_file;
+        } else {
+            return make_cached_file(make_tracked_index_file(_sstable->uncached_index_file()));
         }
     }
 
