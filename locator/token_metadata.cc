@@ -1313,12 +1313,6 @@ sstring topology::get_datacenter(inet_address ep) const {
     return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
 }
 
-std::function<bool(inet_address)> topology::get_local_dc_filter() const noexcept {
-    return [ this, local_dc = get_datacenter() ] (inet_address ep) {
-        return get_datacenter(ep) == local_dc;
-    };
-}
-
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
     if (_sort_by_proximity) {
         std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
