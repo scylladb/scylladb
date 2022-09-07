@@ -301,16 +301,6 @@ public:
     {}
 };
 
-inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state,
-                                    use_caching caching) {
-    auto f = caching ? sst.index_file() : sst.uncached_index_file();
-    f = make_tracked_file(std::move(f), std::move(permit));
-    if (!trace_state) {
-        return f;
-    }
-    return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.filename(component_type::Index)));
-}
-
 // Less-comparator for lookups in the partition index.
 class index_comparator {
     dht::ring_position_comparator_for_sstables _tri_cmp;
@@ -415,7 +405,7 @@ class index_reader {
         if (_sstable->get_version() >= sstable_version_types::mc) {
             seastar::shared_ptr<cached_file> cached_file_ptr = _use_caching
                     ? _sstable->_cached_index_file
-                    : seastar::make_shared<cached_file>(make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching),
+                    : seastar::make_shared<cached_file>(get_tracked_file(),
                                                         index_page_cache_metrics,
                                                         _sstable->manager().get_cache_tracker().get_lru(),
                                                         _sstable->manager().get_cache_tracker().region(),
@@ -425,14 +415,30 @@ class index_reader {
                 promoted_index_cache_metrics, _permit,
                 *ck_values_fixed_lengths, cached_file_ptr, get_file_input_stream_options(_pc).io_priority_class, pi._num_blocks, _trace_state);
         }
-        auto file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
+        auto file = get_tracked_file();
         auto promoted_index_stream = make_file_input_stream(std::move(file), pi._promoted_index_start, pi._promoted_index_size,get_file_input_stream_options(_pc));
         return std::make_unique<scanning_clustered_index_cursor>(*_sstable->get_schema(), _permit,
             std::move(promoted_index_stream), pi._promoted_index_size, pi._num_blocks, ck_values_fixed_lengths);
     }
 
+    seastar::file make_tracked_index_file(file orig) {
+        auto f = make_tracked_file(std::move(orig), _permit);
+        if (!_trace_state) {
+            return f;
+        }
+        return tracing::make_traced_file(std::move(f), _trace_state, format("{}:", _sstable->filename(component_type::Index)));
+    }
+
+    seastar::file get_tracked_file() {
+        if (_use_caching) {
+            return make_tracked_index_file(_sstable->index_file());
+        } else {
+            return make_tracked_index_file(_sstable->uncached_index_file());
+        }
+    }
+
     std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
-        auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
+        auto index_file = get_tracked_file();
         auto input = make_file_input_stream(index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin,
                         get_file_input_stream_options(_pc));
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
