@@ -442,9 +442,10 @@ class ScyllaCluster:
     # pylint: disable=too-many-instance-attributes
 
     class ActionReturn(NamedTuple):
-        """Return status and message for API requests"""
+        """Return status, message, and data (where applicable, otherwise empty) for API requests."""
         success: bool
-        msg: str
+        msg: str = ""
+        data: dict = {}
 
     def __init__(self, replicas: int,
                  create_server: Callable[[str, Optional[List[str]]], ScyllaServer]) -> None:
