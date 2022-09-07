@@ -765,7 +765,9 @@ public:
         , _use_caching(caching)
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
     {
-        sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
+        if (sstlog.is_enabled(logging::log_level::trace)) {
+            sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
+        }
     }
 
     // Ensures that partition_data_ready() returns true.
