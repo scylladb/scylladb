@@ -66,7 +66,7 @@ class ManagerClient():
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
-        await self._request(f"/cluster/before-test/{test_name}")
+        await self._get(f"/cluster/before-test/{test_name}")
         if self.cql is None:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
@@ -74,78 +74,84 @@ class ManagerClient():
 
     async def after_test(self, test_name: str) -> None:
         """Tell harness this test finished"""
-        await self._request(f"/cluster/after-test/{test_name}")
+        await self._get(f"/cluster/after-test/{test_name}")
 
-    async def _request(self, resource: str) -> str:
+    async def _get(self, resource: str) -> aiohttp.ClientResponse:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        resp = await self.session.get(f"http+unix://{self.sock_name}{resource}")
+        return await self.session.get(self._resource_uri(resource))
+
+    async def _get_text(self, resource: str) -> str:
+        resp = await self._get(resource)
         return await resp.text()
+
+    def _resource_uri(self, resource: str) -> str:
+        return f"http+unix://{self.sock_name}{resource}"
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
-        ret = await self._request("/up")
+        ret = await self._get_text("/up")
         return ret == "True"
 
     async def is_cluster_up(self) -> bool:
         """Check if cluster is up"""
-        ret = await self._request("/cluster/up")
+        ret = await self._get_text("/cluster/up")
         return ret == "True"
 
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""
-        dirty = await self._request("/cluster/is-dirty")
+        dirty = await self._get_text("/cluster/is-dirty")
         return dirty == "True"
 
     async def replicas(self) -> int:
         """Get number of configured replicas for the cluster (replication factor)"""
-        resp = await self._request("/cluster/replicas")
+        resp = await self._get_text("/cluster/replicas")
         return int(resp)
 
     async def servers(self) -> List[str]:
         """Get list of running servers"""
-        host_list = await self._request("/cluster/servers")
+        host_list = await self._get_text("/cluster/servers")
         return host_list.split(',')
 
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self._request("/cluster/mark-dirty")
+        await self._get("/cluster/mark-dirty")
 
     async def server_stop(self, server_id: str) -> bool:
         """Stop specified node"""
-        ret = await self._request(f"/cluster/node/{server_id}/stop")
+        ret = await self._get_text(f"/cluster/node/{server_id}/stop")
         return ret == "OK"
 
     async def server_stop_gracefully(self, server_id: str) -> bool:
         """Stop specified node gracefully"""
-        ret = await self._request(f"/cluster/node/{server_id}/stop_gracefully")
+        ret = await self._get_text(f"/cluster/node/{server_id}/stop_gracefully")
         return ret == "OK"
 
     async def server_start(self, server_id: str) -> bool:
         """Start specified node"""
-        ret = await self._request(f"/cluster/node/{server_id}/start")
+        ret = await self._get_text(f"/cluster/node/{server_id}/start")
         self._driver_update()
         return ret == "OK"
 
     async def server_restart(self, server_id: str) -> bool:
         """Restart specified node"""
-        ret = await self._request(f"/cluster/node/{server_id}/restart")
+        ret = await self._get_text(f"/cluster/node/{server_id}/restart")
         self._driver_update()
         return ret == "OK"
 
     async def server_add(self) -> str:
         """Add a new node"""
-        server_id = await self._request("/cluster/addnode")
+        server_id = await self._get_text("/cluster/addnode")
         self._driver_update()
         return server_id
 
     async def server_remove(self, server_id: str) -> None:
         """Remove a specified node"""
-        await self._request(f"/cluster/removenode/{server_id}")
+        await self._get(f"/cluster/removenode/{server_id}")
         self._driver_update()
 
     async def start_stopped(self) -> None:
         """Start all previously stopped servers"""
-        await self._request(f"/cluster/start_stopped")
+        await self._get(f"/cluster/start_stopped")
         self._driver_update()
