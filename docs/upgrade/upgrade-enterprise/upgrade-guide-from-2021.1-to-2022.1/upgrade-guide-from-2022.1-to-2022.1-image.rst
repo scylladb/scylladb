@@ -13,6 +13,6 @@
 .. _SCYLLA_METRICS: ../metric-update-2021.1-to-2022.1
 .. |OPENJDK| replace:: openjdk-8-jre-headless
 .. include:: /upgrade/_common/upgrade-guide-v2022-ubuntu-and-debian-p1.rst
-.. include:: /upgrade/_common/upgrade-image.rst
+.. include:: /upgrade/_common/upgrade-image-enterprise.rst
 .. include:: /upgrade/_common/upgrade-guide-v2022-ubuntu-and-debian-p2.rst
 
