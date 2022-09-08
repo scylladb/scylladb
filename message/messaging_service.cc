@@ -693,7 +693,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         if (!c->error()) {
             return c;
         }
-        remove_error_rpc_client(verb, id);
+        // The 'dead_only' it should be true, because we're interested in
+        // dropping the errored socket, but since it's errored anyway (the
+        // above if) it's false to save unneeded second c->error() call
+        remove_rpc_client_one(_clients[idx], id, false);
     }
 
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
