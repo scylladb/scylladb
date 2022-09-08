@@ -816,13 +816,13 @@ bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
             mlogger.debug("dropped connection to {}", id.addr);
         }).discard_result();
         found = true;
+        _connection_dropped(id.addr);
     }
     return found;
 }
 
 void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id) {
     if (remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true)) {
-        _connection_dropped(id.addr);
     }
 }
 
