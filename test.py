@@ -785,6 +785,7 @@ class PythonTest(Test):
         self.is_after_test_ok = False
         self.args = [
             "-s",  # don't capture print() output inside pytest
+            "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),

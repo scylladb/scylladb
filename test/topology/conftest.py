@@ -7,6 +7,7 @@
 # defines common test fixtures for all of them to use
 
 import asyncio
+import logging
 import pathlib
 import ssl
 import sys
@@ -19,10 +20,24 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
+from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+
+
+logger = logging.getLogger(__name__)
+logger.warning("Driver name %s", DRIVER_NAME)
+logger.warning("Driver version %s", DRIVER_VERSION)
+
 
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
+    parser.addoption('--host', action='store', default='localhost',
+                     help='CQL server host to connect to')
+    parser.addoption('--port', action='store', default='9042',
+                     help='CQL server port to connect to')
+    parser.addoption('--ssl', action='store_true',
+                     help='Connect to CQL via an encrypted TLSv1.2 connection')
 
 # Change default pytest-asyncio event_loop fixture scope to session to
 # allow async fixtures with scope larger than function. (e.g. manager fixture)
