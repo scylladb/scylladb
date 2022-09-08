@@ -793,15 +793,14 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
-bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
+void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
     if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
         // and we'll just interfere
-        return false;
+        return;
     }
 
-    bool found = false;
     auto it = clients.find(id);
     if (it != clients.end() && (!dead_only || it->second.rpc_client->error())) {
         auto client = std::move(it->second.rpc_client);
@@ -815,15 +814,12 @@ bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
         (void)client->stop().finally([id, client, ms = shared_from_this()] {
             mlogger.debug("dropped connection to {}", id.addr);
         }).discard_result();
-        found = true;
         _connection_dropped(id.addr);
     }
-    return found;
 }
 
 void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id) {
-    if (remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true)) {
-    }
+    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true);
 }
 
 void messaging_service::remove_rpc_client(msg_addr id) {
