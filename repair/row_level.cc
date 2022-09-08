@@ -2101,8 +2101,8 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
     co_await db.invoke_on_all([&req] (replica::database& local_db) {
-        auto& table = local_db.find_column_family(req.table_uuid);
-        return ::update_repair_time(table.schema(), req.range, req.repair_time);
+        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+        return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
     });
     db::system_keyspace::repair_history_entry ent;
     ent.id = req.repair_uuid;
@@ -3008,18 +3008,15 @@ future<> repair_service::load_history() {
             auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
-            co_await get_db().invoke_on_all([entry, range, repair_time] (replica::database& local_db) -> future<> {
-                try {
-                    auto& table = local_db.find_column_family(entry.table_uuid);
-                    ::update_repair_time(table.schema(), range, repair_time);
-                } catch (replica::no_such_column_family&) {
-                    rlogger.trace("Table {}.{} with {} does not exist", entry.ks, entry.cf, entry.table_uuid);
-                } catch (...) {
-                    rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
-                            entry.ks, entry.cf, range, repair_time);
-                }
-                co_return;
-            });
+            try {
+                co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
+                    auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+                    gc_state.update_repair_time(table_uuid, range, repair_time);
+                });
+            } catch (...) {
+                rlogger.warn("Failed to update repair history time for keyspace={}, table={}, range={}, repair_time={}",
+                        entry.ks, entry.cf, range, repair_time);
+            }
         });
     }
     co_return;

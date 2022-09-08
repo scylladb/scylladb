@@ -919,6 +919,10 @@ public:
         return _compaction_strategy;
     }
 
+    const compaction_manager& get_compaction_manager() const {
+        return _compaction_manager;
+    }
+
     table_stats& get_stats() const {
         return _stats;
     }

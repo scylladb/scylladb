@@ -1169,7 +1169,8 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    auto gc_before = ::get_gc_before_for_key(_schema, dk, _now);
+    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
@@ -1277,6 +1278,7 @@ future<stop_iteration> view_update_builder::on_results() {
 }
 
 view_update_builder make_view_update_builder(
+        const replica::table& base_table,
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader_v2&& updates,
@@ -1290,7 +1292,7 @@ view_update_builder make_view_update_builder(
         }
         return view_updates(std::move(v));
     }));
-    return view_update_builder(base, std::move(vs), std::move(updates), std::move(existings), now);
+    return view_update_builder(base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,

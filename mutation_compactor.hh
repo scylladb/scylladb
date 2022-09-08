@@ -140,6 +140,7 @@ class compact_mutation_state {
     uint64_t _row_limit{};
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
+    tombstone_gc_state _tombstone_gc_state;
 
     tombstone _partition_tombstone;
 
@@ -239,7 +240,7 @@ private:
             return _gc_before.value();
         } else {
             if (_dk) {
-                _gc_before = ::get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
+                _gc_before = _tombstone_gc_state.get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
                 return _gc_before.value();
             } else {
                 return gc_clock::time_point::min();
@@ -272,6 +273,7 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
+        , _tombstone_gc_state(nullptr)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::end_of_partition_tag_t())
     {
@@ -279,12 +281,14 @@ public:
     }
 
     compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            const tombstone_gc_state& gc_state)
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
+        , _tombstone_gc_state(gc_state)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::end_of_partition_tag_t())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
@@ -572,17 +576,21 @@ class compact_mutation_v2 {
     GCConsumer _gc_consumer;
 
 public:
+    // Can only be used for compact_for_sstables::no
     compact_mutation_v2(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit, Consumer consumer, GCConsumer gc_consumer = GCConsumer())
+              uint32_t partition_limit,
+              Consumer consumer, GCConsumer gc_consumer = GCConsumer())
         : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
 
+    // Can only be used for compact_for_sstables::yes
     compact_mutation_v2(const schema& s, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            const tombstone_gc_state& gc_state,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }

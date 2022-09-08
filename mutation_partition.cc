@@ -1401,13 +1401,14 @@ uint32_t mutation_partition::do_compact(const schema& s,
     bool reverse,
     uint64_t row_limit,
     can_gc_fn& can_gc,
-    bool drop_tombstones_unconditionally)
+    bool drop_tombstones_unconditionally,
+    const tombstone_gc_state& gc_state)
 {
     check_schema(s);
     assert(row_limit > 0);
 
     auto gc_before = drop_tombstones_unconditionally ? gc_clock::time_point::max() :
-        ::get_gc_before_for_key(s.shared_from_this(), dk, query_time);
+        gc_state.get_gc_before_for_key(s.shared_from_this(), dk, query_time);
 
     auto should_purge_tombstone = [&] (const tombstone& t) {
         return t.deletion_time < gc_before && can_gc(t);
@@ -1468,11 +1469,14 @@ mutation_partition::compact_for_query(
 {
     check_schema(s);
     bool drop_tombstones_unconditionally = false;
-    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc, drop_tombstones_unconditionally);
+    // Replicas should only send non-purgeable tombstones already,
+    // so we can expect to not have to actually purge any tombstones here.
+    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
-    can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time)
+    can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time,
+    const tombstone_gc_state& gc_state)
 {
     check_schema(s);
     static const std::vector<query::clustering_range> all_rows = {
@@ -1480,7 +1484,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
     };
 
     bool drop_tombstones_unconditionally = false;
-    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc, drop_tombstones_unconditionally);
+    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_state);
 }
 
 void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(const schema& s, const dht::decorated_key& dk)
@@ -1491,7 +1495,7 @@ void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(
     };
     bool drop_tombstones_unconditionally = true;
     auto compaction_time = gc_clock::time_point::max();
-    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, always_gc, drop_tombstones_unconditionally);
+    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
 }
 
 // Returns true if the mutation_partition represents no writes.

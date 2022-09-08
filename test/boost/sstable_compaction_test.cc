@@ -124,10 +124,12 @@ class table_state_for_test : public table_state {
     column_family_for_tests& _t;
     test_env& _env;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
+    tombstone_gc_state _tombstone_gc_state;
 public:
     explicit table_state_for_test(column_family_for_tests& t, test_env& env)
         : _t(t)
         , _env(env)
+        , _tombstone_gc_state(nullptr)
     {
     }
     const schema_ptr& schema() const noexcept override {
@@ -178,6 +180,9 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return false;
+    }
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+        return _tombstone_gc_state;
     }
 };
 
@@ -3401,7 +3406,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             auto gc_grace_seconds = s->gc_grace_seconds();
 
             auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
-                *s, gc_now, max_purgeable_func, std::move(cr), std::move(purged_cr));
+                *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
             auto compacting = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s));

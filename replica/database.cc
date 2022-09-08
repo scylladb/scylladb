@@ -1005,7 +1005,6 @@ void database::remove(const table& cf) noexcept {
 
 future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
-    drop_repair_history_map_for_table(uuid);
     remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
@@ -2498,7 +2497,8 @@ future<> database::truncate(column_family& cf, const table_truncate_state& st, d
     cf.cache_truncation_record(truncated_at);
     co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
 
-    drop_repair_history_map_for_table(uuid);
+    auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
+    gc_state.drop_repair_history_map_for_table(uuid);
 }
 
 const sstring& database::get_snitch_name() const {

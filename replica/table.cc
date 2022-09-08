@@ -1284,6 +1284,7 @@ table::sstables_as_snapshot_source() {
                 std::move(reader),
                 gc_clock::now(),
                 [](const dht::decorated_key&) { return api::min_timestamp; },
+                _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
@@ -1696,6 +1697,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         gc_clock::time_point now) const {
     auto base_token = m.token();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            *this,
             base,
             std::move(views),
             make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), std::move(m)),
@@ -1831,6 +1833,7 @@ future<> table::populate_views(
         gc_clock::time_point now) {
     auto schema = reader.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            *this,
             schema,
             std::move(views),
             std::move(reader),
@@ -2451,6 +2454,9 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
+    }
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+        return _t.get_compaction_manager().get_tombstone_gc_state();
     }
 };
 

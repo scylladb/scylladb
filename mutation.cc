@@ -174,7 +174,7 @@ mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
 
 mutation mutation::compacted() const {
     auto m = *this;
-    m.partition().compact_for_compaction(*schema(), always_gc, m.decorated_key(), gc_clock::time_point::min());
+    m.partition().compact_for_compaction(*schema(), always_gc, m.decorated_key(), gc_clock::time_point::min(), tombstone_gc_state(nullptr));
     return m;
 }
 
