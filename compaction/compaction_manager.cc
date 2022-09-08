@@ -792,27 +792,26 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<task>> tasks, sst
 }
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction::table_state* t, std::optional<sstables::compaction_type> type_opt) noexcept {
-  // FIXME: restore indentation
-  try {
-    auto ongoing_compactions = get_compactions(t).size();
-    auto tasks = boost::copy_range<std::vector<shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
-        return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
-    }));
-    logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
-    if (cmlog.is_enabled(level)) {
-        std::string scope = "";
-        if (t) {
-            scope = fmt::format(" for table {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
+    try {
+        auto ongoing_compactions = get_compactions(t).size();
+        auto tasks = boost::copy_range<std::vector<shared_ptr<task>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
+            return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
+        }));
+        logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
+        if (cmlog.is_enabled(level)) {
+            std::string scope = "";
+            if (t) {
+                scope = fmt::format(" for table {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
+            }
+            if (type_opt) {
+                scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
+            }
+            cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
         }
-        if (type_opt) {
-            scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
-        }
-        cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
+        return stop_tasks(std::move(tasks), std::move(reason));
+    } catch (...) {
+        return current_exception_as_future<>();
     }
-    return stop_tasks(std::move(tasks), std::move(reason));
-  } catch (...) {
-    return current_exception_as_future<>();
-  }
 }
 
 future<> compaction_manager::drain() {
