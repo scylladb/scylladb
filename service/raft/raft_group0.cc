@@ -349,10 +349,10 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
                 group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_addr.id);
                 initial_configuration.current.emplace(my_addr, true);
             }
-            auto grp = create_server_for_group0(group0_id, my_addr);
-            server = grp.server.get();
-            co_await grp.persistence.bootstrap(std::move(initial_configuration));
-            co_await _raft_gr.start_server_for_group(std::move(grp));
+            // Bootstrap the initial configuration
+            co_await raft_sys_table_storage(_qp, group0_id, my_addr.id).bootstrap(std::move(initial_configuration));
+            co_await start_server_for_group0(group0_id);
+            server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
             // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
             // after we restart. Then we'll call `persistence.bootstrap` again after restart which will overwrite our snapshot, leading to
