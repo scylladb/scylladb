@@ -2,13 +2,13 @@ There are two alternative upgrade procedures:
 
 * :ref:`Upgrading ScyllaDB and simultaneously updating 3rd party and OS packages <upgrade-image-recommended-procedure>`. It is recommended if you are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04.
 
-* :ref:`Upgrading ScyllaDB without updating any external packages <upgrade-image-upgrade-guide-regular-procedure>`.
+* :ref:`Upgrading ScyllaDB without updating any external packages <upgrade-image-enterprise-upgrade-guide-regular-procedure>`.
 
 .. _upgrade-image-recommended-procedure:
 
 **To upgrade ScyllaDB and update 3rd party and OS packages (RECOMMENDED):**
 
-.. versionadded:: 5.0
+.. versionadded:: 2021.1.10
 
 Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command. 
 
@@ -18,19 +18,19 @@ Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and 
     
     .. code:: sh 
     
-       cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get -y
+       cat scylla-enterprise-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get -y
     
     Where:
 
       * ``<version>`` - The ScyllaDB version to which you are upgrading ( |NEW_VERSION| ).
       * ``<arch>`` - Architecture type: ``x86_64`` or ``aarch64``.
     
-    The file is included in the ScyllaDB packages downloaded in the previous step. The file location is ScyllaDB Open Source: ``http://downloads.scylladb.com/downloads/scylla/aws/manifest/scylla-packages-<version>-<arch>.txt``
+    The file is included in the ScyllaDB packages downloaded in the previous step. The file location is ScyllaDB Enterprise: ``http://downloads.scylladb.com/downloads/scylla-enterprise/aws/manifest/scylla-enterprise-packages-<version>-<arch>.txt``.
 
     Example:
     
         .. code:: sh 
            
-           cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get -y
+           cat scylla-enterprise-packages-2022.1.10-x86_64.txt | sudo xargs -n1 apt-get -y
 
-.. _upgrade-image-upgrade-guide-regular-procedure:
+.. _upgrade-image-enterprise-upgrade-guide-regular-procedure:

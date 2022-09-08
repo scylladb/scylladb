@@ -1,4 +1,4 @@
-To upgrade:
+**To upgrade ScyllaDB:**
 
 #. Update the |APT|_ to **2022.x**.
 #. Install:

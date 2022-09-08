@@ -1,5 +1,3 @@
-.. _upgrade-guide-regular-procedure:
-
 **To upgrade ScyllaDB:**
 
 #. Update the |APT|_ to **2022.1** and enable scylla/ppa repo.
