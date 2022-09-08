@@ -65,13 +65,6 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
-        fcfg._disabled_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
-    } else {
-        // Disable support for using raft cluster management so that it cannot
-        // be enabled by accident.
-        // This prevents the `USES_RAFT_CLUSTER_MANAGEMENT` feature from being
-        // advertised via gossip ahead of time.
-        fcfg._masked_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
