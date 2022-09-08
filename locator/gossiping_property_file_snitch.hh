@@ -93,6 +93,7 @@ private:
     unsigned _file_reader_cpu_id;
     snitch_signal_t _reconfigured;
     promise<> _io_is_stopped;
+    gms::inet_address _listen_address;
 
     void reset_io_state() {
         // Reset the promise to allow repeating

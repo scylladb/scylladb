@@ -47,6 +47,9 @@ struct snitch_config {
     unsigned io_cpu_id = 0;
     bool broadcast_rpc_address_specified_by_user = false;
 
+    // Gossiping-property-file specific
+    gms::inet_address listen_address;
+
     // GCE-specific
     sstring gce_meta_server_url = "";
 };
