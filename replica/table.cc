@@ -799,26 +799,29 @@ table::start() {
 future<>
 table::stop() {
     if (_async_gate.is_closed()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return _async_gate.close().then([this] {
-        return await_pending_ops().finally([this] {
-            return _memtables->flush().finally([this] {
-                return _compaction_manager.remove(as_table_state()).then([this] {
-                    return _sstable_deletion_gate.close().then([this] {
-                        return get_row_cache().invalidate(row_cache::external_updater([this] {
-                            _main_sstables = _compaction_strategy.make_sstable_set(_schema);
-                            _maintenance_sstables = make_maintenance_sstable_set();
-                            _sstables = make_compound_sstable_set();
-                        })).then([this] {
-                            _compaction_strategy.get_backlog_tracker().disable();
-                            _cache.refresh_snapshot();
-                        });
-                    });
-                });
-            });
-        });
-    });
+    co_await _async_gate.close();
+    co_await await_pending_ops();
+    std::exception_ptr err;
+    try {
+        co_await _memtables->flush();
+    } catch (...) {
+        err = std::current_exception();
+    }
+    co_await _compaction_manager.remove(as_table_state());
+    co_await _sstable_deletion_gate.close();
+    co_await get_row_cache().invalidate(row_cache::external_updater([this] {
+        _main_sstables = _compaction_strategy.make_sstable_set(_schema);
+        _maintenance_sstables = make_maintenance_sstable_set();
+        _sstables = make_compound_sstable_set();
+    }));
+    _compaction_strategy.get_backlog_tracker().disable();
+    _cache.refresh_snapshot();
+
+    if (err) {
+        co_await coroutine::return_exception_ptr(std::move(err));
+    }
 }
 
 void table::set_metrics() {
