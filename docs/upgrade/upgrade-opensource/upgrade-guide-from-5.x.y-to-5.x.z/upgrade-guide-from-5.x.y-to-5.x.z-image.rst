@@ -12,5 +12,5 @@
 .. |APT| replace:: ScyllaDB deb repo
 .. _APT: http://www.scylladb.com/download/
 .. include:: /upgrade/_common/upgrade-guide-v5-patch-ubuntu-and-debian-p1.rst
-.. include:: /upgrade/_common/upgrade-image.rst
+.. include:: /upgrade/_common/upgrade-image-opensource.rst
 .. include:: /upgrade/_common/upgrade-guide-v5-patch-ubuntu-and-debian-p2.rst
