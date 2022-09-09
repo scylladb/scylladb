@@ -73,7 +73,12 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
 
 
 def run_async(self, *args, **kwargs) -> asyncio.Future:
-    kwargs.setdefault("timeout", 60.0)
+    # The default timeouts should have been more than enough, but in some
+    # extreme cases with a very slow debug build running on a slow or very busy
+    # machine, they may not be. Observed tests reach 160 seconds. So it's
+    # incremented to 200 seconds.
+    # See issue #11289.
+    kwargs.setdefault("timeout", 200.0)
     return _wrap_future(self.execute_async(*args, **kwargs))
 
 
@@ -89,12 +94,13 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        # The default timeout (in seconds) for execute() commands is 10, which
-        # should have been more than enough, but in some extreme cases with a
-        # very slow debug build running on a very busy machine and a very slow
-        # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
-        # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout=120)
+        # The default timeouts should have been more than enough, but in some
+        # extreme cases with a very slow debug build running on a slow or very busy
+        # machine, they may not be. Observed tests reach 160 seconds. So it's
+        # incremented to 200 seconds.
+        # See issue #11289.
+        # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
+        request_timeout=200)
     if ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -113,14 +119,15 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # down nodes, causing errors. If auth is needed in the future for topology
                    # tests, they should bump up auth RF and run repair.
                    ssl_context=ssl_context,
-                   # The default timeout for new connections is 5 seconds, and for
-                   # requests made by the control connection is 2 seconds. These should
-                   # have been more than enough, but in some extreme cases with a very
-                   # slow debug build running on a very busy machine, they may not be.
-                   # so let's increase them to 60 seconds. See issue #11289.
-                   connect_timeout = 60,
-                   control_connection_timeout = 60,
-                   max_schema_agreement_wait=60,
+                   # The default timeouts should have been more than enough, but in some
+                   # extreme cases with a very slow debug build running on a slow or very busy
+                   # machine, they may not be. Observed tests reach 160 seconds. So it's
+                   # incremented to 200 seconds.
+                   # See issue #11289.
+                   connect_timeout = 200,
+                   control_connection_timeout = 200,
+                   max_schema_agreement_wait=200,
+                   idle_heartbeat_timeout=200,
                    )
 
 
