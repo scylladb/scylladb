@@ -741,23 +741,23 @@ expression make_conjunction(expression a, expression b) {
     return conjunction{std::move(children)};
 }
 
-static
-void
-do_factorize(std::vector<expression>& factors, expression e) {
-    if (auto c = expr::as_if<conjunction>(&e)) {
-        for (auto&& element : c->children) {
-            do_factorize(factors, std::move(element));
-        }
-    } else {
-        factors.push_back(std::move(e));
-    }
-}
-
 std::vector<expression>
 boolean_factors(expression e) {
     std::vector<expression> ret;
-    do_factorize(ret, std::move(e));
+    for_each_boolean_factor(e, [&](const expression& boolean_factor) {
+        ret.push_back(boolean_factor);
+    });
     return ret;
+}
+
+void for_each_boolean_factor(const expression& e, const noncopyable_function<void (const expression&)>& for_each_func) {
+    if (auto conj = as_if<conjunction>(&e)) {
+        for (const expression& child : conj->children) {
+            for_each_boolean_factor(child, for_each_func);
+        }
+    } else {
+        for_each_func(e);
+    }
 }
 
 template<typename T>
