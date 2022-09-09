@@ -7,3 +7,12 @@
  */
 
 #include "partition_key_restrictions.hh"
+
+namespace cql3 {
+namespace restrictions {
+partition_key_restrictions::partition_key_restrictions(expr::expression partition_restrictions, schema_ptr table_schema)
+    : _table_schema(std::move(table_schema)), _partition_restrictions(std::move(partition_restrictions)) {
+    // TODO
+}
+}  // namespace restrictions
+}  // namespace cql3

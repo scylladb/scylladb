@@ -21,6 +21,9 @@ struct single_table_query_restrictions {
     // This will later become a separate class.
     expr::expression clustering_restrictions;
     expr::expression other_restrictions;
+
+    static single_table_query_restrictions make(const expr::expression& prepared_where_clause,
+                                                const schema_ptr& table_schema);
 };
 }  // namespace restrictions
 }  // namespace cql3

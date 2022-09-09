@@ -7,10 +7,13 @@
  */
 
 #include "analyzed_where.hh"
+#include "cql3/expr/expression.hh"
+#include "cql3/restrictions/single_table_query_restrictions.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 
 namespace cql3 {
 namespace restrictions {
+using namespace expr;
 
 analyzed_where_clause::analyzed_where_clause(data_dictionary::database db,
                                              schema_ptr schema,
@@ -23,6 +26,12 @@ analyzed_where_clause::analyzed_where_clause(data_dictionary::database db,
     query_restrictions = std::nullopt;
     restrictions = ::make_shared<statement_restrictions>(db, schema, type, where_clause, ctx,
                                                          selects_only_static_columns, for_view, allow_filtering);
+
+    if (!restrictions->uses_secondary_indexing()) {
+        expr::expression prepared_where_clause =
+            expr::prepare_expression(where_clause, db, schema->ks_name(), schema.get(), nullptr);
+        query_restrictions = single_table_query_restrictions::make(prepared_where_clause, schema);
+    }
 }
 
 analyzed_where_clause::analyzed_where_clause(schema_ptr schema, bool allow_filtering) {
