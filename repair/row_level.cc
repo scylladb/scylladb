@@ -2961,12 +2961,12 @@ repair_service::~repair_service() {
     assert(_stopped);
 }
 
-static shard_id repair_id_to_shard(utils::UUID& repair_id) {
-    return shard_id(repair_id.get_most_significant_bits()) % smp::count;
+static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
+    return shard_id(repair_id.uuid().get_most_significant_bits()) % smp::count;
 }
 
 future<std::optional<gc_clock::time_point>>
-repair_service::update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
+repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id, table_id, range, repair_time] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
         repair_history& rh = rs._finished_ranges_history[repair_id];
@@ -2987,7 +2987,7 @@ repair_service::update_history(utils::UUID repair_id, table_id table_id, dht::to
     });
 }
 
-future<> repair_service::cleanup_history(utils::UUID repair_id) {
+future<> repair_service::cleanup_history(tasks::task_id repair_id) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id] (repair_service& rs) mutable {
         rs._finished_ranges_history.erase(repair_id);

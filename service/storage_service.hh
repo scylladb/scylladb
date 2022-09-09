@@ -42,6 +42,7 @@
 #include "locator/snitch_base.hh"
 #include "cdc/generation_id.hh"
 #include "repair/repair.hh"
+#include "tasks/types.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;

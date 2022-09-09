@@ -125,7 +125,7 @@ struct node_ops_cmd_response {
 };
 
 struct repair_update_system_table_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     table_id table_uuid;
     sstring keyspace_name;
     sstring table_name;
@@ -137,7 +137,7 @@ struct repair_update_system_table_response {
 };
 
 struct repair_flush_hints_batchlog_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     std::list<gms::inet_address> target_nodes;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;

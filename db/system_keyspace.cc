@@ -2876,14 +2876,14 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer&& f
 
 future<> system_keyspace::update_repair_history(repair_history_entry entry) {
     sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)", REPAIR_HISTORY);
-    co_await execute_cql(req, entry.table_uuid.uuid(), entry.ts, entry.id, entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
+    co_await execute_cql(req, entry.table_uuid.uuid(), entry.ts, entry.id.uuid(), entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
 }
 
 future<> system_keyspace::get_repair_history(::table_id table_id, repair_history_consumer f) {
     sstring req = format("SELECT * from system.{} WHERE table_uuid = {}", REPAIR_HISTORY, table_id);
     co_await _qp.local().query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
         repair_history_entry ent;
-        ent.id = row.get_as<utils::UUID>("repair_uuid");
+        ent.id = row.get_as<tasks::task_id>("repair_uuid");
         ent.table_uuid = ::table_id(row.get_as<utils::UUID>("table_uuid"));
         ent.range_start = row.get_as<int64_t>("range_start");
         ent.range_end = row.get_as<int64_t>("range_end");
