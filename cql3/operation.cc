@@ -359,7 +359,7 @@ operation::element_deletion::prepare(data_dictionary::database db, const sstring
 }
 
 void
-operation::prepare_for_broadcast_tables(service::broadcast_tables::update_query&) const {
+operation::prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update&) const {
     // FIXME: implement for every type of `operation`.
     throw service::broadcast_tables::unsupported_operation_error{};
 }
