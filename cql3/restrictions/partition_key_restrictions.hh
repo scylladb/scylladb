@@ -51,6 +51,9 @@ public:
     // Check if every partition key column has some kind of restriction.
     bool has_partition_key_unrestricted_components() const;
 
+    // Are there restrictions on partition key token.
+    bool has_token_restrictions() const;
+
    private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.

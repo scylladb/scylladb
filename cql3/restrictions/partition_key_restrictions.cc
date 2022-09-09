@@ -138,5 +138,9 @@ bool partition_key_restrictions::has_partition_key_unrestricted_components() con
     bool all_restricted = pk_columns.size() == _table_schema->partition_key_size();
     return !all_restricted;
 }
+
+bool partition_key_restrictions::has_token_restrictions() const {
+    return has_token(_partition_restrictions);
+}
 }  // namespace restrictions
 }  // namespace cql3

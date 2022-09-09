@@ -87,6 +87,11 @@ bool analyzed_where_clause::has_partition_key_unrestricted_components() const {
 }
 
 bool analyzed_where_clause::has_token_restrictions() const {
+    if (query_restrictions.has_value()) {
+        if (auto single_query_restrictions = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_query_restrictions->partition_restrictions.has_token_restrictions();
+        }
+    }
     return restrictions->has_token_restrictions();
 }
 
