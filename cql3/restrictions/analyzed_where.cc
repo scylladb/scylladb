@@ -96,6 +96,11 @@ bool analyzed_where_clause::has_token_restrictions() const {
 }
 
 bool analyzed_where_clause::is_key_range() const {
+    if (query_restrictions.has_value()) {
+        if (auto single_query_restrictions = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_query_restrictions->partition_restrictions.is_key_range();
+        }
+    }
     return restrictions->is_key_range();
 }
 

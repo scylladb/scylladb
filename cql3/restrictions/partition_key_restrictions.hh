@@ -54,6 +54,10 @@ public:
     // Are there restrictions on partition key token.
     bool has_token_restrictions() const;
 
+    // Checks if the query requests a range of partition keys (token range, no restrictions, etc).
+    // Multiple values because of IN don't count as a key range.
+    bool is_key_range() const;
+
    private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.
