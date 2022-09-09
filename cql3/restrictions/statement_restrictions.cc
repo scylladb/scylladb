@@ -34,7 +34,7 @@
 namespace cql3 {
 namespace restrictions {
 
-static logging::logger rlogger("restrictions");
+logging::logger rlogger("restrictions");
 
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
