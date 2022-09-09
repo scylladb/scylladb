@@ -857,6 +857,31 @@ future<> gossiper::failure_detector_loop() {
     logger.info("failure_detector_loop: Finished main loop");
 }
 
+// Updates SUPPORTED_FEATURES application state when `feature_service::supported_feature_set()` changes.
+future<> gossiper::update_supported_features_loop() {
+    bool stop = false;
+    bool changed = false;
+    condition_variable cv;
+
+    auto subscription = _feature_service.on_supported_features_change([&] () noexcept {
+        changed = true;
+        cv.signal();
+    });
+
+    future<> watch_stopped =
+        _gossiper_stopped.wait([this] { return !_enabled; })
+        .then([&] { stop = true; cv.signal(); });
+
+    co_await [&] () -> future<> {
+        while (!stop) {
+            changed = false;
+            co_await add_local_application_state(application_state::SUPPORTED_FEATURES,
+                    versioned_value::supported_features(_feature_service.supported_feature_set()));
+            co_await cv.wait([&] { return stop || changed; });
+        }
+    }().finally([watch_stopped = std::move(watch_stopped)] () mutable { return std::move(watch_stopped); });
+}
+
 // Depends on:
 // - failure_detector
 // - on_remove callbacks, e.g, storage_service -> access token_metadata
@@ -1858,6 +1883,7 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
     co_await _direct_fd_pinger.update_generation_number(generation_nbr);
+    _update_supported_features_loop_done = update_supported_features_loop();
 }
 
 future<std::unordered_map<gms::inet_address, int32_t>>
@@ -2142,8 +2168,10 @@ future<> gossiper::do_stop_gossiping() {
         // Take the semaphore makes sure existing gossip loop is finished
         get_units(_callback_running, 1).get0();
         container().invoke_on_all([] (auto& g) {
+            g._gossiper_stopped.broadcast();
             return std::move(g._failure_detector_loop_done);
         }).get();
+        std::exchange(_update_supported_features_loop_done, make_ready_future<>()).get();
         logger.info("Gossip is now stopped");
     });
 }

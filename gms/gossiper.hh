@@ -127,6 +127,8 @@ private:
     // Map ip address and generation number
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
+    future<> _update_supported_features_loop_done{make_ready_future<>()};
+    condition_variable _gossiper_stopped;
 
     rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
 
@@ -607,6 +609,7 @@ public:
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
+    future<> update_supported_features_loop();
     future<> update_live_endpoints_version();
 
 public:
