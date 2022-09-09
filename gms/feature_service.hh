@@ -16,6 +16,7 @@
 #include <set>
 #include <any>
 #include "seastarx.hh"
+#include "db/config.hh" // for `db::experimental_features_t`
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
 
@@ -27,7 +28,10 @@ namespace gms {
 class feature_service;
 
 // Disable some features additionally to the ones disabled by `db::config`.
+//
 // Use for tests only!
+// `feature_service` recalculates features dynamically when `db::config` changes.
+// This mechanism may not work correctly in tests if they use this struct to disable features.
 struct custom_feature_config_for_tests {
     std::set<sstring> extra_disabled_features;
 };
@@ -52,6 +56,7 @@ private:
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
 
     std::set<sstring> _disabled_features;
+    utils::observer<std::vector<enum_option<db::experimental_features_t>>> _experimental_features_observer;
 
     std::list<features_changed_callback_t> _supported_features_change_callbacks;
 public:
@@ -142,6 +147,10 @@ public:
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
     void persist_enabled_feature_info(const gms::feature& f) const;
+
+private:
+    // Called when the set of supported features changes according to `db::config&`.
+    void recalculate(db::config&);
 };
 
 } // namespace gms

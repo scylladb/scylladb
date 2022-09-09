@@ -66,8 +66,82 @@ static std::set<sstring> disabled_features_from_db_config(db::config& cfg) {
 }
 
 feature_service::feature_service(db::config& cfg, custom_feature_config_for_tests custom_cfg)
-        : _disabled_features(disabled_features_from_db_config(cfg)) {
+        : _disabled_features(disabled_features_from_db_config(cfg))
+        // FIXME: we observe `cfg.experimental_features` because there is currently no way to observe the
+        // entire config.  In theory, other things could change the set of supported features:
+        // `cfg.enable_user_defined_functions` or `cfg.sstable_format` (at the moment of writing this
+        // comment). But `recalculate` is only interested in a subset of features, the ones for which we
+        // explicitly considered the possibility of supporting them in runtime. If additional config options
+        // need to be observed in the future to handle more features changing, we can add observers here when
+        // we need them. This has the drawback that the warn messages in `recalculate` won't be completely
+        // precise (they won't 'catch' attempts to support features which cannot be supported in runtime if
+        // the config options responsible for these features don't have corresponding observers). Fixing this
+        // would require adding some way to watch the entire config, or add observers for every applicable
+        // config option right now, but then it would be easy to miss changing the set of observers
+        // appropriately when `recalculate` is updated. So we just ignored the problem for now.
+        , _experimental_features_observer(cfg.experimental_features.observe([this, &cfg] (auto&) { recalculate(cfg); })) {
     _disabled_features.merge(std::move(custom_cfg.extra_disabled_features));
+}
+
+void feature_service::recalculate(db::config& cfg) {
+    // The list of features which were verified to be safe to be supported
+    // dynamically (i.e. through a runtime Scylla configuration reload).
+    static const std::set<sstring> can_be_supported_dynamically {
+        // TODO: currently empty.
+    };
+
+    auto disabled_from_new_cfg = disabled_features_from_db_config(cfg);
+
+    {
+        std::set<sstring> attempted_to_disable;
+        std::set_difference(
+                disabled_from_new_cfg.begin(), disabled_from_new_cfg.end(),
+                _disabled_features.begin(), _disabled_features.end(),
+                std::inserter(attempted_to_disable, attempted_to_disable.end()));
+
+        if (!attempted_to_disable.empty()) {
+            logger.warn(
+                "The new Scylla configuration would cause this node to stop supporting the following features,"
+                " which it previously supported: {}. It is not allowed to stop supporting features"
+                " while the node is running. The node will keep supporting them until it is restarted."
+                " WARNING: if the features are already enabled (because all nodes were supporting them),"
+                " it is not possible to un-support them; in that case the node will refuse to boot when restarted.",
+                attempted_to_disable);
+        }
+    }
+
+    std::set<sstring> attempted_to_support;
+    std::set_difference(
+            _disabled_features.begin(), _disabled_features.end(),
+            disabled_from_new_cfg.begin(), disabled_from_new_cfg.end(),
+            std::inserter(attempted_to_support, attempted_to_support.end()));
+
+    std::set<sstring> newly_supported;
+    std::set_intersection(
+            attempted_to_support.begin(), attempted_to_support.end(),
+            can_be_supported_dynamically.begin(), can_be_supported_dynamically.end(),
+            std::inserter(newly_supported, newly_supported.end()));
+
+    if (attempted_to_support.size() > newly_supported.size()) {
+        std::set<sstring> failed_to_support;
+        std::set_difference(
+            attempted_to_support.begin(), attempted_to_support.end(),
+            newly_supported.begin(), newly_supported.end(),
+            std::inserter(failed_to_support, failed_to_support.end()));
+
+        logger.warn("The following features cannot be supported until this node restarts: {}", failed_to_support);
+    }
+
+    if (newly_supported.empty()) {
+        return;
+    }
+
+    logger.info("New features supported by this node: {}", newly_supported);
+    std::erase_if(_disabled_features, [&newly_supported] (const sstring& f) { return newly_supported.contains(f); });
+
+    for (auto& f : _supported_features_change_callbacks) {
+        f();
+    }
 }
 
 future<> feature_service::stop() {
