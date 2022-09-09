@@ -952,6 +952,20 @@ schema_ptr system_keyspace::discovery() {
     return schema;
 }
 
+schema_ptr system_keyspace::broadcast_kv_store() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, BROADCAST_KV_STORE);
+        return schema_builder(NAME, BROADCAST_KV_STORE, id)
+            .with_column("key", utf8_type, column_kind::partition_key)
+            .with_column("value", utf8_type)
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2682,6 +2696,10 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     });
     if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
+
+        if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+            r.insert(r.end(), {broadcast_kv_store()});
+        }
     }
     // legacy schema
     r.insert(r.end(), {

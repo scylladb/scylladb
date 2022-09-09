@@ -23,6 +23,7 @@
 #include "exceptions/exceptions.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
@@ -98,6 +99,7 @@ private:
     service::migration_manager& _mm;
     memory_config _mcfg;
     const cql_config& _cql_config;
+    service::raft_group0_client& _group0_client;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -138,7 +140,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client);
 
     ~query_processor();
 
@@ -200,6 +202,10 @@ public:
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         return _prepared_cache.find(key);
+    }
+
+    service::raft_group0_client& get_group0_client() {
+        return _group0_client;
     }
 
     inline

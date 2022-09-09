@@ -14,7 +14,9 @@
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
+#include "cql3/statements/strongly_consistent_select_statement.hh"
 
+#include "service/broadcast_tables/experimental/lang.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -1734,6 +1736,20 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             stats,
             std::move(prepared_attrs)
         );
+    } else if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+        stmt = ::make_shared<cql3::statements::strongly_consistent_select_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,

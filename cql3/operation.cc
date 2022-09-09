@@ -18,6 +18,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/user.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
 
@@ -355,6 +356,12 @@ operation::element_deletion::prepare(data_dictionary::database db, const sstring
         return make_shared<maps::discarder_by_key>(receiver, std::move(key));
     }
     abort();
+}
+
+void
+operation::prepare_for_broadcast_tables(service::broadcast_tables::update_query&) const {
+    // FIXME: implement for every type of `operation`.
+    throw service::broadcast_tables::unsupported_operation_error{};
 }
 
 }

@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
 #include "canonical_mutation.hh"
@@ -23,8 +24,12 @@ struct schema_change {
     std::vector<canonical_mutation> mutations;
 };
 
+struct broadcast_table_query {
+    service::broadcast_tables::query query;
+};
+
 struct group0_command {
-    std::variant<schema_change> change;
+    std::variant<schema_change, broadcast_table_query> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;

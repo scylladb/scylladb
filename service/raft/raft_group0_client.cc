@@ -8,11 +8,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.hh"
+#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 
@@ -196,6 +200,25 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
     }
 }
 
+future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as) {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "add_entry_unguarded: must run on shard 0");
+    }
+
+    raft::command cmd;
+    ser::serialize(cmd, group0_cmd);
+
+    // Command is not retried, because for now it's not idempotent.
+    try {
+        co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, as);
+    } catch (const raft::not_a_leader& e) {
+        // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
+        // Just fail the operation by propagating the error.
+        logger.error("add_entry_unguarded: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
+        throw;
+    }
+}
+
 static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
     auto ts = api::new_timestamp();
     if (prev_state_id != utils::UUID{}) {
@@ -278,6 +301,24 @@ group0_command raft_group0_client::prepare_command(schema_change change, group0_
     return group0_cmd;
 }
 
+group0_command raft_group0_client::prepare_command(broadcast_table_query query) {
+    const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
+
+    group0_command group0_cmd {
+        .change{std::move(query)},
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+            new_group0_state_id, _history_gc_duration, "")},
+
+        .prev_state_id{std::nullopt},
+        .new_state_id{new_group0_state_id},
+
+        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_id{_raft_gr.group0().id()}
+    };
+
+    return group0_cmd;
+}
+
 raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks)
         : _raft_gr(raft_gr), _sys_ks(sys_ks) {
 }
@@ -330,6 +371,46 @@ future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
 
 db::system_keyspace& raft_group0_client::sys_ks() {
     return _sys_ks;
+}
+
+raft_group0_client::query_result_guard::query_result_guard(utils::UUID query_id, raft_group0_client& client)
+    : _query_id{query_id}, _client{&client} {
+    auto [_, emplaced] = _client->_results.emplace(_query_id, std::nullopt);
+    if (!emplaced) {
+        on_internal_error(logger, "query_result_guard::query_result_guard: there is another query_result_guard alive with the same query_id");
+    }
+}
+
+raft_group0_client::query_result_guard::query_result_guard(raft_group0_client::query_result_guard&& other)
+    : _query_id{other._query_id}, _client{other._client} {
+    other._client = nullptr;
+}
+
+raft_group0_client::query_result_guard::~query_result_guard() {
+    if (_client != nullptr) {
+        _client->_results.erase(_query_id);
+    }
+}
+
+service::broadcast_tables::query_result raft_group0_client::query_result_guard::get() {
+    auto it = _client->_results.find(_query_id);
+
+    if (it == _client->_results.end() || !it->second.has_value()) {
+        on_internal_error(logger, "query_result_guard::get: no result");
+    }
+
+    return std::move(*it->second);
+}
+
+raft_group0_client::query_result_guard raft_group0_client::create_result_guard(utils::UUID query_id) {
+    return query_result_guard{query_id, *this};
+}
+
+void raft_group0_client::set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr) {
+    auto it = _results.find(query_id);
+    if (it != _results.end()) {
+        it->second = std::move(qr);
+    }
 }
 
 }

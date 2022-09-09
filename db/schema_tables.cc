@@ -2850,6 +2850,7 @@ static const std::unordered_set<sstring>& system_ks_null_shard_tables() {
         db::system_keyspace::RAFT_CONFIG,
         db::system_keyspace::GROUP0_HISTORY,
         db::system_keyspace::DISCOVERY,
+        db::system_keyspace::BROADCAST_KV_STORE,
     };
     return tables;
 }

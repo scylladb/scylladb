@@ -16,6 +16,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_upgrade.hh"
 #include "utils/UUID.hh"
@@ -77,6 +78,23 @@ class raft_group0_client {
     seastar::rwlock _upgrade_lock;
     seastar::condition_variable _upgraded;
 
+    std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
+
+    // Guard manages the result of a single query. If it is created for a particular query,
+    // then `group0_state_machine` will save the result of that query and it can be returned by the guard.
+    // Guard manages the lifetime of the _results entry. It creates and destroys the entry, which state machine puts the result in.
+    class query_result_guard {
+        utils::UUID _query_id;
+        raft_group0_client* _client;
+    public:
+        query_result_guard(utils::UUID query_id, raft_group0_client& client);
+        query_result_guard(query_result_guard&&);
+        ~query_result_guard();
+
+        // Preconditon: set_query_result was called with query_id=this->_query_id.
+        service::broadcast_tables::query_result get();
+    };
+
 public:
     raft_group0_client(service::raft_group_registry&, db::system_keyspace&);
 
@@ -84,6 +102,8 @@ public:
     future<> init();
 
     future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as = nullptr);
+
+    future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as = nullptr);
 
     // Ensures that all previously finished operations on group 0 are visible on this node;
     // in particular, performs a Raft read barrier on group 0.
@@ -108,6 +128,7 @@ public:
     future<group0_guard> start_operation(seastar::abort_source* as = nullptr);
 
     group0_command prepare_command(schema_change change, group0_guard& guard, std::string_view description);
+    group0_command prepare_command(broadcast_table_query query);
 
     // Returns the current group 0 upgrade state.
     //
@@ -147,6 +168,9 @@ public:
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
+
+    query_result_guard create_result_guard(utils::UUID query_id);
+    void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
 };
 
 }

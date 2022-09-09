@@ -19,6 +19,10 @@
 
 #include <optional>
 
+namespace service::broadcast_tables {
+    class update_query;
+}
+
 namespace cql3 {
 
 class update_parameters;
@@ -85,6 +89,8 @@ public:
      * Execute the operation.
      */
     virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
+    
+    virtual void prepare_for_broadcast_tables(service::broadcast_tables::update_query&) const;
 
     /**
      * A parsed raw UPDATE operation.

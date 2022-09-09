@@ -975,6 +975,21 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_raft) {
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(cfg.check_experimental(ef::RAFT));
+    BOOST_CHECK(!cfg.check_experimental(ef::BROADCAST_TABLES));
+    BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+    cfg.read_from_yaml("experimental_features:\n    - broadcast-tables\n", throw_on_error);
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::BROADCAST_TABLES});
+    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
+    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
+    BOOST_CHECK(!cfg.check_experimental(ef::RAFT));
+    BOOST_CHECK(cfg.check_experimental(ef::BROADCAST_TABLES));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }

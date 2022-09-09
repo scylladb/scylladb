@@ -9,6 +9,8 @@
  */
 
 #include "update_statement.hh"
+#include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
 #include "raw/update_statement.hh"
 
 #include "raw/insert_statement.hh"
@@ -252,6 +254,107 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
             execute_set_value(m, prefix, params, def, bytes_opt{});
         }
     }
+}
+
+
+static
+bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
+    const auto* conjunction = cql3::expr::as_if<cql3::expr::conjunction>(&partition_key_restrictions);
+
+    if (!conjunction || conjunction->children.size() != 1) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
+            "partition key restriction: {}", partition_key_restrictions));
+    }
+
+    const auto* key_restriction = cql3::expr::as_if<cql3::expr::binary_operator>(&conjunction->children[0]);
+
+    if (!key_restriction) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format("partition key restriction: {}", *conjunction));
+    }
+
+    // FIXME: add support for bind variables
+    const auto* column = cql3::expr::as_if<cql3::expr::column_value>(&key_restriction->lhs);
+    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&key_restriction->rhs);
+
+    if (!column || column->col->kind != column_kind::partition_key ||
+        !value || key_restriction->op != cql3::expr::oper_t::EQ) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format("key restriction: {}", *key_restriction));
+    }
+
+    return to_bytes(value->view());
+}
+
+static
+void prepare_new_value(service::broadcast_tables::update_query& query, const std::vector<::shared_ptr<operation>>& operations) {
+    if (operations.size() != 1) {
+        throw service::broadcast_tables::unsupported_operation_error("only one operation is allowed and must be of the form \"value = X\"");
+    }
+
+    operations[0]->prepare_for_broadcast_tables(query);
+}
+
+static
+std::optional<bytes_opt> get_value_condition(const std::vector<lw_shared_ptr<column_condition>>& conditions) {
+    if (conditions.size() == 0) {
+        return std::nullopt;
+    }
+
+    if (conditions.size() > 1) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format("conditions: {}", fmt::join(
+            conditions | boost::adaptors::transformed([] (const auto& cond) {
+                return fmt::format("{}{}", cond->get_operation(), cond->get_value());
+            }), ", ")));
+    }
+
+    const auto& condition = conditions[0];
+
+    if (!condition->get_value() || condition->get_operation() != cql3::expr::oper_t::EQ) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
+            "condition: {}{}", condition->get_operation(), condition->get_value()));
+    }
+
+    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&*condition->get_value());
+
+    if (!value) {
+        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
+            "condition: {}{}", condition->get_operation(), condition->get_value()));
+    }
+
+    if (value->is_null()) {
+        return bytes_opt{};
+    }
+
+    return to_bytes(value->view());
+}
+
+::shared_ptr<strongly_consistent_modification_statement>
+update_statement::prepare_for_broadcast_tables() const {
+    if (attrs) {
+        if (attrs->is_time_to_live_set()) {
+            throw service::broadcast_tables::unsupported_operation_error{"USING TTL"};
+        }
+
+        if (attrs->is_timestamp_set()) {
+            throw service::broadcast_tables::unsupported_operation_error{"USING TIMESTAMP"};
+        }
+
+        if (attrs->is_timeout_set()) {
+            throw service::broadcast_tables::unsupported_operation_error{"USING TIMEOUT"};
+        }
+    }
+
+    service::broadcast_tables::update_query query = {
+        .key = get_key(restrictions().get_partition_key_restrictions()),
+        .value_condition = get_value_condition(_regular_conditions),
+    };
+
+    prepare_new_value(query, _column_operations);
+
+    return ::make_shared<strongly_consistent_modification_statement>(
+        get_bound_terms(),
+        s,
+        query
+    );
 }
 
 namespace raw {
