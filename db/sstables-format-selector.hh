@@ -23,7 +23,6 @@ class database;
 }
 
 namespace gms {
-class gossiper;
 class feature_service;
 }
 
@@ -44,7 +43,6 @@ public:
 };
 
 class sstables_format_selector {
-    gms::gossiper& _gossiper;
     sharded<gms::feature_service>& _features;
     sharded<replica::database>& _db;
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
@@ -58,7 +56,7 @@ class sstables_format_selector {
     future<> read_sstables_format();
 
 public:
-    sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db);
+    sstables_format_selector(sharded<gms::feature_service>& f, sharded<replica::database>& db);
 
     future<> start();
     future<> stop();

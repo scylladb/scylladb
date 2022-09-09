@@ -1118,7 +1118,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             group0_client.init().get();
 
-            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
+            db::sstables_format_selector sst_format_selector(feature_service, db);
 
             sst_format_selector.start().get();
             auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {

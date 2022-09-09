@@ -11,7 +11,6 @@
 #include "sstables-format-selector.hh"
 #include "log.hh"
 #include "replica/database.hh"
-#include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "gms/versioned_value.hh"
 #include "db/system_keyspace.hh"
@@ -28,9 +27,8 @@ void feature_enabled_listener::on_enabled() {
     }
 }
 
-sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db)
-    : _gossiper(g)
-    , _features(f)
+sstables_format_selector::sstables_format_selector(sharded<gms::feature_service>& f, sharded<replica::database>& db)
+    : _features(f)
     , _db(db)
     , _md_feature_listener(*this, sstables::sstable_version_types::md)
     , _me_feature_listener(*this, sstables::sstable_version_types::me)
@@ -43,9 +41,6 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
     if (new_format > _selected_format) {
         co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format));
         co_await select_format(new_format);
-        // FIXME discarded future
-        (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                 gms::versioned_value::supported_features(_features.local().supported_feature_set())).finally([h = std::move(hg)] {});
     }
 }
 
