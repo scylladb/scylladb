@@ -28,6 +28,9 @@ public:
 
     // Get a map which keeps single column restrictions for each partition key column.
     const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
+
+    // Check if there are no partition key restrictions.
+    bool partition_key_restrictions_is_empty() const;
 };
 }  // namespace restrictions
 }  // namespace cql3

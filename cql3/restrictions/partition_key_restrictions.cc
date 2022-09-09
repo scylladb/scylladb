@@ -47,5 +47,10 @@ const expr::single_column_restrictions_map& partition_key_restrictions::get_sing
     const {
     return _single_column_partition_key_restrictions;
 }
+
+// Check if there are no partition key restrictions.
+bool partition_key_restrictions::partition_key_restrictions_is_empty() const {
+    return is_empty_restriction(_partition_restrictions);
+}
 }  // namespace restrictions
 }  // namespace cql3
