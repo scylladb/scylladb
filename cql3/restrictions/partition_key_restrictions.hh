@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/expr/expression.hh"
+#include "dht/i_partitioner.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -64,6 +65,9 @@ public:
     // Checks if filtering has to involve partition key restrictions.
     bool pk_restrictions_need_filtering() const;
 
+    // Calculates partition key ranges to use in a query.
+    dht::partition_range_vector get_partition_key_ranges(const query_options& options) const;
+
    private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.
@@ -73,6 +77,14 @@ public:
     // we can use these restrictions to generate a list of partition ranges.
     // Otherwise these restrictions have to be filtered.
     bool all_columns_have_eq_restrictions() const;
+
+    // Calculate partition ranges based on column equality restrictions
+    dht::partition_range_vector get_partition_key_ranges_from_column_eq_restrictions(
+        const query_options& options) const;
+
+    // Calculate partition ranges based on token range restrictions
+    dht::partition_range_vector get_partition_key_ranges_from_token_range_restrictions(
+        const query_options& options) const;
 };
 }  // namespace restrictions
 }  // namespace cql3

@@ -7,7 +7,12 @@
  */
 
 #include "partition_key_restrictions.hh"
+#include "cartesian_product.hh"
+#include "cql3/cql_config.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/query_options.hh"
+#include "schema.hh"
+#include "seastar/core/on_internal_error.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -163,6 +168,92 @@ bool partition_key_restrictions::key_is_in_relation() const {
 
 bool partition_key_restrictions::pk_restrictions_need_filtering() const {
     return !is_empty_restriction(_filtering_restrictions);
+}
+
+dht::partition_range_vector partition_key_restrictions::get_partition_key_ranges(const query_options& options) const {
+    if (all_columns_have_eq_restrictions()) {
+        return get_partition_key_ranges_from_column_eq_restrictions(options);
+    }
+    return get_partition_key_ranges_from_token_range_restrictions(options);
+}
+
+dht::partition_range_vector partition_key_restrictions::get_partition_key_ranges_from_token_range_restrictions(
+    const query_options& options) const {
+    const value_set token_values = possible_lhs_values(nullptr, _token_range_restrictions, options);
+
+    return std::visit(overloaded_functor {
+        [&](const value_list& token_values_list) {
+            dht::partition_range_vector result;
+            for (const managed_bytes& token_value : token_values_list) {
+                const dht::token tok = token_value.with_linearized([](bytes_view bv) { return dht::token::from_bytes(bv); });
+                result.emplace_back(dht::ring_position::starting_at(tok), dht::ring_position::ending_at(tok));
+            }
+            return result;
+        },
+        [&](const nonwrapping_range<managed_bytes>& token_range) -> dht::partition_range_vector {
+            const dht::token start_token = token_range.start()
+                ? token_range.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+                : dht::minimum_token();
+            const dht::token end_token = token_range.end()
+                ? token_range.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+                : dht::maximum_token();
+
+            // This part is very weird.
+            // It would make more sense to have something like:
+            // bool include_start = token_range.start() ? token_range.start()->is_inclusive() : true;
+            // dht::partition_range::bound start(dht::ring_position::starting_at(start_token), include_start);
+            // but this fails the tests. I don't know why it's done this way, I just copied the existing code.
+            const bool include_start = token_range.start() ? token_range.start()->is_inclusive() : false;
+            const bool include_end = token_range.end() ? token_range.end()->is_inclusive() : false;
+            auto start = dht::partition_range::bound(include_start
+                                                    ? dht::ring_position::starting_at(start_token)
+                                                    : dht::ring_position::ending_at(start_token));
+            auto end = dht::partition_range::bound(include_end
+                                                ? dht::ring_position::ending_at(end_token)
+                                                : dht::ring_position::starting_at(end_token));
+            return {{std::move(start), std::move(end)}};
+        }
+    }, token_values);
+}
+
+// Turns a partition-key value into a partition_range. pk_values must have elements for all partition columns.
+static dht::partition_range partition_range_from_pk_values(const schema& schema, const std::vector<managed_bytes>& pk_values) {
+    const partition_key pk = partition_key::from_exploded(pk_values);
+    const dht::token tok = dht::get_token(schema, pk);
+    const dht::ring_position pos(std::move(tok), std::move(pk));
+    return dht::partition_range::make_singular(std::move(pos));
+}
+
+dht::partition_range_vector partition_key_restrictions::get_partition_key_ranges_from_column_eq_restrictions(
+    const query_options& options) const {
+    const size_t size_limit =
+        options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
+    // Each element is a vector of that column's possible values:
+    std::vector<std::vector<managed_bytes>> column_values(_table_schema->partition_key_size());
+    size_t product_size = 1;
+    for (auto&& [pk_col_def, pk_col_eq_restrictions] : _column_eq_restrictions) {
+        const value_set vals = possible_lhs_values(pk_col_def, pk_col_eq_restrictions, options);
+        if (auto lst = std::get_if<value_list>(&vals)) {
+            if (lst->empty()) {
+                return {};
+            }
+            product_size *= lst->size();
+            if (product_size > size_limit) {
+                throw std::runtime_error(fmt::format(
+                    "clustering-key cartesian product size {} is greater than maximum {}", product_size, size_limit));
+            }
+            column_values[_table_schema->position(*pk_col_def)] = std::move(*lst);
+        } else {
+            on_internal_error(rlogger, "possible_lhs_values for column_eq_restrictions didnt produce a list of values");
+        }
+    }
+    cartesian_product cp(column_values);
+    dht::partition_range_vector ranges;
+    ranges.reserve(product_size);
+    for (const std::vector<managed_bytes>& pk_values : cp) {
+        ranges.push_back(partition_range_from_pk_values(*_table_schema, pk_values));
+    }
+    return ranges;
 }
 }  // namespace restrictions
 }  // namespace cql3
