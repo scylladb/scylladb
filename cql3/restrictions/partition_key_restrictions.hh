@@ -48,7 +48,10 @@ public:
     // Check that partition key restrictions contain only binary operaters with = operation.
     bool partition_key_restrictions_is_all_eq() const;
 
-private:
+    // Check if every partition key column has some kind of restriction.
+    bool has_partition_key_unrestricted_components() const;
+
+   private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.
     void analyze_restrictions();

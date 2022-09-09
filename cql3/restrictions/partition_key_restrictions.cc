@@ -132,5 +132,11 @@ bool partition_key_restrictions::partition_key_restrictions_is_all_eq() const {
     });
     return result;
 }
+
+bool partition_key_restrictions::has_partition_key_unrestricted_components() const {
+    std::vector<const column_definition*> pk_columns = expr::get_sorted_column_defs(_partition_restrictions);
+    bool all_restricted = pk_columns.size() == _table_schema->partition_key_size();
+    return !all_restricted;
+}
 }  // namespace restrictions
 }  // namespace cql3

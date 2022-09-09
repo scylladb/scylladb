@@ -78,6 +78,11 @@ bool analyzed_where_clause::partition_key_restrictions_is_all_eq() const {
 }
 
 bool analyzed_where_clause::has_partition_key_unrestricted_components() const {
+    if (query_restrictions.has_value()) {
+        if (auto single_query_restrictions = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_query_restrictions->partition_restrictions.has_partition_key_unrestricted_components();
+        }
+    }
     return restrictions->has_partition_key_unrestricted_components();
 }
 
