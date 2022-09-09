@@ -58,6 +58,9 @@ public:
     // Multiple values because of IN don't count as a key range.
     bool is_key_range() const;
 
+    // Checks if there is an IN restriction in partition key restrictions.
+    bool key_is_in_relation() const;
+
    private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.

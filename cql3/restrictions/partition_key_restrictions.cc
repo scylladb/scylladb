@@ -146,5 +146,19 @@ bool partition_key_restrictions::has_token_restrictions() const {
 bool partition_key_restrictions::is_key_range() const {
     return _column_eq_restrictions.size() != _table_schema->partition_key_size();
 }
+
+bool partition_key_restrictions::key_is_in_relation() const {
+    bool result = false;
+    for_each_boolean_factor(_partition_restrictions, [&](const expression& e) {
+        if (auto binop = as_if<binary_operator>(&e)) {
+            if (auto lhs_col = as_if<column_value>(&binop->lhs)) {
+                if (lhs_col->col->is_partition_key() && binop->op == oper_t::IN) {
+                    result = true;
+                }
+            }
+        }
+    });
+    return result;
+}
 }  // namespace restrictions
 }  // namespace cql3

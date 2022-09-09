@@ -105,6 +105,11 @@ bool analyzed_where_clause::is_key_range() const {
 }
 
 bool analyzed_where_clause::key_is_in_relation() const {
+    if (query_restrictions.has_value()) {
+        if (auto single_query_restrictions = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_query_restrictions->partition_restrictions.key_is_in_relation();
+        }
+    }
     return restrictions->key_is_in_relation();
 }
 
