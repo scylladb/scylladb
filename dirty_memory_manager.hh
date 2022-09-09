@@ -120,46 +120,14 @@ public:
 class region_group : public region_listener {
     static region_group_reclaimer no_reclaimer;
 
-    // We want to sort the subgroups so that we can easily find the one that holds the biggest
-    // region for freeing purposes. Please note that this is not the biggest of the region groups,
-    // since a big region group can have a big collection of very small regions, and freeing them
-    // won't achieve anything. An example of such scenario is a ScyllaDB region with a lot of very
-    // small memtables that add up, versus one with a very big memtable. The small memtables are
-    // likely still growing, and freeing the big memtable will guarantee that the most memory is
-    // freed up, while maximizing disk throughput.
-    //
-    // As asynchronous reclaim will likely involve disk operation, and those tend to be more
-    // efficient when bulk done, this behavior is not ScyllaDB memtable specific.
-    //
-    // The maximal score is recursively defined as:
-    //
-    //      max(our_biggest_region, our_subtree_biggest_region)
-    struct subgroup_maximal_region_ascending_less_comparator {
-        bool operator()(region_group* rg1, region_group* rg2) const {
-            return rg1->maximal_score() < rg2->maximal_score();
-        }
-    };
-    friend struct subgroup_maximal_region_ascending_less_comparator;
-
     using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    using subgroup_heap = boost::heap::binomial_heap<region_group*,
-          boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
-          boost::heap::allocator<std::allocator<region_group*>>,
-          //constant_time_size<true> causes corruption with boost < 1.60
-          boost::heap::constant_time_size<false>>;
 
     region_group* _parent = nullptr;
     size_t _total_memory = 0;
     region_group_reclaimer& _reclaimer;
 
-    subgroup_heap _subgroups;
-    subgroup_heap::handle_type _subgroup_heap_handle;
+    std::vector<region_group*> _subgroups;
     region_heap _regions;
-    region_group* _maximal_rg = nullptr;
-    // We need to store the score separately, otherwise we'd have to have an extra pass
-    // before we update the region occupancy.
-    size_t _maximal_score = 0;
 
     struct allocating_function {
         virtual ~allocating_function() = default;
@@ -371,31 +339,6 @@ private:
     }
 
     uint64_t top_region_evictable_space() const noexcept;
-
-    uint64_t maximal_score() const noexcept {
-        return _maximal_score;
-    }
-
-    void update_maximal_rg() {
-        auto my_score = top_region_evictable_space();
-        auto children_score = _subgroups.empty() ? 0 : _subgroups.top()->maximal_score();
-        auto old_maximal_score = _maximal_score;
-        if (children_score > my_score) {
-            _maximal_rg = _subgroups.top()->_maximal_rg;
-        } else {
-            _maximal_rg = this;
-        }
-
-        _maximal_score = _maximal_rg->top_region_evictable_space();
-        if (_parent) {
-            // binomial heap update boost bug.
-            if (_maximal_score > old_maximal_score) {
-                _parent->_subgroups.increase(_subgroup_heap_handle);
-            } else if (_maximal_score < old_maximal_score) {
-                _parent->_subgroups.decrease(_subgroup_heap_handle);
-            }
-        }
-    }
 
     void add(region_group* child);
     void del(region_group* child);
