@@ -33,6 +33,7 @@
 #include "utils/managed_bytes.hh"
 #include "utils/bit_cast.hh"
 #include "utils/chunked_vector.hh"
+#include "tasks/types.hh"
 
 class tuple_type_impl;
 class big_decimal;
@@ -1039,6 +1040,12 @@ template<>
 inline
 shared_ptr<const abstract_type> data_type_for<cql_duration>() {
     return duration_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<tasks::task_id>() {
+    return uuid_type;
 }
 
 namespace std {

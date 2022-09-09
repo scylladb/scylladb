@@ -10,6 +10,7 @@
 #include "schema_fwd.hh"
 #include "query-request.hh"
 #include "locator/host_id.hh"
+#include "tasks/types.hh"
 
 namespace utils {
 class UUID final {
@@ -17,6 +18,10 @@ class UUID final {
     int64_t get_least_significant_bits();
 };
 }
+
+class tasks::task_id final {
+    utils::UUID uuid();
+};
 
 class table_id final {
     utils::UUID uuid();

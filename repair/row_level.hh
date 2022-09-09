@@ -97,7 +97,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
 
-    std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
+    std::unordered_map<tasks::task_id, repair_history> _finished_ranges_history;
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     bool _stopped = false;
@@ -130,8 +130,8 @@ public:
     // stop them abruptly).
     future<> shutdown();
 
-    future<std::optional<gc_clock::time_point>> update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
-    future<> cleanup_history(utils::UUID repair_id);
+    future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
+    future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
     int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);

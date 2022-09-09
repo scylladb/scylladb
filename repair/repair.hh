@@ -28,6 +28,7 @@
 #include "locator/token_metadata.hh"
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
+#include "tasks/types.hh"
 
 namespace replica {
 class database;
@@ -63,7 +64,7 @@ struct repair_uniq_id {
     // The integer ID used to identify a repair job. It is currently used by nodetool and http API.
     int id;
     // A UUID to identifiy a repair job. We will transit to use UUID over the integer ID.
-    utils::UUID uuid;
+    tasks::task_id uuid;
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
@@ -242,8 +243,8 @@ private:
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Map repair id into repair_info.
     std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
-    std::unordered_set<utils::UUID> _pending_repairs;
-    std::unordered_set<utils::UUID> _aborted_pending_repairs;
+    std::unordered_set<tasks::task_id> _pending_repairs;
+    std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
@@ -268,7 +269,7 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
-    bool is_aborted(const utils::UUID& uuid);
+    bool is_aborted(const tasks::task_id& uuid);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -430,7 +431,7 @@ struct node_ops_cmd_response {
 
 
 struct repair_update_system_table_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     table_id table_uuid;
     sstring keyspace_name;
     sstring table_name;
@@ -442,7 +443,7 @@ struct repair_update_system_table_response {
 };
 
 struct repair_flush_hints_batchlog_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     std::list<gms::inet_address> target_nodes;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;

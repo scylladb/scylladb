@@ -407,7 +407,7 @@ future<repair_status> tracker::repair_await_completion(int id, std::chrono::stea
 }
 
 repair_uniq_id tracker::next_repair_command() {
-    return repair_uniq_id{_next_repair_command++, utils::make_random_uuid()};
+    return repair_uniq_id{_next_repair_command++, tasks::task_id::create_random_id()};
 }
 
 future<> tracker::shutdown() {
@@ -459,7 +459,7 @@ size_t tracker::nr_running_repair_jobs() {
     return count;
 }
 
-bool tracker::is_aborted(const utils::UUID& uuid) {
+bool tracker::is_aborted(const tasks::task_id& uuid) {
     return _aborted_pending_repairs.contains(uuid);
 }
 
@@ -1172,7 +1172,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         abort_source as;
-        auto off_strategy_updater = seastar::async([this, uuid, &table_ids, &participants, &as] {
+        auto off_strategy_updater = seastar::async([this, uuid = uuid.uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
