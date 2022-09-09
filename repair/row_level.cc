@@ -9,6 +9,7 @@
 #include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
+#include "repair/repair_task.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation_fragment.hh"
@@ -2917,6 +2918,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_update_generator>& vug,
+        tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
     : _gossiper(gossiper)
@@ -2927,12 +2929,14 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _sys_ks(sys_ks)
     , _view_update_generator(vug)
+    , _repair_module(seastar::make_shared<repair_module>(tm, *this))
     , _mm(mm)
     , _tracker(max_repair_memory)
     , _node_ops_metrics(_tracker)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
 {
+    tm.register_module("repair", _repair_module);
     if (this_shard_id() == 0) {
         _gossip_helper = make_shared<row_level_repair_gossip_helper>(*this);
         _gossiper.local().register_(_gossip_helper);
@@ -2945,6 +2949,7 @@ future<> repair_service::start() {
 }
 
 future<> repair_service::stop() {
+    co_await _repair_module->stop();
     co_await uninit_ms_handlers();
     if (this_shard_id() == 0) {
         co_await _gossiper.local().unregister_(_gossip_helper);
