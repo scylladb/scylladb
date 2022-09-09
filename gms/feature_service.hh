@@ -47,12 +47,18 @@ using namespace std::literals;
  * if the instance needs to persist enabled features in a system table.
  */
 class feature_service final {
+public:
+    using features_changed_callback_t = noncopyable_function<void() noexcept>;
+
+private:
     void register_feature(feature& f);
     void unregister_feature(feature& f);
     friend class feature;
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
 
     feature_config _config;
+
+    std::list<features_changed_callback_t> _supported_features_change_callbacks;
 public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
@@ -61,7 +67,27 @@ public:
     void enable(const sstring& name);
     void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
+
+    // The set of features this node supports.
+    // It is only legal to enable a feature once every node in the cluster supports it.
+    //
+    // The set of supported features may grow while the node is running (e.g. when node configuration is reloaded).
+    // One can subscribe to notifications for this set changing using `on_supported_features_change`.
     std::set<std::string_view> supported_feature_set();
+
+    class supported_features_change_subscription {
+        friend class feature_service;
+        struct impl;
+        std::unique_ptr<impl> _impl;
+    public:
+        supported_features_change_subscription(std::unique_ptr<impl>);
+        ~supported_features_change_subscription();
+    };
+    // Subscribe the given callback to be called whenever the set of features supported by this node grows.
+    // The callback will stop being called when the subscription returned by this function is destroyed.
+    //
+    // The returned subscription must not outlive `feature_service`.
+    supported_features_change_subscription on_supported_features_change(features_changed_callback_t);
 
     // Key in the 'system.scylla_local' table, that is used to
     // persist enabled features

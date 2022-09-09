@@ -216,4 +216,26 @@ void feature_service::enable(const std::set<std::string_view>& list) {
     }
 }
 
+struct feature_service::supported_features_change_subscription::impl {
+    feature_service& _service;
+    std::list<features_changed_callback_t>::iterator _it;
+
+    impl(feature_service& service, features_changed_callback_t cb)
+        : _service(service)
+        , _it(_service._supported_features_change_callbacks.insert(_service._supported_features_change_callbacks.begin(), std::move(cb)))
+    {}
+
+    ~impl() {
+        _service._supported_features_change_callbacks.erase(_it);
+    }
+};
+
+feature_service::supported_features_change_subscription::supported_features_change_subscription(std::unique_ptr<impl> impl) : _impl(std::move(impl)) {}
+feature_service::supported_features_change_subscription::~supported_features_change_subscription() = default;
+
+feature_service::supported_features_change_subscription
+feature_service::on_supported_features_change(features_changed_callback_t cb) {
+    return { std::make_unique<feature_service::supported_features_change_subscription::impl>(*this, std::move(cb)) };
+}
+
 } // namespace gms
