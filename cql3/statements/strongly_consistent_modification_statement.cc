@@ -17,9 +17,12 @@
 #include <seastar/core/future.hh>
 #include <seastar/util/variant_utils.hh>
 
+#include "bytes.hh"
 #include "cql3/attributes.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/operation.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/values.hh"
 #include "timeout_config.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
@@ -32,7 +35,7 @@ namespace statements {
 strongly_consistent_modification_statement::strongly_consistent_modification_statement(
     uint32_t bound_terms,
     schema_ptr schema,
-    service::broadcast_tables::update_query query)
+    broadcast_tables::prepared_update query)
     : cql_statement_opt_metadata{&timeout_config::write_timeout}
     , _bound_terms{bound_terms}
     , _schema{schema}
@@ -44,6 +47,20 @@ strongly_consistent_modification_statement::execute(query_processor& qp, service
     return execute_without_checking_exception_message(qp, qs, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
+
+static
+service::broadcast_tables::update_query
+evaluate_prepared(
+    const broadcast_tables::prepared_update& query,
+    const query_options& options) {
+    return service::broadcast_tables::update_query{
+        .key = expr::evaluate(query.key, options).to_bytes(),
+        .new_value = expr::evaluate(query.new_value, options).to_bytes(),
+        .value_condition = query.value_condition
+            ? std::optional<bytes_opt>{expr::evaluate(*query.value_condition, options).to_bytes_opt()}
+            : std::nullopt
+    };
+}
     
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
@@ -51,7 +68,10 @@ strongly_consistent_modification_statement::execute_without_checking_exception_m
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
-    auto result = co_await service::broadcast_tables::execute(qp.get_group0_client(), { _query });
+    auto result = co_await service::broadcast_tables::execute(
+        qp.get_group0_client(),
+        { evaluate_prepared(_query, options) }
+    );
     
     co_return co_await std::visit(make_visitor(
         [] (service::broadcast_tables::query_result_conditional_update& qr) -> future<::shared_ptr<cql_transport::messages::result_message>> {
@@ -91,7 +111,7 @@ uint32_t strongly_consistent_modification_statement::get_bound_terms() const {
 future<> strongly_consistent_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
     const data_dictionary::database db = qp.db();
     auto f = state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
-    if (_query.value_condition->has_value()) {
+    if (_query.value_condition.has_value()) {
         f = f.then([this, &state, db] {
            return state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::SELECT);
         });

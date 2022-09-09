@@ -25,7 +25,7 @@ namespace statements {
 static logging::logger logger("strongly_consistent_select_statement");
 
 static
-bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
+expr::expression get_key(const cql3::expr::expression& partition_key_restrictions) {
     const auto* conjunction = cql3::expr::as_if<cql3::expr::conjunction>(&partition_key_restrictions);
 
     if (!conjunction || conjunction->children.size() != 1) {
@@ -39,16 +39,14 @@ bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("partition key restriction: {}", *conjunction));
     }
 
-    // FIXME: add support for bind variables
     const auto* column = cql3::expr::as_if<cql3::expr::column_value>(&key_restriction->lhs);
-    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&key_restriction->rhs);
 
     if (!column || column->col->kind != column_kind::partition_key ||
-        !value || key_restriction->op != cql3::expr::oper_t::EQ) {
+        key_restriction->op != cql3::expr::oper_t::EQ) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("key restriction: {}", *key_restriction));
     }
 
-    return to_bytes(value->view());
+    return key_restriction->rhs;
 }
 
 static
@@ -73,7 +71,7 @@ strongly_consistent_select_statement::strongly_consistent_select_statement(schem
       _query{prepare_query()}
 { }
 
-service::broadcast_tables::select_query strongly_consistent_select_statement::prepare_query() const {
+broadcast_tables::prepared_select strongly_consistent_select_statement::prepare_query() const {
     if (!is_selecting_only_value(*_selection)) {
         throw service::broadcast_tables::unsupported_operation_error("only 'value' selector is allowed");
     }
@@ -83,13 +81,26 @@ service::broadcast_tables::select_query strongly_consistent_select_statement::pr
     };
 }
 
+static
+service::broadcast_tables::select_query
+evaluate_prepared(
+    const broadcast_tables::prepared_select& query,
+    const query_options& options) {
+    return service::broadcast_tables::select_query{
+        .key = expr::evaluate(query.key, options).to_bytes()
+    };
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
-    auto result = co_await service::broadcast_tables::execute(qp.get_group0_client(), { _query });
+    auto result = co_await service::broadcast_tables::execute(
+        qp.get_group0_client(),
+        { evaluate_prepared(_query, options) }
+    );
     
     auto query_result = std::get_if<service::broadcast_tables::query_result_select>(&result);
 

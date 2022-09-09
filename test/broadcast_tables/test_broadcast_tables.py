@@ -8,6 +8,7 @@ import string
 from typing import Dict, List, Optional, Tuple
 import pytest
 import enum
+from cassandra.query import PreparedStatement
 
 
 def random_string(size=10) -> str:
@@ -16,24 +17,30 @@ def random_string(size=10) -> str:
     return ''.join(random.choice(letters) for _ in range(size))
 
 
-def select(cql, key: str) -> Optional[str]:
-    result = list(cql.execute(f"SELECT value FROM system.broadcast_kv_store WHERE key = '{key}';"))
+class QueriesHandler:
+    def __init__(self, cql):
+        self.cql = cql
+        self.prepared_select: PreparedStatement = cql.prepare(f"SELECT value FROM system.broadcast_kv_store WHERE key = ?;")
+        self.prepared_update: PreparedStatement = cql.prepare(f"UPDATE system.broadcast_kv_store SET value = ? WHERE key = ?;")
+        self.prepared_conditional_update: PreparedStatement = cql.prepare(f"UPDATE system.broadcast_kv_store SET value = ? WHERE key = ? IF value = ?;")
 
-    if len(result) == 0:
-        return None
+    def select(self, key: str) -> Optional[str]:
+        result = list(self.cql.execute(self.prepared_select, parameters=[key]))
 
-    assert len(result) == 1
-    return result[0].value
+        if len(result) == 0:
+            return None
 
-def update(cql, key: str, new_value: str) -> None:
-    cql.execute(f"UPDATE system.broadcast_kv_store SET value = '{new_value}' WHERE key = '{key}';")
+        assert len(result) == 1
+        return result[0].value
 
-def update_conditional(cql, key: str, new_value: str, value_condition: Optional[str]) -> Tuple[bool, Optional[str]]:
-    condition = "null" if value_condition is None else f"'{value_condition}'"
-    result = list(cql.execute(f"UPDATE system.broadcast_kv_store SET value = '{new_value}' WHERE key = '{key}' IF value = {condition};"))
+    def update(self, key: str, new_value: str) -> None:
+        self.cql.execute(self.prepared_update, parameters=[new_value, key])
 
-    assert len(result) == 1
-    return (result[0].applied, result[0].value)
+    def update_conditional(self, key: str, new_value: str, value_condition: Optional[str]) -> Tuple[bool, Optional[str]]:
+        result = list(self.cql.execute(self.prepared_conditional_update, parameters=[new_value, key, value_condition]))
+
+        assert len(result) == 1
+        return (result[0].applied, result[0].value)
 
 
 # For now, only the following types of statements can be compiled:
@@ -64,6 +71,8 @@ async def test_broadcast_kv_store(cql) -> None:
     remaining_strings = random_strings.copy()
     kv_store: Dict[str, str] = {}
 
+    queries_handler = QueriesHandler(cql)
+
     query_types = random.choices(
             [QueryType.SELECT, QueryType.UPDATE, QueryType.CONDITIONAL_UPDATE],
             weights=[0.3, 0.2, 0.5], k=3721
@@ -72,13 +81,13 @@ async def test_broadcast_kv_store(cql) -> None:
         key = random.choice(random_strings)
 
         if query_type == QueryType.SELECT:
-            value = select(cql, key)
+            value = queries_handler.select(key)
             assert value == kv_store.get(key)
         else:
             new_value = random.choice(random_strings)
 
             if query_type == QueryType.UPDATE:
-                update(cql, key, new_value)
+                queries_handler.update(key, new_value)
                 kv_store[key] = new_value
             elif query_type == QueryType.CONDITIONAL_UPDATE:
                 condition_type: ConditionType
@@ -101,7 +110,7 @@ async def test_broadcast_kv_store(cql) -> None:
                     key = remaining_strings.pop()
                     value_condition = None
 
-                result = update_conditional(cql, key, new_value, value_condition)
+                result = queries_handler.update_conditional(key, new_value, value_condition)
                 applied = False
                 previous_value = kv_store.get(key)
                 if previous_value == value_condition:

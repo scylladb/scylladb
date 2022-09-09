@@ -9,6 +9,7 @@
  */
 
 #include "update_statement.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raw/update_statement.hh"
@@ -24,6 +25,7 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "validation.hh"
+#include <optional>
 
 namespace cql3 {
 
@@ -258,7 +260,7 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
 
 
 static
-bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
+expr::expression get_key(const cql3::expr::expression& partition_key_restrictions) {
     const auto* conjunction = cql3::expr::as_if<cql3::expr::conjunction>(&partition_key_restrictions);
 
     if (!conjunction || conjunction->children.size() != 1) {
@@ -272,20 +274,18 @@ bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("partition key restriction: {}", *conjunction));
     }
 
-    // FIXME: add support for bind variables
     const auto* column = cql3::expr::as_if<cql3::expr::column_value>(&key_restriction->lhs);
-    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&key_restriction->rhs);
 
     if (!column || column->col->kind != column_kind::partition_key ||
-        !value || key_restriction->op != cql3::expr::oper_t::EQ) {
+        key_restriction->op != cql3::expr::oper_t::EQ) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("key restriction: {}", *key_restriction));
     }
 
-    return to_bytes(value->view());
+    return key_restriction->rhs;
 }
 
 static
-void prepare_new_value(service::broadcast_tables::update_query& query, const std::vector<::shared_ptr<operation>>& operations) {
+void prepare_new_value(broadcast_tables::prepared_update& query, const std::vector<::shared_ptr<operation>>& operations) {
     if (operations.size() != 1) {
         throw service::broadcast_tables::unsupported_operation_error("only one operation is allowed and must be of the form \"value = X\"");
     }
@@ -294,7 +294,7 @@ void prepare_new_value(service::broadcast_tables::update_query& query, const std
 }
 
 static
-std::optional<bytes_opt> get_value_condition(const std::vector<lw_shared_ptr<column_condition>>& conditions) {
+std::optional<expr::expression> get_value_condition(const std::vector<lw_shared_ptr<column_condition>>& conditions) {
     if (conditions.size() == 0) {
         return std::nullopt;
     }
@@ -313,18 +313,7 @@ std::optional<bytes_opt> get_value_condition(const std::vector<lw_shared_ptr<col
             "condition: {}{}", condition->get_operation(), condition->get_value()));
     }
 
-    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&*condition->get_value());
-
-    if (!value) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "condition: {}{}", condition->get_operation(), condition->get_value()));
-    }
-
-    if (value->is_null()) {
-        return bytes_opt{};
-    }
-
-    return to_bytes(value->view());
+    return condition->get_value();
 }
 
 ::shared_ptr<strongly_consistent_modification_statement>
@@ -343,7 +332,7 @@ update_statement::prepare_for_broadcast_tables() const {
         }
     }
 
-    service::broadcast_tables::update_query query = {
+    broadcast_tables::prepared_update query = {
         .key = get_key(restrictions().get_partition_key_restrictions()),
         .value_condition = get_value_condition(_regular_conditions),
     };

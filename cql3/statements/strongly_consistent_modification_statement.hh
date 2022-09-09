@@ -18,13 +18,23 @@ namespace cql3 {
 
 namespace statements {
 
+namespace broadcast_tables {
+
+struct prepared_update {
+    expr::expression key;
+    expr::expression new_value;
+    std::optional<expr::expression> value_condition;
+};
+
+}
+
 class strongly_consistent_modification_statement : public cql_statement_opt_metadata {
     const uint32_t _bound_terms;
     const schema_ptr _schema;
-    const service::broadcast_tables::update_query _query;
+    const broadcast_tables::prepared_update _query;
 
 public:
-    strongly_consistent_modification_statement(uint32_t bound_terms, schema_ptr schema, service::broadcast_tables::update_query query);
+    strongly_consistent_modification_statement(uint32_t bound_terms, schema_ptr schema, broadcast_tables::prepared_update query);
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
