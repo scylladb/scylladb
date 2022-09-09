@@ -50,7 +50,7 @@ public:
             }
         }
 
-        virtual void prepare_for_broadcast_tables(service::broadcast_tables::update_query& query) const override;
+        virtual void prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update& query) const override;
     };
 
     struct adder final : operation {

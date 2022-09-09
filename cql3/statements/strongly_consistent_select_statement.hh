@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "cql3/expr/expression.hh"
 #include "cql3/statements/select_statement.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
@@ -17,10 +18,18 @@ namespace cql3 {
 
 namespace statements {
 
-class strongly_consistent_select_statement : public select_statement {
-    const service::broadcast_tables::select_query _query;
+namespace broadcast_tables {
 
-    service::broadcast_tables::select_query prepare_query() const;
+struct prepared_select {
+    expr::expression key;
+};
+
+}
+
+class strongly_consistent_select_statement : public select_statement {
+    const broadcast_tables::prepared_select _query;
+
+    broadcast_tables::prepared_select prepare_query() const;
 public:
     strongly_consistent_select_statement(schema_ptr schema,
                      uint32_t bound_terms,
