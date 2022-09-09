@@ -114,6 +114,11 @@ bool analyzed_where_clause::key_is_in_relation() const {
 }
 
 bool analyzed_where_clause::pk_restrictions_need_filtering() const {
+    if (query_restrictions.has_value()) {
+        if (auto single_query_restrictions = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_query_restrictions->partition_restrictions.pk_restrictions_need_filtering();
+        }
+    }
     return restrictions->pk_restrictions_need_filtering();
 }
 

@@ -160,5 +160,9 @@ bool partition_key_restrictions::key_is_in_relation() const {
     });
     return result;
 }
+
+bool partition_key_restrictions::pk_restrictions_need_filtering() const {
+    return !is_empty_restriction(_filtering_restrictions);
+}
 }  // namespace restrictions
 }  // namespace cql3

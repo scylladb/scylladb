@@ -61,6 +61,9 @@ public:
     // Checks if there is an IN restriction in partition key restrictions.
     bool key_is_in_relation() const;
 
+    // Checks if filtering has to involve partition key restrictions.
+    bool pk_restrictions_need_filtering() const;
+
    private:
     // Analyze _partition_restrictions to fill in _column_eq_restrictions, _token_range_restrictions
     // and _filtering_restrictions.
