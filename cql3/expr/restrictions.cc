@@ -201,7 +201,7 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     preliminary_binop_vaidation_checks(restriction);
 
     // Prepare the restriction
-    binary_operator prepared_binop = prepare_binary_operator(restriction, db, schema);
+    binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema);
 
     // Fill prepare context
     const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,
