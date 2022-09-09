@@ -3175,6 +3175,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
     return app.run(argc, argv, [&app, found_op] {
         return async([&app, found_op] {
+            logalloc::use_standard_allocator_segment_pool_backend(100 * 1024 * 1024).get();
+
             auto& app_config = app.configuration();
 
             const auto& operation = *found_op;

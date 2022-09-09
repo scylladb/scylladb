@@ -8,12 +8,14 @@
 
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/core/app-template.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "log.hh"
 #include "schema_builder.hh"
 #include "tools/utils.hh"
+#include "utils/logalloc.hh"
 
 using namespace seastar;
 
@@ -341,7 +343,9 @@ $ scylla types {{action}} --help
         {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
     });
 
-    return app.run(argc, argv, [&app, found_ah] {
+    return app.run(argc, argv, [&app, found_ah] () -> future<> {
+        co_await logalloc::use_standard_allocator_segment_pool_backend(1 * 1024 * 1024);
+
         const action_handler& handler = *found_ah;
 
         if (!app.configuration().contains("type")) {
@@ -370,7 +374,7 @@ $ scylla types {{action}} --help
 
         handler(std::move(type), std::move(values), app.configuration());
 
-        return make_ready_future<>();
+        co_return;
     });
 }
 
