@@ -14,6 +14,7 @@
 #include "cql3/lists.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
+#include "types.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
@@ -887,8 +888,46 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             return result;
         },
-        [&] (const conjunction&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "conjunctions are not yet reachable via prepare_expression()");
+        [&] (const conjunction& conj) -> std::optional<expression> {
+            if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
+                throw exceptions::invalid_request_exception(
+                    format("AND conjunction produces a boolean value, which doesn't match the type: {} of {}",
+                           receiver->type->name(), receiver->name->text()));
+            }
+
+            std::vector<expression> prepared_children;
+
+            lw_shared_ptr<column_specification> child_receiver;
+            if (receiver.get() != nullptr) {
+                ::shared_ptr<column_identifier> child_receiver_name =
+                    ::make_shared<column_identifier>(format("AND_element({})", receiver->name->text()), true);
+                child_receiver = make_lw_shared<column_specification>(
+                    receiver->ks_name, receiver->cf_name, std::move(child_receiver_name), boolean_type);
+            } else {
+                ::shared_ptr<column_identifier> child_receiver_name =
+                    ::make_shared<column_identifier>("AND_element(unknown)", true);
+                sstring cf_name = schema_opt ? schema_opt->cf_name() : "unknown_cf";
+                child_receiver = make_lw_shared<column_specification>(
+                    keyspace, std::move(cf_name), std::move(child_receiver_name), boolean_type);
+            }
+
+            bool all_terminal = true;
+            for (const expression& child : conj.children) {
+                std::optional<expression> prepared_child = try_prepare_expression(child, db, keyspace, schema_opt, child_receiver);
+                if (!prepared_child.has_value()) {
+                    return std::nullopt;
+                }
+                if (!is<constant>(*prepared_child)) {
+                    all_terminal = false;
+                }
+                prepared_children.push_back(std::move(*prepared_child));
+            }
+
+            conjunction result = conjunction{std::move(prepared_children)};
+            if (all_terminal) {
+                return constant(evaluate(result, query_options::DEFAULT), boolean_type);
+            }
+            return result;
         },
         [] (const column_value& cv) -> std::optional<expression> {
             return cv;
