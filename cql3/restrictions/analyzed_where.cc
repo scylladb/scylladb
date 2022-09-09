@@ -51,6 +51,11 @@ const expr::expression& analyzed_where_clause::get_partition_key_restrictions() 
 
 const expr::single_column_restrictions_map& analyzed_where_clause::get_single_column_partition_key_restrictions()
     const {
+    if (query_restrictions.has_value()) {
+        if (auto single_table_query = std::get_if<single_table_query_restrictions>(&*query_restrictions)) {
+            return single_table_query->partition_restrictions.get_single_column_partition_key_restrictions();
+        }
+    }
     return restrictions->get_single_column_partition_key_restrictions();
 }
 

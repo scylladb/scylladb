@@ -7,6 +7,7 @@
  */
 
 #include "partition_key_restrictions.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 namespace restrictions {
@@ -34,10 +35,17 @@ partition_key_restrictions::partition_key_restrictions(expr::expression partitio
     }
 
     assert_contains_only_partition_key_columns(_partition_restrictions);
+
+    _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_partition_restrictions);
 }
 
 const expr::expression& partition_key_restrictions::get_partition_key_restrictions() const {
     return _partition_restrictions;
+}
+
+const expr::single_column_restrictions_map& partition_key_restrictions::get_single_column_partition_key_restrictions()
+    const {
+    return _single_column_partition_key_restrictions;
 }
 }  // namespace restrictions
 }  // namespace cql3
