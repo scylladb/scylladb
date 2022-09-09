@@ -83,7 +83,7 @@ overloaded_exception::overloaded_exception(size_t c) noexcept
     {}
 
 rate_limit_exception::rate_limit_exception(const sstring& ks, const sstring& cf, db::operation_type op_type_, bool rejected_by_coordinator_) noexcept
-    : cassandra_exception(exception_code::CONFIG_ERROR, prepare_message("Per-partition rate limit reached for {} in table {}.{}, rejected by {}", op_type_, ks, cf, rejected_by_coordinator_ ? "coordinator" : "replicas"))
+    : cassandra_exception(exception_code::RATE_LIMIT_ERROR, prepare_message("Per-partition rate limit reached for {} in table {}.{}, rejected by {}", op_type_, ks, cf, rejected_by_coordinator_ ? "coordinator" : "replicas"))
     , op_type(op_type_)
     , rejected_by_coordinator(rejected_by_coordinator_)
     { }
