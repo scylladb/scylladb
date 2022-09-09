@@ -35,5 +35,9 @@ partition_key_restrictions::partition_key_restrictions(expr::expression partitio
 
     assert_contains_only_partition_key_columns(_partition_restrictions);
 }
+
+const expr::expression& partition_key_restrictions::get_partition_key_restrictions() const {
+    return _partition_restrictions;
+}
 }  // namespace restrictions
 }  // namespace cql3

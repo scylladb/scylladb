@@ -22,7 +22,8 @@ class partition_key_restrictions {
 public:
     partition_key_restrictions(expr::expression partition_restrictions, schema_ptr table_schema);
 
-    // TODO
+    // Access expression containing all parittion key restrictions.
+    const expr::expression& get_partition_key_restrictions() const;
 };
 }  // namespace restrictions
 }  // namespace cql3
