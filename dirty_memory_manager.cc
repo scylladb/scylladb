@@ -51,21 +51,18 @@ uint64_t region_group::top_region_evictable_space() const noexcept {
 }
 
 dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() noexcept {
-    if (!_maximal_rg || _maximal_rg->_regions.empty()) {
-        return nullptr;
-    }
-    return _maximal_rg->_regions.top();
+    return _regions.empty() ? nullptr : _regions.top();
 }
 
 void
 region_group::add(region_group* child) {
-    child->_subgroup_heap_handle = _subgroups.push(child);
+    _subgroups.push_back(child);
     update(child->_total_memory);
 }
 
 void
 region_group::del(region_group* child) {
-    _subgroups.erase(child->_subgroup_heap_handle);
+    _subgroups.erase(std::find(_subgroups.begin(), _subgroups.end(), child));
     update(-child->_total_memory);
 }
 
@@ -166,7 +163,6 @@ void region_group::update(ssize_t delta) {
     region_group* top_relief = nullptr;
 
     do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
-        rg->update_maximal_rg();
         rg->_total_memory += delta;
 
         if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
