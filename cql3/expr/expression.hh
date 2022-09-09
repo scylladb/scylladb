@@ -821,6 +821,9 @@ bytes_opt value_for(const column_definition&, const expression&, const query_opt
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
+
+// Checks if the expression is fully prepared
+bool is_prepared(const expression&);
 } // namespace expr
 
 } // namespace cql3

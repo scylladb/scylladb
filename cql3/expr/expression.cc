@@ -2499,5 +2499,68 @@ bool has_only_eq_binops(const expression& e) {
 
     return non_eq_binop == nullptr;
 }
+
+bool is_prepared(const expression& maybe_prepared) {
+    bool contains_unprepared = recurse_until(maybe_prepared, [](const expression& e) -> bool {
+        bool is_prepared = expr::visit(overloaded_functor{
+            [] (const constant& constant_val) {
+                return true;
+            },
+            [] (const conjunction& conj) {
+                return true;
+            },
+            [&] (const binary_operator& opr) { return true; },
+            [] (const column_value&) -> bool {
+                return true;
+            },
+            [] (const subscript&) -> bool {
+                return true;
+            },
+            [] (const token&) -> bool {
+                return true;
+            },
+            [] (const unresolved_identifier&) -> bool {
+                return false;
+            },
+            [] (const column_mutation_attribute&) -> bool {
+                // column_mutation_attribute has an expression field inside of it:
+                // expression column;
+                // but this field can only contain unresolved_identifier,
+                // even after preparation.
+                return true;
+            },
+            [] (const function_call&) -> bool {
+                return true;
+            },
+            [] (const cast&) -> bool {
+                return true;
+            },
+            [] (const field_selection&) -> bool {
+                return true;
+            },
+            [] (const null&) -> bool {
+                return false;
+            },
+            [] (const bind_variable&) -> bool {
+                return true;
+            },
+            [] (const untyped_constant&) -> bool {
+                return false;
+            },
+            [] (const tuple_constructor&) -> bool {
+                return true;
+            },
+            [] (const collection_constructor&) -> bool {
+                return true;
+            },
+            [] (const usertype_constructor&) -> bool {
+                return true;
+            },
+        }, e);
+        return !is_prepared;
+    });
+
+    return !contains_unprepared;
+}
 } // namespace expr
 } // namespace cql3
