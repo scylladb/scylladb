@@ -740,6 +740,66 @@ public:
     }
 };
 
+// Segments storage is allocated via `mmap()`.
+// This area cannot be shrunk or enlarged, so freeing segments doesn't increase
+// memory availability.
+class standard_memory_segment_store_backend : public segment_store_backend {
+    struct free_segment {
+        free_segment* next = nullptr;
+    };
+
+private:
+    uintptr_t _segments_offset = 0;
+    free_segment* _freelist = nullptr;
+    size_t _available_segments; // for fast free_memory()
+
+private:
+    static memory::memory_layout allocate_memory(size_t segments) {
+        const auto size = segments * segment_size;
+        auto p = mmap(nullptr, size,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1, 0);
+        if (p == MAP_FAILED) {
+            std::abort();
+        }
+        madvise(p, size, MADV_HUGEPAGE);
+        auto start = reinterpret_cast<uintptr_t>(p);
+        return {start, start + size};
+    }
+public:
+    standard_memory_segment_store_backend(size_t segments)
+        : segment_store_backend(allocate_memory(segments), false)
+        , _available_segments((_layout.end - _segments_base) / segment_size)
+    { }
+    ~standard_memory_segment_store_backend() {
+        munmap(reinterpret_cast<void*>(_layout.start), _layout.end - _layout.start);
+    }
+    virtual void* alloc_segment_memory() noexcept override {
+        if (_freelist) {
+            --_available_segments;
+            return std::exchange(_freelist, _freelist->next);
+        }
+        auto seg = _segments_base + _segments_offset * segment_size;
+        if (seg + segment_size > _layout.end) {
+            return nullptr;
+        }
+        ++_segments_offset;
+        --_available_segments;
+        return reinterpret_cast<void*>(seg);
+    }
+    virtual void free_segment_memory(void* seg) noexcept override {
+        unpoison(reinterpret_cast<char*>(seg), sizeof(free_segment));
+        auto fs = new (seg) free_segment;
+        fs->next = _freelist;
+        _freelist = fs;
+        ++_available_segments;
+    }
+    virtual size_t free_memory() const noexcept override {
+        return _available_segments * segment_size;
+    }
+};
+
 static constexpr size_t segment_npos = size_t(-1);
 
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
