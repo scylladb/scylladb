@@ -195,7 +195,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     cfg.volatile_system_keyspace_for_testing(true);
 
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
-    feature_service.enable(feature_service.known_feature_set());
+    feature_service.enable(feature_service.supported_feature_set());
     sharded<locator::shared_token_metadata> token_metadata;
 
     token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
