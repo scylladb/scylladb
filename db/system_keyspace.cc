@@ -1346,10 +1346,14 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(_qp.local(), NAME);
     co_await cache_truncation_record();
-    auto preferred_ips = co_await get_preferred_ips();
-    co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
-        return ms.init_local_preferred_ip_cache(preferred_ips);
-    });
+
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (snitch->prefer_local()) {
+        auto preferred_ips = co_await get_preferred_ips();
+        co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
+            return ms.init_local_preferred_ip_cache(preferred_ips);
+        });
+    }
 }
 
 struct truncation_record {
