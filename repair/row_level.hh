@@ -11,6 +11,8 @@
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
+#include "repair/repair_task.hh"
+#include "tasks/task_manager.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -88,6 +90,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
+    shared_ptr<repair_module> _repair_module;
     service::migration_manager& _mm;
     tracker _tracker;
     node_ops_metrics _node_ops_metrics;
@@ -114,6 +117,7 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,
             sharded<db::view::view_update_generator>& vug,
+            tasks::task_manager& tm,
             service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();
     future<> start();
@@ -171,6 +175,10 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
+    repair_module& get_repair_module() noexcept {
+        return *_repair_module;
+    }
+
     tracker& repair_tracker() {
         return _tracker;
     }
