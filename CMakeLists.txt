@@ -371,6 +371,7 @@ set(scylla_sources
     cql3/restrictions/analyzed_where.cc
     cql3/restrictions/single_table_query_restrictions.cc
     cql3/restrictions/index_table_query_restrictions.cc
+    cql3/restrictions/partition_key_restrictions.cc
     cql3/result_set.cc
     cql3/role_name.cc
     cql3/selection/abstract_function_selector.cc
