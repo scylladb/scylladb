@@ -3164,7 +3164,7 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
         co_return;
     }
     gms::feature_service& local_feat_srv = feat.local();
-    const auto known_features = local_feat_srv.known_feature_set();
+    const auto known_features = local_feat_srv.supported_feature_set();
     const auto& registered_features = local_feat_srv.registered_features();
     const auto persisted_features = gms::feature_service::to_feature_set(*pre_enabled_features);
     for (auto&& f : persisted_features) {

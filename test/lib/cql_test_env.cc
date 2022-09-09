@@ -672,7 +672,7 @@ public:
 
             feature_service.invoke_on_all([] (auto& fs) {
                 return seastar::async([&fs] {
-                    fs.enable(fs.known_feature_set());
+                    fs.enable(fs.supported_feature_set());
                 });
             }).get();
 

@@ -98,16 +98,7 @@ void feature_service::enable(const sstring& name) {
     }
 }
 
-future<> feature_service::support(const std::string_view& name) {
-    _config._masked_features.erase(sstring(name));
-
-    if (db::qctx) {
-        // Update `system.local#supported_features` accordingly
-        co_await db::system_keyspace::save_local_supported_features(supported_feature_set());
-    }
-}
-
-std::set<std::string_view> feature_service::known_feature_set() {
+std::set<std::string_view> feature_service::supported_feature_set() {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
@@ -146,15 +137,6 @@ std::set<std::string_view> feature_service::known_feature_set() {
 
 const std::unordered_map<sstring, std::reference_wrapper<feature>>& feature_service::registered_features() const {
     return _registered_features;
-}
-
-std::set<std::string_view> feature_service::supported_feature_set() {
-    auto features = known_feature_set();
-
-    for (const sstring& s : _config._masked_features) {
-        features.erase(s);
-    }
-    return features;
 }
 
 feature::feature(feature_service& service, std::string_view name, bool enabled)

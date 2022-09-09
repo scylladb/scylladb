@@ -331,7 +331,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
-        auto local_features = _feature_service.known_feature_set();
+        auto local_features = _feature_service.supported_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes);
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
@@ -1552,7 +1552,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
     return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
-        auto local_features = _feature_service.known_feature_set();
+        auto local_features = _feature_service.supported_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round(initial_contact_nodes).get();
@@ -1623,7 +1623,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     // make magic happen
     slogger.info("Checking remote features with gossip");
     co_await _gossiper.do_shadow_round(initial_contact_nodes);
-    auto local_features = _feature_service.known_feature_set();
+    auto local_features = _feature_service.supported_feature_set();
     _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
