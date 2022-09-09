@@ -2427,7 +2427,7 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     return feature_service::to_feature_set(app_state->value);
 }
 
-std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
+std::set<sstring> gossiper::calculate_enabled_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
     std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
     std::set<sstring> common_features;
 
@@ -2482,7 +2482,7 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
 
 void gossiper::check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const {
     auto local_endpoint = get_broadcast_address();
-    auto common_features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::yes);
+    auto common_features = calculate_enabled_features(loaded_peer_features, ignore_features_of_local_node::yes);
     if (boost::range::includes(local_features, common_features)) {
         logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
                 local_endpoint, local_features, common_features);
@@ -2537,7 +2537,7 @@ future<> gossiper::maybe_enable_features() {
         co_return;
     }
     auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
-    auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
+    auto&& features = calculate_enabled_features(loaded_peer_features, ignore_features_of_local_node::no);
     co_await container().invoke_on_all([&features] (gossiper& g) {
         // gms::feature::enable should be run within seastar::async context
         return seastar::async([&features, &g] {
