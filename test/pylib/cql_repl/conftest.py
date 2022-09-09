@@ -69,7 +69,7 @@ def cql(request):
         ssl_context = None
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                       contact_points=[request.config.getoption('host')],
-                      port=request.config.getoption('port'),
+                      port=int(request.config.getoption('port')),
                       # TODO: make the protocol version an option, to allow testing with
                       # different versions. If we drop this setting completely, it will
                       # mean pick the latest version supported by the client and the server.
