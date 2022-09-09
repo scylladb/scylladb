@@ -118,5 +118,19 @@ void partition_key_restrictions::analyze_restrictions() {
 bool partition_key_restrictions::all_columns_have_eq_restrictions() const {
     return _column_eq_restrictions.size() == _table_schema->partition_key_size();
 }
+
+bool partition_key_restrictions::partition_key_restrictions_is_all_eq() const {
+    bool result = true;
+    for_each_boolean_factor(_partition_restrictions, [&](const expression& e) {
+        const binary_operator* binop = as_if<binary_operator>(&e);
+        if (binop == nullptr) {
+            result = false;
+        }
+        if (binop->op != oper_t::EQ) {
+            result = false;
+        }
+    });
+    return result;
+}
 }  // namespace restrictions
 }  // namespace cql3
