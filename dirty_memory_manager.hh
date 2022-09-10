@@ -126,7 +126,7 @@ class region_group : public region_listener {
     size_t _total_memory = 0;
     region_group_reclaimer& _reclaimer;
 
-    std::vector<region_group*> _subgroups;
+    region_group* _subgroup = nullptr;
     region_heap _regions;
 
     struct allocating_function {

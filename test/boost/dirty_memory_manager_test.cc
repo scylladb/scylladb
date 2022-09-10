@@ -409,68 +409,6 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
     });
 }
 
-SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
-    return seastar::async([] {
-        class leaf {
-            region_group_reclaimer _leaf_reclaimer;
-            test_region_group _rg;
-            std::unique_ptr<test_region> _region;
-        public:
-            leaf(test_region_group& parent)
-                : _leaf_reclaimer(logalloc::segment_size)
-                , _rg(&parent, _leaf_reclaimer)
-                , _region(std::make_unique<test_region>())
-                {
-                _region->listen(&_rg);
-            }
-
-            void alloc(size_t size) {
-                _region->alloc(size);
-            }
-
-            future<> try_alloc(size_t size) {
-                return _rg.run_when_memory_available([this, size] {
-                    alloc(size);
-                }, db::no_timeout);
-            }
-            void reset() {
-                _region.reset(new test_region());
-                _region->listen(&_rg);
-            }
-        };
-
-        region_group_reclaimer simple_reclaimer(logalloc::segment_size);
-        test_region_group parent(simple_reclaimer);
-
-        leaf first_leaf(parent);
-        leaf second_leaf(parent);
-        leaf third_leaf(parent);
-
-        first_leaf.alloc(logalloc::segment_size);
-        second_leaf.alloc(logalloc::segment_size);
-        third_leaf.alloc(logalloc::segment_size);
-
-        auto fut_1 = first_leaf.try_alloc(sizeof(uint64_t));
-        auto fut_2 = second_leaf.try_alloc(sizeof(uint64_t));
-        auto fut_3 = third_leaf.try_alloc(sizeof(uint64_t));
-
-        BOOST_REQUIRE_EQUAL(fut_1.available() || fut_2.available() || fut_3.available(), false);
-
-        // Total memory is still 2 * segment_size, can't proceed
-        first_leaf.reset();
-        // Can't quiesce because we don't want to wait on the futures.
-        sleep(10ms).get();
-
-        BOOST_REQUIRE_EQUAL(fut_1.available() || fut_2.available() || fut_3.available(), false);
-
-        // Now all futures should resolve.
-        first_leaf.reset();
-        second_leaf.reset();
-        third_leaf.reset();
-        quiesce(when_all(std::move(fut_1), std::move(fut_2), std::move(fut_3)));
-    });
-}
-
 // Helper for all async reclaim tests.
 class test_async_reclaim_region {
     dirty_memory_manager_logalloc::size_tracked_region _region;

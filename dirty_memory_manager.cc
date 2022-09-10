@@ -56,13 +56,14 @@ dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_re
 
 void
 region_group::add(region_group* child) {
-    _subgroups.push_back(child);
+    assert(!_subgroup);
+    _subgroup = child;
     update(child->_total_memory);
 }
 
 void
 region_group::del(region_group* child) {
-    _subgroups.erase(std::find(_subgroups.begin(), _subgroups.end(), child));
+    _subgroup = nullptr;
     update(-child->_total_memory);
 }
 
@@ -153,8 +154,8 @@ bool region_group::reclaimer_can_block() const {
 
 void region_group::notify_relief() {
     _relief.signal();
-    for (region_group* child : _subgroups) {
-        child->notify_relief();
+    if (_subgroup) {
+        _subgroup->notify_relief();
     }
 }
 
