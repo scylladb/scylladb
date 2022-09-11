@@ -187,6 +187,13 @@ void region_group::update(ssize_t delta) {
     }
 }
 
+future<>
+region_group::shutdown() noexcept {
+    _shutdown_requested = true;
+    _relief.signal();
+    return std::move(_releaser);
+}
+
 void allocation_queue::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
 }

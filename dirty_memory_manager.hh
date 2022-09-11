@@ -283,22 +283,7 @@ public:
     // We disallow future-returning functions here, because otherwise memory may be available
     // when we start executing it, but no longer available in the middle of the execution.
     requires (!is_future<std::invoke_result_t<Func>>::value)
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-        auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-            return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
-        });
-
-        if (!blocked_at) {
-            return futurize_invoke(func);
-        }
-
-        auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
-        auto fut = fn->get_future();
-        _blocked_requests.push_back(std::move(fn), timeout);
-        ++_blocked_requests_counter;
-
-        return fut;
-    }
+    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout);
 
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
@@ -307,19 +292,11 @@ public:
 
     // Shutdown is mandatory for every user who has set a threshold
     // Can be called at most once.
-    future<> shutdown() noexcept {
-        _shutdown_requested = true;
-        _relief.signal();
-        return std::move(_releaser);
-    }
+    future<> shutdown() noexcept;
 
-    size_t blocked_requests() const noexcept {
-        return _blocked_requests.size();
-    }
+    size_t blocked_requests() const noexcept;
 
-    uint64_t blocked_requests_counter() const noexcept {
-        return _blocked_requests_counter;
-    }
+    uint64_t blocked_requests_counter() const noexcept;
 private:
     // Returns true if and only if constraints of this group are not violated.
     // That's taking into account any constraints imposed by enclosing (parent) groups.
@@ -344,9 +321,7 @@ private:
         return nullptr;
     }
 
-    inline bool under_pressure() const noexcept {
-        return _reclaimer.under_pressure();
-    }
+    inline bool under_pressure() const noexcept;
 
     uint64_t top_region_evictable_space() const noexcept;
 
@@ -568,6 +543,50 @@ private:
 
     friend class flush_permit;
 };
+
+namespace dirty_memory_manager_logalloc {
+
+template <typename Func>
+// We disallow future-returning functions here, because otherwise memory may be available
+// when we start executing it, but no longer available in the middle of the execution.
+requires (!is_future<std::invoke_result_t<Func>>::value)
+futurize_t<std::result_of_t<Func()>>
+region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
+    auto blocked_at = do_for_each_parent(this, [] (auto rg) {
+        return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
+    });
+
+    if (!blocked_at) {
+        return futurize_invoke(func);
+    }
+
+    auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
+    auto fut = fn->get_future();
+    _blocked_requests.push_back(std::move(fn), timeout);
+    ++_blocked_requests_counter;
+
+    return fut;
+}
+
+inline
+size_t
+region_group::blocked_requests() const noexcept {
+    return _blocked_requests.size();
+}
+
+inline
+uint64_t
+region_group::blocked_requests_counter() const noexcept {
+    return _blocked_requests_counter;
+}
+
+inline
+bool
+region_group::under_pressure() const noexcept {
+    return _reclaimer.under_pressure();
+}
+
+}
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;
 
