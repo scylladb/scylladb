@@ -115,20 +115,8 @@ public:
     }
 };
 
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
-class region_group : public region_listener {
-    static region_group_reclaimer no_reclaimer;
-
-    using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    region_group* _parent = nullptr;
-    size_t _total_memory = 0;
-    region_group_reclaimer& _reclaimer;
-
-    region_group* _subgroup = nullptr;
-    region_heap _regions;
-
+class allocation_queue {
+public:
     struct allocating_function {
         virtual ~allocating_function() = default;
         virtual void allocate() = 0;
@@ -169,6 +157,28 @@ class region_group : public region_listener {
         explicit on_request_expiry(sstring name) : _name(std::move(name)) {}
         void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
+};
+
+// Groups regions for the purpose of statistics.  Can be nested.
+// Interfaces to regions via region_listener
+class region_group : public region_listener {
+    static region_group_reclaimer no_reclaimer;
+
+    using region_heap = dirty_memory_manager_logalloc::region_heap;
+
+    region_group* _parent = nullptr;
+    size_t _total_memory = 0;
+    region_group_reclaimer& _reclaimer;
+
+    region_group* _subgroup = nullptr;
+    region_heap _regions;
+
+    using allocating_function = allocation_queue::allocating_function;
+
+    template <typename Func>
+    using concrete_allocating_function = allocation_queue::concrete_allocating_function<Func>;
+
+    using on_request_expiry = allocation_queue::on_request_expiry;
 
     // It is a more common idiom to just hold the promises in the circular buffer and make them
     // ready. However, in the time between the promise being made ready and the function execution,

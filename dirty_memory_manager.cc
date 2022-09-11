@@ -187,7 +187,7 @@ void region_group::update(ssize_t delta) {
     }
 }
 
-void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
+void allocation_queue::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
 }
 
