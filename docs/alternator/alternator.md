@@ -138,11 +138,11 @@ API and how they are, or could be, implemented in Scylla can be found in:
 
 Almost all of Alternator's source code (except some initialization code)
 can be found in the alternator/ subdirectory of Scylla's source code.
-Extensive functional tests can be found in the alternator-test/
+Extensive functional tests can be found in the test/alternator
 subdirectory. These tests are written in Python, and can be run against
 both Alternator and Amazon's DynamoDB; This allows verifying that
 Alternator's behavior matches the one observed on DynamoDB.
-See alternator-test/README.md for more information about the tests and
+See test/alternator/README.md for more information about the tests and
 how to run them.
 
 With Alternator enabled on port 8000 (for example), every Scylla node
