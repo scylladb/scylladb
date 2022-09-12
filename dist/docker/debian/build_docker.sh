@@ -76,7 +76,7 @@ run apt-get -y update
 run apt-get -y install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2.7 python3 python3-yaml curl rsyslog locales sudo
+run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog locales sudo
 run locale-gen en_US.UTF-8
 run update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 run bash -ec "dpkg -i packages/*.deb"
