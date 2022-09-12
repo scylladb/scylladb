@@ -23,32 +23,24 @@ namespace gms {
 
 static logging::logger logger("features");
 
-feature_config::feature_config() {
-}
-
-feature_service::feature_service(feature_config cfg) : _config(cfg)
-{}
-
-feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
-    feature_config fcfg;
-
-    fcfg._disabled_features = std::move(disabled);
+static std::set<sstring> disabled_features_from_db_config(db::config& cfg) {
+    std::set<sstring> result;
 
     switch (sstables::from_string(cfg.sstable_format())) {
     case sstables::sstable_version_types::ka:
     case sstables::sstable_version_types::la:
     case sstables::sstable_version_types::mc:
-        fcfg._disabled_features.insert("MD_SSTABLE_FORMAT"s);
+        result.insert("MD_SSTABLE_FORMAT"s);
         [[fallthrough]];
     case sstables::sstable_version_types::md:
-        fcfg._disabled_features.insert("ME_SSTABLE_FORMAT"s);
+        result.insert("ME_SSTABLE_FORMAT"s);
         [[fallthrough]];
     case sstables::sstable_version_types::me:
         break;
     }
 
     if (!cfg.enable_user_defined_functions()) {
-        fcfg._disabled_features.insert("UDF");
+        result.insert("UDF");
     } else {
         if (!cfg.check_experimental(db::experimental_features_t::feature::UDF)) {
             throw std::runtime_error(
@@ -58,19 +50,24 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     }
 
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
-        fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
+        result.insert("ALTERNATOR_STREAMS"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
-        fcfg._disabled_features.insert("ALTERNATOR_TTL"s);
+        result.insert("ALTERNATOR_TTL"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
-        fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
+        result.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
+        result.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
 
-    return fcfg;
+    return result;
+}
+
+feature_service::feature_service(db::config& cfg, custom_feature_config_for_tests custom_cfg)
+        : _disabled_features(disabled_features_from_db_config(cfg)) {
+    _disabled_features.merge(std::move(custom_cfg.extra_disabled_features));
 }
 
 future<> feature_service::stop() {
@@ -129,7 +126,7 @@ std::set<std::string_view> feature_service::supported_feature_set() {
         features.insert(name);
     }
 
-    for (const sstring& s : _config._disabled_features) {
+    for (const sstring& s : _disabled_features) {
         features.erase(s);
     }
     return features;

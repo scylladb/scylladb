@@ -556,9 +556,8 @@ public:
 
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
             sharded<gms::feature_service> feature_service;
-            feature_service.start(fcfg).get();
+            feature_service.start(std::ref(*cfg), gms::custom_feature_config_for_tests{cfg_in.disabled_features}).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             sharded<gms::gossiper> gossiper;

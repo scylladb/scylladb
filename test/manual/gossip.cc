@@ -62,7 +62,7 @@ int main(int ac, char ** av) {
             auto cfg = std::make_unique<db::config>();
 
             sharded<gms::feature_service> feature_service;
-            feature_service.start(gms::feature_config_from_db_config(*cfg)).get();
+            feature_service.start(std::ref(*cfg)).get();
             auto stop_feature_service = deferred_stop(feature_service);
 
             sharded<abort_source> abort_sources;

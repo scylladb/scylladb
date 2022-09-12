@@ -603,10 +603,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
-
             debug::the_feature_service = &feature_service;
-            feature_service.start(fcfg).get();
+            feature_service.start(std::ref(*cfg)).get();
             // FIXME storage_proxy holds a reference on it and is not yet stopped.
             // also the proxy leaves range_slice_read_executor-s hanging around
             // and willing to find out if the cluster_supports_digest_multipartition_reads

@@ -33,7 +33,7 @@ static const sstring some_column_family("cf");
 
 db::nop_large_data_handler nop_lp_handler;
 db::config test_db_config;
-gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
+gms::feature_service test_feature_service(test_db_config);
 
 column_family_for_tests::data::data()
     : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")

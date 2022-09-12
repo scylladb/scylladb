@@ -26,16 +26,11 @@ namespace gms {
 
 class feature_service;
 
-struct feature_config {
-private:
-    std::set<sstring> _disabled_features;
-    feature_config();
-
-    friend class feature_service;
-    friend feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled);
+// Disable some features additionally to the ones disabled by `db::config`.
+// Use for tests only!
+struct custom_feature_config_for_tests {
+    std::set<sstring> extra_disabled_features;
 };
-
-feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled = {});
 
 using namespace std::literals;
 
@@ -56,11 +51,11 @@ private:
     friend class feature;
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
 
-    feature_config _config;
+    std::set<sstring> _disabled_features;
 
     std::list<features_changed_callback_t> _supported_features_change_callbacks;
 public:
-    explicit feature_service(feature_config cfg);
+    explicit feature_service(db::config& cfg, custom_feature_config_for_tests custom_cfg = {});
     ~feature_service() = default;
     future<> stop();
     // Has to run inside seastar::async context
