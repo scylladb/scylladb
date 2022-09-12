@@ -28,8 +28,13 @@ Table of contents                                             mc-1-big-TOC.txt  
 
 This document focuses on the data file format but also refers to other components in parts where information stored in them affects the way we read/write the data file.
 
-Note that the file on-disk format applies both to the "mc" and "md" SSTable format versions.
-The "md" format only fixed the semantics of the (min|max)_clustering_key fields in the SSTable Statistics file, which are now valid for describing the accurate range of clustering prefixes present in the SSTable.
+Note that the file on-disk format applies to all "m*" SSTable format versions ("mc", "md", and "me").
+
+* The "md" format only fixed the semantics of the ``(min|max)_clustering_key`` fields in the SSTable Statistics file, 
+  which are now valid for describing the accurate range of clustering prefixes present in the SSTable.
+* The "me" format added the ``host_id`` of the host writing the SStable to the SSTable Statistics file. 
+  It is used to qualify the commit log replay position that is also stored in the SSTable Statistics file.
+
 See :doc:`SSTables 3.0 Statistics File Format </architecture/sstable/sstable3/sstables-3-statistics>` for more details.
 
 Overview
