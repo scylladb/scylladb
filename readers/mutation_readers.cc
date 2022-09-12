@@ -1409,6 +1409,7 @@ private:
         if (_last_uncompacted_kind != mutation_fragment_v2::kind::partition_end) {
             _ignore_partition_end = true;
             _compactor.consume_end_of_partition(*this, _gc_consumer);
+            _last_uncompacted_kind = mutation_fragment_v2::kind::partition_end;
             _ignore_partition_end = false;
         }
     }
