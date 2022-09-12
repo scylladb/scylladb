@@ -336,6 +336,7 @@ public:
     named_value<uint32_t> max_clustering_key_restrictions_per_query;
     named_value<uint64_t> max_memory_for_unlimited_query_soft_limit;
     named_value<uint64_t> max_memory_for_unlimited_query_hard_limit;
+    named_value<uint32_t> twcs_max_window_count;
     named_value<unsigned> initial_sstable_loading_concurrency;
     named_value<bool> enable_3_1_0_compatibility_mode;
     named_value<bool> enable_user_defined_functions;
@@ -377,6 +378,7 @@ public:
     // enjoy:
     named_value<tri_mode_restriction> restrict_replication_simplestrategy;
     named_value<tri_mode_restriction> restrict_dtcs;
+    named_value<tri_mode_restriction> restrict_twcs_without_default_ttl;
 
     named_value<bool> ignore_truncation_record;
     named_value<bool> force_schema_commit_log;

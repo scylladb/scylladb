@@ -130,6 +130,7 @@ public:
 
 std::optional<sstring> check_restricted_table_properties(
     query_processor& qp,
+    std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops);
 

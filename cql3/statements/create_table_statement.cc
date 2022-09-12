@@ -30,6 +30,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
+#include "compaction/time_window_compaction_strategy.hh"
 
 namespace cql3 {
 
@@ -426,6 +427,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 // in the table's options are done elsewhere.
 std::optional<sstring> check_restricted_table_properties(
     query_processor& qp,
+    std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops)
 {
@@ -434,6 +436,19 @@ std::optional<sstring> check_restricted_table_properties(
     // function before cfprops.validate() (there, validate() is only called
     // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
+    sstables::compaction_strategy_type current_strategy = sstables::compaction_strategy_type::null;
+    gc_clock::duration current_ttl = gc_clock::duration::zero();
+    // cfprops doesn't return any of the table attributes unless the attribute
+    // has been specified in the CQL statement. If a schema is defined, then
+    // this was an ALTER TABLE statement.
+    if (schema) {
+        current_strategy = (*schema)->compaction_strategy();
+        current_ttl = (*schema)->default_time_to_live();
+    }
+
+    // Evaluate whether the strategy to evaluate was explicitly passed
+    auto cs = (strategy) ? strategy : current_strategy;
+
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
         switch(qp.db().get_config().restrict_dtcs()) {
         case db::tri_mode_restriction_t::mode::TRUE:
@@ -452,12 +467,52 @@ std::optional<sstring> check_restricted_table_properties(
             break;
         }
     }
+    if (cs == sstables::compaction_strategy_type::time_window) {
+        std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
+        sstables::time_window_compaction_strategy_options twcs_options(options);
+        long ttl = (cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE)) ? cfprops.get_default_time_to_live() : current_ttl.count();
+        auto max_windows = qp.db().get_config().twcs_max_window_count();
+
+        // It may happen that an user tries to update an unrelated table property. Allow the request through.
+        if (!cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE) && !strategy) {
+            return std::nullopt;
+        }
+
+        if (ttl > 0) {
+            // Ideally we should not need the window_size check below. However, given #2336 it may happen that some incorrectly
+            // table created with a window_size=0 may exist, which would cause a division by zero (eg: in an ALTER statement).
+            // Given that, an invalid window size is treated as 1 minute, which is the smaller "supported" window size for TWCS.
+            auto window_size = twcs_options.get_sstable_window_size() > std::chrono::seconds::zero() ? twcs_options.get_sstable_window_size() : std::chrono::seconds(60);
+            auto window_count = std::chrono::seconds(ttl) / window_size;
+            if (max_windows > 0 && window_count > max_windows) {
+                throw exceptions::configuration_exception(fmt::format("The setting of default_time_to_live={} and compaction window={}(s) "
+                                                   "can lead to {} windows, which is larger than the allowed number of windows specified "
+                                                   "by the twcs_max_window_count ({}) parameter. Note that default_time_to_live=0 is also "
+                                                   "highly discouraged.", ttl, twcs_options.get_sstable_window_size().count(), window_count, max_windows));
+            }
+        } else {
+              switch (qp.db().get_config().restrict_twcs_without_default_ttl()) {
+              case db::tri_mode_restriction_t::mode::TRUE:
+                  throw exceptions::configuration_exception(
+                      "TimeWindowCompactionStrategy tables without a strict default_time_to_live setting "
+                      "are forbidden. You may override this restriction by setting restrict_twcs_without_default_ttl "
+                      "configuration option to false.");
+              case db::tri_mode_restriction_t::mode::WARN:
+                  return format("TimeWindowCompactionStrategy tables without a default_time_to_live "
+                      "may potentially introduce too many windows. Ensure that insert statements specify a "
+                      "TTL (via USING TTL), when inserting data to this table. The restrict_twcs_without_default_ttl "
+                      "configuration option can be changed to silence this warning or make it into an error");
+              case db::tri_mode_restriction_t::mode::FALSE:
+                  break;
+              }
+        }
+   }
     return std::nullopt;
 }
 
 future<::shared_ptr<messages::result_message>>
 create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp, keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp, std::nullopt, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

@@ -840,6 +840,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , max_memory_for_unlimited_query_hard_limit(this, "max_memory_for_unlimited_query_hard_limit", "max_memory_for_unlimited_query", liveness::LiveUpdate, value_status::Used, (uint64_t(100) << 20),
             "Maximum amount of memory a query, whose memory consumption is not naturally limited, is allowed to consume, e.g. non-paged and reverse queries. "
             "This is the hard limit, queries violating this limit will be aborted.")
+    , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,
+            "The maximum number of compaction windows allowed when making use of TimeWindowCompactionStrategy. A setting of 0 effectively disables the restriction.")
     , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
             "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this")
     , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
@@ -897,6 +899,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
     , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
     , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
         "Ignore truncation record stored in system tables as if tables were never truncated.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,

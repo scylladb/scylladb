@@ -43,6 +43,10 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
         }
     }
 
+    if (window_size <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} must be greater than 1 for compaction_window_size", window_size));
+    }
+
     sstable_window_size = window_size * window_unit;
 
     it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
