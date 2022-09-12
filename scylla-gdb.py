@@ -4056,7 +4056,8 @@ class scylla_memtables(gdb.Command):
         region_ptr_type = gdb.lookup_type('logalloc::region').pointer()
         for table in all_tables(db):
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
-            memtable_list = seastar_lw_shared_ptr(table['_memtables']).get()
+            compaction_group = std_unique_ptr(table["_compaction_group"]).get()
+            memtable_list = seastar_lw_shared_ptr(compaction_group['_memtables']).get()
             for mt_ptr in std_vector(memtable_list['_memtables']):
                 mt = seastar_lw_shared_ptr(mt_ptr).get()
                 reg = lsa_region(mt.cast(region_ptr_type))

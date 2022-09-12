@@ -318,6 +318,7 @@ struct table_stats;
 using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
+class compaction_group;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
@@ -402,19 +403,17 @@ private:
     uint64_t _failed_counter_applies_to_memtable = 0;
 
     template<typename... Args>
-    void do_apply(db::rp_handle&&, Args&&... args);
-
-    lw_shared_ptr<memtable_list> _memtables;
+    void do_apply(compaction_group& cg, db::rp_handle&&, Args&&... args);
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
-    lw_shared_ptr<memtable_list> make_memtable_list();
+    lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
+    compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    // SSTable set which contains all non-maintenance sstables
-    lw_shared_ptr<sstables::sstable_set> _main_sstables;
-    // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
-    lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
-    // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
+    // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
+    //  will be able to hold more than one group.
+    std::unique_ptr<compaction_group> _compaction_group;
+    // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
     // have not been deleted yet, so must not GC any tombstones in other sstables
@@ -438,7 +437,6 @@ private:
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     bool _durable_writes;
-    compaction_manager& _compaction_manager;
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
@@ -491,9 +489,6 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
-
-    class table_state;
-    std::unique_ptr<table_state> _table_state;
 public:
     data_dictionary::table as_data_dictionary() const;
 
@@ -536,6 +531,15 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    // Return compaction group if table owns a single one. Otherwise, null is returned.
+    compaction_group* single_compaction_group_if_available() const noexcept;
+    // Select a compaction group from a given token.
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept;
+    // Select a compaction group from a given key.
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
+    // Select a compaction group from a given sstable based on its token range.
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
@@ -550,16 +554,17 @@ private:
     lw_shared_ptr<sstables::sstable_set>
     do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker);
-    void add_sstable(sstables::shared_sstable sstable);
-    void add_maintenance_sstable(sstables::shared_sstable sst);
+    // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
+    void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
+    void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
-    future<> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
+    future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
-    future<> update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
+    future<> update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -582,14 +587,6 @@ private:
     static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
         return sstables::generation_value(sstable_generation) % smp::count;
     }
-    // This will update sstable lists on behalf of off-strategy compaction, where
-    // input files will be removed from the maintenance set and output files will
-    // be inserted into the main set.
-    future<>
-    update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
-
-    // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
-    future<> update_main_sstable_list_on_compaction_completion(sstables::compaction_completion_desc desc);
 private:
     void rebuild_statistics();
 
@@ -729,7 +726,9 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    memtable& active_memtable() { return _memtables->active_memtable(); }
+    // FIXME: for supporting multiple compaction groups, this interface will need to return
+    // as many active sstables as there are groups.
+    memtable& active_memtable();
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;
@@ -777,10 +776,10 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m, m_schema);
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m);
+        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }
 
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
@@ -892,7 +891,6 @@ public:
     future<std::unordered_set<sstring>> get_sstables_by_partition_key(const sstring& key) const;
 
     const sstables::sstable_set& get_sstable_set() const;
-    const sstables::sstable_set& maintenance_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
@@ -1083,7 +1081,7 @@ private:
     //
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
-    future<> seal_active_memtable(flush_permit&&) noexcept;
+    future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 public:
@@ -1106,6 +1104,8 @@ public:
     void enable_off_strategy_trigger();
 
     compaction::table_state& as_table_state() const noexcept;
+
+    friend class compaction_group;
 };
 
 using user_types_metadata = data_dictionary::user_types_metadata;
