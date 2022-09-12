@@ -498,7 +498,7 @@ public:
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
-    bool remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
+    void remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
     void do_start_listen();
 
     bool is_same_dc(inet_address ep) const;
