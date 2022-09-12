@@ -1044,6 +1044,7 @@ scylla_core = (['message/messaging_service.cc',
                 'direct_failure_detector/failure_detector.cc',
                 'service/raft/raft_group0_client.cc',
                 'service/broadcast_tables/experimental/lang.cc',
+                'tasks/task_manager.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1080,6 +1081,10 @@ api = ['api/api.cc',
        'api/stream_manager.cc',
        Json2Code('api/api-doc/system.json'),
        'api/system.cc',
+       Json2Code('api/api-doc/task_manager.json'),
+       'api/task_manager.cc',
+       Json2Code('api/api-doc/task_manager_test.json'),
+       'api/task_manager_test.cc',
        'api/config.cc',
        Json2Code('api/api-doc/config.json'),
        'api/error_injection.cc',

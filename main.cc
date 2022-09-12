@@ -9,6 +9,7 @@
 #include <functional>
 
 #include <seastar/util/closeable.hh>
+#include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
 #include "replica/database.hh"
@@ -502,7 +503,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     auto& proxy = service::get_storage_proxy();
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
-    api::http_context ctx(db, proxy, load_meter, token_metadata);
+    sharded<tasks::task_manager> task_manager;
+    api::http_context ctx(db, proxy, load_meter, token_metadata, task_manager);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
@@ -547,7 +549,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -959,6 +961,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }
 
+            auto get_tm_cfg = sharded_parameter([&] {
+                return tasks::task_manager::config {
+                    .task_ttl = cfg->task_ttl_seconds,
+                };
+            });
+            task_manager.start(std::move(get_tm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_task_manager = defer_verbose_shutdown("task_manager", [&task_manager] {
+                task_manager.stop().get();
+            });
+
             supervisor::notify("starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
@@ -1338,6 +1350,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_repair(ctx).get();
             });
 
+            api::set_server_task_manager(ctx).get();
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+            api::set_server_task_manager_test(ctx, cfg).get();
+#endif
             supervisor::notify("starting sstables loader");
             sst_loader.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging)).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {

@@ -189,6 +189,8 @@ set(swagger_files
     api/api-doc/storage_service.json
     api/api-doc/stream_manager.json
     api/api-doc/system.json
+    api/api-doc/task_manager.json
+    api/api-doc/task_manager_test.json
     api/api-doc/utils.json)
 
 set(swagger_gen_files)
@@ -301,6 +303,8 @@ set(scylla_sources
     api/storage_service.cc
     api/stream_manager.cc
     api/system.cc
+    api/task_manager.cc
+    api/task_manager_test.cc
     atomic_cell.cc
     auth/allow_all_authenticator.cc
     auth/allow_all_authorizer.cc
@@ -615,6 +619,7 @@ set(scylla_sources
     streaming/stream_task.cc
     streaming/stream_transfer_task.cc
     table_helper.cc
+    tasks/task_manager.cc
     thrift/controller.cc
     thrift/handler.cc
     thrift/server.cc
