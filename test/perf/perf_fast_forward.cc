@@ -1165,7 +1165,13 @@ static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
 
 static
 table_config read_config(cql_test_env& env, const sstring& name) {
-    auto msg = env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
+    auto msg = std::invoke([&] {
+        try {
+            return env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
+        } catch (const exceptions::invalid_request_exception& e) {
+            throw std::runtime_error(fmt::format("Could not read config (exception: `{}`). Did you run --populate ?", e.what()));
+        }
+    });
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     const auto& rs = rows->rs().result_set();
     if (rs.size() < 1) {
