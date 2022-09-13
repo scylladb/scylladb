@@ -50,6 +50,7 @@ class ManagerClient():
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
+            self.driver_close()
             servers = await self.servers()
             logger.debug("driver connecting to %s", servers)
             self.ccluster = self.con_gen(servers, self.port, self.ssl)
