@@ -2031,7 +2031,7 @@ future<> db::commitlog::segment_manager::shutdown() {
         }
     }
     co_await _shutdown_promise->get_shared_future();
-    clogger.info("Commitlog shutdown complete");
+    clogger.debug("Commitlog shutdown complete");
 }
 
 void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_mode mode) {
