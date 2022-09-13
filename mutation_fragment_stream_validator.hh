@@ -108,6 +108,7 @@ public:
     /// normally invalid and hence wouldn't advance the internal state. This
     /// can be used by users that can correct such invalid streams and wish to
     /// continue validating it.
+    void reset(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     void reset(const mutation_fragment&);
     void reset(const mutation_fragment_v2&);
 
@@ -177,6 +178,8 @@ public:
     /// Equivalent to `operator()(mf.kind(), mf.position())`
     bool operator()(const mutation_fragment_v2& mv);
     bool operator()(const mutation_fragment& mv);
+    void reset(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
+    void reset(const mutation_fragment_v2& mf);
     /// Equivalent to `operator()(partition_end{})`
     bool on_end_of_partition();
     void on_end_of_stream();
