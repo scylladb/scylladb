@@ -2283,10 +2283,14 @@ future<> database::stop() {
 
     // try to ensure that CL has done disk flushing
     if (_commitlog) {
+        dblog.info("Shutting down commitlog");
         co_await _commitlog->shutdown();
+        dblog.info("Shutting down commitlog complete");
     }
     if (_schema_commitlog) {
+        dblog.info("Shutting down schema commitlog");
         co_await _schema_commitlog->shutdown();
+        dblog.info("Shutting down schema commitlog complete");
     }
     co_await _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
     if (_commitlog) {
