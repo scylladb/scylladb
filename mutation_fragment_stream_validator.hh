@@ -41,9 +41,11 @@ public:
     /// `operator()(const mutation_fragment&)` is not desired.
     /// Using both overloads for the same stream is not supported.
     /// Advances the previous fragment kind, but only if the validation passes.
+    /// `new_current_tombstone` should be engaged only when the fragment changes
+    /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind);
+    bool operator()(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind);
 
     /// Validates the monotonicity of the mutation fragment kind and position.
@@ -54,9 +56,11 @@ public:
     /// Using both overloads for the same stream is not supported.
     /// Advances the previous fragment kind and position-in-partition, but only
     /// if the validation passes.
+    /// `new_current_tombstone` should be engaged only when the fragment changes
+    /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the mutation fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
 
     /// Validates the monotonicity of the mutation fragment.
@@ -158,7 +162,6 @@ class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validator _validator;
     sstring _name;
     mutation_fragment_stream_validation_level _validation_level;
-    tombstone _current_tombstone;
 
 public:
     /// Constructor.
@@ -169,7 +172,7 @@ public:
     mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, mutation_fragment_stream_validation_level level);
 
     bool operator()(const dht::decorated_key& dk);
-    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
     /// Equivalent to `operator()(mf.kind(), mf.position())`
     bool operator()(const mutation_fragment_v2& mv);

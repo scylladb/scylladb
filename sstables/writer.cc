@@ -30,7 +30,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
     _impl->_validator(dk);
-    _impl->_validator(mutation_fragment::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{}));
+    _impl->_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{}), {});
     _impl->_sst.get_stats().on_partition_write();
     return _impl->consume_new_partition(dk);
 }
@@ -41,7 +41,7 @@ void sstable_writer::consume(tombstone t) {
 }
 
 stop_iteration sstable_writer::consume(static_row&& sr) {
-    _impl->_validator(mutation_fragment::kind::static_row, sr.position());
+    _impl->_validator(mutation_fragment_v2::kind::static_row, sr.position(), {});
     if (!sr.empty()) {
         _impl->_sst.get_stats().on_static_row_write();
     }
@@ -49,13 +49,13 @@ stop_iteration sstable_writer::consume(static_row&& sr) {
 }
 
 stop_iteration sstable_writer::consume(clustering_row&& cr) {
-    _impl->_validator(mutation_fragment::kind::clustering_row, cr.position());
+    _impl->_validator(mutation_fragment_v2::kind::clustering_row, cr.position(), {});
     _impl->_sst.get_stats().on_row_write();
     return _impl->consume(std::move(cr));
 }
 
 stop_iteration sstable_writer::consume(range_tombstone_change&& rtc) {
-    _impl->_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position());
+    _impl->_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
     _impl->_sst.get_stats().on_range_tombstone_write();
     return _impl->consume(std::move(rtc));
 }
