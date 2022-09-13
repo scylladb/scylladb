@@ -638,8 +638,10 @@ class ScyllaCluster:
 
     async def server_restart(self, server_id: str) -> ActionReturn:
         """Restart a running server"""
+        logging.info("Cluster %s restarting server %s", self, server_id)
         ret = await self.server_stop(server_id, gracefully=True)
         if not ret.success:
+            logging.error("Cluster %s failed to stop server %s", self, server_id)
             return ret
         return await self.server_start(server_id)
 
