@@ -55,7 +55,8 @@ public:
 
 
 // A T that can be updated at runtime; uses updateable_value_base to track
-// the source as the object is moved or copied. Copying across shards is supported.
+// the source as the object is moved or copied. Copying across shards is supported
+// unless #7316 is still open
 template <typename T>
 class updateable_value : public updateable_value_base {
     T _value = {};
