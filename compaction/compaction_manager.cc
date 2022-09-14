@@ -1056,7 +1056,7 @@ public:
     bool performed() const noexcept {
         return _performed;
     }
-
+private:
     future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
         // This procedure will reshape sstables in maintenance set until it's ready for
         // integration into main set.
@@ -1089,6 +1089,7 @@ public:
             return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
         };
 
+        std::exception_ptr err;
         while (auto desc = get_next_job()) {
             desc->creator = [this, &new_unused_sstables, &t] (shard_id dummy) {
                 auto sst = t.make_sstable();
@@ -1097,7 +1098,16 @@ public:
             };
             auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc->sstables);
 
-            auto ret = co_await sstables::compact_sstables(std::move(*desc), cdata, t);
+            sstables::compaction_result ret;
+            try {
+                ret = co_await sstables::compact_sstables(std::move(*desc), cdata, t);
+            } catch (sstables::compaction_stopped_exception&) {
+                // If off-strategy compaction stopped on user request, let's not discard the partial work.
+                // Therefore, both un-reshaped and reshaped data will be integrated into main set, allowing
+                // regular compaction to continue from where off-strategy left off.
+                err = std::current_exception();
+                break;
+            }
             _performed = true;
 
             // update list of reshape candidates without input but with output added to it
@@ -1133,6 +1143,9 @@ public:
         // on restart if there's a crash midway.
         for (auto& sst : sstables_to_remove) {
             sst->mark_for_deletion();
+        }
+        if (err) {
+            co_await coroutine::return_exception_ptr(std::move(err));
         }
     }
 protected:
