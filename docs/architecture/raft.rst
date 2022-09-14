@@ -121,7 +121,7 @@ In summary, Raft makes schema changes safe, but it requires that a quorum of nod
 Handling Failures
 ------------------
 Raft requires a quorum of nodes in a cluster to be available. If one or more nodes are down, but the quorum is live, reads, writes,
-and schema udpates proceed unaffected.
+and schema updates proceed unaffected.
 When the node that was down is up again, it first contacts the cluster to fetch the latest schema and then starts serving queries.
 
 The following examples show the recovery actions depending on the number of nodes and DCs in your cluster.
@@ -140,10 +140,10 @@ Examples
      - Schema updates are possible and safe.
      - Try restarting the node. If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 2 nodes
-     - Cluster is not fully opetarional. The data is available for reads and writes, but schema changes are impossible.
+     - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
      - Restart at least 1 of the 2 nodes that are down to regain quorum. If you can’t recover at least 1 of the 2 nodes, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
    * - 1 datacenter
-     - Cluster is not fully opetarional. The data is available for reads and writes, but schema changes are impossible.
+     - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
      - When the DC comes back online, restart the nodes. If the DC does not come back online and nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
 
 
@@ -158,10 +158,10 @@ Examples
      - Schema updates are possible and safe.
      - Try restarting the node(s). If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 3 nodes
-     - Cluster is not fully opetarional. The data is available for reads and writes, but schema changes are impossible.
+     - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
      - Restart 1 of the 3 nodes that are down to regain quorum. If you can’t recover at least 1 of the 3 failed nodes, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
    * - 1DC
-     - Cluster is not fully opetarional. The data is available for reads and writes, but schema changes are impossible.
+     - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
      - When the DCs come back online, restart the nodes. If the DC fails to come back online and the nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
 
 
@@ -179,7 +179,7 @@ Examples
      - Schema updates are possible and safe.
      - When the DC comes back online, try restarting the nodes in the cluster. If the nodes are dead, :doc:`add 3 new nodes in a new region </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`.
    * - 2 DCs
-     - Cluster is not fully opetarional. The data is available for reads and writes, but schema changes are impossible.
+     - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
      - When the DCs come back online, restart the nodes. If at least one DC fails to come back online and the nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
      
 
