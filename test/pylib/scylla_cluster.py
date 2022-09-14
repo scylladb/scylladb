@@ -728,6 +728,7 @@ class ScyllaClusterManager:
     async def _before_test(self, test_name: str) -> None:
         if self.cluster.is_dirty:
             await self.cluster.stop()
+            await self.clusters.add_one(took_one=True)   # Replace with fresh one
             await self._get_cluster()
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
         self.cluster.before_test(self.test_name)
@@ -736,12 +737,18 @@ class ScyllaClusterManager:
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
+        logging.info("ScyllaManager stopping for test %s", self.test_name)
         await self.site.stop()
         if not self.cluster.is_dirty:
-            logging.info("Returning Scylla cluster %s", self.cluster)
+            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_name)
             await self.clusters.put(self.cluster)
         else:
+            logging.info("ScyllaManager stopping Scylla cluster %s for test %s", self.cluster,
+                         self.test_name)
             await self.cluster.stop()
+            logging.info("ScyllaManager adding fresh ScylaCluster to the pool for test %s",
+                         self.test_name)
+            await self.clusters.add_one(took_one=True)   # Replace with fresh one
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
