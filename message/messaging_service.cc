@@ -696,7 +696,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         // The 'dead_only' it should be true, because we're interested in
         // dropping the errored socket, but since it's errored anyway (the
         // above if) it's false to save unneeded second c->error() call
-        remove_rpc_client_one(_clients[idx], id, false);
+        find_and_remove_client(_clients[idx], id, [] (const auto&) { return true; });
     }
 
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
@@ -796,7 +796,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
-void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
+template <typename Fn>
+requires std::is_invocable_r_v<bool, Fn, const messaging_service::shard_info&>
+void messaging_service::find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter) {
     if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
@@ -805,7 +807,7 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
     }
 
     auto it = clients.find(id);
-    if (it != clients.end() && (!dead_only || it->second.rpc_client->error())) {
+    if (it != clients.end() && filter(it->second)) {
         auto client = std::move(it->second.rpc_client);
         clients.erase(it);
         //
@@ -822,12 +824,12 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
 }
 
 void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id) {
-    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true);
+    find_and_remove_client(_clients[get_rpc_client_idx(verb)], id, [] (const auto& s) { return s.rpc_client->error(); });
 }
 
 void messaging_service::remove_rpc_client(msg_addr id) {
     for (auto& c : _clients) {
-        remove_rpc_client_one(c, id, false);
+        find_and_remove_client(c, id, [] (const auto&) { return true; });
     }
 }
 

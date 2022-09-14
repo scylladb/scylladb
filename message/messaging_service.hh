@@ -498,7 +498,9 @@ public:
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
-    void remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
+    template <typename Fn>
+    requires std::is_invocable_r_v<bool, Fn, const shard_info&>
+    void find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter);
     void do_start_listen();
 
     bool is_same_dc(inet_address ep) const;
