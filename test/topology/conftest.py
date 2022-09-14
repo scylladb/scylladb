@@ -126,7 +126,9 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
                    # See issue #11289.
                    connect_timeout = 200,
                    control_connection_timeout = 200,
-                   max_schema_agreement_wait=200,
+                   # NOTE: max_schema_agreement_wait must be 2x or 3x smaller than request_timeout
+                   # else the driver can't handle a server being down
+                   max_schema_agreement_wait=20,
                    idle_heartbeat_timeout=200,
                    )
 
