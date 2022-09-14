@@ -136,7 +136,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLeave request.
+// Alternator tables with TTL configured via a UpdateTimeToLive request.
 //
 // Here is a brief overview of how the expiration service works:
 //
@@ -150,22 +150,21 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // To avoid scanning the same items RF times in RF replicas, only one node is
 // responsible for scanning a token range at a time. Normally, this is the
 // node owning this range as a "primary range" (the first node in the ring
-// with this range), but when this node is down, other nodes may take over
-// (FIXME: this is not implemented yet).
+// with this range), but when this node is down, the secondary owner (the
+// second in the ring) may take over.
 // An expiration thread is reponsible for all tables which need expiration
-// scans. FIXME: explain how this is done with multiple tables - parallel,
-// staggered, or what?
+// scans. Currently, the different tables are scanned sequentially (not in
+// parallel).
 // The expiration thread scans item using CL=QUORUM to ensures that it reads
 // a consistent expiration-time attribute. This means that the items are read
 // locally and in addition QUORUM-1 additional nodes (one additional node
 // when RF=3) need to read the data and send digests.
-// FIXME: explain if we can read the exact attribute or the entire map.
 // When the expiration thread decides that an item has expired and wants
 // to delete it, it does it using a CL=QUORUM write. This allows this
 // deletion to be visible for consistent (quorum) reads. The deletion,
 // like user deletions, will also appear on the CDC log and therefore
-// Alternator Streams if enabled (FIXME: explain how we mark the
-// deletion different from user deletes. We don't do it yet.).
+// Alternator Streams if enabled - currently as ordinary deletes (the
+// userIdentity flag is currently missing this is issue #11523).
 expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy, gms::gossiper& g)
         : _db(db)
         , _proxy(proxy)
@@ -366,7 +365,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 // 2. The primary replica for this token is currently marked down.
 // 3. In this node, this shard is responsible for this token.
 // We use the <secondary> case to handle the possibility that some of the
-// nodes in the system are down. A dead node will not be expiring expiring
+// nodes in the system are down. A dead node will not be expiring
 // the tokens owned by it, so we want the secondary owner to take over its
 // primary ranges.
 //
