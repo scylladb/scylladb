@@ -22,6 +22,8 @@ from io import BufferedWriter
 from test.pylib.pool import Pool
 import aiohttp
 import aiohttp.web
+import yaml
+
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
 from cassandra.auth import PlainTextAuthProvider        # type: ignore
@@ -32,70 +34,56 @@ from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-mod
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
-#
-# Put all Scylla options in a template file. Sic: if you make a typo in the
-# configuration file, Scylla will boot fine and ignore the setting.
-# Always check the error log after modifying the template.
-#
-SCYLLA_CONF_TEMPLATE = """cluster_name: {cluster_name}
-developer_mode: true
 
-# Allow testing experimental features. Following issue #9467, we need
-# to add here specific experimental features as they are introduced.
+def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
+    return {
+        'cluster_name': cluster_name,
+        'workdir': str(workdir.resolve()),
+        'listen_address': host_addr,
+        'rpc_address': host_addr,
+        'api_address': host_addr,
+        'prometheus_address': host_addr,
+        'alternator_address': host_addr,
+        'seed_provider': [{
+            'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
+            'parameters': [{
+                'seeds': '{}'.format(','.join(seed_addrs))
+                }]
+            }],
 
-enable_user_defined_functions: true
-experimental: true
-experimental_features:
-    - raft
-    - udf
+        'developer_mode': True,
 
-data_file_directories:
-    - {workdir}/data
-commitlog_directory: {workdir}/commitlog
-hints_directory: {workdir}/hints
-view_hints_directory: {workdir}/view_hints
+        # Allow testing experimental features. Following issue #9467, we need
+        # to add here specific experimental features as they are introduced.
+        'enable_user_defined_functions': True,
+        'experimental': True,
+        'experimental_features': ['raft', 'udf'],
 
-listen_address: {host}
-rpc_address: {host}
-api_address: {host}
-prometheus_address: {host}
-alternator_address: {host}
+        'skip_wait_for_gossip_to_settle': 0,
+        'ring_delay_ms': 0,
+        'num_tokens': 16,
+        'flush_schema_tables_after_modification': False,
+        'auto_snapshot': False,
 
-seed_provider:
-    - class_name: org.apache.cassandra.locator.simple_seed_provider
-      parameters:
-          - seeds: {seeds}
+        # Significantly increase default timeouts to allow running tests
+        # on a very slow setup (but without network losses). Note that these
+        # are server-side timeouts: The client should also avoid timing out
+        # its own requests - for this reason we increase the CQL driver's
+        # client-side timeout in conftest.py.
 
-skip_wait_for_gossip_to_settle: 0
-ring_delay_ms: 0
-num_tokens: 16
-flush_schema_tables_after_modification: false
-auto_snapshot: false
+        'range_request_timeout_in_ms': 300000,
+        'read_request_timeout_in_ms': 300000,
+        'counter_write_request_timeout_in_ms': 300000,
+        'cas_contention_timeout_in_ms': 300000,
+        'truncate_request_timeout_in_ms': 300000,
+        'write_request_timeout_in_ms': 300000,
+        'request_timeout_in_ms': 300000,
 
-# Significantly increase default timeouts to allow running tests
-# on a very slow setup (but without network losses). Note that these
-# are server-side timeouts: The client should also avoid timing out
-# its own requests - for this reason we increase the CQL driver's
-# client-side timeout in conftest.py.
+        'strict_allow_filtering': True,
 
-range_request_timeout_in_ms: 300000
-read_request_timeout_in_ms: 300000
-counter_write_request_timeout_in_ms: 300000
-cas_contention_timeout_in_ms: 300000
-truncate_request_timeout_in_ms: 300000
-write_request_timeout_in_ms: 300000
-request_timeout_in_ms: 300000
-
-# Set up authentication in order to allow testing this module
-# and other modules dependent on it: e.g. service levels
-
-authenticator: {authenticator}
-authorizer: {authorizer}
-strict_allow_filtering: true
-
-permissions_update_interval_in_ms: 100
-permissions_validity_in_ms: 100
-"""
+        'permissions_update_interval_in_ms': 100,
+        'permissions_validity_in_ms': 100,
+    }
 
 # Seastar options can not be passed through scylla.yaml, use command line
 # for them. Keep everything else in the configuration file to make
@@ -141,8 +129,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
-        self.authenticator: str = config_options["authenticator"]
-        self.authorizer: str = config_options["authorizer"]
+        self.config_options = config_options
 
         async def stop_server() -> None:
             if self.is_running:
@@ -214,16 +201,14 @@ class ScyllaServer:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.config_filename.parent.mkdir(parents=True, exist_ok=True)
         # Create a configuration file.
-        fmt = {
-              "cluster_name": self.cluster_name,
-              "host": self.hostname,
-              "seeds": ",".join(self.seeds),
-              "workdir": self.workdir,
-              "authenticator": self.authenticator,
-              "authorizer": self.authorizer
-        }
+        config = make_scylla_conf(
+                workdir = self.workdir,
+                host_addr = self.hostname,
+                seed_addrs = self.seeds,
+                cluster_name = self.cluster_name) \
+            | self.config_options
         with self.config_filename.open('w') as config_file:
-            config_file.write(SCYLLA_CONF_TEMPLATE.format(**fmt))
+            yaml.dump(config, config_file)
 
         self.log_file = self.log_filename.open("wb")
 
