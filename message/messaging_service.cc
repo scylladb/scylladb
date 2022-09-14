@@ -492,6 +492,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
     case messaging_verb::GET_GROUP0_UPGRADE_STATE:
+        // ATTN -- if moving GOSSIP_ verbs elsewhere, mind updating the tcp_nodelay
+        // setting in get_rpc_client(), which assumes gossiper verbs live in idx 0
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -759,7 +761,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }();
 
     auto must_tcp_nodelay = [&] {
-        if (idx == 1) {
+        if (idx == 0) {
             return true; // gossip
         }
         if (_cfg.tcp_nodelay == tcp_nodelay_what::all || !has_topology()) {
