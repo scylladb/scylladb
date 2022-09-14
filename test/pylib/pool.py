@@ -28,7 +28,19 @@ class Pool(Generic[T]):
         self.total = 0
 
     async def get(self) -> T:
+        """Get an entry from the pool.
+           If pool is empty, if total less than limit, add a new one,
+           else block until an entry is returned.
+        """
         if self.pool.empty() and self.total < self.pool.maxsize:
+            await self.add_one(took_one=False)
+        return await self.pool.get()
+
+    async def add_one(self, took_one:bool) -> None:
+        """Build and add a new entry to the pool"""
+        if took_one:
+            self.total -= 1
+        if self.total < self.pool.maxsize:
             # Increment the total first to avoid a race
             # during self.build()
             self.total += 1
@@ -38,9 +50,8 @@ class Pool(Generic[T]):
                 self.total -= 1
                 raise
 
-        return await self.pool.get()
-
     async def put(self, obj: T):
+        """Add an entry to the pool"""
         await self.pool.put(obj)
 
     def instance(self) -> AsyncContextManager[T]:
