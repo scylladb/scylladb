@@ -1064,42 +1064,6 @@ SEASTAR_TEST_CASE(check_overlapping) {
   });
 }
 
-SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
-    return test_env::do_with([] (test_env& env) {
-        simple_schema ss;
-        auto s = ss.schema();
-
-        auto key_and_token_pair = token_generation_for_current_shard(6);
-        auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
-
-        sstables::sstable_run run;
-
-        auto insert = [&] (int first_key_idx, int last_key_idx) {
-            auto sst = sstable_for_overlapping_test(env, s, next_gen(),
-                key_and_token_pair[first_key_idx].first, key_and_token_pair[last_key_idx].first);
-            return run.insert(sst);
-        };
-
-        // insert ranges [0, 0], [1, 1], [3, 4]
-        BOOST_REQUIRE(insert(0, 0) == true);
-        BOOST_REQUIRE(insert(1, 1) == true);
-        BOOST_REQUIRE(insert(3, 4) == true);
-        BOOST_REQUIRE(run.all().size() == 3);
-
-        // check overlapping candidates won't be inserted
-        BOOST_REQUIRE(insert(0, 4) == false);
-        BOOST_REQUIRE(insert(4, 5) == false);
-        BOOST_REQUIRE(run.all().size() == 3);
-
-        // check non-overlapping candidates will be inserted
-        BOOST_REQUIRE(insert(2, 2) == true);
-        BOOST_REQUIRE(insert(5, 5) == true);
-        BOOST_REQUIRE(run.all().size() == 5);
-
-        return make_ready_future<>();
-    });
-}
-
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
@@ -5106,5 +5070,142 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
         // LCS: Check that 1 jobs is returned for all non-overlapping files in level 1, as incremental compaction can be employed
         // to limit memory usage and space requirement.
         run_cleanup_strategy_test(sstables::compaction_strategy_type::leveled, 64, empty_opts, 0ms, 1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test_large_partition_splitting_on_compaction")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compressor_params(compression_parameters::no_compression());
+        builder.set_gc_grace_seconds(0); // Don't purge any tombstone
+        auto s = builder.build();
+
+        using namespace std::chrono;
+        auto next_timestamp = [] (std::chrono::seconds step = 0s) {
+            return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
+        };
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+        column_family_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
+
+        auto get_next_ckey = [&] {
+            static thread_local int32_t row_value = 1;
+            return clustering_key::from_exploded(*s, {int32_type->decompose(row_value++)});
+        };
+
+        auto make_row = [&] () {
+            mutation m(s, pkey);
+            auto c_key = get_next_ckey();
+            // Use a step to make sure that rows aren't covered by tombstone.
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(0)), next_timestamp(seconds(3600)));
+            return m;
+        };
+
+        auto make_open_ended_range_tombstone = [&] () {
+            mutation m(s, pkey);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            auto start_key = get_next_ckey();
+            auto start_bound = bound_view(start_key, bound_kind::incl_start);
+            auto end_bound = bound_view::top();
+            range_tombstone rt(start_bound,
+                    end_bound,
+                    tomb);
+            m.partition().apply_delete(*s, std::move(rt));
+            return m;
+        };
+
+        auto deletion_mut = [&] () {
+            mutation m(s, pkey);
+            tombstone tomb(next_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        }();
+
+        std::vector<mutation> mutations;
+        static constexpr size_t rows = 20;
+        mutations.reserve(1 + rows);
+        mutations.push_back(std::move(deletion_mut));
+
+        for (size_t i = 0; i < rows; i++) {
+            mutations.push_back(make_row());
+            mutations.push_back(make_open_ended_range_tombstone());
+        }
+
+        auto sst = make_sstable_containing(sst_gen, std::move(mutations));
+
+        auto desc = sstables::compaction_descriptor({ sst }, default_priority_class());
+        // With max_sstable_bytes of 1, we'll perform the splitting of the partition as soon as possible.
+        desc.max_sstable_bytes = 1;
+        desc.can_split_large_partition = true;
+        // Set block size to 1, so promoted index is generated for every row written, allowing the split to happen as soon as possible.
+        env.manager().set_promoted_index_block_size(1);
+
+        auto ret = compact_sstables(cf.get_compaction_manager(), std::move(desc), *cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get0();
+
+        testlog.info("Large partition splitting on compaction created {} sstables", ret.new_sstables.size());
+        BOOST_REQUIRE(ret.new_sstables.size() > 1);
+
+        sstable_run sst_run;
+
+        std::optional<range_tombstone_entry> last_rt;
+        std::optional<position_in_partition> last_pos;
+        position_in_partition::tri_compare pos_tri_cmp(*s);
+
+        for (auto& sst : ret.new_sstables) {
+            BOOST_REQUIRE(sst->may_have_partition_tombstones());
+
+            auto reader = sstable_reader(sst, s, env.make_reader_permit());
+
+            mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get0();
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, pkey));
+            // ASSERT that partition tobmstone is replicated to every fragment.
+            BOOST_REQUIRE(m->partition().partition_tombstone());
+            auto rows = m->partition().clustered_rows();
+            BOOST_REQUIRE(rows.calculate_size() >= 1);
+            auto& row = rows.begin()->row();
+            auto& cells = row.cells();
+            BOOST_REQUIRE_EQUAL(cells.size(), 1);
+            auto& cdef = *s->get_column_definition("value");
+            BOOST_REQUIRE(cells.cell_at(cdef.id).as_atomic_cell(cdef).is_live());
+
+            testlog.info("SSTable of generation {} has position range [{}, {}]", sst->generation(), sst->first_partition_first_position(), sst->last_partition_last_position());
+
+            // Check that if we split partition with active range tombstone, check we will issue properly
+            // the end bound in fragment A and re-emit it as start bound in fragment B.
+            // Fragment A will contain range [r1, r2]
+            // And fragment B will contain range (r2, ...]
+            // assuming the split happened when last position was r2.
+            auto& current_first_rt = *m->partition().row_tombstones().begin();
+            if (auto previous_last_rt = std::exchange(last_rt, *m->partition().row_tombstones().rbegin())) {
+                testlog.info("\tprevious last rt's end bound: {}", previous_last_rt->end_bound());
+                testlog.info("\tcurrent first rt's start bound: {}", current_first_rt.start_bound());
+                BOOST_REQUIRE(previous_last_rt->end_bound().prefix() == current_first_rt.start_bound().prefix());
+                BOOST_REQUIRE(previous_last_rt->end_bound().kind() == bound_kind::incl_end);
+                BOOST_REQUIRE(current_first_rt.start_bound().kind() == bound_kind::excl_start);
+            }
+            const auto& current_first_pos = sst->first_partition_first_position();
+            if (auto previous_last_pos = std::exchange(last_pos, sst->last_partition_last_position())) {
+                testlog.info("\tprevious last pos: {}", previous_last_pos);
+                testlog.info("\tcurrent first pos: {}", current_first_pos);
+                BOOST_REQUIRE(pos_tri_cmp(*previous_last_pos, current_first_pos) == 0);
+            }
+
+            BOOST_REQUIRE(!(reader)().get0());
+
+            reader.close().get();
+
+            // CHECK that all fragments generated by compaction are disjoint.
+            BOOST_REQUIRE(sst_run.insert(sst) == true);
+        }
+
     });
 }

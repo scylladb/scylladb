@@ -1158,7 +1158,7 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
-void sstable::set_position_range() {
+void sstable::set_min_max_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
     }
@@ -1180,7 +1180,108 @@ void sstable::set_position_range() {
         return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
     };
 
-    _position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
+    _min_max_position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
+}
+
+future<std::optional<position_in_partition>>
+sstable::find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed, const io_priority_class& pc) {
+    using position_in_partition_opt = std::optional<position_in_partition>;
+    class position_finder {
+        position_in_partition_opt& _pos;
+        bool _reversed;
+    private:
+        // If consuming in reversed mode, range_tombstone_change or clustering_row will have
+        // its bound weight reversed, so we need to revert it here so the returned position
+        // can be correctly used to mark the end bound.
+        void on_position_found(position_in_partition&& pos, bool reverse_pos = false) {
+            _pos = reverse_pos ? std::move(pos).reversed() : std::move(pos);
+        }
+    public:
+        position_finder(position_in_partition_opt& pos, bool reversed) noexcept : _pos(pos), _reversed(reversed) {}
+
+        void consume_new_partition(const dht::decorated_key& dk) {}
+
+        stop_iteration consume(tombstone t) {
+            // Handle case partition contains only a partition_tombstone, so position_in_partition
+            // for this key should be before all rows.
+            on_position_found(position_in_partition::before_all_clustered_rows());
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(range_tombstone_change&& rt) {
+            on_position_found(std::move(std::move(rt)).position(), _reversed);
+            return stop_iteration::yes;
+        }
+
+        stop_iteration consume(clustering_row&& cr) {
+            on_position_found(position_in_partition::for_key(std::move(cr.key())), _reversed);
+            return stop_iteration::yes;
+        }
+
+        stop_iteration consume(static_row&& sr) {
+            on_position_found(position_in_partition(sr.position()));
+            // If reversed == true, we shouldn't stop at static row as we want to find the last row.
+            // We don't want to ignore its position, to handle the case where partition contains only static row.
+            return stop_iteration(!_reversed);
+        }
+
+        stop_iteration consume_end_of_partition() {
+            // Handle case where partition has no rows.
+            if (!_pos) {
+                on_position_found(_reversed ? position_in_partition::after_all_clustered_rows() : position_in_partition::before_all_clustered_rows());
+            }
+            return stop_iteration::yes;
+        }
+
+        mutation_opt consume_end_of_stream() {
+            return std::nullopt;
+        }
+    };
+
+    auto pr = dht::partition_range::make_singular(key);
+    auto s = get_schema();
+    auto full_slice = s->full_slice();
+    if (reversed) {
+        s = s->make_reversed();
+        full_slice.options.set(query::partition_slice::option::reversed);
+    }
+    auto r = make_reader(s, std::move(permit), pr, full_slice, pc, {}, streamed_mutation::forwarding::no,
+                         mutation_reader::forwarding::no /* to avoid reading past the partition end */);
+
+    position_in_partition_opt ret = std::nullopt;
+    position_finder finder(ret, reversed);
+    std::exception_ptr ex;
+    try {
+        co_await r.consume(finder);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await r.close();
+    if (ex) {
+        co_await coroutine::exception(std::move(ex));
+    }
+    co_return std::move(ret);
+}
+
+future<> sstable::load_first_and_last_position_in_partition() {
+    if (!_schema->clustering_key_size()) {
+        co_return;
+    }
+
+    auto& sem = _manager.sstable_metadata_concurrency_sem();
+    reader_permit permit = co_await sem.obtain_permit(&*_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout);
+    auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
+    auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
+
+    // Allow loading to proceed even if we were unable to load this metadata as the lack of it
+    // will not affect correctness.
+    if (!first_pos_opt || !last_pos_opt) {
+        sstlog.warn("Unable to retrieve metadata for first and last keys of {}. Not a critical error.", get_filename());
+        co_return;
+    }
+
+    _first_partition_first_position = std::move(*first_pos_opt);
+    _last_partition_last_position = std::move(*last_pos_opt);
 }
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
@@ -1310,7 +1411,7 @@ future<> sstable::update_info_for_opened_data() {
         }
         return make_ready_future<>();
     }).then([this] {
-        this->set_position_range();
+        this->set_min_max_position_range();
         this->set_first_and_last_keys();
         _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
@@ -1336,6 +1437,8 @@ future<> sstable::update_info_for_opened_data() {
                 _bytes_on_disk += bytes;
             });
         });
+    }).then([this] {
+        return load_first_and_last_position_in_partition();
     });
 }
 
@@ -1635,7 +1738,7 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
     }
 
     return std::ranges::any_of(ranges, [this] (const query::clustering_range& range) {
-        return _position_range.overlaps(*_schema,
+        return _min_max_position_range.overlaps(*_schema,
             position_in_partition_view::for_range_start(range),
             position_in_partition_view::for_range_end(range));
     });

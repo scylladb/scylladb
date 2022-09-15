@@ -22,9 +22,18 @@ namespace sstables {
 
 class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
+    std::optional<size_t> _promoted_index_block_size;
 public:
     virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
-        return sstables_manager::configure_writer(std::move(origin));
+        auto ret = sstables_manager::configure_writer(std::move(origin));
+        if (_promoted_index_block_size) {
+            ret.promoted_index_block_size = *_promoted_index_block_size;
+        }
+        return ret;
+    }
+
+    void set_promoted_index_block_size(size_t promoted_index_block_size) {
+        _promoted_index_block_size = promoted_index_block_size;
     }
 };
 
@@ -35,7 +44,7 @@ class test_env {
         reader_concurrency_semaphore semaphore;
 
         impl()
-            : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker)
+            : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker, memory::stats().total_memory())
             , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
         { }
         impl(impl&&) = delete;

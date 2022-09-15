@@ -153,6 +153,8 @@ struct compaction_descriptor {
     int level;
     // Threshold size for sstable(s) to be created.
     uint64_t max_sstable_bytes;
+    // Can split large partitions at clustering boundary.
+    bool can_split_large_partition = false;
     // Run identifier of output sstables.
     sstables::run_id run_identifier;
     // The options passed down to the compaction code.
