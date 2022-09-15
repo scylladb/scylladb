@@ -126,9 +126,9 @@ private:
     future<> complete() {
         _b->counter.fetch_add(smp::count);
         bool alive = _b->alive.load(std::memory_order_relaxed);
-        return smp::invoke_on_all([this, sid = this_shard_id(), alive] {
+        return smp::invoke_on_all([b = _b, sid = this_shard_id(), alive] {
             if (this_shard_id() != sid) {
-                std::optional<promise<>>& w = _b->wakeup[this_shard_id()];
+                std::optional<promise<>>& w = b->wakeup[this_shard_id()];
                 if (alive) {
                     assert(w.has_value());
                     w->set_value();
