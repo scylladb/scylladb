@@ -1329,6 +1329,12 @@ void reclaim_timer::sample_stats(stats& data) {
 }
 
 void reclaim_timer::report() const noexcept {
+    // The logger can allocate (and will recover from allocation failure), and
+    // we're in a memory-sensitive situation here and allocation can easily fail.
+    // Prevent --abort-on-seastar-bad-alloc from crashing us in a situation that
+    // we're likely to recover from, by reclaiming more.
+    auto guard = memory::disable_abort_on_alloc_failure_temporarily();
+
     auto time_level = _stall_detected ? log_level::warn : log_level::debug;
     auto info_level = _stall_detected ? log_level::info : log_level::debug;
     auto MiB = 1024*1024;
