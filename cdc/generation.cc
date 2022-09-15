@@ -583,7 +583,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
         co_return;
     }
 
-    if (co_await db::system_keyspace::cdc_is_rewritten()) {
+    if (co_await _sys_ks.local().cdc_is_rewritten()) {
         co_return;
     }
 

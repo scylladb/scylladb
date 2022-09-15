@@ -1806,7 +1806,7 @@ future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1>
 
 future<bool> system_keyspace::cdc_is_rewritten() {
     // We don't care about the actual timestamp; it's additional information for debugging purposes.
-    return qctx->execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
+    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
             .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         return !msg->empty();
     });
