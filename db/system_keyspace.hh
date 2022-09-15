@@ -419,7 +419,7 @@ public:
     static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
     static future<bool> cdc_is_rewritten();
-    static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+    future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
 

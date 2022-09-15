@@ -550,7 +550,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
-        co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
+        co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
     }
 
     if (!cdc_gen_id) {

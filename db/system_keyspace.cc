@@ -1793,12 +1793,12 @@ static const sstring CDC_REWRITTEN_KEY = "rewritten";
 
 future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1> gen_id) {
     if (gen_id) {
-        return qctx->execute_cql(
+        return execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
                 CDC_REWRITTEN_KEY, gen_id->ts).discard_result();
     } else {
         // Insert just the row marker.
-        return qctx->execute_cql(
+        return execute_cql(
                 format("INSERT INTO system.{} (key) VALUES (?)", v3::CDC_LOCAL),
                 CDC_REWRITTEN_KEY).discard_result();
     }

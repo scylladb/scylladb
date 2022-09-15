@@ -613,7 +613,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
     if (times_and_ttls.empty()) {
         // There's no point in rewriting old generations' streams (they don't contain any data).
         cdc_log.info("No CDC log tables present, not rewriting stream tables.");
-        co_return co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
+        co_return co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
     }
 
     auto get_num_token_owners = [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); };
@@ -631,7 +631,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
             std::move(get_num_token_owners),
             _abort_src);
 
-    co_await db::system_keyspace::cdc_set_rewritten(last_rewritten);
+    co_await _sys_ks.local().cdc_set_rewritten(last_rewritten);
 }
 
 static void assert_shard_zero(const sstring& where) {
