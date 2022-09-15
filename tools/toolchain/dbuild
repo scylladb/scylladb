@@ -133,6 +133,11 @@ MAVEN_LOCAL_REPO="$HOME/.m2"
 
 mkdir -p "$MAVEN_LOCAL_REPO"
 
+if [[ -z "$CARGO_HOME" ]]; then
+    export CARGO_HOME="$HOME/.cargo"
+    mkdir -p "$CARGO_HOME"
+fi
+
 is_podman="$($tool --help | grep -o podman)"
 
 docker_common_args=()
@@ -187,6 +192,8 @@ docker_common_args+=(
        -v "$tmpdir:/tmp" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
        -v /etc/localtime:/etc/localtime:ro \
+       --env CARGO_HOME \
+       -v "${CARGO_HOME}:${CARGO_HOME}" \
        -w "$PWD" \
        -e HOME="$HOME" \
        "${docker_args[@]}" \
