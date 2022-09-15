@@ -562,6 +562,7 @@ raft_tests = set([
     'test/raft/replication_test',
     'test/raft/randomized_nemesis_test',
     'test/raft/many_test',
+    'test/raft/raft_server_test',
     'test/raft/fsm_test',
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
@@ -1187,7 +1188,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/random_schema.cc',
 ]
 
-scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
+scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc']
 
 scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc']
 
@@ -1321,6 +1322,7 @@ deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
 deps['test/boost/rust_test'] += rusts
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
+deps['test/raft/raft_server_test'] = ['test/raft/raft_server_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies

@@ -39,6 +39,7 @@ struct raft_server_for_group {
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
+    std::optional<seastar::future<>> aborted;
 };
 
 // This class is responsible for creating, storing and accessing raft servers.
@@ -102,6 +103,7 @@ public:
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);
+    void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }

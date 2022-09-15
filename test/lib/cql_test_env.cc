@@ -135,6 +135,7 @@ private:
     sharded<db::batchlog_manager>& _batchlog_manager;
     sharded<gms::gossiper>& _gossiper;
     service::raft_group0_client& _group0_client;
+    sharded<service::raft_group_registry>& _group0_registry;
 
 private:
     struct core_local_state {
@@ -186,7 +187,8 @@ public:
             sharded<qos::service_level_controller> &sl_controller,
             sharded<db::batchlog_manager>& batchlog_manager,
             sharded<gms::gossiper>& gossiper,
-            service::raft_group0_client& client)
+            service::raft_group0_client& client,
+            sharded<service::raft_group_registry>& group0_registry)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -198,6 +200,7 @@ public:
             , _batchlog_manager(batchlog_manager)
             , _gossiper(gossiper)
             , _group0_client(client)
+            , _group0_registry(group0_registry)
     {
         adjust_rlimit();
     }
@@ -415,6 +418,10 @@ public:
 
     virtual service::raft_group0_client& get_raft_group0_client() override {
         return _group0_client;
+    }
+
+    virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
+        return _group0_registry;
     }
 
     virtual future<> refresh_client_state() override {
@@ -870,7 +877,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client);
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

@@ -269,7 +269,10 @@ struct commit_status_unknown : public error {
 };
 
 struct stopped_error : public error {
-    stopped_error() : error("Raft instance is stopped") {}
+    explicit stopped_error(const sstring& reason = "")
+            : error(!reason.empty()
+                    ? fmt::format("Raft instance is stopped, reason: \"{}\"", reason)
+                    : std::string("Raft instance is stopped")) {}
 };
 
 struct conf_change_in_progress : public error {

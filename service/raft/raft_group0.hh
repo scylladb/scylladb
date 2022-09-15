@@ -82,6 +82,17 @@ class raft_group0 {
 
     gms::feature::listener_registration _raft_support_listener;
 
+    seastar::metrics::metric_groups _metrics;
+    void register_metrics();
+
+    // Status of the raft group0 for monitoring.
+    enum class status_for_monitoring : uint8_t {
+        // Raft is disabled.
+        disabled = 0,
+        normal = 1,
+        aborted = 2
+    } _status_for_monitoring;
+
 public:
     // Assumes that the provided services are fully started.
     raft_group0(seastar::abort_source& abort_source,
