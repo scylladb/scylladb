@@ -123,9 +123,9 @@ public:
     // returns leader{}.
     tick_output tick();
 
-    // The set of peers discovered until now (including seeds, excluding self).
+    // The list of peers discovered until now (including the seeds and self).
     // Must be persisted before externalizing output (from `tick` or `request`).
-    const peer_set& peers() const { return _peers; }
+    const peer_list& get_peer_list() const { return _peer_list; }
 
     // A helper for testing.
     bool is_leader() { return _is_leader; }

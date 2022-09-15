@@ -741,7 +741,7 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
 
 static constexpr auto DISCOVERY_KEY = "peers";
 
-static mutation make_discovery_mutation(discovery::peer_set peers) {
+static mutation make_discovery_mutation(discovery::peer_list peers) {
     auto s = db::system_keyspace::discovery();
     auto ts = api::new_timestamp();
     auto raft_id_cdef = s->get_column_definition("raft_id");
@@ -757,23 +757,23 @@ static mutation make_discovery_mutation(discovery::peer_set peers) {
     return m;
 }
 
-static future<> store_discovered_peers(cql3::query_processor& qp, discovery::peer_set peers) {
+static future<> store_discovered_peers(cql3::query_processor& qp, discovery::peer_list peers) {
     return qp.proxy().mutate_locally({make_discovery_mutation(std::move(peers))}, tracing::trace_state_ptr{});
 }
 
-static future<discovery::peer_set> load_discovered_peers(cql3::query_processor& qp) {
+static future<discovery::peer_list> load_discovered_peers(cql3::query_processor& qp) {
     static const auto load_cql = format(
             "SELECT server_info, raft_id FROM system.{} WHERE key = '{}'",
             db::system_keyspace::DISCOVERY, DISCOVERY_KEY);
     auto rs = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
     assert(rs);
 
-    discovery::peer_set peers;
+    discovery::peer_list peers;
     for (auto& r: *rs) {
-        peers.emplace(
+        peers.push_back({
             raft::server_id{r.get_as<utils::UUID>("raft_id")},
             r.get_as<bytes>("server_info")
-        );
+        });
     }
 
     co_return peers;
@@ -781,10 +781,36 @@ static future<discovery::peer_set> load_discovered_peers(cql3::query_processor& 
 
 future<persistent_discovery> persistent_discovery::make(raft::server_address self, peer_list seeds, cql3::query_processor& qp) {
     auto peers = co_await load_discovered_peers(qp);
-    // If a peer is present both on disk and in provided list of `seeds`,
-    // we take the information from disk (which may already contain the Raft ID of this peer).
-    std::move(seeds.begin(), seeds.end(), std::inserter(peers, peers.end()));
-    co_return persistent_discovery{std::move(self), {peers.begin(), peers.end()}, qp};
+    // If we're restarting discovery, the peer list is loaded from
+    // the discovery table and includes the seeds from
+    // scylla.yaml, so ignore the 'seeds' param.
+    //
+    // Should we perhaps use 'seeds' instead, or use both, the
+    // loaded seeds and scylla.yaml seeds?
+    //
+    // If a node crashes or stops during discovery, either of the
+    // following two option is safe:
+    // - restart the node; the discovery will resume from where it
+    // stopped with the persisted seeds
+    // - erase the data directory, possibly update scylla.yaml,
+    // and start a new boot.
+    // Updating scylla.yaml with a new set of seeds while keeping
+    // the old data directory is something DBAs can potentially
+    // do but their intent would be unclear at best: it is not
+    // safe to ignore the old seeds, they may have learned about
+    // this node already, so it's not safe to progress if they are
+    // not unreachable. As long as the old seeds have to be reached,
+    // adding more seeds is not very useful.
+    //
+    // We could check for this and throw, but since the
+    // whole case is a bit made up, let's simply ignore scylla.yaml
+    // seeds once we know they are persisted in the discovery table.
+    if (peers.empty()) {
+        peers = std::move(seeds);
+    }
+    // discovery::step() will automatically exclude self and skip
+    // duplicates in the list.
+    co_return persistent_discovery{std::move(self), peers, qp};
 }
 
 future<std::optional<discovery::peer_list>> persistent_discovery::request(peer_list peers) {
@@ -799,7 +825,7 @@ future<std::optional<discovery::peer_list>> persistent_discovery::request(peer_l
     auto holder = _gate.hold();
 
     auto response = _discovery.request(peers);
-    co_await store_discovered_peers(_qp, _discovery.peers());
+    co_await store_discovered_peers(_qp, _discovery.get_peer_list());
 
     co_return response;
 }
@@ -816,7 +842,7 @@ future<discovery::tick_output> persistent_discovery::tick() {
     // No need to enter `_gate`, since `stop` must be called after all calls to `tick` (and before the object is destroyed).
 
     auto result = _discovery.tick();
-    co_await store_discovered_peers(_qp, _discovery.peers());
+    co_await store_discovered_peers(_qp, _discovery.get_peer_list());
 
     co_return result;
 }
