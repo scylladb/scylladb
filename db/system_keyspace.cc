@@ -1766,7 +1766,7 @@ future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
 }
 
 future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id() {
-    auto msg = co_await qctx->execute_cql(
+    auto msg = co_await execute_cql(
             format("SELECT streams_timestamp, uuid FROM system.{} WHERE key = ?", v3::CDC_LOCAL),
             sstring(v3::CDC_LOCAL));
 

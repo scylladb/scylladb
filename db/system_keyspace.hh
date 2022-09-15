@@ -416,7 +416,7 @@ public:
     * Read the CDC generation ID announced by this node from persistent storage.
     * Used to initialize a restarting node.
     */
-    static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
+    future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);

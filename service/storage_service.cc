@@ -366,7 +366,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack());
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
-        cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
+        cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
         if (!cdc_gen_id) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
@@ -1842,7 +1842,7 @@ future<> storage_service::start_gossiping() {
             co_await ss._gossiper.container().invoke_on_all(&gms::gossiper::start);
             bool should_stop_gossiper = false; // undo action
             try {
-                auto cdc_gen_ts = co_await db::system_keyspace::get_cdc_generation_id();
+                auto cdc_gen_ts = co_await ss._sys_ks.local().get_cdc_generation_id();
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
                 }
