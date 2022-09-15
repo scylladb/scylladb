@@ -35,8 +35,10 @@ struct context {
     std::optional<rust::Box<wasmtime::Module>> module;
     std::string function_name;
     instance_cache* cache;
+    uint64_t yield_fuel;
+    uint64_t total_fuel;
 
-    context(wasmtime::Engine& engine_ptr, std::string name, instance_cache* cache);
+    context(wasmtime::Engine& engine_ptr, std::string name, instance_cache* cache, uint64_t yield_fuel, uint64_t total_fuel);
 };
 
 void compile(context& ctx, const std::vector<sstring>& arg_names, std::string script);

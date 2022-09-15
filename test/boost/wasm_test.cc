@@ -16,9 +16,9 @@
 #include <seastar/core/coroutine.hh>
 
 SEASTAR_TEST_CASE(test_long_udf_yields) {
-    auto wasm_engine = wasmtime::create_engine();
-    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, std::chrono::seconds(1));
-    auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get());
+    auto wasm_engine = wasmtime::create_engine(1024 * 1024);
+    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
+    auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get(), 100000, 100000000000);
     // Recursive fibonacci function
     wasm::compile(wasm_ctx, {}, R"(
 (module
@@ -68,7 +68,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     auto rets = wasmtime::get_val_vec();
     rets->push_i32(0);
 
-    auto store = wasmtime::create_store(wasm_ctx.engine_ptr);
+    auto store = wasmtime::create_store(wasm_ctx.engine_ptr, wasm_ctx.total_fuel, wasm_ctx.yield_fuel);
     auto instance = wasmtime::create_instance(wasm_ctx.engine_ptr, **wasm_ctx.module, *store);
     auto func = wasmtime::create_func(*instance, *store, wasm_ctx.function_name);
     auto memory = wasmtime::get_memory(*instance, *store);

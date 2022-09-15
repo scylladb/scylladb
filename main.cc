@@ -987,7 +987,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             std::any stop_udf_cache_handlers;
             if (udf_enabled) {
                 supervisor::notify("starting wasm udf cache");
-                wasm_instance_cache.start(128*1024*1024, std::chrono::seconds(5)).get();
+                size_t max_cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction();
+                wasm_instance_cache.start(max_cache_size, cfg->wasm_cache_instance_size_limit(), std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms())).get();
                 stop_udf_cache_handlers = defer_verbose_shutdown("udf cache", [] {
                     wasm_instance_cache.stop().get();
                 });

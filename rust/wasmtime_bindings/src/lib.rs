@@ -39,7 +39,11 @@ mod ffi {
         fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>>;
 
         type Store;
-        fn create_store(engine: &mut Engine) -> Result<Box<Store>>;
+        fn create_store(
+            engine: &mut Engine,
+            total_fuel: u64,
+            yield_fuel: u64,
+        ) -> Result<Box<Store>>;
 
         type Memory;
         fn data(self: &Memory, store: &Store) -> *mut u8;
@@ -49,7 +53,7 @@ mod ffi {
         fn get_abi(instance: &Instance, store: &mut Store, memory: &Memory) -> Result<u32>;
 
         type Engine;
-        fn create_engine() -> Result<Box<Engine>>;
+        fn create_engine(max_size: u32) -> Result<Box<Engine>>;
 
         type Func;
         fn create_func(
@@ -130,11 +134,13 @@ pub struct Store {
     wasmtime_store: wasmtime::Store<wasmtime_wasi::WasiCtx>,
 }
 
-fn create_store(engine: &mut Engine) -> Result<Box<Store>> {
+fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
     let wasi = wasmtime_wasi::WasiCtxBuilder::new().build();
     let mut store = wasmtime::Store::new(&engine.wasmtime_engine, wasi);
-    // TODO: make this configurable
-    store.out_of_fuel_async_yield(10000000, 1000);
+    store.out_of_fuel_async_yield(
+        ((total_fuel + yield_fuel - 1) / yield_fuel) as u64,
+        yield_fuel,
+    );
     Ok(Box::new(Store {
         wasmtime_store: store,
     }))
@@ -196,12 +202,14 @@ pub struct Engine {
     wasmtime_engine: wasmtime::Engine,
 }
 
-fn create_engine() -> Result<Box<Engine>> {
+fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
-    config.with_host_memory(std::sync::Arc::new(ScyllaMemoryCreator {}));
+    config.with_host_memory(std::sync::Arc::new(ScyllaMemoryCreator::new(
+        max_size as usize,
+    )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
     config.static_memory_maximum_size(0);
     config.dynamic_memory_reserved_for_growth(0);

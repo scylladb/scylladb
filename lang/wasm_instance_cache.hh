@@ -94,9 +94,10 @@ private:
     seastar::lowres_clock::duration _timer_period;
     size_t _total_size = 0;
     size_t _max_size;
+    size_t _max_instance_size;
 
 public:
-    explicit instance_cache(size_t size, seastar::lowres_clock::duration timer_period);
+    explicit instance_cache(size_t size, size_t instance_size, seastar::lowres_clock::duration timer_period);
 
 private:
     wasm_instance load(wasm::context& ctx);

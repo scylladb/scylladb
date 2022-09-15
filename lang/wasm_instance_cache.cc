@@ -37,17 +37,18 @@ void instance_cache::setup_metrics() {
     });
 }
 
-instance_cache::instance_cache(size_t size, seastar::lowres_clock::duration timer_period)
+instance_cache::instance_cache(size_t size, size_t instance_size, seastar::lowres_clock::duration timer_period)
     : _timer([this] { return on_timer(); })
     , _timer_period(timer_period)
     , _max_size(size)
+    , _max_instance_size(instance_size)
 {
     setup_metrics();
     _timer.arm_periodic(_timer_period);
 }
 
 wasm_instance instance_cache::load(wasm::context& ctx) {
-    auto store = wasmtime::create_store(ctx.engine_ptr);
+    auto store = wasmtime::create_store(ctx.engine_ptr, ctx.total_fuel, ctx.yield_fuel);
     auto instance = wasmtime::create_instance(ctx.engine_ptr, **ctx.module, *store);
     auto func = wasmtime::create_func(*instance, *store, ctx.function_name);
     auto memory = wasmtime::get_memory(*instance, *store);
@@ -123,7 +124,7 @@ void instance_cache::recycle(instance_cache::value_type val) noexcept {
             return;
         }
         size = get_instance_size(val->instance.value());
-        if (size > 1 * MB) {
+        if (size > _max_instance_size) {
             val->instance = std::nullopt;
             return;
         }

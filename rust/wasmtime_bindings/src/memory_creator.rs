@@ -89,8 +89,14 @@ unsafe impl LinearMemory for ScyllaLinearMemory {
 // In order to use the Seastar memory allocator instead of mmap,
 // create our own MemoryCreator which directly calls aligned_alloc
 // and free, both of which came from Seastar
-pub struct ScyllaMemoryCreator;
-
+pub struct ScyllaMemoryCreator {
+    max_scylla_size: usize,
+}
+impl ScyllaMemoryCreator {
+    pub fn new(max_scylla_size: usize) -> Self {
+        ScyllaMemoryCreator { max_scylla_size }
+    }
+}
 unsafe impl wasmtime::MemoryCreator for ScyllaMemoryCreator {
     fn new_memory(
         &self,
@@ -104,10 +110,14 @@ unsafe impl wasmtime::MemoryCreator for ScyllaMemoryCreator {
         assert_eq!(guard_size_in_bytes, 0);
         assert!(reserved_size_in_bytes.is_none());
         assert!(!ty.is_64());
+        let max_size = std::cmp::min(
+            self.max_scylla_size,
+            maximum.unwrap_or(u32::MAX as usize + 1),
+        );
         let mut mem = ScyllaLinearMemory {
             ptr: ptr::null_mut(),
             size: 0,
-            maximum_size: maximum,
+            maximum_size: Some(max_size),
         };
         mem.grow_to(minimum).map_err(|e| e.to_string())?;
         Ok(Box::new(mem))
