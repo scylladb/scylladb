@@ -14,6 +14,12 @@ Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and 
 
 #. Update the |SCYLLA_REPO|_ to |NEW_VERSION|.
 
+#. Load the new repo:
+
+    .. code:: sh 
+    
+       sudo apt-get update
+
 #. Run the following command to update the manifest file:
     
     .. code:: sh 
