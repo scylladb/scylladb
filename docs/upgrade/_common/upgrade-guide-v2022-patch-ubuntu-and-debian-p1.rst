@@ -1,5 +1,5 @@
 ======================================================================
-Upgrade Guide - ScyllaDB Enterprise 2022.x.y to 2022.x.z for |OS|
+Upgrade Guide - |SCYLLA_NAME| |SRC_VERSION| to |NEW_VERSION| for |OS|
 ======================================================================
 
 This document is a step-by-step procedure for upgrading from |SCYLLA_NAME| |FROM| to |SCYLLA_NAME| |TO|, and rollback to 2021.1 if required.
