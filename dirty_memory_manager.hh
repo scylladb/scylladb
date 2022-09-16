@@ -347,6 +347,7 @@ private:
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
 
+    friend void do_update(region_group* rg, region_group*& top_relief, ssize_t delta);
     friend class test_region_group;
 };
 

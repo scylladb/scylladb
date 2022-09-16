@@ -164,26 +164,29 @@ void region_group::notify_relief() {
     }
 }
 
+void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
+    rg->_total_memory += delta;
+
+    if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
+        rg->_reclaimer.notify_soft_pressure();
+    } else {
+        rg->_reclaimer.notify_soft_relief();
+    }
+
+    if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
+        rg->_reclaimer.notify_pressure();
+    } else if (rg->_reclaimer.under_pressure()) {
+        rg->_reclaimer.notify_relief();
+        top_relief = rg;
+    }
+}
+
 void region_group::update(ssize_t delta) {
     // Most-enclosing group which was relieved.
     region_group* top_relief = nullptr;
 
     do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
-        rg->_total_memory += delta;
-
-        if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
-            rg->_reclaimer.notify_soft_pressure();
-        } else {
-            rg->_reclaimer.notify_soft_relief();
-        }
-
-        if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
-            rg->_reclaimer.notify_pressure();
-        } else if (rg->_reclaimer.under_pressure()) {
-            rg->_reclaimer.notify_relief();
-            top_relief = rg;
-        }
-
+        do_update(rg, top_relief, delta);
         return stop_iteration::no;
     });
 
