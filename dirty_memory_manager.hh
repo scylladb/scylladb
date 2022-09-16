@@ -188,18 +188,63 @@ public:
     bool empty() const noexcept { return _blocked_requests.empty(); }
 };
 
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
-class region_group : public region_listener {
+class region_group;
+class memory_hard_limit;
+
+template <typename T>
+concept region_group_or_memory_hard_limit = std::same_as<T, region_group> || std::same_as<T, memory_hard_limit>;
+
+class memory_hard_limit {
     static region_group_reclaimer no_reclaimer;
 
-    using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    region_group* _parent = nullptr;
-    size_t _total_memory = 0;
+    sstring _name;
     region_group_reclaimer& _reclaimer;
 
     region_group* _subgroup = nullptr;
+
+    size_t _total_memory = 0;
+
+public:
+    memory_hard_limit(sstring name = "(unnamed region_group)",
+            region_group_reclaimer& reclaimer = no_reclaimer,
+            scheduling_group deferred_work_sg = default_scheduling_group() /* unused */)
+            : _name(std::move(name))
+            , _reclaimer(reclaimer) {
+    }
+
+    void notify_relief();
+
+    void update(ssize_t delta);
+
+    bool under_pressure() const noexcept;
+
+    size_t memory_used() const noexcept {
+        return _total_memory;
+    }
+
+    void add(region_group* child);
+    void del(region_group* child);
+
+    future<> shutdown() {
+        return make_ready_future<>();
+    }
+
+    template <region_group_or_memory_hard_limit RG>
+    friend void do_update(RG* rg, RG*& top_relief, ssize_t delta);
+
+    friend class region_group;
+};
+
+// Groups regions for the purpose of statistics.  Can be nested.
+// Interfaces to regions via region_listener
+class region_group : public region_listener {
+    static inline region_group_reclaimer& no_reclaimer = memory_hard_limit::no_reclaimer;
+    using region_heap = dirty_memory_manager_logalloc::region_heap;
+
+    memory_hard_limit* _parent = nullptr;
+    size_t _total_memory = 0;
+    region_group_reclaimer& _reclaimer;
+
     region_heap _regions;
 
     using allocating_function = allocation_queue::allocating_function;
@@ -235,7 +280,7 @@ public:
             region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group()) noexcept
         : region_group(std::move(name), nullptr, reclaimer, deferred_work_sg) {}
-    region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
+    region_group(sstring name, memory_hard_limit* parent, region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
@@ -319,36 +364,17 @@ private:
     // That's taking into account any constraints imposed by enclosing (parent) groups.
     bool execution_permitted() noexcept;
 
-    // Executes the function func for each region_group upwards in the hierarchy, starting with the
-    // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
-    // the next ancestor in the hierarchy, or stop_iteration::yes, in which case it stops at this
-    // level.
-    //
-    // This method returns a pointer to the region_group that was processed last, or nullptr if the
-    // root was reached.
-    template <typename Func>
-    static region_group* do_for_each_parent(region_group *node, Func&& func) noexcept(noexcept(func(node))) {
-        auto rg = node;
-        while (rg) {
-            if (func(rg) == stop_iteration::yes) {
-                return rg;
-            }
-            rg = rg->_parent;
-        }
-        return nullptr;
-    }
-
     inline bool under_pressure() const noexcept;
 
     uint64_t top_region_evictable_space() const noexcept;
 
-    void add(region_group* child);
-    void del(region_group* child);
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
 
-    friend void do_update(region_group* rg, region_group*& top_relief, ssize_t delta);
+    template <region_group_or_memory_hard_limit RG>
+    friend void do_update(RG* rg, RG*& top_relief, ssize_t delta);
     friend class test_region_group;
+    friend class memory_hard_limit;
 };
 
 }
@@ -408,7 +434,7 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     replica::database* _db;
     // The _real_region_group protects against actual dirty memory usage hitting the maximum. Usage
     // for this group is the real dirty memory usage of the system.
-    dirty_memory_manager_logalloc::region_group _real_region_group;
+    dirty_memory_manager_logalloc::memory_hard_limit _real_region_group;
     // The _virtual_region_group accounts for virtual memory usage. It is defined as the real dirty
     // memory usage minus bytes that were already written to disk.
     dirty_memory_manager_logalloc::region_group _virtual_region_group;
@@ -570,11 +596,14 @@ template <typename Func>
 requires (!is_future<std::invoke_result_t<Func>>::value)
 futurize_t<std::result_of_t<Func()>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-    auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-        return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
-    });
+    auto rg = this;
+    bool blocked = 
+        !(rg->_blocked_requests.empty() && !rg->under_pressure());
+    if (!blocked && _parent) {
+        blocked = _parent->under_pressure();
+    }
 
-    if (!blocked_at) {
+    if (!blocked) {
         return futurize_invoke(func);
     }
 
@@ -613,6 +642,12 @@ region_group::blocked_requests_counter() const noexcept {
 inline
 bool
 region_group::under_pressure() const noexcept {
+    return _reclaimer.under_pressure();
+}
+
+inline
+bool
+memory_hard_limit::under_pressure() const noexcept {
     return _reclaimer.under_pressure();
 }
 

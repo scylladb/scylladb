@@ -50,7 +50,7 @@ using namespace dirty_memory_manager_logalloc;
 SEASTAR_TEST_CASE(test_region_groups) {
     return seastar::async([] {
         region_group just_four;
-        region_group all;
+        memory_hard_limit all;
         region_group one_and_two("one_and_two", &all);
 
         auto one = std::make_unique<size_tracked_region>();
@@ -58,7 +58,6 @@ SEASTAR_TEST_CASE(test_region_groups) {
         auto two = std::make_unique<size_tracked_region>();
         two->listen(&one_and_two);
         auto three = std::make_unique<size_tracked_region>();
-        three->listen(&all);
         auto four = std::make_unique<size_tracked_region>();
         four->listen(&just_four);
         auto five = std::make_unique<size_tracked_region>();
@@ -98,7 +97,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t(three_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
 
         constexpr size_t four_count = 4 * base_count;
         std::vector<managed_ref<int>> four_objs;
@@ -122,27 +121,27 @@ SEASTAR_TEST_CASE(test_region_groups) {
         three->merge(*four);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
         BOOST_REQUIRE_EQUAL(just_four.memory_used(), 0);
 
         three->merge(*five);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
 
         with_allocator(two->allocator(), [&] {
             two_objs.clear();
         });
         two.reset();
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
 
         with_allocator(one->allocator(), [&] {
             one_objs.clear();
         });
         one.reset();
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), 0);
-        BOOST_REQUIRE_EQUAL(all.memory_used(), three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), 0);
 
         with_allocator(three->allocator(), [&] {
             three_objs.clear();
@@ -169,7 +168,7 @@ inline void quiesce(FutureType&& fut) {
 // Simple RAII structure that wraps around a region_group
 // Not using defer because we usually employ many region groups
 struct test_region_group: public region_group {
-    test_region_group(region_group* parent, region_group_reclaimer& reclaimer)
+    test_region_group(memory_hard_limit* parent, region_group_reclaimer& reclaimer)
         : region_group("test_region_group", parent, reclaimer) {}
     test_region_group(region_group_reclaimer& reclaimer)
         : region_group("test_region_group", nullptr, reclaimer) {}
@@ -268,61 +267,6 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     });
 }
 
-SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_child_alloc) {
-    return seastar::async([] {
-        region_group_reclaimer parent_reclaimer(2 * logalloc::segment_size);
-        region_group_reclaimer child_reclaimer(logalloc::segment_size);
-
-        test_region_group parent(parent_reclaimer);
-        test_region_group child(&parent, child_reclaimer);
-
-        auto child_region = std::make_unique<test_region>();
-        child_region->listen(&child);
-        auto parent_region = std::make_unique<test_region>();
-        parent_region->listen(&parent);
-
-        child_region->alloc();
-        BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
-
-        auto fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); }, db::no_timeout);
-        BOOST_REQUIRE_EQUAL(fut.available(), true);
-        BOOST_REQUIRE_GE(parent.memory_used(), 2 * logalloc::segment_size);
-
-        // This time child will use all parent's memory. Note that because the child's memory limit
-        // is lower than the parent's, for that to happen we need to allocate directly.
-        child_region->alloc();
-        BOOST_REQUIRE_GE(child.memory_used(), 2 * logalloc::segment_size);
-
-        fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); }, db::no_timeout);
-        BOOST_REQUIRE_EQUAL(fut.available(), false);
-        BOOST_REQUIRE_GE(parent.memory_used(), 2 * logalloc::segment_size);
-
-        child_region.reset();
-        quiesce(std::move(fut));
-    });
-}
-
-SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_parent_alloc) {
-    return seastar::async([] {
-        region_group_reclaimer simple_reclaimer(logalloc::segment_size);
-
-        test_region_group parent(simple_reclaimer);
-        test_region_group child(&parent, simple_reclaimer);
-
-        auto parent_region = std::make_unique<test_region>();
-        parent_region->listen(&parent);
-
-        parent_region->alloc();
-        BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
-
-        auto fut = child.run_when_memory_available([] {}, db::no_timeout);
-        BOOST_REQUIRE_EQUAL(fut.available(), false);
-
-        parent_region.reset();
-        quiesce(std::move(fut));
-    });
-}
-
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
@@ -350,62 +294,6 @@ SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
 
         region.reset();
         quiesce(when_all(executions.begin(), executions.end()));
-    });
-}
-
-SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restriction) {
-    // Hierarchy here is A -> B -> C.
-    // We will fill B causing an execution in C to fail. We then fill A and free B.
-    //
-    // C should still be blocked.
-    return seastar::async([] {
-        region_group_reclaimer simple_reclaimer(logalloc::segment_size);
-
-        test_region_group root(simple_reclaimer);
-        test_region_group inner(&root, simple_reclaimer);
-        test_region_group child(&inner, simple_reclaimer);
-
-        auto inner_region = std::make_unique<test_region>();
-        inner_region->listen(&inner);
-        auto root_region = std::make_unique<test_region>();
-        root_region->listen(&root);
-
-        // fill the inner node. Try allocating at child level. Should not be allowed.
-        circular_buffer<managed_bytes> big_alloc;
-        with_allocator(inner_region->allocator(), [&big_alloc] {
-            big_alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), logalloc::segment_size)));
-        });
-        BOOST_REQUIRE_GE(inner.memory_used(), logalloc::segment_size);
-
-        auto fut = child.run_when_memory_available([] {}, db::no_timeout);
-        BOOST_REQUIRE_EQUAL(fut.available(), false);
-
-        // Now fill the root...
-        with_allocator(root_region->allocator(), [&big_alloc] {
-            big_alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), logalloc::segment_size)));
-        });
-        BOOST_REQUIRE_GE(root.memory_used(), logalloc::segment_size);
-
-        // And free the inner node. We will verify that
-        // 1) the notifications that the inner node sent the child when it was freed won't
-        //    erroneously cause it to execute
-        // 2) the child is still able to receive notifications from the root
-        with_allocator(inner_region->allocator(), [&big_alloc] {
-            big_alloc.pop_front();
-        });
-        inner_region.reset();
-
-        // Verifying (1)
-        // Can't quiesce because we don't want to wait on the futures.
-        sleep(10ms).get();
-        BOOST_REQUIRE_EQUAL(fut.available(), false);
-
-        // Verifying (2)
-        with_allocator(root_region->allocator(), [&big_alloc] {
-            big_alloc.pop_front();
-        });
-        root_region.reset();
-        quiesce(std::move(fut));
     });
 }
 
@@ -487,7 +375,6 @@ public:
     }
 
     test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
-    test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg("test_reclaimer RG", &parent._rg, *this) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
@@ -543,33 +430,6 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offen
         BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[2], logalloc::segment_size);
         BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[1], 2 * logalloc::segment_size);
         BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[0], 3 * logalloc::segment_size);
-    });
-}
-
-
-SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_ancestor_block) {
-    return seastar::async([] {
-        // allocate a parent region group (A) with a leaf region group (B)
-        // Make sure that active reclaim still works when we block at an ancestor
-        test_reclaimer root(logalloc::segment_size);
-        test_reclaimer leaf(root, logalloc::segment_size);
-
-        test_async_reclaim_region root_region(root.rg(), logalloc::segment_size);
-        auto f = root.unleash(make_ready_future<>());
-        // FIXME: discarded future.
-        (void)leaf.unleash(std::move(f));
-
-        // Can't run this function until we have reclaimed. Try at the leaf, and we'll make sure
-        // that the root reclaims
-        auto fut = leaf.rg().run_when_memory_available([&root] {
-            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
-        }, db::no_timeout);
-
-        // Initially not available
-        BOOST_REQUIRE_EQUAL(fut.available(), false);
-        quiesce(std::move(fut));
-
-        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], logalloc::segment_size);
     });
 }
 

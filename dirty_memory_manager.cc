@@ -44,7 +44,7 @@ region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_re
     return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
 }
 
-region_group_reclaimer region_group::no_reclaimer;
+region_group_reclaimer memory_hard_limit::no_reclaimer;
 
 uint64_t region_group::top_region_evictable_space() const noexcept {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
@@ -55,14 +55,14 @@ dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_re
 }
 
 void
-region_group::add(region_group* child) {
+memory_hard_limit::add(region_group* child) {
     assert(!_subgroup);
     _subgroup = child;
     update(child->_total_memory);
 }
 
 void
-region_group::del(region_group* child) {
+memory_hard_limit::del(region_group* child) {
     _subgroup = nullptr;
     update(-child->_total_memory);
 }
@@ -104,9 +104,8 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return do_for_each_parent(this, [] (auto rg) noexcept {
-        return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
-    }) == nullptr;
+    return !(this->under_pressure()
+                || (_parent && _parent->under_pressure()));
 }
 
 void
@@ -141,7 +140,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
     });
 }
 
-region_group::region_group(sstring name, region_group *parent,
+region_group::region_group(sstring name, memory_hard_limit *parent,
         region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
     : _parent(parent)
     , _reclaimer(reclaimer)
@@ -159,12 +158,16 @@ bool region_group::reclaimer_can_block() const {
 
 void region_group::notify_relief() {
     _relief.signal();
+}
+
+void memory_hard_limit::notify_relief() {
     if (_subgroup) {
         _subgroup->notify_relief();
     }
 }
 
-void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
+template <region_group_or_memory_hard_limit RG>
+void do_update(RG* rg, RG*& top_relief, ssize_t delta) {
     rg->_total_memory += delta;
 
     if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
@@ -181,17 +184,31 @@ void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
     }
 }
 
-void region_group::update(ssize_t delta) {
+void memory_hard_limit::update(ssize_t delta) {
     // Most-enclosing group which was relieved.
-    region_group* top_relief = nullptr;
+    memory_hard_limit* top_relief = nullptr;
 
-    do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
-        do_update(rg, top_relief, delta);
-        return stop_iteration::no;
-    });
+    do_update(this, top_relief, delta);
 
     if (top_relief) {
         top_relief->notify_relief();
+    }
+}
+
+void region_group::update(ssize_t delta) {
+    // Most-enclosing group which was relieved.
+    region_group* top_relief_region_group = nullptr;
+    memory_hard_limit* top_relief_memory_hard_limit = nullptr;
+
+    do_update(this, top_relief_region_group, delta);
+    if (_parent) {
+        do_update(_parent, top_relief_memory_hard_limit, delta);
+    }
+
+    if (top_relief_memory_hard_limit) {
+        top_relief_memory_hard_limit->notify_relief();
+    } else if (top_relief_region_group) {
+        top_relief_region_group->notify_relief();
     }
 }
 
