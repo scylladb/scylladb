@@ -169,8 +169,10 @@ size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     return std::hash<bytes_view>()(id.addr.bytes());
 }
 
-messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client)
-    : rpc_client(std::move(client)) {
+messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored)
+    : rpc_client(std::move(client))
+    , topology_ignored(topo_ignored)
+{
 }
 
 rpc::stats messaging_service::shard_info::get_stats() const {
@@ -490,6 +492,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
     case messaging_verb::GET_GROUP0_UPGRADE_STATE:
+        // ATTN -- if moving GOSSIP_ verbs elsewhere, mind updating the tcp_nodelay
+        // setting in get_rpc_client(), which assumes gossiper verbs live in idx 0
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -696,25 +700,26 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         // The 'dead_only' it should be true, because we're interested in
         // dropping the errored socket, but since it's errored anyway (the
         // above if) it's false to save unneeded second c->error() call
-        remove_rpc_client_one(_clients[idx], id, false);
+        find_and_remove_client(_clients[idx], id, [] (const auto&) { return true; });
     }
 
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
 
+    std::optional<bool> topology_status;
+    auto has_topology = [&] {
+        if (!topology_status.has_value()) {
+            topology_status = _token_metadata ? _token_metadata->get()->get_topology().has_endpoint(id.addr) : false;
+        }
+        return *topology_status;
+    };
+
     auto must_encrypt = [&] {
         if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
-        if (_cfg.encrypt == encrypt_what::all) {
-            return true;
-        }
-
-        // if we have dc/rack encryption but this is gossip, we should
-        // use tls anyway, to avoid having mismatched ideas on which 
-        // group we/client are in. 
-        if (verb >= messaging_verb::GOSSIP_DIGEST_SYN && verb <= messaging_verb::GOSSIP_SHUTDOWN) {
+        if (_cfg.encrypt == encrypt_what::all || !has_topology()) {
             return true;
         }
 
@@ -743,26 +748,27 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return broadcast_address != laddr && !is_same_rack(laddr);
     }();
 
-    auto must_compress = [&id, this] {
+    auto must_compress = [&] {
         if (_cfg.compress == compress_what::none) {
             return false;
         }
 
-        if (_cfg.compress == compress_what::dc) {
-            return !is_same_dc(id.addr);
+        if (_cfg.compress == compress_what::all || !has_topology()) {
+            return true;
         }
 
-        return true;
+        return !is_same_dc(id.addr);
     }();
 
     auto must_tcp_nodelay = [&] {
-        if (idx == 1) {
+        if (idx == 0) {
             return true; // gossip
         }
-        if (_cfg.tcp_nodelay == tcp_nodelay_what::local) {
-            return is_same_dc(id.addr);
+        if (_cfg.tcp_nodelay == tcp_nodelay_what::all || !has_topology()) {
+            return true;
         }
-        return true;
+
+        return is_same_dc(id.addr);
     }();
 
     auto addr = get_preferred_ip(id.addr);
@@ -784,7 +790,8 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr, laddr);
 
-    auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
+    bool topology_ignored = topology_status.has_value() ? *topology_status == false : false;
+    auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
     assert(res.second);
     it = res.first;
     uint32_t src_cpu_id = this_shard_id();
@@ -796,7 +803,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
-void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
+template <typename Fn>
+requires std::is_invocable_r_v<bool, Fn, const messaging_service::shard_info&>
+void messaging_service::find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter) {
     if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
@@ -805,7 +814,7 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
     }
 
     auto it = clients.find(id);
-    if (it != clients.end() && (!dead_only || it->second.rpc_client->error())) {
+    if (it != clients.end() && filter(it->second)) {
         auto client = std::move(it->second.rpc_client);
         clients.erase(it);
         //
@@ -822,12 +831,18 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
 }
 
 void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id) {
-    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true);
+    find_and_remove_client(_clients[get_rpc_client_idx(verb)], id, [] (const auto& s) { return s.rpc_client->error(); });
 }
 
 void messaging_service::remove_rpc_client(msg_addr id) {
     for (auto& c : _clients) {
-        remove_rpc_client_one(c, id, false);
+        find_and_remove_client(c, id, [] (const auto&) { return true; });
+    }
+}
+
+void messaging_service::remove_rpc_client_with_ignored_topology(msg_addr id) {
+    for (auto& c : _clients) {
+        find_and_remove_client(c, id, [] (const auto& s) { return s.topology_ignored; });
     }
 }
 

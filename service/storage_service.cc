@@ -3543,6 +3543,7 @@ future<> storage_service::notify_joined(inet_address endpoint) {
     }
 
     co_await container().invoke_on_all([endpoint] (auto&& ss) {
+        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
         return ss._lifecycle_notifier.notify_joined(endpoint);
     });
     slogger.debug("Notify node {} has joined the cluster", endpoint);
