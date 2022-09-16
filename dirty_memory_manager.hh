@@ -157,6 +157,35 @@ public:
         explicit on_request_expiry(sstring name) : _name(std::move(name)) {}
         void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
+private:
+    // It is a more common idiom to just hold the promises in the circular buffer and make them
+    // ready. However, in the time between the promise being made ready and the function execution,
+    // it could be that our memory usage went up again. To protect against that, we have to recheck
+    // if memory is still available after the future resolves.
+    //
+    // But we can greatly simplify it if we store the function itself in the circular_buffer, and
+    // execute it synchronously in release_requests() when we are sure memory is available.
+    //
+    // This allows us to easily provide strong execution guarantees while keeping all re-check
+    // complication in release_requests and keep the main request execution path simpler.
+    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, db::timeout_clock> _blocked_requests;
+
+    uint64_t _blocked_requests_counter = 0;
+
+public:
+    explicit allocation_queue(on_request_expiry on_expiry);
+
+    void execute_one();
+
+    void push_back(std::unique_ptr<allocating_function>, db::timeout_clock::time_point timeout);
+
+    size_t blocked_requests() const noexcept;
+
+    uint64_t blocked_requests_counter() const noexcept;
+
+    size_t size() const noexcept { return _blocked_requests.size(); }
+
+    bool empty() const noexcept { return _blocked_requests.empty(); }
 };
 
 // Groups regions for the purpose of statistics.  Can be nested.
@@ -180,19 +209,7 @@ class region_group : public region_listener {
 
     using on_request_expiry = allocation_queue::on_request_expiry;
 
-    // It is a more common idiom to just hold the promises in the circular buffer and make them
-    // ready. However, in the time between the promise being made ready and the function execution,
-    // it could be that our memory usage went up again. To protect against that, we have to recheck
-    // if memory is still available after the future resolves.
-    //
-    // But we can greatly simplify it if we store the function itself in the circular_buffer, and
-    // execute it synchronously in release_requests() when we are sure memory is available.
-    //
-    // This allows us to easily provide strong execution guarantees while keeping all re-check
-    // complication in release_requests and keep the main request execution path simpler.
-    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, db::timeout_clock> _blocked_requests;
-
-    uint64_t _blocked_requests_counter = 0;
+    allocation_queue _blocked_requests;
 
     condition_variable _relief;
     future<> _releaser;
@@ -563,9 +580,15 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
     auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
     auto fut = fn->get_future();
     _blocked_requests.push_back(std::move(fn), timeout);
-    ++_blocked_requests_counter;
 
     return fut;
+}
+
+inline
+void
+allocation_queue::push_back(std::unique_ptr<allocation_queue::allocating_function> f, db::timeout_clock::time_point timeout) {
+    _blocked_requests.push_back(std::move(f));
+    ++_blocked_requests_counter;
 }
 
 inline
@@ -576,8 +599,14 @@ region_group::blocked_requests() const noexcept {
 
 inline
 uint64_t
-region_group::blocked_requests_counter() const noexcept {
+allocation_queue::blocked_requests_counter() const noexcept {
     return _blocked_requests_counter;
+}
+
+inline
+uint64_t
+region_group::blocked_requests_counter() const noexcept {
+    return _blocked_requests.blocked_requests_counter();
 }
 
 inline

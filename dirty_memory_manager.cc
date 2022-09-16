@@ -109,6 +109,13 @@ region_group::execution_permitted() noexcept {
     }) == nullptr;
 }
 
+void
+allocation_queue::execute_one() {
+    auto req = std::move(_blocked_requests.front());
+    _blocked_requests.pop_front();
+    req->allocate();
+}
+
 future<>
 region_group::start_releaser(scheduling_group deferred_work_sg) {
     return with_scheduling_group(deferred_work_sg, [this] {
@@ -119,9 +126,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
                 }
 
                 if (!_blocked_requests.empty() && execution_permitted()) {
-                    auto req = std::move(_blocked_requests.front());
-                    _blocked_requests.pop_front();
-                    req->allocate();
+                    _blocked_requests.execute_one();
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 } else {
                     // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
@@ -196,6 +201,10 @@ region_group::shutdown() noexcept {
 
 void allocation_queue::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
+}
+
+allocation_queue::allocation_queue(allocation_queue::on_request_expiry on_expiry)
+        : _blocked_requests(std::move(on_expiry)) {
 }
 
 }
