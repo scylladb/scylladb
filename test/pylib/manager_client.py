@@ -11,10 +11,14 @@
 
 import os.path
 from typing import List, Optional, Callable
+import logging
 import aiohttp                                                             # type: ignore
 import aiohttp.web                                                         # type: ignore
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
+
+
+logger = logging.getLogger(__name__)
 
 
 class ManagerClient():
@@ -46,12 +50,15 @@ class ManagerClient():
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
-            self.ccluster = self.con_gen(await self.servers(), self.port, self.ssl)
+            servers = await self.servers()
+            logger.debug("driver connecting to %s", servers)
+            self.ccluster = self.con_gen(servers, self.port, self.ssl)
             self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
         """Disconnect from cluster"""
         if self.ccluster is not None:
+            logger.debug("shutting down driver")
             self.ccluster.shutdown()
             self.ccluster = None
         self.cql = None
@@ -59,10 +66,12 @@ class ManagerClient():
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:
         if self.ccluster is not None:
+            logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
     async def before_test(self, test_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
+        logger.debug("before_test for %s", test_name)
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
@@ -74,12 +83,17 @@ class ManagerClient():
 
     async def after_test(self, test_name: str) -> None:
         """Tell harness this test finished"""
+        logger.debug("after_test for %s", test_name)
         await self._get(f"/cluster/after-test/{test_name}")
 
     async def _get(self, resource: str) -> aiohttp.ClientResponse:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        return await self.session.get(self._resource_uri(resource))
+        resp = await self.session.get(self._resource_uri(resource))
+        if resp.status != 200:
+            text = await resp.text()
+            raise Exception(f'status code: {resp.status}, body text: {text}')
+        return resp
 
     async def _get_text(self, resource: str) -> str:
         resp = await self._get(resource)
@@ -119,44 +133,41 @@ class ManagerClient():
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self._get("/cluster/mark-dirty")
+        await self._get_text("/cluster/mark-dirty")
 
-    async def server_stop(self, server_id: str) -> bool:
-        """Stop specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/stop")
-        return ret == "OK"
+    async def server_stop(self, server_id: str) -> None:
+        """Stop specified server"""
+        logger.debug("ManagerClient stopping %s", server_id)
+        await self._get_text(f"/cluster/server/{server_id}/stop")
 
-    async def server_stop_gracefully(self, server_id: str) -> bool:
-        """Stop specified node gracefully"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/stop_gracefully")
-        return ret == "OK"
+    async def server_stop_gracefully(self, server_id: str) -> None:
+        """Stop specified server gracefully"""
+        logger.debug("ManagerClient stopping gracefully %s", server_id)
+        await self._get_text(f"/cluster/server/{server_id}/stop_gracefully")
 
-    async def server_start(self, server_id: str) -> bool:
-        """Start specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/start")
+    async def server_start(self, server_id: str) -> None:
+        """Start specified server"""
+        logger.debug("ManagerClient starting %s", server_id)
+        await self._get_text(f"/cluster/server/{server_id}/start")
         self._driver_update()
-        return ret == "OK"
 
-    async def server_restart(self, server_id: str) -> bool:
-        """Restart specified node"""
-        ret = await self._get_text(f"/cluster/node/{server_id}/restart")
+    async def server_restart(self, server_id: str) -> None:
+        """Restart specified server"""
+        logger.debug("ManagerClient restarting %s", server_id)
+        await self._get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
-        return ret == "OK"
 
     async def server_add(self) -> str:
-        """Add a new node"""
-        server_id = await self._get_text("/cluster/addnode")
+        """Add a new server"""
+        server_id = await self._get_text("/cluster/addserver")
         self._driver_update()
+        logger.debug("ManagerClient added %s", server_id)
         return server_id
 
     async def server_remove(self, server_id: str) -> None:
-        """Remove a specified node"""
-        await self._get(f"/cluster/removenode/{server_id}")
-        self._driver_update()
-
-    async def start_stopped(self) -> None:
-        """Start all previously stopped servers"""
-        await self._get(f"/cluster/start_stopped")
+        """Remove a specified server"""
+        logger.debug("ManagerClient removing %s", server_id)
+        await self._get_text(f"/cluster/removeserver/{server_id}")
         self._driver_update()
 
     async def server_get_config(self, server_id: str) -> dict[str, object]:

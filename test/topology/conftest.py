@@ -62,10 +62,16 @@ def _wrap_future(f: ResponseFuture) -> asyncio.Future:
     aio_future = loop.create_future()
 
     def on_result(result):
-        loop.call_soon_threadsafe(aio_future.set_result, result)
+        if not aio_future.done():
+            loop.call_soon_threadsafe(aio_future.set_result, result)
+        else:
+            logger.debug("_wrap_future: on_result() on already done future: %s", result)
 
     def on_error(exception, *_):
-        loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        if not aio_future.done():
+            loop.call_soon_threadsafe(aio_future.set_exception, exception)
+        else:
+            logger.debug("_wrap_future: on_error() on already done future: %s"), result
 
     f.add_callback(on_result)
     f.add_errback(on_error)
@@ -188,9 +194,7 @@ def fails_without_raft(request, check_pre_raft):
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
-async def random_tables(request, cql, manager):
+def random_tables(request, cql):
     tables = RandomTables(request.node.name, cql, unique_name())
     yield tables
-    # NOTE: to avoid occasional timeouts on keyspace teardown, start stopped servers
-    await manager.start_stopped()
     tables.drop_all()
