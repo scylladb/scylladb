@@ -430,6 +430,7 @@ scylla_tests = set([
     'test/boost/estimated_histogram_test',
     'test/boost/summary_test',
     'test/boost/logalloc_test',
+    'test/boost/logalloc_standard_allocator_segment_pool_backend_test',
     'test/boost/managed_vector_test',
     'test/boost/managed_bytes_test',
     'test/boost/intrusive_array_test',
