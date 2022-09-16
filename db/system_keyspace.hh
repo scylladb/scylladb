@@ -410,16 +410,16 @@ public:
     /*
     * Save the CDC generation ID announced by this node in persistent storage.
     */
-    static future<> update_cdc_generation_id(cdc::generation_id);
+    future<> update_cdc_generation_id(cdc::generation_id);
 
     /*
     * Read the CDC generation ID announced by this node from persistent storage.
     * Used to initialize a restarting node.
     */
-    static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
+    future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
-    static future<bool> cdc_is_rewritten();
-    static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+    future<bool> cdc_is_rewritten();
+    future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
 
