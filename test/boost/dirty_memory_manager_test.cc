@@ -496,29 +496,13 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         size_t hard_threshold = logalloc::segment_size * 8;
         size_t soft_threshold = hard_threshold / 2;
 
-        class reclaimer : public region_group_reclaimer {
-            bool _reclaim = false;
-        protected:
-            void start_reclaiming() noexcept {
-                _reclaim = true;
-            }
-
-            void stop_reclaiming() noexcept {
-                _reclaim = false;
-            }
-        public:
-            reclaimer(size_t hard_threshold, size_t soft_threshold)
-                : region_group_reclaimer({
-                        .hard_limit = hard_threshold,
-                        .soft_limit = soft_threshold,
-                        .start_reclaiming = std::bind_front(&reclaimer::start_reclaiming, this),
-                        .stop_reclaiming =std::bind_front(&reclaimer::stop_reclaiming, this)
-                  })
-            { }
-            bool reclaiming() const { return _reclaim; };
-        };
-
-        reclaimer recl(hard_threshold, soft_threshold);
+        bool reclaiming = false;
+        region_group_reclaimer recl({
+                .hard_limit = hard_threshold,
+                .soft_limit = soft_threshold,
+                .start_reclaiming = [&] () noexcept { reclaiming = true; },
+                .stop_reclaiming = [&] () noexcept { reclaiming = false; },
+        });
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
@@ -527,32 +511,32 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         with_allocator(r.allocator(), [&] {
             std::vector<managed_bytes> objs;
 
-            BOOST_REQUIRE(!recl.reclaiming());
+            BOOST_REQUIRE(!reclaiming);
 
             while (!recl.over_soft_limit()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
-            BOOST_REQUIRE(recl.reclaiming());
+            BOOST_REQUIRE(reclaiming);
 
             while (!recl.under_pressure()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
-            BOOST_REQUIRE(recl.reclaiming());
+            BOOST_REQUIRE(reclaiming);
 
             while (recl.under_pressure()) {
                 objs.pop_back();
             }
 
             BOOST_REQUIRE(recl.over_soft_limit());
-            BOOST_REQUIRE(recl.reclaiming());
+            BOOST_REQUIRE(reclaiming);
 
             while (recl.over_soft_limit()) {
                 objs.pop_back();
             }
 
-            BOOST_REQUIRE(!recl.reclaiming());
+            BOOST_REQUIRE(!reclaiming);
         });
     });
 }
