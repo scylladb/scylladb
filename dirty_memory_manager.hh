@@ -157,7 +157,7 @@ class memory_hard_limit {
 
     size_t _total_memory = 0;
 
-    reclaim_config _cfg;
+    size_t _limit;
 
     bool _under_pressure = false;
     bool _under_soft_pressure = false;
@@ -173,17 +173,11 @@ private:
     }
 
     void notify_soft_pressure() noexcept {
-        if (!_under_soft_pressure) {
-            _under_soft_pressure = true;
-            _cfg.start_reclaiming();
-        }
+        _under_soft_pressure = true;
     }
 
     void notify_soft_relief() noexcept {
-        if (_under_soft_pressure) {
-            _under_soft_pressure = false;
-            _cfg.stop_reclaiming();
-        }
+        _under_soft_pressure = false;
     }
 
     void notify_pressure() noexcept {
@@ -195,19 +189,18 @@ private:
     }
 
     size_t throttle_threshold() const noexcept {
-        return _cfg.hard_limit;
+        return _limit;
     }
     size_t soft_limit_threshold() const noexcept {
-        return _cfg.soft_limit;
+        return _limit;
     }
 
 
 public:
     memory_hard_limit(sstring name = "(unnamed region_group)",
-            reclaim_config cfg = {})
+            size_t limit = std::numeric_limits<size_t>::max())
             : _name(std::move(name))
-            , _cfg(std::move(cfg)) {
-        assert(_cfg.soft_limit <= _cfg.hard_limit);
+            , _limit(limit) {
     }
 
     void notify_pressure_relieved();
@@ -540,7 +533,7 @@ public:
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
     dirty_memory_manager()
         : _db(nullptr)
-        , _real_region_group("memtable", dirty_memory_manager_logalloc::reclaim_config{})
+        , _real_region_group("memtable", std::numeric_limits<size_t>::max())
         , _virtual_region_group("memtable (virtual)", &_real_region_group,
                 dirty_memory_manager_logalloc::reclaim_config{
                     .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),

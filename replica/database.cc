@@ -449,7 +449,7 @@ void backlog_controller::update_controller(float shares) {
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
     : _db(&db)
-    , _real_region_group("memtable", dirty_memory_manager_logalloc::reclaim_config{.hard_limit = threshold})
+    , _real_region_group("memtable", threshold)
     , _virtual_region_group("memtable (virtual)", &_real_region_group, dirty_memory_manager_logalloc::reclaim_config{
             .hard_limit = threshold / 2,
             .soft_limit = threshold * soft_limit / 2,
