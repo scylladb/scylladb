@@ -97,9 +97,9 @@ public:
     }
 
     region_group_reclaimer() noexcept
-        : _threshold(std::numeric_limits<size_t>::max()), _soft_limit(std::numeric_limits<size_t>::max()) {}
+        : region_group_reclaimer(std::numeric_limits<size_t>::max()) {}
     region_group_reclaimer(size_t threshold) noexcept
-        : _threshold(threshold), _soft_limit(threshold) {}
+        : region_group_reclaimer(threshold, threshold) {}
     region_group_reclaimer(size_t threshold, size_t soft) noexcept
         : _threshold(threshold), _soft_limit(soft) {
         assert(_soft_limit <= _threshold);
