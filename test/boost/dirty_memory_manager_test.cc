@@ -211,7 +211,7 @@ private:
 
 SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     return seastar::async([] {
-        region_group_reclaimer simple_reclaimer(logalloc::segment_size);
+        region_group_reclaimer simple_reclaimer({ .hard_limit = logalloc::segment_size });
 
         // singleton hierarchy, only one segment allowed
         test_region_group simple(simple_reclaimer);
@@ -270,7 +270,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
-        region_group_reclaimer simple_reclaimer(logalloc::segment_size);
+        region_group_reclaimer simple_reclaimer({.hard_limit = logalloc::segment_size});
 
         test_region_group rg(simple_reclaimer);
 
@@ -374,7 +374,10 @@ public:
         return _rg;
     }
 
-    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold, std::bind_front(&test_reclaimer::start_reclaiming, this)), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
+    test_reclaimer(size_t threshold) : region_group_reclaimer({
+            .hard_limit = threshold,
+            .start_reclaiming = std::bind_front(&test_reclaimer::start_reclaiming, this),
+        }), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
@@ -441,7 +444,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
 
         auto free_space = memory::stats().free_memory();
         size_t threshold = size_t(0.75 * free_space);
-        region_group_reclaimer recl(threshold, threshold);
+        region_group_reclaimer recl({.hard_limit = threshold, .soft_limit = threshold});
         region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
@@ -505,9 +508,12 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
             }
         public:
             reclaimer(size_t hard_threshold, size_t soft_threshold)
-                : region_group_reclaimer(hard_threshold, soft_threshold,
-                        std::bind_front(&reclaimer::start_reclaiming, this),
-                        std::bind_front(&reclaimer::stop_reclaiming, this))
+                : region_group_reclaimer({
+                        .hard_limit = hard_threshold,
+                        .soft_limit = soft_threshold,
+                        .start_reclaiming = std::bind_front(&reclaimer::start_reclaiming, this),
+                        .stop_reclaiming =std::bind_front(&reclaimer::stop_reclaiming, this)
+                  })
             { }
             bool reclaiming() const { return _reclaim; };
         };
