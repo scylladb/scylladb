@@ -114,11 +114,11 @@ have_gnutls = any([lib.startswith('libgnutls.so')
 gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.PIPE)
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
-# relocatable package format version = 2.2
+# relocatable package format version = 3.0
 shutil.rmtree(f'build/{SCYLLA_DIR}', ignore_errors=True)
 os.makedirs(f'build/{SCYLLA_DIR}')
 with open(f'build/{SCYLLA_DIR}/.relocatable_package_version', 'w') as f:
-    f.write('2.2\n')
+    f.write('3.0\n')
 ar.add(f'build/{SCYLLA_DIR}/.relocatable_package_version', arcname='.relocatable_package_version')
 
 for exe in executables_scylla:

@@ -51,9 +51,10 @@ done
 
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
 PKGS="build/$MODE/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-$VERSION-$RELEASE.noarch.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz"
+BASEDIR="build/$MODE/unified/$PRODUCT-$VERSION"
 
 rm -rf build/"$MODE"/unified/
-mkdir -p build/"$MODE"/unified/
+mkdir -p "$BASEDIR"
 for pkg in $PKGS; do
     if [ ! -e "$pkg" ]; then
         echo "$pkg not found."
@@ -61,17 +62,17 @@ for pkg in $PKGS; do
         exit 1
     fi
     pkg="$(readlink -f $pkg)"
-    tar -C build/"$MODE"/unified/ -xpf "$pkg"
+    tar -C "$BASEDIR" -xpf "$pkg"
     dirname=$(basename "$pkg"| sed -e "s/-$VERSION_ESC-$RELEASE_ESC\.[^.]*\.tar\.gz//")
     dirname=${dirname/#$PRODUCT/scylla}
-    if [ ! -d build/"$MODE"/unified/"$dirname" ]; then
+    if [ ! -d "$BASEDIR/$dirname" ]; then
         echo "Directory $dirname not found in $pkg, the pacakge may corrupted."
         exit 1
     fi
 done
-ln -f unified/install.sh build/"$MODE"/unified/
-ln -f unified/uninstall.sh build/"$MODE"/unified/
-# relocatable package format version = 2.2
-echo "2.2" > build/"$MODE"/unified/.relocatable_package_version
+ln -f unified/install.sh "$BASEDIR"
+ln -f unified/uninstall.sh "$BASEDIR"
+# relocatable package format version = 3.0
+echo "3.0" > "$BASEDIR"/.relocatable_package_version
 cd build/"$MODE"/unified
-tar cpf "$UNIFIED_PKG" --use-compress-program=pigz * .relocatable_package_version
+tar cpf "$UNIFIED_PKG" --use-compress-program=pigz "$PRODUCT-$VERSION"
