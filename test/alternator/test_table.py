@@ -11,7 +11,7 @@ import pytest
 import time
 import threading
 from botocore.exceptions import ClientError
-from util import list_tables, unique_table_name, create_test_table, random_string
+from util import list_tables, unique_table_name, create_test_table, random_string, new_test_table
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -246,32 +246,105 @@ def test_table_streams_off(dynamodb):
 # we stored a map for all non-key columns. If the user tried to name one
 # of the key columns with this same name, the result was a disaster - Scylla
 # goes into a bad state after trying to write data with two updates to same-
-# named columns.
-special_column_name1 = 'attrs'
-special_column_name2 = ':attrs'
-@pytest.fixture(scope="module")
-def test_table_special_column_name(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[
-            { 'AttributeName': special_column_name1, 'KeyType': 'HASH' },
-            { 'AttributeName': special_column_name2, 'KeyType': 'RANGE' }
-        ],
-        AttributeDefinitions=[
-            { 'AttributeName': special_column_name1, 'AttributeType': 'S' },
-            { 'AttributeName': special_column_name2, 'AttributeType': 'S' },
-        ],
-    )
-    yield table
-    table.delete()
-@pytest.mark.xfail(reason="special attrs column not yet hidden correctly")
-def test_create_table_special_column_name(test_table_special_column_name):
+# named columns. Starting with commit fc946ddfbac324cc3cc2550ab7fade5002fced01
+# the result was no longer a disaster, but is still an error from CreateTable
+# saying that the column name ':attrs' is reserved.
+# Reproduces #5009
+@pytest.mark.xfail(reason="#5009: name ':attrs' not allowed for key column")
+def test_create_table_special_column_name(dynamodb):
+    for c in ['attrs', ':attrs']:
+        # Try the suspicious attribute name as a partition key:
+        with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': c, 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': c, 'AttributeType': 'S' }]) as table:
+            s = random_string()
+            expected = {c: s, 'hello': random_string()}
+            table.put_item(Item=expected)
+            assert expected == table.get_item(Key={c: s}, ConsistentRead=True)['Item']
+        # Try the suspicious attribute name as a clustering key:
+        with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' },
+                       { 'AttributeName': c, 'KeyType': 'RANGE' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' },
+                                  { 'AttributeName': c, 'AttributeType': 'S' }]) as table:
+            p = random_string()
+            s = random_string()
+            expected = {'p': p, c: s, 'hello': random_string()}
+            table.put_item(Item=expected)
+            assert expected == table.get_item(Key={'p': p, c: s}, ConsistentRead=True)['Item']
+
+# Whereas test_create_table_special_column_name above tests what happen when
+# the name ":attrs" is used for a key column (partition key or sort key), in
+# the following tests test_special_attribute_name_* we want to see what happens
+# if the user tries to set or get a non-key attribute with that special name
+# using various operations like PutItem, GetItem, UpdateItem and various
+# expressions involving attribute names. Before issue #5009 was fixed, some of
+# these tests used to crash Scylla or otherwise fail.
+@pytest.mark.skip(reason="#5009: name ':attrs' for non-key attribute crashes Scylla")
+def test_special_attribute_name_putitem(test_table_s):
+    p = random_string()
+    expected = {'p': p, ':attrs': random_string()}
+    test_table_s.put_item(Item=expected)
+    assert expected == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+@pytest.mark.skip(reason="#5009: name ':attrs' for non-key attribute crashes Scylla")
+def test_special_attribute_name_updateitem_put(test_table_s):
+    p = random_string()
     s = random_string()
-    c = random_string()
-    h = random_string()
-    expected = {special_column_name1: s, special_column_name2: c, 'hello': h}
-    test_table_special_column_name.put_item(Item=expected)
-    got = test_table_special_column_name.get_item(Key={special_column_name1: s, special_column_name2: c}, ConsistentRead=True)['Item']
-    assert got == expected
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={':attrs': {'Value': s, 'Action': 'PUT'}})
+    assert {'p': p, ':attrs': s} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+@pytest.mark.xfail(reason="#5009: name ':attrs' for non-key attribute")
+def test_special_attribute_name_updateitem_delete(test_table_s):
+    p = random_string()
+    s = random_string()
+    test_table_s.put_item(Item={'p': p, ':attrs': s, 'animal': 'dog'})
+    assert {'p': p, ':attrs': s, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={':attrs': {'Action': 'DELETE'}})
+    assert {'p': p, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+@pytest.mark.xfail(reason="#5009: name ':attrs' for non-key attribute")
+def test_special_attribute_name_updateitem_rmw(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, ':attrs': 7})
+    assert {'p': p, ':attrs': 7} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET #a = #a + :one',
+        ExpressionAttributeValues={':one': 1},
+        ExpressionAttributeNames={'#a': ':attrs'})
+    assert {'p': p, ':attrs': 8} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+def test_special_attribute_name_updateitem_expected(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, ':attrs': 7})
+    assert {'p': p, ':attrs': 7} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'animal': {'Value': 'dog', 'Action': 'PUT'}},
+        Expected={':attrs': {'ComparisonOperator': 'EQ', 'AttributeValueList': [7]}})
+    assert {'p': p, ':attrs': 7, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+def test_special_attribute_name_updateitem_condition(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, ':attrs': 7})
+    assert {'p': p, ':attrs': 7} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET #b = :val',
+        ExpressionAttributeValues={':val': 'dog', ':seven': 7},
+        ExpressionAttributeNames={'#a': ':attrs', '#b': 'animal'},
+        ConditionExpression='#a = :seven')
+    assert {'p': p, ':attrs': 7, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
+def test_special_attribute_name_getitem_projection(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, ':attrs': 7, 'animal': 'dog'})
+    assert {'p': p, ':attrs': 7, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert {':attrs': 7} == test_table_s.get_item(Key={'p': p},
+        ProjectionExpression='#a',
+        ExpressionAttributeNames={'#a': ':attrs'},
+        ConsistentRead=True)['Item']
+
 
 # Test that all tables we create are listed, and pagination works properly.
 # Note that the DyanamoDB setup we run this against may have hundreds of
