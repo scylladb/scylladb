@@ -156,13 +156,13 @@ bool region_group::reclaimer_can_block() const {
     return _reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max();
 }
 
-void region_group::notify_relief() {
+void region_group::notify_pressure_relieved() {
     _relief.signal();
 }
 
-void memory_hard_limit::notify_relief() {
+void memory_hard_limit::notify_pressure_relieved() {
     if (_subgroup) {
-        _subgroup->notify_relief();
+        _subgroup->notify_pressure_relieved();
     }
 }
 
@@ -191,7 +191,7 @@ void memory_hard_limit::update(ssize_t delta) {
     do_update(this, top_relief, delta);
 
     if (top_relief) {
-        top_relief->notify_relief();
+        top_relief->notify_pressure_relieved();
     }
 }
 
@@ -206,9 +206,9 @@ void region_group::update(ssize_t delta) {
     }
 
     if (top_relief_memory_hard_limit) {
-        top_relief_memory_hard_limit->notify_relief();
+        top_relief_memory_hard_limit->notify_pressure_relieved();
     } else if (top_relief_region_group) {
-        top_relief_region_group->notify_relief();
+        top_relief_region_group->notify_pressure_relieved();
     }
 }
 

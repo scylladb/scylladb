@@ -211,7 +211,7 @@ public:
             , _reclaimer(reclaimer) {
     }
 
-    void notify_relief();
+    void notify_pressure_relieved();
 
     void update(ssize_t delta);
 
@@ -257,7 +257,7 @@ class region_group : public region_listener {
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
-    void notify_relief();
+    void notify_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 private: // from region_listener
     virtual void moved(region* old_address, region* new_address) override;
