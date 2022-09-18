@@ -1729,9 +1729,7 @@ future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
     return std::move(_waiting_flush).then([this] {
-        return _virtual_region_group.shutdown().then([this] {
-            return _real_region_group.shutdown();
-        });
+        return _virtual_region_group.shutdown();
     });
 }
 

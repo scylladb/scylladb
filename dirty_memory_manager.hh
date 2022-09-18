@@ -225,10 +225,6 @@ public:
     void add(region_group* child);
     void del(region_group* child);
 
-    future<> shutdown() {
-        return make_ready_future<>();
-    }
-
     template <region_group_or_memory_hard_limit RG>
     friend void do_update(RG* rg, RG*& top_relief, ssize_t delta);
 
