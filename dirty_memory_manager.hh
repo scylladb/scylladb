@@ -72,7 +72,7 @@ struct reclaim_config {
 };
 
 //
-class region_group_reclaimer {
+class region_group_reclaimer final {
 public:
 protected:
     reclaim_config _cfg;
@@ -113,8 +113,6 @@ public:
     explicit region_group_reclaimer(reclaim_config cfg = {}) noexcept : _cfg(std::move(cfg)) {
         assert(_cfg.soft_limit <= _cfg.hard_limit);
     }
-
-    virtual ~region_group_reclaimer() {}
 
     size_t throttle_threshold() const noexcept {
         return _cfg.hard_limit;
@@ -429,7 +427,8 @@ public:
     future<flush_permit> reacquire_sstable_write_permit() &&;
 };
 
-class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_reclaimer {
+class dirty_memory_manager {
+    dirty_memory_manager_logalloc::region_group_reclaimer _virtual_dirty_reclaimer;
     dirty_memory_manager_logalloc::region_group_reclaimer _real_dirty_reclaimer;
     // We need a separate boolean, because from the LSA point of view, pressure may still be
     // mounting, in which case the pressure flag could be set back on if we force it off.
@@ -466,7 +465,7 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     void start_reclaiming() noexcept;
 
     bool has_pressure() const noexcept {
-        return over_soft_limit();
+        return _virtual_dirty_reclaimer.over_soft_limit();
     }
 
     unsigned _extraneous_flushes = 0;
@@ -510,12 +509,13 @@ public:
     // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
-    dirty_memory_manager() : dirty_memory_manager_logalloc::region_group_reclaimer({
+    dirty_memory_manager()
+        : _virtual_dirty_reclaimer({
                 .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
           })
         , _db(nullptr)
         , _real_region_group("memtable", _real_dirty_reclaimer)
-        , _virtual_region_group("memtable (virtual)", &_real_region_group, *this)
+        , _virtual_region_group("memtable (virtual)", &_real_region_group, _virtual_dirty_reclaimer)
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
@@ -557,6 +557,14 @@ public:
 
     size_t virtual_dirty_memory() const noexcept {
         return _virtual_region_group.memory_used();
+    }
+
+    void notify_soft_pressure() {
+        _virtual_dirty_reclaimer.notify_soft_pressure();
+    }
+
+    size_t throttle_threshold() const {
+        return _virtual_dirty_reclaimer.throttle_threshold();
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;

@@ -340,7 +340,8 @@ public:
     }
 };
 
-class test_reclaimer: public region_group_reclaimer {
+class test_reclaimer {
+    region_group_reclaimer _reclaimer;
     test_reclaimer *_result_accumulator;
     region_group _rg;
     std::vector<size_t> _reclaim_sizes;
@@ -353,7 +354,7 @@ public:
         (void)with_gate(_reclaimers_done, [this] {
             return _unleash_reclaimer.get_shared_future().then([this] {
                 _unleashed.set_value();
-                while (this->under_pressure()) {
+                while (_reclaimer.under_pressure()) {
                     size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
                     _result_accumulator->_reclaim_sizes.push_back(reclaimed);
                 }
@@ -374,10 +375,11 @@ public:
         return _rg;
     }
 
-    test_reclaimer(size_t threshold) : region_group_reclaimer({
+    test_reclaimer(size_t threshold)
+        : _reclaimer({
             .hard_limit = threshold,
             .start_reclaiming = std::bind_front(&test_reclaimer::start_reclaiming, this),
-        }), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
+        }), _result_accumulator(this), _rg("test_reclaimer RG", _reclaimer) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
