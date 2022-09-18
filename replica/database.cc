@@ -451,7 +451,7 @@ dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t thresho
     : dirty_memory_manager_logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
     , _real_dirty_reclaimer(threshold)
     , _db(&db)
-    , _real_region_group("memtable", _real_dirty_reclaimer, deferred_work_sg)
+    , _real_region_group("memtable", _real_dirty_reclaimer)
     , _virtual_region_group("memtable (virtual)", &_real_region_group, *this, deferred_work_sg)
     , _flush_serializer(1)
     , _waiting_flush(flush_when_needed()) {}

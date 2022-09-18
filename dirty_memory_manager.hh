@@ -206,8 +206,7 @@ class memory_hard_limit {
 
 public:
     memory_hard_limit(sstring name = "(unnamed region_group)",
-            region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group() /* unused */)
+            region_group_reclaimer& reclaimer = no_reclaimer)
             : _name(std::move(name))
             , _reclaimer(reclaimer) {
     }
