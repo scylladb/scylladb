@@ -348,7 +348,7 @@ class test_reclaimer: public region_group_reclaimer {
     seastar::gate _reclaimers_done;
     promise<> _unleashed;
 public:
-    virtual void start_reclaiming() noexcept override {
+    void start_reclaiming() noexcept {
         // Future is waited on indirectly in `~test_reclaimer()` (via `_reclaimers_done`).
         (void)with_gate(_reclaimers_done, [this] {
             return _unleash_reclaimer.get_shared_future().then([this] {
@@ -374,7 +374,7 @@ public:
         return _rg;
     }
 
-    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
+    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold, std::bind_front(&test_reclaimer::start_reclaiming, this)), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
@@ -496,16 +496,18 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         class reclaimer : public region_group_reclaimer {
             bool _reclaim = false;
         protected:
-            void start_reclaiming() noexcept override {
+            void start_reclaiming() noexcept {
                 _reclaim = true;
             }
 
-            void stop_reclaiming() noexcept override {
+            void stop_reclaiming() noexcept {
                 _reclaim = false;
             }
         public:
             reclaimer(size_t hard_threshold, size_t soft_threshold)
-                : region_group_reclaimer(hard_threshold, soft_threshold)
+                : region_group_reclaimer(hard_threshold, soft_threshold,
+                        std::bind_front(&reclaimer::start_reclaiming, this),
+                        std::bind_front(&reclaimer::stop_reclaiming, this))
             { }
             bool reclaiming() const { return _reclaim; };
         };

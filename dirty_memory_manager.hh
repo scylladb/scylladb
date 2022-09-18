@@ -46,6 +46,9 @@ public:
 // those methods - which are a nop by default - the callers can take action to aid the LSA in
 // alleviating pressure.
 class region_group_reclaimer {
+public:
+    using reclaim_start_callback = noncopyable_function<void () noexcept>;
+    using reclaim_stop_callback = noncopyable_function<void () noexcept>;
 protected:
     size_t _threshold;
     size_t _soft_limit;
@@ -63,8 +66,8 @@ protected:
     //    In particular, the implementation should not depend on memory allocation
     //    because that may fail when in reclaiming context.
     //
-    virtual void start_reclaiming() noexcept {}
-    virtual void stop_reclaiming() noexcept {}
+    reclaim_start_callback _start_reclaiming;
+    reclaim_stop_callback _stop_reclaiming;
 public:
     bool under_pressure() const noexcept {
         return _under_pressure;
@@ -77,14 +80,14 @@ public:
     void notify_soft_pressure() noexcept {
         if (!_under_soft_pressure) {
             _under_soft_pressure = true;
-            start_reclaiming();
+            _start_reclaiming();
         }
     }
 
     void notify_soft_relief() noexcept {
         if (_under_soft_pressure) {
             _under_soft_pressure = false;
-            stop_reclaiming();
+            _stop_reclaiming();
         }
     }
 
@@ -96,12 +99,19 @@ public:
         _under_pressure = false;
     }
 
-    region_group_reclaimer() noexcept
-        : region_group_reclaimer(std::numeric_limits<size_t>::max()) {}
-    region_group_reclaimer(size_t threshold) noexcept
-        : region_group_reclaimer(threshold, threshold) {}
-    region_group_reclaimer(size_t threshold, size_t soft) noexcept
-        : _threshold(threshold), _soft_limit(soft) {
+    region_group_reclaimer(reclaim_start_callback start_reclaiming = [] () noexcept {},
+            reclaim_stop_callback stop_reclaiming = [] () noexcept {}) noexcept
+        : region_group_reclaimer(std::numeric_limits<size_t>::max(), std::move(start_reclaiming), std::move(stop_reclaiming)) {}
+    region_group_reclaimer(size_t threshold,
+            reclaim_start_callback start_reclaiming = [] () noexcept {},
+            reclaim_stop_callback stop_reclaiming = [] () noexcept {}) noexcept
+        : region_group_reclaimer(threshold, threshold, std::move(start_reclaiming), std::move(stop_reclaiming)) {}
+    region_group_reclaimer(size_t threshold, size_t soft,
+            reclaim_start_callback start_reclaiming = [] () noexcept {},
+            reclaim_stop_callback stop_reclaiming = [] () noexcept {}) noexcept
+        : _threshold(threshold), _soft_limit(soft)
+        , _start_reclaiming(std::move(start_reclaiming))
+        , _stop_reclaiming(std::move(stop_reclaiming)) {
         assert(_soft_limit <= _threshold);
     }
 
@@ -454,7 +464,7 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     future<> flush_when_needed();
 
     future<> _waiting_flush;
-    virtual void start_reclaiming() noexcept override;
+    void start_reclaiming() noexcept;
 
     bool has_pressure() const noexcept {
         return over_soft_limit();
@@ -501,7 +511,7 @@ public:
     // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
-    dirty_memory_manager() : dirty_memory_manager_logalloc::region_group_reclaimer()
+    dirty_memory_manager() : dirty_memory_manager_logalloc::region_group_reclaimer(std::bind_front(&dirty_memory_manager::start_reclaiming, this))
         , _db(nullptr)
         , _real_region_group("memtable", _real_dirty_reclaimer)
         , _virtual_region_group("memtable (virtual)", &_real_region_group, *this)
