@@ -448,15 +448,13 @@ void backlog_controller::update_controller(float shares) {
 
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
-    : _virtual_dirty_reclaimer({
+    : _db(&db)
+    , _real_region_group("memtable", dirty_memory_manager_logalloc::reclaim_config{.hard_limit = threshold})
+    , _virtual_region_group("memtable (virtual)", &_real_region_group, dirty_memory_manager_logalloc::reclaim_config{
             .hard_limit = threshold / 2,
             .soft_limit = threshold * soft_limit / 2,
             .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this)
-      })
-    , _real_dirty_reclaimer({.hard_limit = threshold})
-    , _db(&db)
-    , _real_region_group("memtable", _real_dirty_reclaimer)
-    , _virtual_region_group("memtable (virtual)", &_real_region_group, _virtual_dirty_reclaimer, deferred_work_sg)
+      }, deferred_work_sg)
     , _flush_serializer(1)
     , _waiting_flush(flush_when_needed()) {}
 

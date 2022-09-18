@@ -168,10 +168,10 @@ inline void quiesce(FutureType&& fut) {
 // Simple RAII structure that wraps around a region_group
 // Not using defer because we usually employ many region groups
 struct test_region_group: public region_group {
-    test_region_group(memory_hard_limit* parent, region_group_reclaimer& reclaimer)
-        : region_group("test_region_group", parent, reclaimer) {}
-    test_region_group(region_group_reclaimer& reclaimer)
-        : region_group("test_region_group", nullptr, reclaimer) {}
+    test_region_group(memory_hard_limit* parent, reclaim_config cfg)
+        : region_group("test_region_group", parent, std::move(cfg)) {}
+    test_region_group(reclaim_config cfg)
+        : region_group("test_region_group", nullptr, std::move(cfg)) {}
 
     ~test_region_group() {
         shutdown().get();
@@ -211,10 +211,8 @@ private:
 
 SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     return seastar::async([] {
-        region_group_reclaimer simple_reclaimer({ .hard_limit = logalloc::segment_size });
-
         // singleton hierarchy, only one segment allowed
-        test_region_group simple(simple_reclaimer);
+        test_region_group simple({ .hard_limit = logalloc::segment_size });
         auto simple_region = std::make_unique<test_region>();
         simple_region->listen(&simple);
 
@@ -270,9 +268,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
-        region_group_reclaimer simple_reclaimer({.hard_limit = logalloc::segment_size});
-
-        test_region_group rg(simple_reclaimer);
+        test_region_group rg({.hard_limit = logalloc::segment_size});
 
         auto region = std::make_unique<test_region>();
         region->listen(&rg);
@@ -341,7 +337,6 @@ public:
 };
 
 class test_reclaimer {
-    region_group_reclaimer _reclaimer;
     test_reclaimer *_result_accumulator;
     region_group _rg;
     std::vector<size_t> _reclaim_sizes;
@@ -354,7 +349,7 @@ public:
         (void)with_gate(_reclaimers_done, [this] {
             return _unleash_reclaimer.get_shared_future().then([this] {
                 _unleashed.set_value();
-                while (_reclaimer.under_pressure()) {
+                while (_rg.under_pressure()) {
                     size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
                     _result_accumulator->_reclaim_sizes.push_back(reclaimed);
                 }
@@ -376,10 +371,11 @@ public:
     }
 
     test_reclaimer(size_t threshold)
-        : _reclaimer({
+        : _result_accumulator(this)
+        , _rg("test_reclaimer RG", {
             .hard_limit = threshold,
             .start_reclaiming = std::bind_front(&test_reclaimer::start_reclaiming, this),
-        }), _result_accumulator(this), _rg("test_reclaimer RG", _reclaimer) {}
+        }) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
@@ -446,8 +442,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
 
         auto free_space = memory::stats().free_memory();
         size_t threshold = size_t(0.75 * free_space);
-        region_group_reclaimer recl({.hard_limit = threshold, .soft_limit = threshold});
-        region_group gr(test_name, recl);
+        region_group gr(test_name, {.hard_limit = threshold, .soft_limit = threshold});
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
         r.listen(&gr);
@@ -466,7 +461,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
             });
 
             auto fill_to_pressure = [&] {
-                while (!recl.under_pressure()) {
+                while (!gr.under_pressure()) {
                     objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
                 }
             };
@@ -485,7 +480,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
             }
 
             // Release
-            while (recl.under_pressure()) {
+            while (gr.under_pressure()) {
                 objs.pop_back();
             }
         });
@@ -499,13 +494,12 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         size_t soft_threshold = hard_threshold / 2;
 
         bool reclaiming = false;
-        region_group_reclaimer recl({
+        region_group gr(test_name, {
                 .hard_limit = hard_threshold,
                 .soft_limit = soft_threshold,
                 .start_reclaiming = [&] () noexcept { reclaiming = true; },
                 .stop_reclaiming = [&] () noexcept { reclaiming = false; },
         });
-        region_group gr(test_name, recl);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
         r.listen(&gr);
@@ -515,26 +509,26 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
 
             BOOST_REQUIRE(!reclaiming);
 
-            while (!recl.over_soft_limit()) {
+            while (!gr.over_soft_limit()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
             BOOST_REQUIRE(reclaiming);
 
-            while (!recl.under_pressure()) {
+            while (!gr.under_pressure()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
             BOOST_REQUIRE(reclaiming);
 
-            while (recl.under_pressure()) {
+            while (gr.under_pressure()) {
                 objs.pop_back();
             }
 
-            BOOST_REQUIRE(recl.over_soft_limit());
+            BOOST_REQUIRE(gr.over_soft_limit());
             BOOST_REQUIRE(reclaiming);
 
-            while (recl.over_soft_limit()) {
+            while (gr.over_soft_limit()) {
                 objs.pop_back();
             }
 

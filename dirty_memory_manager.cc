@@ -44,8 +44,6 @@ region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_re
     return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
 }
 
-region_group_reclaimer memory_hard_limit::no_reclaimer;
-
 uint64_t region_group::top_region_evictable_space() const noexcept {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
@@ -141,9 +139,9 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
 }
 
 region_group::region_group(sstring name, memory_hard_limit *parent,
-        region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
-    : _parent(parent)
-    , _reclaimer(reclaimer)
+        reclaim_config cfg, scheduling_group deferred_work_sg)
+    : _cfg(std::move(cfg))
+    , _parent(parent)
     , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {
@@ -153,7 +151,7 @@ region_group::region_group(sstring name, memory_hard_limit *parent,
 }
 
 bool region_group::reclaimer_can_block() const {
-    return _reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max();
+    return throttle_threshold() != std::numeric_limits<size_t>::max();
 }
 
 void region_group::notify_pressure_relieved() {
@@ -170,16 +168,16 @@ template <region_group_or_memory_hard_limit RG>
 void do_update(RG* rg, RG*& top_relief, ssize_t delta) {
     rg->_total_memory += delta;
 
-    if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
-        rg->_reclaimer.notify_soft_pressure();
+    if (rg->_total_memory >= rg->soft_limit_threshold()) {
+        rg->notify_soft_pressure();
     } else {
-        rg->_reclaimer.notify_soft_relief();
+        rg->notify_soft_relief();
     }
 
-    if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
-        rg->_reclaimer.notify_pressure();
-    } else if (rg->_reclaimer.under_pressure()) {
-        rg->_reclaimer.notify_relief();
+    if (rg->_total_memory > rg->throttle_threshold()) {
+        rg->notify_pressure();
+    } else if (rg->under_pressure()) {
+        rg->notify_relief();
         top_relief = rg;
     }
 }
