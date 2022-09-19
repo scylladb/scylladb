@@ -212,10 +212,6 @@ bool storage_service::should_bootstrap() {
     return !_sys_ks.local().bootstrap_complete() && !is_first_node();
 }
 
-future<> storage_service::snitch_reconfigured() {
-    return update_topology(utils::fb_utilities::get_broadcast_address());
-}
-
 /* Broadcasts the chosen tokens through gossip,
  * together with a CDC generation timestamp and STATUS=NORMAL.
  *
@@ -3258,10 +3254,11 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     });
 }
 
-future<> storage_service::update_topology(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+future<> storage_service::snitch_reconfigured() {
+    return container().invoke_on(0, [] (auto& ss) {
+        return ss.mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
             // re-read local rack and DC info
+            auto endpoint = utils::fb_utilities::get_broadcast_address();
             auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
             auto dr = locator::endpoint_dc_rack {
                 .dc = snitch->get_datacenter(endpoint),
