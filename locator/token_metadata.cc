@@ -74,9 +74,13 @@ private:
 
     void sort_tokens();
 
+    struct shallow_copy {};
+    token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
+    {}
+
 public:
     token_metadata_impl() noexcept {};
-    token_metadata_impl(const token_metadata_impl&) = default;
+    token_metadata_impl(const token_metadata_impl&) = delete; // it's too huge for direct copy, use clone_async()
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
@@ -358,7 +362,7 @@ future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone_sorted_tokens) const noexcept {
-    return do_with(token_metadata_impl(), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
+    return do_with(token_metadata_impl(shallow_copy{}, *this), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
         ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
         return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
             ret._token_to_endpoint_map.emplace(p);
