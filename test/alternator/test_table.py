@@ -280,14 +280,12 @@ def test_create_table_special_column_name(dynamodb):
 # using various operations like PutItem, GetItem, UpdateItem and various
 # expressions involving attribute names. Before issue #5009 was fixed, some of
 # these tests used to crash Scylla or otherwise fail.
-@pytest.mark.skip(reason="#5009: name ':attrs' for non-key attribute crashes Scylla")
 def test_special_attribute_name_putitem(test_table_s):
     p = random_string()
     expected = {'p': p, ':attrs': random_string()}
     test_table_s.put_item(Item=expected)
     assert expected == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
-@pytest.mark.skip(reason="#5009: name ':attrs' for non-key attribute crashes Scylla")
 def test_special_attribute_name_updateitem_put(test_table_s):
     p = random_string()
     s = random_string()
@@ -295,7 +293,6 @@ def test_special_attribute_name_updateitem_put(test_table_s):
         AttributeUpdates={':attrs': {'Value': s, 'Action': 'PUT'}})
     assert {'p': p, ':attrs': s} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
-@pytest.mark.xfail(reason="#5009: name ':attrs' for non-key attribute")
 def test_special_attribute_name_updateitem_delete(test_table_s):
     p = random_string()
     s = random_string()
@@ -305,7 +302,6 @@ def test_special_attribute_name_updateitem_delete(test_table_s):
         AttributeUpdates={':attrs': {'Action': 'DELETE'}})
     assert {'p': p, 'animal': 'dog'} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
-@pytest.mark.xfail(reason="#5009: name ':attrs' for non-key attribute")
 def test_special_attribute_name_updateitem_rmw(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, ':attrs': 7})
