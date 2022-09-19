@@ -210,6 +210,7 @@ public:
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
         _sst->_run_identifier = run_id::create_random_id();
+        _sst->_shards.push_back(this_shard_id());
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats, uint64_t data_file_size = 1) {
@@ -223,6 +224,7 @@ public:
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
         _sst->_run_identifier = run_id::create_random_id();
+        _sst->_shards.push_back(this_shard_id());
     }
 
     void rewrite_toc_without_scylla_component() {
