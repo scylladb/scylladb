@@ -212,9 +212,9 @@ public:
         _sst->_run_identifier = run_id::create_random_id();
     }
 
-    void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
-        _sst->_data_file_size = 1;
-        _sst->_bytes_on_disk = 1;
+    void set_values(sstring first_key, sstring last_key, stats_metadata stats, uint64_t data_file_size = 1) {
+        _sst->_data_file_size = data_file_size;
+        _sst->_bytes_on_disk = data_file_size;
         // scylla component must be present for a sstable to be considered fully expired.
         _sst->_recognized_components.insert(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
