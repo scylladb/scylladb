@@ -1260,6 +1260,22 @@ put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schem
     check_key(key, schema);
 }
 
+// find_attribute() checks whether the named attribute is stored in the
+// schema as a real column (we do this for key attribute, and for a GSI key)
+// and if so, returns that column. If not, the function returns nullptr,
+// telling the caller that the attribute is stored serialized in the
+// ATTRS_COLUMN_NAME map - not in a stand-alone column in the schema.
+static inline const column_definition* find_attribute(const schema& schema, const bytes& attribute_name) {
+    const column_definition* cdef = schema.get_column_definition(attribute_name);
+    // Although ATTRS_COLUMN_NAME exists as an actual column, when used as an
+    // attribute name it should refer to an attribute inside ATTRS_COLUMN_NAME
+    // not to ATTRS_COLUMN_NAME itself. This if() is needed for #5009.
+    if (cdef && cdef->name() == executor::ATTRS_COLUMN_NAME) {
+        return nullptr;
+    }
+    return cdef;
+}
+
 put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
@@ -1267,7 +1283,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
-        const column_definition* cdef = schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*schema, column_name);
         if (!cdef) {
             bytes value = serialize_item(it->value);
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
@@ -1299,7 +1315,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     auto& row = m.partition().clustered_row(*schema, _ck);
     attribute_collector attrs_collector;
     for (auto& c : *_cells) {
-        const column_definition* cdef = schema->get_column_definition(c.column_name);
+        const column_definition* cdef = find_attribute(*schema, c.column_name);
         if (!cdef) {
             attrs_collector.put(c.column_name, c.value, ts);
         } else {
@@ -2754,7 +2770,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 }
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
@@ -2776,7 +2792,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
         } else {
