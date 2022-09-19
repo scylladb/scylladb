@@ -32,23 +32,24 @@ public:
     void on_next_partition(dht::decorated_key, tombstone);
 };
 
+enum class row_processing_result {
+    // Causes the parser to return the control to the caller without advancing.
+    // Next time when the parser is called, the same consumer method will be called.
+    retry_later,
+
+    // Causes the parser to proceed to the next element.
+    do_proceed,
+
+    // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
+    skip_row
+};
+
 class mp_row_consumer_m {
     reader_permit _permit;
     const shared_sstable& _sst;
     tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 public:
-    enum class row_processing_result {
-        // Causes the parser to return the control to the caller without advancing.
-        // Next time when the parser is called, the same consumer method will be called.
-        retry_later,
-
-        // Causes the parser to proceed to the next element.
-        do_proceed,
-
-        // Causes the parser to skip the whole row. consume_row_end() will not be called for the current row.
-        skip_row
-    };
 
     mp_row_consumer_reader_mx* _reader;
     schema_ptr _schema;
@@ -317,7 +318,7 @@ public:
         return data_consumer::proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
-    mp_row_consumer_m::row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) {
+    row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) {
         auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
@@ -336,7 +337,7 @@ public:
         switch (res.action) {
         case mutation_fragment_filter::result::emit:
             sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
-            return mp_row_consumer_m::row_processing_result::do_proceed;
+            return row_processing_result::do_proceed;
         case mutation_fragment_filter::result::ignore:
             sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
             if (_mf_filter->out_of_range()) {
@@ -345,18 +346,18 @@ public:
                 // is ok because signalling out-of-range on the reader will cause it
                 // to either stop reading or skip to the next partition using index,
                 // not by ignoring fragments.
-                return mp_row_consumer_m::row_processing_result::retry_later;
+                return row_processing_result::retry_later;
             }
             if (_mf_filter->is_current_range_changed()) {
-                return mp_row_consumer_m::row_processing_result::retry_later;
+                return row_processing_result::retry_later;
             } else {
                 _in_progress_row.reset();
-                return mp_row_consumer_m::row_processing_result::skip_row;
+                return row_processing_result::skip_row;
             }
         case mutation_fragment_filter::result::store_and_finish:
             sstlog.trace("mp_row_consumer_m {}: store_and_finish", fmt::ptr(this));
             _reader->on_out_of_clustering_range();
-            return mp_row_consumer_m::row_processing_result::retry_later;
+            return row_processing_result::retry_later;
         }
         abort();
     }
@@ -376,14 +377,14 @@ public:
         return data_consumer::proceed::yes;
     }
 
-    mp_row_consumer_m::row_processing_result consume_static_row_start() {
+    row_processing_result consume_static_row_start() {
         sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", fmt::ptr(this));
         if (_treat_static_row_as_regular) {
             return consume_row_start({});
         }
         _inside_static_row = true;
         _in_progress_static_row = static_row();
-        return mp_row_consumer_m::row_processing_result::do_proceed;
+        return row_processing_result::do_proceed;
     }
 
     data_consumer::proceed consume_column(const column_translation::column_info& column_info,
@@ -931,17 +932,17 @@ private:
             _next_row_offset = position() - _processing_data->size() + _u64;
             co_yield read_unsigned_vint(*_processing_data);
             // Ignore the result
-            mp_row_consumer_m::row_processing_result ret = _extended_flags.is_static()
+            row_processing_result ret = _extended_flags.is_static()
                 ? _consumer.consume_static_row_start()
                 : _consumer.consume_row_start(_row_key);
 
-            while (ret == mp_row_consumer_m::row_processing_result::retry_later) {
+            while (ret == row_processing_result::retry_later) {
                 co_yield data_consumer::proceed::no;
                 ret = _extended_flags.is_static()
                     ? _consumer.consume_static_row_start()
                     : _consumer.consume_row_start(_row_key);
             }
-            if (ret == mp_row_consumer_m::row_processing_result::skip_row) {
+            if (ret == row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = position() - _processing_data->size();
                 auto maybe_skip_bytes = skip(*_processing_data, _next_row_offset - current_pos);
