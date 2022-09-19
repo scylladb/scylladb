@@ -3260,7 +3260,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
-    return mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
+    co_await mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
         auto endpoint = utils::fb_utilities::get_broadcast_address();
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
