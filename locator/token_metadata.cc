@@ -1241,10 +1241,11 @@ inline future<> topology::clear_gently() noexcept {
     co_return;
 }
 
-topology::topology(const topology& other) {
-    _dc_endpoints = other._dc_endpoints;
-    _dc_racks = other._dc_racks;
-    _current_locations = other._current_locations;
+topology::topology(const topology& other)
+        : _dc_endpoints(other._dc_endpoints)
+        , _dc_racks(other._dc_racks)
+        , _current_locations(other._current_locations)
+{
 }
 
 void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
