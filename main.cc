@@ -713,7 +713,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
             supervisor::notify("starting tokens manager");
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
+            locator::token_metadata::config tm_cfg;
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             // storage_proxy holds a reference on it and is not yet stopped.
             // what's worse is that the calltrace
             //   storage_proxy::do_query 

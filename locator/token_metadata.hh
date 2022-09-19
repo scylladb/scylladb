@@ -45,7 +45,9 @@ struct endpoint_dc_rack {
 
 class topology {
 public:
-    topology() {}
+    struct config {
+    };
+    topology(config cfg);
     topology(const topology& other);
 
     future<> clear_gently() noexcept;
@@ -135,6 +137,9 @@ class token_metadata_impl;
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 public:
+    struct config {
+        topology::config topo_cfg;
+    };
     using inet_address = gms::inet_address;
 private:
     class tokens_iterator {
@@ -158,7 +163,7 @@ private:
         friend class token_metadata_impl;
     };
 public:
-    token_metadata();
+    token_metadata(config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
@@ -350,8 +355,8 @@ class shared_token_metadata {
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
-    explicit shared_token_metadata(token_metadata_lock_func lock_func)
-        : _shared(make_token_metadata_ptr())
+    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
+        : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
     { }
 

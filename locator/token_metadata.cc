@@ -76,10 +76,11 @@ private:
 
     struct shallow_copy {};
     token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
+            : _topology(topology::config{})
     {}
 
 public:
-    token_metadata_impl() noexcept {};
+    token_metadata_impl(token_metadata::config cfg) noexcept : _topology(std::move(cfg.topo_cfg)) {};
     token_metadata_impl(const token_metadata_impl&) = delete; // it's too huge for direct copy, use clone_async()
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
@@ -973,8 +974,8 @@ token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
     : _impl(std::move(impl)) {
 }
 
-token_metadata::token_metadata()
-        : _impl(std::make_unique<token_metadata_impl>()) {
+token_metadata::token_metadata(config cfg)
+        : _impl(std::make_unique<token_metadata_impl>(std::move(cfg))) {
 }
 
 token_metadata::~token_metadata() = default;
@@ -1243,6 +1244,10 @@ inline future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_racks);
     co_await utils::clear_gently(_current_locations);
     co_return;
+}
+
+topology::topology(config cfg)
+{
 }
 
 topology::topology(const topology& other)

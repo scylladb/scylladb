@@ -526,7 +526,8 @@ public:
             }
 
             sharded<locator::shared_token_metadata> token_metadata;
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
+            locator::token_metadata::config tm_cfg;
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
             sharded<locator::effective_replication_map_factory> erm_factory;

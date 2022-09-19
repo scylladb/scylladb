@@ -172,7 +172,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 }
 
 std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_point>& pts) {
-    auto topo = std::make_unique<locator::topology>();
+    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
 
     // This resembles rack_inferring_snitch dc/rack generation which is
     // still in use by this test via token_metadata internals
@@ -199,7 +199,7 @@ void simple_test() {
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -284,7 +284,7 @@ void heavy_origin_test() {
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -559,7 +559,7 @@ std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<ss
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
-    auto topo = std::make_unique<locator::topology>();
+    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
 
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
@@ -594,7 +594,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
-        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); });
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
         auto topo = generate_topology(datacenters, nodes);
 
         std::unordered_set<dht::token> random_tokens;
