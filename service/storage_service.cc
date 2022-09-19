@@ -3260,17 +3260,17 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
-        return mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
-            // re-read local rack and DC info
-            auto endpoint = utils::fb_utilities::get_broadcast_address();
-            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            auto dr = locator::endpoint_dc_rack {
-                .dc = snitch->get_datacenter(endpoint),
-                .rack = snitch->get_rack(endpoint),
-            };
-            tmptr->update_topology(endpoint, std::move(dr));
-            return make_ready_future<>();
-        });
+    return mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
+        // re-read local rack and DC info
+        auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        auto dr = locator::endpoint_dc_rack {
+            .dc = snitch->get_datacenter(endpoint),
+            .rack = snitch->get_rack(endpoint),
+        };
+        tmptr->update_topology(endpoint, std::move(dr));
+        return make_ready_future<>();
+    });
 }
 
 void storage_service::init_messaging_service() {
