@@ -1,22 +1,17 @@
 **To upgrade ScyllaDB:**
 
-1. Update the |SCYLLA_REPO|_ to |NEW_VERSION|
+#. Update the |SCYLLA_REPO|_ to |NEW_VERSION|.
 
-2. Install
+#. Install:
 
-.. code-block::
+    .. code-block:: console
    
-   sudo apt-get clean all
-   sudo apt-get update
-   sudo apt-get dist-upgrade |PKG_NAME|
+       sudo apt-get clean all
+       sudo apt-get update
+       sudo apt-get dist-upgrade scylla
 
 
 Answer ‘y’ to the first two questions.
-
-.. note::
-
-   Alternator users upgrading from Scylla 4.0 to 4.1 need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`.
-
 
 Start the node
 --------------
@@ -27,10 +22,10 @@ Start the node
 
 Validate
 --------
-1. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in UN status.
-2. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the Scylla version.
-3. Check scylla-server log (by ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no errors.
-4. Check again after two minutes to validate no new issues are introduced.
+#. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in UN status.
+#. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the Scylla version.
+#. Check scylla-server log (by ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no errors.
+#. Check again after two minutes to validate no new issues are introduced.
 
 Once you are sure the node upgrade is successful, move to the next node in the cluster.
 
@@ -41,25 +36,25 @@ Rollback Procedure
 
 .. include:: /upgrade/_common/warning_rollback.rst
 
-The following procedure describes a rollback from |SCYLLA_NAME| release |NEW_VERSION|.x to |SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to |NEW_VERSION| failed before completing on all nodes. Use this procedure only for nodes you upgraded to |NEW_VERSION|.
+The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION|.x to |SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to |NEW_VERSION| failed before completing on all nodes. Use this procedure only for nodes you upgraded to |NEW_VERSION|.
 
-Scylla rollback is a rolling procedure which does **not** require full cluster shutdown.
-For each of the nodes rollback to |SRC_VERSION|, you will:
+ScyllaDB rollback is a rolling procedure which does **not** require full cluster shutdown.
+For each of the nodes you rollback to |SRC_VERSION|, you will:
 
 * Drain the node and stop Scylla
-* Retrieve the old Scylla packages
+* Retrieve the old ScyllaDB packages
 * Restore the configuration file
 * Restore system tables
 * Reload systemd configuration
-* Restart Scylla
+* Restart ScyllaDB
 * Validate the rollback success
 
-Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running with the new version.
+Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running the old version.
 
-Rollback steps
+Rollback Steps
 ==============
-Gracefully shutdown Scylla
---------------------------
+Gracefully shutdown ScyllaDB
+----------------------------
 
 .. code:: sh
 
@@ -68,20 +63,20 @@ Gracefully shutdown Scylla
 
 Download and install the old release
 ------------------------------------
-1. Remove the old repo file.
+#. Remove the old repo file.
 
-.. code:: sh
+    .. code:: sh
 
-   sudo rm -rf /etc/apt/sources.list.d/scylla.list
+       sudo rm -rf /etc/apt/sources.list.d/scylla.list
 
-2. Update the |SCYLLA_REPO|_ to |SRC_VERSION|
-3. Install
+#. Update the |SCYLLA_REPO|_ to |SRC_VERSION|.
+#. Install:
 
-.. code-block::
+    .. code-block::
    
-   sudo apt-get update
-   sudo apt-get remove scylla\* -y
-   sudo apt-get install |PKG_NAME|
+       sudo apt-get update
+       sudo apt-get remove scylla\* -y
+       sudo apt-get install scylla
 
 Answer ‘y’ to the first two questions.
 
@@ -95,7 +90,7 @@ Restore the configuration file
 Restore system tables
 ---------------------
 
-Restore all tables of **system** and **system_schema** from the previous snapshot - |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for reference.
+Restore all tables of **system** and **system_schema** from the previous snapshot because |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for reference.
 
 .. code:: sh
 
