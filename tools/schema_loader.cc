@@ -198,6 +198,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     feature_service.enable(feature_service.supported_feature_set());
     sharded<locator::shared_token_metadata> token_metadata;
 
+    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{}).get();
     auto stop_token_metadata = deferred_stop(token_metadata);
 

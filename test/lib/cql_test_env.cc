@@ -532,6 +532,7 @@ public:
 
             sharded<locator::shared_token_metadata> token_metadata;
             locator::token_metadata::config tm_cfg;
+            tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
@@ -608,10 +609,6 @@ public:
                 gossiper.stop().get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            token_metadata.invoke_on_all([&snitch] (auto& tm) {
-                tm.init_local_endpoint({ snitch.local()->get_datacenter(), snitch.local()->get_rack() });
-            }).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
