@@ -125,6 +125,18 @@ namespace bloom_calculations {
         }
         return std::min(probs.size() - 1, size_t(v));
     }
+
+    /**
+     * Retrieves the minimum supported bloom_filter_fp_chance value
+     * if compute_bloom_spec() above is attempted with bloom_filter_fp_chance
+     * lower than this, it will throw an unsupported_operation_exception.
+     */
+    inline double min_supported_bloom_filter_fp_chance() {
+        int max_buckets = probs.size() - 1;
+        int max_K = probs[max_buckets].size() - 1;
+        return probs[max_buckets][max_K];
+    }
+
 }
 
 }
