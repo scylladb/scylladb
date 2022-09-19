@@ -3271,6 +3271,11 @@ future<> storage_service::snitch_reconfigured() {
         tmptr->update_topology(endpoint, std::move(dr));
         return make_ready_future<>();
     });
+
+    if (_gossiper.is_enabled()) {
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        co_await _gossiper.add_local_application_state(snitch->get_app_states());
+    }
 }
 
 void storage_service::init_messaging_service() {
