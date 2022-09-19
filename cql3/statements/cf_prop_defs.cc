@@ -20,6 +20,7 @@
 #include "tombstone_gc.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "utils/bloom_calculations.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -150,6 +151,16 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
     if (max_index_interval < min_index_interval) {
         throw exceptions::configuration_exception(KW_MAX_INDEX_INTERVAL + " must be greater than " + KW_MIN_INDEX_INTERVAL);
+    }
+
+    if (get_simple(KW_BF_FP_CHANCE)) {
+        double bloom_filter_fp_chance = get_double(KW_BF_FP_CHANCE, 0/*not used*/);
+        double min_bloom_filter_fp_chance = utils::bloom_calculations::min_supported_bloom_filter_fp_chance();
+        if (bloom_filter_fp_chance <= min_bloom_filter_fp_chance || bloom_filter_fp_chance > 1.0) {
+            throw exceptions::configuration_exception(format(
+                "{} must be larger than {} and less than or equal to 1.0 (got {})",
+                KW_BF_FP_CHANCE, min_bloom_filter_fp_chance, bloom_filter_fp_chance));
+        }
     }
 
     speculative_retry::from_sstring(get_string(KW_SPECULATIVE_RETRY, speculative_retry(speculative_retry::type::NONE, 0).to_sstring()));
