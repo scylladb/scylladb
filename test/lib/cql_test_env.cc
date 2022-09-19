@@ -525,6 +525,11 @@ public:
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
 
+            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
+            snitch.start(locator::snitch_config{}).get();
+            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+
             sharded<locator::shared_token_metadata> token_metadata;
             locator::token_metadata::config tm_cfg;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
@@ -603,11 +608,6 @@ public:
                 gossiper.stop().get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
-            snitch.start(locator::snitch_config{}).get();
-            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
             token_metadata.invoke_on_all([&snitch] (auto& tm) {
                 tm.init_local_endpoint({ snitch.local()->get_datacenter(), snitch.local()->get_rack() });

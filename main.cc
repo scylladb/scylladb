@@ -712,6 +712,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
+            supervisor::notify("creating snitch");
+            snitch_config snitch_cfg;
+            snitch_cfg.name = cfg->endpoint_snitch();
+            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
+            snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
+            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            snitch.start(snitch_cfg).get();
+            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
+                snitch.stop().get();
+            });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+            // #293 - do not stop anything (unless snitch.on_all(start) fails)
+            stop_snitch->cancel();
+
             supervisor::notify("starting tokens manager");
             locator::token_metadata::config tm_cfg;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
@@ -888,20 +902,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            supervisor::notify("creating snitch");
-            snitch_config snitch_cfg;
-            snitch_cfg.name = cfg->endpoint_snitch();
-            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
-            snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
-            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(snitch_cfg).get();
-            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
-                snitch.stop().get();
-            });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
-            // #293 - do not stop anything (unless snitch.on_all(start) fails)
-            stop_snitch->cancel();
 
             if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
                 //
