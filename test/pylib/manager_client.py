@@ -75,7 +75,9 @@ class ManagerClient():
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
-        await self._get(f"/cluster/before-test/{test_name}")
+        resp = await self._get(f"/cluster/before-test/{test_name}")
+        if resp.status != 200:
+            raise RuntimeError(f"Failed before test check {await resp.text()}")
         if self.cql is None:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
