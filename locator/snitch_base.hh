@@ -206,17 +206,10 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
         return _ptr ? true : false;
     }
 
-    snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>&);
-
-    gms::gossiper& get_local_gossiper() noexcept { return _gossiper.local(); }
-    const gms::gossiper& get_local_gossiper() const noexcept { return _gossiper.local(); }
-
-    sharded<gms::gossiper>& get_gossiper() noexcept { return _gossiper; }
-    const sharded<gms::gossiper>& get_gossiper() const noexcept { return _gossiper; }
+    snitch_ptr(const snitch_config cfg);
 
 private:
     ptr_type _ptr;
-    sharded<gms::gossiper>& _gossiper;
 };
 
 /**
@@ -246,7 +239,7 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            tmp_snitch.start(cfg, std::ref(get_local_snitch_ptr().get_gossiper())).get();
+            tmp_snitch.start(cfg).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {

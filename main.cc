@@ -895,7 +895,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
             snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
             sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(snitch_cfg, std::ref(gossiper)).get();
+            snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
                 snitch.stop().get();
             });

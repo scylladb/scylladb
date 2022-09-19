@@ -26,7 +26,6 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/std-compat.hh>
-#include "gms/gossiper.hh"
 
 namespace fs = std::filesystem;
 
@@ -85,9 +84,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
-            sharded<gms::gossiper> g;
             sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(cfg, std::ref(g)).get();
+            snitch.start(cfg).get();
             snitch.invoke_on_all(&snitch_ptr::start).get();
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed configuration file");

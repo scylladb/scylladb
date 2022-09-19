@@ -9,7 +9,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/ec2_snitch.hh"
-#include "gms/gossiper.hh"
 #include "utils/fb_utilities.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
@@ -38,9 +37,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     snitch_config cfg;
     cfg.name = "Ec2Snitch";
     cfg.properties_file_name = fname.string();
-    sharded<gms::gossiper> g;
-    auto start = [cfg, &g] {
-        return i_endpoint_snitch::snitch_instance().start(cfg, std::ref(g)).then([] {
+    auto start = [cfg] {
+        return i_endpoint_snitch::snitch_instance().start(cfg).then([] {
             return i_endpoint_snitch::snitch_instance().invoke_on_all(&snitch_ptr::start);
         });
     };

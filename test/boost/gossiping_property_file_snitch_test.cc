@@ -10,7 +10,6 @@
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
 #include "utils/fb_utilities.hh"
-#include "gms/gossiper.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
@@ -21,10 +20,9 @@
 namespace fs = std::filesystem;
 
 static fs::path test_files_subdir("test/resource/snitch_property_files");
-static sharded<gms::gossiper> gossiper;
 
 static future<> create_snitch(locator::snitch_config cfg) {
-    return locator::i_endpoint_snitch::snitch_instance().start(cfg, std::ref(gossiper)).then([] {
+    return locator::i_endpoint_snitch::snitch_instance().start(cfg).then([] {
         return locator::i_endpoint_snitch::snitch_instance().invoke_on_all(&locator::snitch_ptr::start);
     });
 }

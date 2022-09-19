@@ -605,7 +605,7 @@ public:
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
             sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
-            snitch.start(locator::snitch_config{}, std::ref(gossiper)).get();
+            snitch.start(locator::snitch_config{}).get();
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
