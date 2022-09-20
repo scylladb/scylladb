@@ -2355,14 +2355,19 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
     auto dirs_to_sync = std::set<sstring>({dir()});
-    // FIXME: rewrite it for multiple compaction groups.
-    auto main_sstables = _compaction_group->main_sstables()->all();
     for (auto sst : sstables) {
         dirs_to_sync.emplace(sst->get_dir());
         try {
+            // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
+            // completed first.
+            // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
+            // from stepping on each other's toe.
             co_await sst->move_to_new_dir(dir(), sst->generation(), false);
-            // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
-            if (main_sstables->contains(sst)) {
+            // If view building finished faster, SSTable with repair origin still exists.
+            // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
+            // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
+            // Otherwise, we can count on off-strategy completion to add it when updating lists.
+            if (sst->get_origin() != sstables::repair_origin) {
                 add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
             }
         } catch (...) {
