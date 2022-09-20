@@ -115,7 +115,7 @@ public:
         return table().as_table_state().on_compaction_completion(std::move(desc), offstrategy);
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
-        return false;
+        return table().is_auto_compaction_disabled_by_user();
     }
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
