@@ -1178,3 +1178,76 @@ def test_index_paging_pk_only(cql, test_keyspace):
             assert len(results.current_rows) < page_size
             all_rows.extend(results.current_rows)
             assert sorted(all_rows) == [(i,) for i in range(10)]
+
+# When a partition key is indexed (it is redundant to index the entire
+# partition key, so this test has a compound partition key and indexes only
+# one component), the restriction can match the entire partition, but paging
+# still needs to page through it - and not return the entire partition as one
+# page! Reproduces #7432.
+@pytest.mark.xfail(reason="issue #7432")
+def test_index_paging_match_partition(cql, test_keyspace):
+    schema = 'p1 int, p2 int, c int, primary key (p1,p2,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(p2)")
+        insert = cql.prepare(f"INSERT INTO {table}(p1,p2,c) VALUES (?,?,?)")
+        for i in range(10):
+            # All of these have p2 = 1:
+            cql.execute(insert, [1, 1, i])
+        cql.execute(insert, [17, 17, 2])
+        for page_size in [1, 2, 3, 100]:
+            stmt = SimpleStatement(f"SELECT c FROM {table} WHERE p2 = 1", fetch_size=page_size)
+            # Check that:
+            # 1. Each page of results has the expected page_size, or less in
+            #    the last page. Although partial pages are theoretically
+            #    allowed (and happen in other tests), in this test we don't
+            #    expect Scylla or Cassandra to generate them.
+            # 2. Check that all the results read over all pages are the
+            #    expected ones (0...9)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(i,) for i in range(10)]
+
+# If, in contrast with test_index_paging_match_partition above which indexed
+# a partition key column, we index a clustering key column, paging does work
+# as expected and stops at the right page size. However, as was noted in
+# issue #7432, if we add "GROUP BY p" to the query, Scylla now mistakenly
+# returns all the results in one page instead of stopping. So the following
+# test passes with use_group_by = False but failed with use_group_by = True.
+@pytest.mark.parametrize("use_group_by", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#7432")), False])
+def test_index_paging_group_by(cql, test_keyspace, use_group_by):
+    schema = 'p int, c1 int, c2 int, primary key (p,c1,c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c1)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,c1,c2) VALUES (?,?,?)")
+        for i in range(10):
+            # All of these have c1 = 1:
+            cql.execute(insert, [i, 1, i])
+        cql.execute(insert, [17, 17, 2])
+        for page_size in [1, 2, 3, 100]:
+            group_by = 'GROUP BY p' if use_group_by else ''
+            stmt = SimpleStatement(f"SELECT p FROM {table} WHERE c1 = 1 {group_by}", fetch_size=page_size)
+            # Check that:
+            # 1. Each page of results has the expected page_size, or less in
+            #    the last page. Although partial pages are theoretically
+            #    allowed (and happen in other tests), in this test we don't
+            #    expect Scylla or Cassandra to generate them.
+            # 2. Check that all the results read over all pages are the
+            #    expected ones (0...9)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(i,) for i in range(10)]
