@@ -9,6 +9,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include "utils/small_vector.hh"
 #include "raft.hh"
 #include "tracker.hh"
 #include "log.hh"
@@ -20,7 +21,6 @@ struct fsm_output {
     struct applied_snapshot {
         snapshot_descriptor snp;
         bool is_local;
-        snapshot_id prev_snp_id;
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
@@ -28,6 +28,8 @@ struct fsm_output {
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<applied_snapshot> snp;
+    // In a typical scenario contains only one item, occasionally more.
+    utils::small_vector<snapshot_id, 1> snps_to_drop;
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
     std::optional<config_member_set> configuration;
@@ -39,7 +41,7 @@ struct fsm_output {
     bool empty() const {
         return !term_and_vote &&
             log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp &&
+            committed.size() == 0 && !snp && snps_to_drop.empty() &&
             !configuration;
     }
 };
@@ -459,7 +461,8 @@ public:
 
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry. Returns false if the snapshot is older than existing one.
+    // entry. Returns false if the snapshot is older than existing one,
+    // the passed snapshot will be dropped in this case.
     bool apply_snapshot(snapshot_descriptor snp, size_t traling, bool local);
 
     std::optional<std::pair<read_id, index_t>> start_read_barrier(server_id requester);

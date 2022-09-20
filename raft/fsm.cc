@@ -286,7 +286,7 @@ future<fsm_output> fsm::poll_output() {
         auto diff = _log.last_idx() - _log.stable_idx();
 
         if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed) || _output.snp) {
+                (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty()) {
             break;
         }
         co_await _sm_events.wait();
@@ -992,17 +992,22 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local) {
     if (snp.idx <= current_snp.idx || (!local && snp.idx <= _commit_idx)) {
         logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}, commit_idx={}",
                         _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx, _commit_idx);
+        _output.snps_to_drop.push_back(snp.id);
         return false;
     }
+
+    _output.snps_to_drop.push_back(current_snp.id);
+
     // If the snapshot is local, _commit_idx is larger than snp.idx.
     // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
-    _output.snp.emplace(fsm_output::applied_snapshot{snp, local, current_snp.id});
+    _output.snp.emplace(fsm_output::applied_snapshot{snp, local});
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
         leader_state().log_limiter_semaphore->signal(units);
     }
+    _sm_events.signal();
     return true;
 }
 

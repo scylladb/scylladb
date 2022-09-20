@@ -1460,6 +1460,16 @@ public:
             _fd_subscription = std::nullopt;
             co_await _fd_service->stop();
             co_await _server->abort();
+
+            {
+                std::vector<raft::snapshot_id> snapshot_ids;
+                snapshot_ids.reserve(_snapshots->size());
+                for (const auto& p: *_snapshots) {
+                    snapshot_ids.push_back(p.first);
+                }
+                BOOST_TEST_INFO(format("snapshot ids: [{}]", snapshot_ids));
+                BOOST_CHECK_LE(snapshot_ids.size(), 2);
+            }
         }
         co_await std::move(f);
         _stopped = true;
@@ -1549,6 +1559,10 @@ public:
         if (!_gate.is_closed()) {
             _rpc.receive(src, m);
         }
+    }
+
+    raft::server* get_server() {
+        return _server.get();
     }
 
 private:
@@ -2153,6 +2167,84 @@ SEASTAR_TEST_CASE(basic_test) {
 
         assert(std::holds_alternative<std::monostate>(
             co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
+
+        tlogger.debug("Configuration changed");
+
+        co_await call(ExReg::exchange{0}, 100_t);
+        for (int i = 1; i <= 100; ++i) {
+            assert(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger.debug("100 exchanges - three servers - passed");
+
+        // concurrent calls
+        std::vector<future<call_result_t<ExReg>>> futs;
+        for (int i = 0; i < 100; ++i) {
+            futs.push_back(call(ExReg::read{}, 100_t));
+            co_await timer.sleep(2_t);
+        }
+        for (int i = 0; i < 100; ++i) {
+            assert(eq(co_await std::move(futs[i]), ExReg::ret{100}));
+        }
+
+        tlogger.debug("100 concurrent reads - three servers - passed");
+    });
+
+    tlogger.debug("Finished");
+}
+
+SEASTAR_TEST_CASE(test_frequent_snapshotting) {
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{random_engine},
+        .network_delay{0, 6},
+        .fd_convict_threshold = 50_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        using output_t = typename ExReg::output_t;
+
+        t.start([&] (uint64_t tick) -> future<> {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+        const auto server_config = raft::server::configuration {
+            .snapshot_threshold{1},
+            .snapshot_trailing{5},
+            .max_log_size{20},
+            .enable_forwarding{true}
+        };
+
+        auto leader_id = co_await env.new_server(true, server_config);
+
+        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
+            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
+        };
+
+        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
+            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
+        };
+
+        // Wait at most 1000 ticks for the server to elect itself as a leader.
+        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
+
+        auto id2 = co_await env.new_server(false, server_config);
+        auto id3 = co_await env.new_server(false, server_config);
+
+        env.for_each_server([](raft::server_id, raft_server<ExReg>* srv) {
+            srv->get_server()->set_applier_queue_max_size(1);
+        });
+
+        tlogger.debug("Started 2 more servers, changing configuration");
+
+        assert(std::holds_alternative<std::monostate>(
+                co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
 
         tlogger.debug("Configuration changed");
 
