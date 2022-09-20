@@ -36,6 +36,10 @@ class compaction_group {
     lw_shared_ptr<sstables::sstable_set> _main_sstables;
     // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
     lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
+    // sstables that have been compacted (so don't look up in query) but
+    // have not been deleted yet, so must not GC any tombstones in other sstables
+    // that may delete data in these sstables:
+    std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
 public:
     compaction_group(table& t);
 
@@ -77,6 +81,8 @@ public:
 
     // Makes a compound set, which includes main and maintenance sets
     lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+
+    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
 
     compaction::table_state& as_table_state() const noexcept;
 };

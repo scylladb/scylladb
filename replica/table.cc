@@ -944,7 +944,7 @@ void table::rebuild_statistics() {
     _sstables->for_each_sstable([this] (const sstables::shared_sstable& tab) {
         update_stats_for_new_sstable(tab->bytes_on_disk());
     });
-    for (auto& tab : _sstables_compacted_but_not_deleted) {
+    for (auto& tab : as_table_state().compacted_undeleted_sstables()) {
         update_stats_for_new_sstable(tab->bytes_on_disk());
     }
 }
@@ -1042,7 +1042,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
     // Precompute before so undo_compacted_but_not_deleted can be sure not to throw
     std::unordered_set<sstables::shared_sstable> s(
            desc.old_sstables.begin(), desc.old_sstables.end());
-    auto& sstables_compacted_but_not_deleted = _t._sstables_compacted_but_not_deleted;
+    auto& sstables_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
     sstables_compacted_but_not_deleted.insert(sstables_compacted_but_not_deleted.end(), desc.old_sstables.begin(), desc.old_sstables.end());
     // After we are done, unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
     // or they could stay forever in the set, resulting in deleted files remaining
@@ -1241,17 +1241,17 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
 // garbage-collect a tombstone that covers data in an sstable that may not be
 // successfully deleted.
 lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undeleted() const {
-    if (_sstables_compacted_but_not_deleted.empty()) {
+    if (as_table_state().compacted_undeleted_sstables().empty()) {
         return get_sstables();
     }
     auto ret = make_lw_shared<sstable_list>(*_sstables->all());
-    for (auto&& s : _sstables_compacted_but_not_deleted) {
+    for (auto&& s : as_table_state().compacted_undeleted_sstables()) {
         ret->insert(s);
     }
     return ret;
 }
 
-const std::vector<sstables::shared_sstable>& table::compacted_undeleted_sstables() const {
+const std::vector<sstables::shared_sstable>& compaction_group::compacted_undeleted_sstables() const noexcept {
     return _sstables_compacted_but_not_deleted;
 }
 
@@ -2519,7 +2519,7 @@ public:
         return sstables::get_fully_expired_sstables(*this, sstables, query_time);
     }
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
-        return _t.compacted_undeleted_sstables();
+        return _cg.compacted_undeleted_sstables();
     }
     sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
         return _t.get_compaction_strategy();
