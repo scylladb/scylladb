@@ -56,6 +56,8 @@ struct column_family_for_tests {
 
     schema_ptr schema() { return _data->s; }
 
+    const replica::cf_stats& cf_stats() const noexcept { return _data->cf_stats; }
+
     operator lw_shared_ptr<replica::column_family>() { return _data->cf; }
 
     replica::column_family& operator*() { return *_data->cf; }
