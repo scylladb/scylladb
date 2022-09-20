@@ -30,6 +30,10 @@
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 
+namespace tasks {
+class repair_module;
+}
+
 namespace replica {
 class database;
 }
@@ -234,15 +238,11 @@ public:
 // be queried about more than once (FIXME: reconsider this. But note that
 // failed repairs should be rare anwyay).
 // This object is not thread safe, and must be used by only one cpu.
+// TODO: track the repair tasks entirely by the repair module
 class tracker {
 private:
-    // Each repair_start() call returns a unique int which the user can later
-    // use to follow the status of this repair with repair_status().
-    // We can't use the number 0 - if repair_start() returns 0, it means it
-    // decide quickly that there is nothing to repair.
-    int _next_repair_command = 1;
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
-    // Successfully-finished repairs are those with id < _next_repair_command
+    // Successfully-finished repairs are those with id <= repair_module::_sequence_number
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
     // Used to allow shutting down repairs in progress, and waiting for them.
@@ -262,8 +262,6 @@ private:
     void done(repair_uniq_id id, bool succeeded);
 public:
     explicit tracker(size_t max_repair_memory);
-    repair_status get(int id) const;
-    repair_uniq_id next_repair_command();
     future<> shutdown();
     void check_in_shutdown();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
@@ -275,9 +273,10 @@ public:
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
-    future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
     bool is_aborted(const tasks::task_id& uuid);
+
+    friend class repair_module;
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
