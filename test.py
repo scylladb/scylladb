@@ -331,11 +331,11 @@ class PythonTestSuite(TestSuite):
 
         topology = self.cfg.get("topology", {"class": "simple", "replication_factor": 1})
 
-        self.create_cluster = self.topology_for_class(topology["class"], topology)
+        self.create_cluster = self.get_cluster_factory(topology["class"], topology)
 
         self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
 
-    def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
+    def get_cluster_factory(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
         def create_server(cluster_name: str, seeds: List[str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
