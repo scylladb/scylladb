@@ -465,7 +465,7 @@ class ScyllaCluster:
         data: dict = {}
 
     def __init__(self, replicas: int,
-                 create_server: Callable[[str, Optional[List[str]]], ScyllaServer]) -> None:
+                 create_server: Callable[[str, List[str]], ScyllaServer]) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server

@@ -366,7 +366,7 @@ class PythonTestSuite(TestSuite):
             return server
 
         if class_name.lower() == "simple":
-            async def create_cluster():
+            async def create_cluster() -> ScyllaCluster:
                 cluster = ScyllaCluster(int(cfg["replication_factor"]),
                                         create_server)
                 await cluster.install_and_start()
