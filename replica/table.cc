@@ -1222,8 +1222,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
 }
 
 const sstables::sstable_set& table::get_sstable_set() const {
-    // main sstables is enough for the outside world. sstables in other set like maintenance is not needed even for expiration purposes in compaction
-    return *_compaction_group->main_sstables();
+    return *_sstables;
 }
 
 lw_shared_ptr<const sstable_list> table::get_sstables() const {
