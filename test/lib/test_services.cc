@@ -78,7 +78,7 @@ public:
         return true;
     }
     const sstables::sstable_set& main_sstable_set() const override {
-        return table().get_sstable_set();
+        return table().as_table_state().main_sstable_set();
     }
     const sstables::sstable_set& maintenance_sstable_set() const override {
         return table().as_table_state().maintenance_sstable_set();
