@@ -946,9 +946,10 @@ compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_sha
 std::unique_ptr<sstable_set_impl> compound_sstable_set::clone() const {
     std::vector<lw_shared_ptr<sstable_set>> cloned_sets;
     cloned_sets.reserve(_sets.size());
-    for (auto& set : _sets) {
+    for (const auto& set : _sets) {
         // implicit clone by using sstable_set's copy ctor.
-        cloned_sets.push_back(make_lw_shared(std::move(*set)));
+        auto cloned_set = make_lw_shared(*set);
+        cloned_sets.push_back(std::move(cloned_set));
     }
     return std::make_unique<compound_sstable_set>(_schema, std::move(cloned_sets));
 }
