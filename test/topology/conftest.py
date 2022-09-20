@@ -182,7 +182,10 @@ def check_pre_raft(cql):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
     experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
-    return 'raft' in experimental_features
+    # Check if command line option was set (if not present set to false)
+    ccm = list(cql.execute("SELECT value FROM system.config WHERE name = 'consistent_cluster_management'"))
+    ccm = 'false' if not ccm else ccm[0].value
+    return 'raft' in experimental_features or ccm == 'true'
 
 @pytest.fixture(scope="function")
 def fails_without_raft(request, check_pre_raft):
