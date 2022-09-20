@@ -54,9 +54,9 @@ public:
 };
 
 class node_ops_metrics {
-    tracker& _tracker;
+    shared_ptr<repair_module> _module;
 public:
-    node_ops_metrics(tracker& tracker);
+    node_ops_metrics(shared_ptr<repair_module> module);
 
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
@@ -92,7 +92,6 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::view::view_update_generator>& _view_update_generator;
     shared_ptr<repair_module> _repair_module;
     service::migration_manager& _mm;
-    tracker _tracker;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
@@ -177,13 +176,6 @@ public:
     seastar::semaphore& memory_sem() { return _memory_sem; }
     repair_module& get_repair_module() noexcept {
         return *_repair_module;
-    }
-
-    tracker& repair_tracker() {
-        return _tracker;
-    }
-    const tracker& repair_tracker() const {
-        return _tracker;
     }
 
     const node_ops_metrics& get_metrics() const noexcept {

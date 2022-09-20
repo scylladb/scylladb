@@ -72,13 +72,32 @@ protected:
     // TODO: implement abort and progress for data-sync repairs
 };
 
+// The repair_module tracks ongoing repair operations and their progress.
+// A repair which has already finished successfully is dropped from this
+// table, but a failed repair will remain in the table forever so it can
+// be queried about more than once (FIXME: reconsider this. But note that
+// failed repairs should be rare anwyay).
 class repair_module : public tasks::task_manager::module {
 private:
+    // Note that there are no "SUCCESSFUL" entries in the "status" map:
+    // Successfully-finished repairs are those with id < _sequence_number
+    // but aren't listed as running or failed the status map.
+    std::unordered_map<int, repair_status> _status;
+    // Map repair id into repair_info.
+    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs; // TODO: This may be replaced with ptrs to shard tasks. 
+    std::unordered_set<tasks::task_id> _pending_repairs;
+    std::unordered_set<tasks::task_id> _aborted_pending_repairs;
+    named_semaphore _range_parallelism_semaphore;
+    static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
+    seastar::condition_variable _done_cond;
     repair_service& _rs;
-public:
-    repair_module(tasks::task_manager& tm, repair_service& rs) noexcept : module(tm, "repair"), _rs(rs) {}
 
-    repair_service& repair_service() noexcept {
+    void start(repair_uniq_id id);
+    void done(repair_uniq_id id, bool succeeded);
+public:
+    repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept;
+
+    repair_service& get_repair_service() noexcept {
         return _rs;
     }
 
@@ -89,6 +108,19 @@ public:
         };
     }
 
+    void check_in_shutdown();
     repair_status get(int id) const;
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
+    void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
+    void remove_repair_info(int id);
+    lw_shared_ptr<repair_info> get_repair_info(int id);
+    std::vector<int> get_active() const;
+    size_t nr_running_repair_jobs();
+    void abort_all_repairs();
+    named_semaphore& range_parallelism_semaphore();
+    static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
+    future<> run(repair_uniq_id id, std::function<void ()> func);
+    float report_progress(streaming::stream_reason reason);
+    void abort_repair_node_ops(node_ops_id ops_uuid);
+    bool is_aborted(const tasks::task_id& uuid);
 };
