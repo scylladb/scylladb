@@ -1719,25 +1719,21 @@ future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 rea
 
 static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
     auto schema = table_s.schema();
+    auto permit = table_s.make_compaction_reader_permit();
 
-    formatted_sstables_list sstables_list_msg;
-    auto sstables = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(schema, false));
+    uint64_t validation_errors;
+
     for (const auto& sst : descriptor.sstables) {
-        sstables_list_msg += sst;
-        sstables->insert(sst);
+        clogger.info("Scrubbing in validate mode {}", sst->get_filename());
+
+        auto reader = sst->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
+        validation_errors += co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
+
+        clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
     }
 
-    clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
-
-    auto permit = table_s.make_compaction_reader_permit();
-    auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
-
-    const auto validation_errors = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
-
-    clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, validation_errors == 0 ? "valid" : "invalid");
-
     if (validation_errors != 0) {
-        for (auto& sst : *sstables->all()) {
+        for (auto& sst : descriptor.sstables) {
             co_await sst->change_state(sstables::quarantine_dir);
         }
     }
