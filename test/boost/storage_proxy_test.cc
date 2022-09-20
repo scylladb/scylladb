@@ -55,7 +55,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             {
                 // Ring with minimum token
                 auto tmptr = locator::make_token_metadata_ptr();
-                tmptr->update_topology(gms::inet_address("10.0.0.1"), {});
                 tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), gms::inet_address("10.0.0.1")).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {
@@ -69,9 +68,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             {
                 auto tmptr = locator::make_token_metadata_ptr();
-                tmptr->update_topology(gms::inet_address("10.0.0.1"), {});
                 tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), gms::inet_address("10.0.0.1")).get();
-                tmptr->update_topology(gms::inet_address("10.0.0.2"), {});
                 tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), gms::inet_address("10.0.0.2")).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {

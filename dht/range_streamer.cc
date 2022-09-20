@@ -126,7 +126,6 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
     //Pending ranges
-    metadata_clone.update_topology(_address, _dr);
     metadata_clone.update_normal_tokens(_tokens, _address).get();
     auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
     metadata_clone.clear_gently().get();

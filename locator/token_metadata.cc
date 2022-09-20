@@ -96,8 +96,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.update_endpoint(ep, std::move(dr));
+    void update_topology(inet_address ep) {
+        _topology.update_endpoint(ep);
     }
 
     /**
@@ -422,10 +422,6 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
         co_return;
     }
 
-    if (!is_member(endpoint)) {
-        on_internal_error(tlogger, format("token_metadata_impl: {} must be member to update normal tokens", endpoint));
-    }
-
     bool should_sort_tokens = false;
 
     // Phase 1: erase all tokens previously owned by the endpoint.
@@ -446,10 +442,11 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
     }
 
     // Phase 2:
-    // a. ...
+    // a. Add the endpoint to _topology if needed.
     // b. update pending _bootstrap_tokens and _leaving_endpoints
     // c. update _token_to_endpoint_map with the new endpoint->token mappings
     //    - set `should_sort_tokens` if new tokens were added
+    _topology.add_endpoint(endpoint);
     remove_by_value(_bootstrap_tokens, endpoint);
     _leaving_endpoints.erase(endpoint);
     invalidate_cached_rings();
@@ -854,7 +851,6 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     for (auto& x : tmp) {
         auto& endpoint = x.first;
         auto& tokens = x.second;
-        all_left_metadata->update_topology(endpoint, {});
         all_left_metadata->update_normal_tokens(tokens, endpoint).get();
         for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint).get0()) {
             new_pending_ranges.emplace(x.second, endpoint);
@@ -1026,8 +1022,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
-    _impl->update_topology(ep, std::move(dr));
+token_metadata::update_topology(inet_address ep) {
+    _impl->update_topology(ep);
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
@@ -1247,20 +1243,31 @@ topology::topology(const topology& other) {
     _current_locations = other._current_locations;
 }
 
-void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
+void topology::add_endpoint(const inet_address& ep)
 {
+    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
+    sstring dc = snitch->get_datacenter(ep);
+    sstring rack = snitch->get_rack(ep);
     auto current = _current_locations.find(ep);
 
     if (current != _current_locations.end()) {
-        if (current->second.dc == dr.dc && current->second.rack == dr.rack) {
+        if (current->second.dc == dc && current->second.rack == rack) {
             return;
         }
         remove_endpoint(ep);
     }
 
-    _dc_endpoints[dr.dc].insert(ep);
-    _dc_racks[dr.dc][dr.rack].insert(ep);
-    _current_locations[ep] = std::move(dr);
+    _dc_endpoints[dc].insert(ep);
+    _dc_racks[dc][rack].insert(ep);
+    _current_locations[ep] = {dc, rack};
+}
+
+void topology::update_endpoint(inet_address ep) {
+    if (!_current_locations.contains(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
+        return;
+    }
+
+    add_endpoint(ep);
 }
 
 void topology::remove_endpoint(inet_address ep)

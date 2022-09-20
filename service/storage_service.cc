@@ -14,7 +14,6 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include "locator/snitch_base.hh"
-#include "locator/production_snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
@@ -317,8 +316,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        auto ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
-        bootstrap_tokens = std::move(ri.tokens);
+        bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
         auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -326,7 +324,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -363,7 +360,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack());
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
         cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
@@ -540,7 +536,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack());
         return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
@@ -686,7 +681,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack());
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
                 }).get();
@@ -709,7 +703,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
             } else {
@@ -965,9 +959,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
-    if (!is_member) {
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
-    }
     co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
@@ -1016,7 +1007,6 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
@@ -1316,15 +1306,6 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint) {
-    auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
-    auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
-    return locator::endpoint_dc_rack{
-        .dc = dc ? dc->value : locator::production_snitch_base::default_dc,
-        .rack = rack ? rack->value : locator::production_snitch_base::default_rack,
-    };
-}
-
 void endpoint_lifecycle_notifier::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
 {
     _subscribers.add(subscriber);
@@ -1394,18 +1375,6 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
-            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info();
-
-            auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
-                if (loaded_dc_rack.contains(ep)) {
-                    return loaded_dc_rack[ep];
-                } else {
-                    return locator::endpoint_dc_rack {
-                        .dc = locator::production_snitch_base::default_dc,
-                        .rack = locator::production_snitch_base::default_rack,
-                    };
-                }
-            };
 
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
@@ -1424,7 +1393,6 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                     // entry has been mistakenly added, delete it
                     _sys_ks.local().remove_endpoint(ep).get();
                 } else {
-                    tmptr->update_topology(ep, get_dc_rack(ep));
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
@@ -1643,18 +1611,14 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
     }
 
-    auto dc_rack = get_dc_rack_for(replace_address);
+    replacement_info ret {std::move(tokens)};
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
     co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
     const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
     co_await _gossiper.reset_endpoint_state_map();
-
-    co_return replacement_info {
-        .tokens = std::move(tokens),
-        .dc_rack = std::move(dc_rack),
-    };
+    co_return ret;
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
@@ -2262,7 +2226,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 
@@ -2697,7 +2661,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                    ss.get_broadcast_address(), ss._sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
+                    ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
             if (source_dc != "") {
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -2872,7 +2836,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Removenode", streaming::stream_reason::removenode);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -2899,7 +2863,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             as.request_abort();
         }
     });
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
     auto status_checker = seastar::async([this, endpoint, &as] {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
@@ -3019,7 +2983,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -3261,12 +3225,7 @@ future<> storage_service::update_topology(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto& ss) {
         return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
             // re-read local rack and DC info
-            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            auto dr = locator::endpoint_dc_rack {
-                .dc = snitch->get_datacenter(endpoint),
-                .rack = snitch->get_rack(endpoint),
-            };
-            tmptr->update_topology(endpoint, std::move(dr));
+            tmptr->update_topology(endpoint);
             return make_ready_future<>();
         });
     });

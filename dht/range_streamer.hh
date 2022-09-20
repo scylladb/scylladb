@@ -76,24 +76,21 @@ public:
         }
     };
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
         : _db(db)
         , _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
         , _abort_source(abort_source)
         , _tokens(std::move(tokens))
         , _address(address)
-        , _dr(std::move(dr))
         , _description(std::move(description))
         , _reason(reason)
     {
         _abort_source.check();
     }
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason) {
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, description, reason) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -152,7 +149,6 @@ private:
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
     inet_address _address;
-    locator::endpoint_dc_rack _dr;
     sstring _description;
     streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
