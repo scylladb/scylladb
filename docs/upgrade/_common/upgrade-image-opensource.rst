@@ -20,24 +20,30 @@ Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and 
     
        sudo apt-get update
 
-#. Run the following command to update the manifest file:
 
+#. Run the following command to update the manifest file:
+    
     .. code:: sh 
     
-       cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get -y
+       cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get install -y
     
     Where:
 
       * ``<version>`` - The ScyllaDB version to which you are upgrading ( |NEW_VERSION| ).
       * ``<arch>`` - Architecture type: ``x86_64`` or ``aarch64``.
-
+    
     The file is included in the ScyllaDB packages downloaded in the previous step. The file location is ``http://downloads.scylladb.com/downloads/scylla/aws/manifest/scylla-packages-<version>-<arch>.txt``
 
     Example:
-
+    
         .. code:: sh 
            
-           cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get -y
+           cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get install -y
 
+        .. note:: 
+
+           Alternatively, you can update the manifest file with the following command:
+
+           ``sudo apt-get install $(awk '{print $1'} scylla-packages-<version>-<arch>.txt) -y``
 
 .. _upgrade-image-upgrade-guide-regular-procedure:
