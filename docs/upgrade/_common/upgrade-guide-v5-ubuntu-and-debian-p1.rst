@@ -2,49 +2,43 @@
 Upgrade Guide - |SCYLLA_NAME| |SRC_VERSION| to |NEW_VERSION| for |OS|
 =============================================================================
 
-This document is a step by step procedure for upgrading from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|, and rollback to |SRC_VERSION| if required.
+This document is a step by step procedure for upgrading from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|, and rollback to version |SRC_VERSION| if required.
 
-..
-  Relevant and tested for Ubuntu 20.04. Remove from other OSes and versions.
-
-There are two upgrade alternatives: you can upgrade ScyllaDB simultaneously updating 3rd party and OS packages (recommended for Ubuntu 20.04), or upgrade ScyllaDB without updating any external packages.
-
-Applicable versions
+Applicable Versions
 ===================
-This guide covers upgrading Scylla from version |SRC_VERSION|.x or later to |SCYLLA_NAME| version |NEW_VERSION|.y on the following platform:
-
-* |OS|
+This guide covers upgrading |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION| on |OS|.
+See :doc:`OS Support by Platform and Version </getting-started/os-support>` for information about supported versions.
 
 Upgrade Procedure
 =================
 
-A Scylla upgrade is a rolling procedure which does **not** require full cluster shutdown.
+A ScyllaDB upgrade is a rolling procedure which does **not** require full cluster shutdown.
 For each of the nodes in the cluster, you will:
 
-* Check cluster schema
-* Drain node and backup the data
-* Backup configuration file
-* Stop Scylla
-* Download and install new Scylla packages
-* Start Scylla
+* Check the cluster's schema
+* Drain the node and backup the data
+* Backup the configuration file
+* Stop ScyllaDB
+* Download and install new ScyllaDB packages
+* Start ScyllaDB
 * Validate that the upgrade was successful
 
-Apply the following procedure **serially** on each node. Do not move to the next node before validating that the node you upgraded is up and running with the new version.
+Apply the following procedure **serially** on each node. Do not move to the next node before validating that the node you upgraded is up and running the new version.
 
 
 **During** the rolling upgrade, it is highly recommended:
 
-* Not to use new |NEW_VERSION| features
-* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `here <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
+* Not to use the new |NEW_VERSION| features
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
 * Not to apply schema changes
 
-.. note:: Before upgrading, make sure to use the latest `Scylla Montioring <https://monitoring.docs.scylladb.com/>`_ stack.
+.. note:: Before upgrading, make sure to use the latest `ScyllaDB Montioring <https://monitoring.docs.scylladb.com/>`_ stack.
 
-Upgrade steps
+Upgrade Steps
 =============
 Check the cluster schema
 -------------------------
-Make sure that all nodes have the schema synched before the upgrade. The upgrade will fail if there is any disagreement between the nodes.
+Make sure that all nodes have the schema synced before the upgrade. The upgrade will fail if there is a schema disagreement between nodes.
 
 .. code:: sh
 
@@ -59,12 +53,12 @@ Before any major procedure, like an upgrade, it is recommended to backup all the
    nodetool drain
    nodetool snapshot
 
-Take note of the directory name that nodetool gives you, and copy all the directories having this name under ``/var/lib/scylla`` to a backup device.
+Take note of the directory name that nodetool gives you, and copy all the directories having that name under ``/var/lib/scylla`` to a backup device.
 
-When the upgrade is complete on all nodes, the snapshot should be removed by ``nodetool clearsnapshot -t <snapshot>`` to prevent running out of space.
+When the upgrade is completed on all nodes, remove the snapshot with the ``nodetool clearsnapshot -t <snapshot>`` command to prevent running out of space.
 
-Backup configuration file
--------------------------
+Backup the configuration file
+------------------------------
 
 .. code:: sh
 
