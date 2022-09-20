@@ -92,6 +92,7 @@ public:
     bool is_leader() override;
     void tick() override;
     raft::server_id id() const override;
+    void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
@@ -834,18 +835,20 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.snp) {
-                auto& [snp, is_local, old_id] = *batch.snp;
+                auto& [snp, is_local] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
                 co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
                 _stats.store_snapshot++;
-                // Drop previous snapshot since it is no longer used
-                 _state_machine->drop_snapshot(old_id);
                 // If this is locally generated snapshot there is no need to
                 // load it.
                 if (!is_local) {
                     co_await _apply_entries.push_eventually(std::move(snp));
                 }
+            }
+
+            for (const auto& snp_id: batch.snps_to_drop) {
+                _state_machine->drop_snapshot(snp_id);
             }
 
             if (batch.log_entries.size()) {
@@ -999,11 +1002,6 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
     } catch (...) {
         logger.error("apply_snapshot[{}] failed with {}", _id, std::current_exception());
     }
-    if (!reply.success) {
-        // Drop snapshot that failed to be applied
-        _state_machine->drop_snapshot(snp.snp.id);
-    }
-
     co_return reply;
 }
 
@@ -1075,7 +1073,6 @@ future<> server_impl::applier_fiber() {
                    if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                       _state_machine->drop_snapshot(snp.id);
                    }
                    _stats.snapshots_taken++;
                }
@@ -1492,6 +1489,10 @@ void server_impl::tick() {
 
 raft::server_id server_impl::id() const {
     return _id;
+}
+
+void server_impl::set_applier_queue_max_size(size_t queue_max_size) {
+    _apply_entries.set_max_size(queue_max_size);
 }
 
 const server_address_set& server_impl::get_rpc_config() const {
