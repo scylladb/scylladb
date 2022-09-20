@@ -1581,11 +1581,7 @@ private:
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     reader_concurrency_semaphore::inactive_read_handle _irh;
-    bool _drop_partition_start = false;
-    bool _drop_static_row = false;
-    // Validate the partition key of the first emitted partition, set after the
-    // reader was recreated.
-    bool _validate_partition_key = false;
+    bool _reader_recreated = false; // set if reader was recreated since last operation
     position_in_partition::tri_compare _tri_cmp;
 
     std::optional<dht::decorated_key> _last_pkey;
@@ -1606,10 +1602,9 @@ private:
     void adjust_partition_slice();
     flat_mutation_reader_v2 recreate_reader();
     future<flat_mutation_reader_v2> resume_or_create_reader();
-    void maybe_validate_partition_start(const flat_mutation_reader_v2::tracked_buffer& buffer);
+    void validate_partition_start(const partition_start& ps);
     void validate_position_in_partition(position_in_partition_view pos) const;
-    bool should_drop_fragment(const mutation_fragment_v2& mf);
-    future<> do_fill_buffer();
+    void examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3);
 
 public:
     evictable_reader_v2(
@@ -1725,9 +1720,6 @@ flat_mutation_reader_v2 evictable_reader_v2::recreate_reader() {
     _range_override.reset();
     _slice_override.reset();
 
-    _drop_partition_start = false;
-    _drop_static_row = false;
-
     if (_last_pkey) {
         bool partition_range_is_inclusive = true;
 
@@ -1736,11 +1728,8 @@ flat_mutation_reader_v2 evictable_reader_v2::recreate_reader() {
             partition_range_is_inclusive = false;
             break;
         case partition_region::static_row:
-            _drop_partition_start = true;
             break;
         case partition_region::clustered:
-            _drop_partition_start = true;
-            _drop_static_row = true;
             adjust_partition_slice();
             slice = &*_slice_override;
             break;
@@ -1763,7 +1752,7 @@ flat_mutation_reader_v2 evictable_reader_v2::recreate_reader() {
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
         range = &*_range_override;
 
-        _validate_partition_key = true;
+        _reader_recreated = true;
     }
 
     return _ms.make_reader_v2(
@@ -1788,41 +1777,33 @@ future<flat_mutation_reader_v2> evictable_reader_v2::resume_or_create_reader() {
     co_return recreate_reader();
 }
 
-void evictable_reader_v2::maybe_validate_partition_start(const flat_mutation_reader_v2::tracked_buffer& buffer) {
-    if (!_validate_partition_key || buffer.empty()) {
-        return;
-    }
-
-    // If this is set we can assume the first fragment is a partition-start.
-    const auto& ps = buffer.front().as_partition_start();
+void evictable_reader_v2::validate_partition_start(const partition_start& ps) {
     const auto tri_cmp = dht::ring_position_comparator(*_schema);
     // If we recreated the reader after fast-forwarding it we won't have
     // _last_pkey set. In this case it is enough to check if the partition
     // is in range.
     if (_last_pkey) {
         const auto cmp_res = tri_cmp(*_last_pkey, ps.key());
-        if (_drop_partition_start) { // we expect to continue from the same partition
+        if (_next_position_in_partition.region() != partition_region::partition_start) { // we expect to continue from the same partition
             // We cannot assume the partition we stopped the read at is still alive
             // when we recreate the reader. It might have been compacted away in the
             // meanwhile, so allow for a larger partition too.
             require(
                     cmp_res <= 0,
-                    "{}(): validation failed, expected partition with key larger or equal to _last_pkey {} due to _drop_partition_start being set, but got {}",
+                    "{}(): validation failed, expected partition with key larger or equal to _last_pkey {}, but got {}",
                     __FUNCTION__,
                     *_last_pkey,
                     ps.key());
-            // Reset drop flags and next pos if we are not continuing from the same partition
+            // Reset next pos if we are not continuing from the same partition
             if (cmp_res < 0) {
                 // Close previous partition, we are not going to continue it.
                 push_mutation_fragment(*_schema, _permit, partition_end{});
-                _drop_partition_start = false;
-                _drop_static_row = false;
                 _next_position_in_partition = position_in_partition::for_partition_start();
             }
         } else { // should be a larger partition
             require(
                     cmp_res < 0,
-                    "{}(): validation failed, expected partition with key larger than _last_pkey {} due to _drop_partition_start being unset, but got {}",
+                    "{}(): validation failed, expected partition with key larger than _last_pkey {}, but got {}",
                     __FUNCTION__,
                     *_last_pkey,
                     ps.key());
@@ -1836,8 +1817,6 @@ void evictable_reader_v2::maybe_validate_partition_start(const flat_mutation_rea
             __FUNCTION__,
             prange,
             ps.key());
-
-    _validate_partition_key = false;
 }
 
 void evictable_reader_v2::validate_position_in_partition(position_in_partition_view pos) const {
@@ -1860,7 +1839,12 @@ void evictable_reader_v2::validate_position_in_partition(position_in_partition_v
         const bool any_contains = std::any_of(ranges.begin(), ranges.end(), [this, &pos] (const query::clustering_range& cr) {
             // TODO: somehow avoid this copy
             auto range = position_range(cr);
-            return range.contains(*_schema, pos);
+            // We cannot use range.contains() because that treats range as a
+            // [a, b) range, meaning a range tombstone change with position
+            // after_key(b) will be considered outside of it. Such range
+            // tombstone changes can be emitted however when recreating the
+            // reader on clustering range edge.
+            return _tri_cmp(range.start(), pos) <= 0 && _tri_cmp(pos, range.end()) <= 0;
         });
         require(
                 any_contains,
@@ -1871,42 +1855,40 @@ void evictable_reader_v2::validate_position_in_partition(position_in_partition_v
     }
 }
 
-bool evictable_reader_v2::should_drop_fragment(const mutation_fragment_v2& mf) {
-    if (_drop_partition_start && mf.is_partition_start()) {
-        _drop_partition_start = false;
-        return true;
+void evictable_reader_v2::examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3) {
+    if (!mf1) {
+        return; // the reader is at EOS
     }
-    // Unlike partition-start above, a partition is not guaranteed to have a
-    // static row fragment. So reset the flag regardless of whether we could
-    // drop one or not.
-    // We are guaranteed to get here only right after dropping a partition-start,
-    // so if we are not seeing a static row here, the partition doesn't have one.
-    if (_drop_static_row) {
-         _drop_static_row = false;
-        return mf.is_static_row();
-    }
-    return false;
-}
 
-future<> evictable_reader_v2::do_fill_buffer() {
-    if (!_drop_partition_start && !_drop_static_row) {
-        auto fill_buf_fut = _reader->fill_buffer();
-        if (_validate_partition_key) {
-            fill_buf_fut = fill_buf_fut.then([this] {
-                maybe_validate_partition_start(_reader->buffer());
-            });
-        }
-        return fill_buf_fut;
+    // If engaged, the first fragment is always a partition-start.
+    validate_partition_start(mf1->as_partition_start());
+    if (_tri_cmp(mf1->position(), _next_position_in_partition) < 0) {
+        mf1 = {}; // drop mf1
     }
-    return repeat([this] {
-        return _reader->fill_buffer().then([this] {
-            maybe_validate_partition_start(_reader->buffer());
-            while (!_reader->is_buffer_empty() && should_drop_fragment(_reader->peek_buffer())) {
-                _reader->pop_mutation_fragment();
-            }
-            return stop_iteration(_reader->is_buffer_full() || _reader->is_end_of_stream());
-        });
-    });
+
+    const auto continue_same_partition = _next_position_in_partition.region() != partition_region::partition_start;
+
+    // If we have a first fragment, we are guaranteed to have a second one -- if not else, a partition-end.
+    if (mf2->is_end_of_partition()) {
+        return; // no further fragments, nothing to do
+    }
+
+    // We want to validate the position of the first non-dropped fragment.
+    // If mf2 is a static row and we need to drop it, this will be mf3.
+    if (mf2->is_static_row() && _tri_cmp(mf2->position(), _next_position_in_partition) < 0) {
+        mf2 = {}; // drop mf2
+    } else {
+        if (continue_same_partition) {
+            validate_position_in_partition(mf2->position());
+        }
+        return;
+    }
+
+    if (mf3->is_end_of_partition()) {
+        return; // no further fragments, nothing to do
+    } else if (continue_same_partition) {
+        validate_position_in_partition(mf3->position());
+    }
 }
 
 evictable_reader_v2::evictable_reader_v2(
@@ -1935,10 +1917,62 @@ future<> evictable_reader_v2::fill_buffer() {
         co_return;
     }
     _reader = co_await resume_or_create_reader();
-    co_await do_fill_buffer();
+
+    if (_reader_recreated) {
+        // Recreating the reader breaks snapshot isolation and creates all sorts
+        // of complications around the continuity of range tombstone changes,
+        // e.g. a range tombstone started by the previous reader object
+        // might not exist anymore with the new reader object.
+        // To avoid complications we reset the tombstone state on each reader
+        // recreation by emitting a null tombstone change, if we read at least
+        // one clustering fragment from the partition.
+        if (_next_position_in_partition.region() == partition_region::clustered
+                && _tri_cmp(_next_position_in_partition, position_in_partition::before_all_clustered_rows()) > 0) {
+            push_mutation_fragment(*_schema, _permit, range_tombstone_change{position_in_partition_view::before_key(_next_position_in_partition), {}});
+        }
+        auto mf1 = co_await (*_reader)();
+        auto mf2 = co_await (*_reader)();
+        auto mf3 = co_await (*_reader)();
+        examine_first_fragments(mf1, mf2, mf3);
+        if (mf3) {
+            _reader->unpop_mutation_fragment(std::move(*mf3));
+        }
+        if (mf2) {
+            _reader->unpop_mutation_fragment(std::move(*mf2));
+        }
+        if (mf1) {
+            _reader->unpop_mutation_fragment(std::move(*mf1));
+        }
+        _reader_recreated = false;
+    } else {
+        co_await _reader->fill_buffer();
+    }
+
     _reader->move_buffer_content_to(*this);
+
+    // Ensure that each buffer represents forward progress. Only a concern when
+    // the last fragment in the buffer is range tombstone change. In this case
+    // ensure that:
+    // * buffer().back().position() > _next_position_in_partition;
+    // * _reader.peek()->position() > buffer().back().position();
+    if (!is_buffer_empty() && buffer().back().is_range_tombstone_change()) {
+        auto* next_mf = co_await _reader->peek();
+
+        // First make sure we've made progress w.r.t. _next_position_in_partition.
+        while (next_mf && _tri_cmp(_next_position_in_partition, buffer().back().position()) <= 0) {
+            push_mutation_fragment(_reader->pop_mutation_fragment());
+            next_mf = co_await _reader->peek();
+        }
+
+        const auto last_pos = position_in_partition(buffer().back().position());
+        while (next_mf && _tri_cmp(last_pos, next_mf->position()) == 0) {
+            push_mutation_fragment(_reader->pop_mutation_fragment());
+            next_mf = co_await _reader->peek();
+        }
+    }
+
     update_next_position();
-    _end_of_stream = _reader->is_end_of_stream() && _reader->is_buffer_empty();
+    _end_of_stream = _reader->is_end_of_stream();
     maybe_pause(std::move(*_reader));
 }
 
