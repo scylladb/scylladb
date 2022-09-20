@@ -25,7 +25,7 @@ Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and 
     
     .. code:: sh 
     
-       cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get -y
+       cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get install -y
     
     Where:
 
@@ -38,6 +38,12 @@ Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and 
     
         .. code:: sh 
            
-           cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get -y
+           cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get install -y
+
+        .. note:: 
+
+           Alternatively, you can update the manifest file with the following command:
+
+           ``sudo apt-get install $(awk '{print $1'} scylla-packages-<version>-<arch>.txt) -y``
 
 .. _upgrade-image-upgrade-guide-regular-procedure:
