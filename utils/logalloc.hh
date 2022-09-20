@@ -525,4 +525,10 @@ public:
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
+// Use the segment pool appropriate for the standard allocator.
+//
+// In debug mode, this will use the release standard allocator store.
+// Call once, when initializing the application, before any LSA allocation takes place.
+future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
+
 }

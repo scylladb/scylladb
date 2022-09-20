@@ -693,87 +693,180 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
-#ifndef SEASTAR_DEFAULT_ALLOCATOR
-class segment_store {
+class segment_store_backend {
+protected:
     memory::memory_layout _layout;
-    uintptr_t _segments_base; // The address of the first segment
+    // Whether freeing segments actually increases availability of non-lsa memory.
+    bool _freed_segment_increases_general_memory_availability;
+    // Aligned (to segment::size) address of the first segment.
+    uintptr_t _segments_base;
+
+public:
+    explicit segment_store_backend(memory::memory_layout layout, bool freed_segment_increases_general_memory_availability) noexcept
+        : _layout(layout)
+        , _freed_segment_increases_general_memory_availability(freed_segment_increases_general_memory_availability)
+        , _segments_base(align_up(_layout.start, static_cast<uintptr_t>(segment::size)))
+    { }
+    memory::memory_layout memory_layout() const noexcept { return _layout; }
+    uintptr_t segments_base() const noexcept { return _segments_base; }
+    virtual void* alloc_segment_memory() noexcept = 0;
+    virtual void free_segment_memory(void* seg) noexcept = 0;
+    virtual size_t free_memory() const noexcept = 0;
+    bool can_allocate_more_segments(size_t non_lsa_reserve) const noexcept {
+        if (_freed_segment_increases_general_memory_availability) {
+            return free_memory() >= non_lsa_reserve + segment::size;
+        } else {
+            return free_memory() >= segment::size;
+        }
+    }
+};
+
+// Segments are allocated from the seastar allocator.
+// The entire memory area of the local shard is used as a segment store, i.e.
+// segments are allocated from the same memory area regular objeces are.
+class seastar_memory_segment_store_backend : public segment_store_backend {
+public:
+    seastar_memory_segment_store_backend()
+        : segment_store_backend(memory::get_memory_layout(), true)
+    { }
+    virtual void* alloc_segment_memory() noexcept override {
+        return aligned_alloc(segment::size, segment::size);
+    }
+    virtual void free_segment_memory(void* seg) noexcept override {
+        ::free(seg);
+    }
+    virtual size_t free_memory() const noexcept override {
+        return memory::free_memory();
+    }
+};
+
+// Segments storage is allocated via `mmap()`.
+// This area cannot be shrunk or enlarged, so freeing segments doesn't increase
+// memory availability.
+class standard_memory_segment_store_backend : public segment_store_backend {
+    struct free_segment {
+        free_segment* next = nullptr;
+    };
+
+private:
+    uintptr_t _segments_offset = 0;
+    free_segment* _freelist = nullptr;
+    size_t _available_segments; // for fast free_memory()
+
+private:
+    static memory::memory_layout allocate_memory(size_t segments) {
+        const auto size = segments * segment_size;
+        auto p = mmap(nullptr, size,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1, 0);
+        if (p == MAP_FAILED) {
+            std::abort();
+        }
+        madvise(p, size, MADV_HUGEPAGE);
+        auto start = reinterpret_cast<uintptr_t>(p);
+        return {start, start + size};
+    }
+public:
+    standard_memory_segment_store_backend(size_t segments)
+        : segment_store_backend(allocate_memory(segments), false)
+        , _available_segments((_layout.end - _segments_base) / segment_size)
+    { }
+    ~standard_memory_segment_store_backend() {
+        munmap(reinterpret_cast<void*>(_layout.start), _layout.end - _layout.start);
+    }
+    virtual void* alloc_segment_memory() noexcept override {
+        if (_freelist) {
+            --_available_segments;
+            return std::exchange(_freelist, _freelist->next);
+        }
+        auto seg = _segments_base + _segments_offset * segment_size;
+        if (seg + segment_size > _layout.end) {
+            return nullptr;
+        }
+        ++_segments_offset;
+        --_available_segments;
+        return reinterpret_cast<void*>(seg);
+    }
+    virtual void free_segment_memory(void* seg) noexcept override {
+        unpoison(reinterpret_cast<char*>(seg), sizeof(free_segment));
+        auto fs = new (seg) free_segment;
+        fs->next = _freelist;
+        _freelist = fs;
+        ++_available_segments;
+    }
+    virtual size_t free_memory() const noexcept override {
+        return _available_segments * segment_size;
+    }
+};
+
+static constexpr size_t segment_npos = size_t(-1);
+
+// Segments are allocated from a large contiguous memory area.
+class contiguous_memory_segment_store {
+    std::unique_ptr<segment_store_backend> _backend;
 
 public:
     size_t non_lsa_reserve = 0;
-    segment_store()
-        : _layout(memory::get_memory_layout())
-        , _segments_base(align_down(_layout.start, (uintptr_t)segment::size)) {
+    contiguous_memory_segment_store()
+        : _backend(std::make_unique<seastar_memory_segment_store_backend>())
+    { }
+    struct with_standard_memory_backend {};
+    contiguous_memory_segment_store(with_standard_memory_backend, size_t available_memory) {
+        use_standard_allocator_segment_pool_backend(available_memory);
+    }
+    void use_standard_allocator_segment_pool_backend(size_t available_memory) {
+        _backend = std::make_unique<standard_memory_segment_store_backend>(available_memory / segment::size);
+        llogger.debug("using the standard allocator segment pool backend with {} available memory", available_memory);
     }
     const segment* segment_from_idx(size_t idx) const noexcept {
-        return reinterpret_cast<segment*>(_segments_base) + idx;
+        return reinterpret_cast<segment*>(_backend->segments_base()) + idx;
     }
     segment* segment_from_idx(size_t idx) noexcept {
-        return reinterpret_cast<segment*>(_segments_base) + idx;
+        return reinterpret_cast<segment*>(_backend->segments_base()) + idx;
     }
     size_t idx_from_segment(const segment* seg) const noexcept {
-        return seg - reinterpret_cast<segment*>(_segments_base);
+        const auto seg_uint = reinterpret_cast<uintptr_t>(seg);
+        if (seg_uint < _backend->memory_layout().start || seg_uint > _backend->memory_layout().end) [[unlikely]] {
+            return segment_npos;
+        }
+        return seg - reinterpret_cast<segment*>(_backend->segments_base());
     }
-    size_t new_idx_for_segment(segment* seg) noexcept {
-        return idx_from_segment(seg);
+    std::pair<segment*, size_t> allocate_segment() noexcept {
+        auto p = _backend->alloc_segment_memory();
+        if (!p) {
+            return {nullptr, 0};
+        }
+        auto seg = new (p) segment;
+        poison(seg, sizeof(segment));
+        return {seg, idx_from_segment(seg)};
     }
-    void free_segment(segment *seg) noexcept { }
+    void free_segment(segment *seg) noexcept {
+        seg->~segment();
+        _backend->free_segment_memory(seg);
+    }
     size_t max_segments() const noexcept {
-        return (_layout.end - _segments_base) / segment::size;
+        return (_backend->memory_layout().end - _backend->segments_base()) / segment::size;
     }
     bool can_allocate_more_segments() const noexcept {
-        return memory::free_memory() >= non_lsa_reserve + segment::size;
+        return _backend->can_allocate_more_segments(non_lsa_reserve);
     }
 };
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+using segment_store = contiguous_memory_segment_store;
 #else
 class segment_store {
+    std::unique_ptr<contiguous_memory_segment_store> _delegate_store;
     std::vector<segment*> _segments;
     std::unordered_map<segment*, size_t> _segment_indexes;
     static constexpr size_t _std_memory_available = size_t(1) << 30; // emulate 1GB per shard
     std::vector<segment*>::iterator find_empty() noexcept {
-        // segment 0 is a marker for no segment
-        return std::find(_segments.begin() + 1, _segments.end(), nullptr);
+        return std::find(_segments.begin(), _segments.end(), nullptr);
     }
     std::vector<segment*>::const_iterator find_empty() const noexcept {
-        // segment 0 is a marker for no segment
-        return std::find(_segments.cbegin() + 1, _segments.cend(), nullptr);
+        return std::find(_segments.cbegin(), _segments.cend(), nullptr);
     }
-
-public:
-    size_t non_lsa_reserve = 0;
-    segment_store() : _segments(max_segments()) {
-        _segment_indexes.reserve(max_segments());
-    }
-    const segment* segment_from_idx(size_t idx) const noexcept {
-        assert(idx < _segments.size());
-        return _segments[idx];
-    }
-    segment* segment_from_idx(size_t idx) noexcept {
-        assert(idx < _segments.size());
-        return _segments[idx];
-    }
-    size_t idx_from_segment(const segment* seg) const noexcept {
-        // segment 0 is a marker for no segment
-        auto i = _segment_indexes.find(const_cast<segment*>(seg));
-        if (i == _segment_indexes.end()) {
-            return 0;
-        }
-        return i->second;
-    }
-    size_t new_idx_for_segment(segment* seg) noexcept {
-        auto i = find_empty();
-        assert(i != _segments.end());
-        *i = seg;
-        size_t ret = i - _segments.begin();
-        _segment_indexes[seg] = ret;
-        return ret;
-    }
-    void free_segment(segment *seg) noexcept {
-        size_t i = idx_from_segment(seg);
-        assert(i != 0);
-        _segment_indexes.erase(seg);
-        _segments[i] = nullptr;
-    }
-    ~segment_store() {
+    void free_segments() noexcept {
         for (segment *seg : _segments) {
             if (seg) {
                 seg->~segment();
@@ -781,10 +874,82 @@ public:
             }
         }
     }
+
+public:
+    size_t non_lsa_reserve = 0;
+    segment_store() : _segments(max_segments()) {
+        _segment_indexes.reserve(max_segments());
+    }
+    void use_standard_allocator_segment_pool_backend(size_t available_memory) {
+        _delegate_store = std::make_unique<contiguous_memory_segment_store>(contiguous_memory_segment_store::with_standard_memory_backend{}, available_memory);
+        free_segments();
+        _segment_indexes = {};
+        llogger.debug("using the standard allocator segment pool backend with {} available memory", available_memory);
+    }
+    const segment* segment_from_idx(size_t idx) const noexcept {
+        if (_delegate_store) {
+            return _delegate_store->segment_from_idx(idx);
+        }
+        assert(idx < _segments.size());
+        return _segments[idx];
+    }
+    segment* segment_from_idx(size_t idx) noexcept {
+        if (_delegate_store) {
+            return _delegate_store->segment_from_idx(idx);
+        }
+        assert(idx < _segments.size());
+        return _segments[idx];
+    }
+    size_t idx_from_segment(const segment* seg) const noexcept {
+        if (_delegate_store) {
+            return _delegate_store->idx_from_segment(seg);
+        }
+        auto i = _segment_indexes.find(const_cast<segment*>(seg));
+        if (i == _segment_indexes.end()) {
+            return segment_npos;
+        }
+        return i->second;
+    }
+    std::pair<segment*, size_t> allocate_segment() noexcept {
+        if (_delegate_store) {
+            return _delegate_store->allocate_segment();
+        }
+        auto p = aligned_alloc(segment::size, segment::size);
+        if (!p) {
+            return {nullptr, 0};
+        }
+        auto seg = new (p) segment;
+        poison(seg, sizeof(segment));
+        auto i = find_empty();
+        assert(i != _segments.end());
+        *i = seg;
+        size_t ret = i - _segments.begin();
+        _segment_indexes[seg] = ret;
+        return {seg, ret};
+    }
+    void free_segment(segment *seg) noexcept {
+        if (_delegate_store) {
+            return _delegate_store->free_segment(seg);
+        }
+        seg->~segment();
+        ::free(seg);
+        size_t i = idx_from_segment(seg);
+        _segment_indexes.erase(seg);
+        _segments[i] = nullptr;
+    }
+    ~segment_store() {
+        free_segments();
+    }
     size_t max_segments() const noexcept {
+        if (_delegate_store) {
+            return _delegate_store->max_segments();
+        }
         return _std_memory_available / segment::size;
     }
     bool can_allocate_more_segments() const noexcept {
+        if (_delegate_store) {
+            return _delegate_store->can_allocate_more_segments();
+        }
         auto i = find_empty();
         return i != _segments.end();
     }
@@ -863,6 +1028,7 @@ public:
     explicit segment_pool(tracker::impl& tracker);
     tracker::impl& tracker() { return _tracker; }
     void prime(size_t available_memory, size_t min_free_memory);
+    void use_standard_allocator_segment_pool_backend(size_t available_memory);
     segment* new_segment(region::impl* r);
     const segment_descriptor& descriptor(const segment* seg) const noexcept {
         uintptr_t index = idx_from_segment(seg);
@@ -1064,8 +1230,6 @@ size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
         _lsa_free_segments_bitmap.clear(src_idx);
         _lsa_owned_segments_bitmap.clear(src_idx);
         _store.free_segment(src);
-        src->~segment();
-        ::free(src);
         ++reclaimed_segments;
         --_free_segments;
         if (preempt && need_preempt()) {
@@ -1104,13 +1268,10 @@ segment* segment_pool::allocate_segment(size_t reserve)
         }
         if (can_allocate_more_segments()) {
             memory::disable_abort_on_alloc_failure_temporarily dfg;
-            auto p = aligned_alloc(segment::size, segment::size);
-            if (!p) {
+            auto [seg, idx] = _store.allocate_segment();
+            if (!seg) {
                 continue;
             }
-            auto seg = new (p) segment;
-            poison(seg, sizeof(segment));
-            auto idx = _store.new_idx_for_segment(seg);
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
@@ -1142,6 +1303,9 @@ segment_pool::containing_segment(const void* obj) noexcept {
     auto offset = addr & (segment::size - 1);
     auto seg = reinterpret_cast<segment*>(addr - offset);
     auto index = idx_from_segment(seg);
+    if (index == segment_npos) {
+        return nullptr;
+    }
     auto& desc = _segments[index];
     if (desc._region) {
         return seg;
@@ -1215,6 +1379,16 @@ void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
     _store.non_lsa_reserve = min_free_memory + gap;
     // Since the reclaimer is not yet in place, free some low memory for general use
     reclaim_segments(_store.non_lsa_reserve / segment::size, is_preemptible::no);
+}
+
+void segment_pool::use_standard_allocator_segment_pool_backend(size_t available_memory) {
+    if (_segments_in_use) {
+        throw std::runtime_error("cannot change segment store backend after segments are in use");
+    }
+    _store.use_standard_allocator_segment_pool_backend(available_memory);
+    _segments = std::vector<segment_descriptor>(max_segments());
+    _lsa_owned_segments_bitmap = utils::dynamic_bitset(max_segments());
+    _lsa_free_segments_bitmap = utils::dynamic_bitset(max_segments());
 }
 
 inline void segment_pool::on_segment_compaction(size_t used_size) noexcept {
@@ -2717,6 +2891,12 @@ void allocating_section::set_std_reserve(size_t reserve) noexcept {
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
     return smp::invoke_on_all([=] {
         shard_tracker().get_impl().segment_pool().prime(available_memory, min_free_memory);
+    });
+}
+
+future<> use_standard_allocator_segment_pool_backend(size_t available_memory) {
+    return smp::invoke_on_all([=] {
+        shard_tracker().get_impl().segment_pool().use_standard_allocator_segment_pool_backend(available_memory);
     });
 }
 
