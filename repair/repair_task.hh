@@ -88,4 +88,7 @@ public:
             .task_data = tasks::task_info(tasks::task_id::create_random_id(), this_shard_id())
         };
     }
+
+    repair_status get(int id) const;
+    future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
 };
