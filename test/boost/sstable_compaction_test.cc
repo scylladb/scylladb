@@ -1321,7 +1321,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(cf->as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(15) + cf->schema()->gc_grace_seconds());
+        auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(15) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 0);
     }
 
@@ -1333,7 +1333,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(cf->as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(25) + cf->schema()->gc_grace_seconds());
+        auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(25) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(generation_value(expired_sst->generation()) == 1);
@@ -1372,7 +1372,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 
         auto ssts = std::vector<shared_sstable>{ sst };
 
-        auto expired = get_fully_expired_sstables(cf->as_table_state(), ssts, gc_clock::now());
+        auto expired = get_fully_expired_sstables(cf.as_table_state(), ssts, gc_clock::now());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(generation_value(expired_sst->generation()) == 1);
@@ -2199,8 +2199,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2222,10 +2222,10 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             sstables::compaction_type_options::scrub opts = {
                 .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
             };
-            table.get_compaction_manager().perform_sstable_scrub(table->as_table_state(), opts).get();
+            table.get_compaction_manager().perform_sstable_scrub(table.as_table_state(), opts).get();
 
             BOOST_REQUIRE(sst->is_quarantined());
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
             verify_fragments(sst, corrupt_fragments);
         });
     }, test_cfg);
@@ -2388,8 +2388,8 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, permit));
@@ -2410,20 +2410,20 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get(), sstables::compaction_aborted_exception);
+            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get(), sstables::compaction_aborted_exception);
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub in skip mode");
 
             // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+            compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() != sst);
-            verify_fragments(in_strategy_sstables(table->as_table_state()).front(), scrubbed_fragments);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() != sst);
+            verify_fragments(in_strategy_sstables(table.as_table_state()).front(), scrubbed_fragments);
         });
     }, test_cfg);
 }
@@ -2475,8 +2475,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2497,19 +2497,19 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get(), sstables::compaction_aborted_exception);
+            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get(), sstables::compaction_aborted_exception);
 
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub in segregate mode");
 
             // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-            compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+            compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
 
-            testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table->as_table_state()).size());
-            BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() > 1);
+            testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table.as_table_state()).size());
+            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() > 1);
             {
                 auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
                 auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
@@ -2577,8 +2577,8 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
 
                 table->add_sstable_and_update_cache(sst).get();
 
-                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() == 1);
-                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).front() == sst);
+                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
+                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
 
                 auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
                     auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
@@ -2599,9 +2599,9 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
                 sstables::compaction_type_options::scrub opts = {};
                 opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-                compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+                compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
 
-                BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
+                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
                 BOOST_REQUIRE(sst->is_quarantined());
                 verify_fragments(sst, corrupt_fragments);
 
@@ -2610,14 +2610,14 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
                 opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
                 opts.quarantine_operation_mode = qmode;
-                compaction_manager.perform_sstable_scrub(table->as_table_state(), opts).get();
+                compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
 
                 switch (qmode) {
                 case sstables::compaction_type_options::scrub::quarantine_mode::include:
                 case sstables::compaction_type_options::scrub::quarantine_mode::only:
                     // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                    testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table->as_table_state()).size());
-                    BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).size() > 1);
+                    testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table.as_table_state()).size());
+                    BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() > 1);
                     {
                         auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
                         auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
@@ -2631,7 +2631,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                     break;
                 case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
                     // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                    BOOST_REQUIRE(in_strategy_sstables(table->as_table_state()).empty());
+                    BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
                     BOOST_REQUIRE(sst->is_quarantined());
                     verify_fragments(sst, corrupt_fragments);
                     break;
@@ -2903,7 +2903,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
-            return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(std::move(all), default_priority_class(), 1, 0), cf->as_table_state(), sst_gen, replacer).get0().new_sstables;
+            return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(std::move(all), default_priority_class(), 1, 0), cf.as_table_state(), sst_gen, replacer).get0().new_sstables;
         };
         auto make_insert = [&] (auto p) {
             auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
@@ -2927,8 +2927,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 BOOST_REQUIRE(!sstables.contains(new_sst));
                 sstables.insert(new_sst);
             }
-            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables).get();
-            compaction_manager_test(cf.get_compaction_manager()).propagate_replacement(cf->as_table_state(), old_sstables, new_sstables);
+            column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
+            compaction_manager_test(cf.get_compaction_manager()).propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
         };
 
         auto do_incremental_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
@@ -2959,7 +2959,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {
             auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
             auto strategy_c = make_strategy_control_for_test(false);
-            auto desc = cs.get_sstables_for_compaction(cf->as_table_state(), *strategy_c, std::move(input_ssts));
+            auto desc = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, std::move(input_ssts));
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {
@@ -3157,7 +3157,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // register partial sstable run
         auto cm_test = compaction_manager_test(cf.get_compaction_manager());
-        cm_test.run(partial_sstable_run_identifier, cf->as_table_state(), [&cf] (sstables::compaction_data&) {
+        cm_test.run(partial_sstable_run_identifier, cf.as_table_state(), [&cf] (sstables::compaction_data&) {
             return cf->compact_all_sstables();
         }).get();
 
@@ -3416,7 +3416,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
                     .produces(mut2)
                     .produces_end_of_stream();
             }
-            column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables).get();
+            column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
             // force compaction failure after sstable containing expired tombstone is removed from set.
             throw std::runtime_error("forcing compaction failure on early replacement");
         };
@@ -3550,7 +3550,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cf->start();
         auto stop_cf = deferred_stop(*cf);
         cf->trigger_compaction();
-        cm.submit(cf->as_table_state());
+        cm.submit(cf.as_table_state());
         BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0 && ss.completed_tasks == 0);
         // enable auto compaction
         cf->enable_auto_compaction();
@@ -4795,7 +4795,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             }
 
             auto strategy = cf->get_compaction_strategy();
-            auto jobs = strategy.get_cleanup_compaction_jobs(cf->as_table_state(), candidates);
+            auto jobs = strategy.get_cleanup_compaction_jobs(cf.as_table_state(), candidates);
             return std::make_pair(std::move(candidates), std::move(jobs));
         };
 
