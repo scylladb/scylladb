@@ -182,12 +182,11 @@ def check_pre_raft(cql):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
     experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
-    return not '"raft"' in experimental_features
-
+    return 'raft' in experimental_features
 
 @pytest.fixture(scope="function")
 def fails_without_raft(request, check_pre_raft):
-    if check_pre_raft:
+    if not check_pre_raft:
         request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
 
 
