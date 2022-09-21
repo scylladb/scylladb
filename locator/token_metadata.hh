@@ -129,6 +129,7 @@ private:
     bool _sort_by_proximity = true;
 };
 
+using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;
 class token_metadata_impl;
 
 class token_metadata final {
@@ -305,7 +306,7 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
 
     token get_predecessor(token t) const;
 
