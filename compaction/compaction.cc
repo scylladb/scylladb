@@ -1726,8 +1726,14 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
 
-        auto reader = sst->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
-        validation_errors += co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
+        validation_errors += co_await sst->validate(permit, descriptor.io_priority, cdata.abort, [&schema] (sstring what) {
+            scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
+        });
+        // Did validation actually finish because aborted?
+        if (cdata.is_stop_requested()) {
+            // Compaction manager will catch this exception and re-schedule the compaction.
+            throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
+        }
 
         clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
     }
