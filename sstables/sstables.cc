@@ -1839,6 +1839,62 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
     return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats, pc, shard);
 }
 
+future<uint64_t> sstable::validate(reader_permit permit, const io_priority_class& pc, abort_source& abort,
+        std::function<void(sstring)> error_handler) {
+    auto reader = make_crawling_reader(_schema, permit, pc, nullptr);
+
+    uint64_t errors = 0;
+    std::exception_ptr ex;
+
+    try {
+        auto validator = mutation_fragment_stream_validator(*_schema);
+
+        while (auto mf_opt = co_await reader()) {
+            if (abort.abort_requested()) [[unlikely]] {
+                break;
+            }
+
+            const auto& mf = *mf_opt;
+
+            if (auto res = validator(mf); !res) {
+                error_handler(res.what());
+                validator.reset(mf);
+                ++errors;
+            }
+
+            if (mf.is_partition_start()) {
+                const auto& ps = mf.as_partition_start();
+                if (auto res = validator(ps.key()); !res) {
+                    error_handler(res.what());
+                    validator.reset(ps.key());
+                    ++errors;
+                }
+            }
+        }
+        if (auto res = validator.on_end_of_stream(); !res) {
+            error_handler(res.what());
+            ++errors;
+        }
+    } catch (const malformed_sstable_exception& e) {
+        try {
+            error_handler(format("unrecoverable error: {}", e));
+            ++errors;
+        } catch (...) {
+            ex = std::current_exception();
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await reader.close();
+
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+
+    co_return errors;
+}
+
 // Encoding stats for compaction are based on the sstable's stats metadata
 // since, in contract to the mc-format encoding_stats that are evaluated
 // before the sstable data is written, the stats metadata is updated during

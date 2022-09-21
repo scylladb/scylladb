@@ -263,6 +263,16 @@ public:
         const io_priority_class& pc = default_priority_class(),
         shard_id shard = this_shard_id());
 
+    // Validates the content of the sstable.
+    // Reports all errors via the provided error handler.
+    // Returns the count of all validation errors found.
+    // Can be aborted via the abort-source parameter.
+    // If aborted, either via the abort-source or via unrecoverable errors
+    // (e.g. parse error), it will return with validation error count seen up to
+    // the abort. In the latter case it will call the error-handler before doing so.
+    future<uint64_t> validate(reader_permit permit, const io_priority_class& pc, abort_source& abort,
+            std::function<void(sstring)> error_handler);
+
     encoding_stats get_encoding_stats_for_compaction() const;
 
     future<> seal_sstable(bool backup);
