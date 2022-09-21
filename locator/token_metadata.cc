@@ -246,7 +246,7 @@ public:
      */
     future<> update_pending_ranges(
             const token_metadata& unpimplified_this,
-            const abstract_replication_strategy& strategy, const sstring& keyspace_name);
+            const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
     void calculate_pending_ranges_for_leaving(
         const token_metadata& unpimplified_this,
         const abstract_replication_strategy& strategy,
@@ -255,7 +255,7 @@ public:
     void calculate_pending_ranges_for_bootstrap(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata) const;
+        mutable_token_metadata_ptr all_left_metadata, dc_rack_fn& get_dc_rack) const;
     void calculate_pending_ranges_for_replacing(
         const token_metadata& unpimplified_this,
         const abstract_replication_strategy& strategy,
@@ -836,7 +836,7 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
 void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata) const {
+        mutable_token_metadata_ptr all_left_metadata, dc_rack_fn& get_dc_rack) const {
     // For each of the bootstrapping nodes, simply add and remove them one by one to
     // allLeftMetadata and check in between what their ranges would be.
     std::unordered_multimap<inet_address, token> bootstrap_addresses;
@@ -854,7 +854,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     for (auto& x : tmp) {
         auto& endpoint = x.first;
         auto& tokens = x.second;
-        all_left_metadata->update_topology(endpoint, {});
+        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint));
         all_left_metadata->update_normal_tokens(tokens, endpoint).get();
         for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint).get0()) {
             new_pending_ranges.emplace(x.second, endpoint);
@@ -866,7 +866,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
 
 future<> token_metadata_impl::update_pending_ranges(
         const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
+        const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack) {
     tlogger.debug("calculate_pending_ranges: keyspace_name={}, bootstrap_tokens={}, leaving nodes={}, replacing_endpoints={}",
         keyspace_name, _bootstrap_tokens, _leaving_endpoints, _replacing_endpoints);
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
@@ -875,7 +875,7 @@ future<> token_metadata_impl::update_pending_ranges(
         return make_ready_future<>();
     }
 
-    return async([this, &unpimplified_this, &strategy, keyspace_name] () mutable {
+    return async([this, &unpimplified_this, &strategy, keyspace_name, &get_dc_rack] () mutable {
         std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
         calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges);
         // Copy of metadata reflecting the situation after all leave operations are finished.
@@ -883,7 +883,7 @@ future<> token_metadata_impl::update_pending_ranges(
         calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata);
         // At this stage newPendingRanges has been updated according to leave operations. We can
         // now continue the calculation by checking bootstrapping nodes.
-        calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
+        calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata, get_dc_rack);
         all_left_metadata->clear_gently().get();
 
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
@@ -1189,8 +1189,8 @@ token_metadata::has_pending_ranges(sstring keyspace_name, inet_address endpoint)
 }
 
 future<>
-token_metadata::update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
-    return _impl->update_pending_ranges(*this, strategy, keyspace_name);
+token_metadata::update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack) {
+    return _impl->update_pending_ranges(*this, strategy, keyspace_name, get_dc_rack);
 }
 
 token
