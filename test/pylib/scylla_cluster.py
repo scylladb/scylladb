@@ -875,7 +875,6 @@ async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], tes
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
     manager = ScyllaClusterManager(test_name, clusters, test_path)
-    await manager.start()
     try:
         yield manager
     finally:
