@@ -710,6 +710,9 @@ class ScyllaClusterManager:
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
+        if self.is_running:
+            logging.warning("ScyllaClusterManager already running")
+            return
         await self._get_cluster()
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
@@ -741,6 +744,7 @@ class ScyllaClusterManager:
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
+        self.is_running = False
 
     async def _get_cluster(self) -> None:
         self.cluster = await self.clusters.get()
