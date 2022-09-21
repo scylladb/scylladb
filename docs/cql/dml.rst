@@ -99,11 +99,12 @@ alternatively, of the wildcard character (``*``) to select all the columns defin
 Selectors
 `````````
 
-A :token:`selector` can be one of:
+A :token:`selector` can be one of the following:
 
 - A column name of the table selected to retrieve the values for that column.
 - A casting, which allows you to convert a nested selector to a (compatible) type.
 - A function call, where the arguments are selector themselves.
+- A call to the :ref:`COUNT function <count-function>`, which counts all non-null results.
 
 Aliases
 ```````
