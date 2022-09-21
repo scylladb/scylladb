@@ -945,16 +945,13 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     if (sstables.empty()) {
         throw std::runtime_error("error: no sstables specified on the command line");
     }
-    const auto merge = vm.count("merge");
-    sstables::compaction_data info;
-    consume_sstables(schema, permit, sstables, merge, true, [&info] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
-        if (sst) {
-            sst_log.info("validating {}", sst->get_filename());
-        }
-        const auto errors = sstables::scrub_validate_mode_validate_reader(std::move(rd), info).get();
-        sst_log.info("validated {}: {}", sst ? sst->get_filename() : "the stream", errors == 0 ? "valid" : "invalid");
-        return stop_iteration::no;
-    });
+
+    abort_source abort;
+    for (const auto& sst : sstables) {
+        sst_log.info("validating {}", sst->get_filename());
+        const auto errors = sst->validate(permit, default_priority_class(), abort, [] (sstring what) { sst_log.info("{}", what); }).get();
+        sst_log.info("validated {}: {}", sst->get_filename(), errors == 0 ? "valid" : "invalid");
+    }
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -2713,7 +2710,7 @@ validation will happen on the fragment level.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate
 for more information on this operation.
 )",
-            {"merge"},
+            {},
             validate_operation},
     {"validate-checksums",
             "Validate the checksums of the sstable(s)",
