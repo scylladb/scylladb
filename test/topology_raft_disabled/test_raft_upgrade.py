@@ -14,6 +14,7 @@ from cassandra.cluster import NoHostAvailable
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 
+@pytest.mark.skip(reason="Flaky on Jenkins, driver disconnects from a node and does not reconnect.")
 @pytest.mark.asyncio
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
     start = time.time()
