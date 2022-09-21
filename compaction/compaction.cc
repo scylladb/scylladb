@@ -1669,54 +1669,6 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
     return descriptor.options.visit(visitor_factory);
 }
 
-future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 reader, const compaction_data& cdata) {
-    auto schema = reader.schema();
-
-    uint64_t errors = 0;
-    std::exception_ptr ex;
-
-    try {
-        auto validator = mutation_fragment_stream_validator(*schema);
-
-        while (auto mf_opt = co_await reader()) {
-            if (cdata.is_stop_requested()) [[unlikely]] {
-                // Compaction manager will catch this exception and re-schedule the compaction.
-                throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
-            }
-
-            const auto& mf = *mf_opt;
-
-            if (auto res = validator(mf); !res) {
-                scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
-                validator.reset(mf);
-                ++errors;
-            }
-            if (mf.is_partition_start()) {
-                const auto& ps = mf.as_partition_start();
-                if (auto res = validator(ps.key()); !res) {
-                    scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
-                    validator.reset(ps.key());
-                    ++errors;
-                }
-            }
-        }
-        if (auto res = validator.on_end_of_stream(); !res) {
-            scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
-            ++errors;
-        }
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
-    co_await reader.close();
-
-    if (ex) {
-        co_return coroutine::exception(std::move(ex));
-    }
-
-    co_return errors;
-}
-
 static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();

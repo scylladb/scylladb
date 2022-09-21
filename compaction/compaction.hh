@@ -130,7 +130,4 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 // For tests, can drop after we virtualize sstables.
 flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
 
-// For tests, can drop after we virtualize sstables.
-future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 rd, const compaction_data& info);
-
 }
