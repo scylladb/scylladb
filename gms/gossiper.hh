@@ -240,8 +240,6 @@ private:
 public:
     explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
 
-    void check_seen_seeds();
-
     /**
      * Register for interesting state changes.
      *
@@ -510,9 +508,6 @@ private:
     void build_seeds_list();
 
 public:
-    // initialize local HB state if needed, i.e., if gossiper has never been started before.
-    void maybe_initialize_local_state(int generation_nbr);
-
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */

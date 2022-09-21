@@ -995,23 +995,6 @@ void gossiper::run() {
   });
 }
 
-void gossiper::check_seen_seeds() {
-    auto seen = std::any_of(_endpoint_state_map.begin(), _endpoint_state_map.end(), [this] (auto& entry) {
-        if (_seeds.contains(entry.first)) {
-            return true;
-        }
-        auto* internal_ip = entry.second.get_application_state_ptr(application_state::INTERNAL_IP);
-        return internal_ip && _seeds.contains(inet_address(internal_ip->value));
-    });
-    logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
-        boost::copy_range<std::list<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys),
-        _seeds, _gcfg.seeds, seen);
-    if (!seen) {
-        dump_endpoint_state_map();
-        throw std::runtime_error("Unable to contact any seeds!");
-    }
-}
-
 bool gossiper::is_seed(const gms::inet_address& endpoint) const {
     return _seeds.contains(endpoint);
 }
@@ -1972,16 +1955,6 @@ void gossiper::build_seeds_list() {
             continue;
         }
         _seeds.emplace(seed);
-    }
-}
-
-void gossiper::maybe_initialize_local_state(int generation_nbr) {
-    heart_beat_state hb_state(generation_nbr);
-    endpoint_state local_state(hb_state);
-    local_state.mark_alive();
-    inet_address ep = get_broadcast_address();
-    if (!_endpoint_state_map.contains(ep)) {
-        _endpoint_state_map.emplace(ep, local_state);
     }
 }
 
