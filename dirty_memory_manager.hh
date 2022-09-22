@@ -155,26 +155,12 @@ class memory_hard_limit {
     size_t _limit;
 
     bool _under_pressure = false;
-    bool _under_soft_pressure = false;
-
 public:
     bool under_pressure() const noexcept {
         return _under_pressure;
     }
 
 private:
-    bool over_soft_limit() const noexcept {
-        return _under_soft_pressure;
-    }
-
-    void notify_soft_pressure() noexcept {
-        _under_soft_pressure = true;
-    }
-
-    void notify_soft_relief() noexcept {
-        _under_soft_pressure = false;
-    }
-
     void notify_pressure() noexcept {
         _under_pressure = true;
     }
@@ -186,11 +172,6 @@ private:
     size_t throttle_threshold() const noexcept {
         return _limit;
     }
-    size_t soft_limit_threshold() const noexcept {
-        return _limit;
-    }
-
-
 public:
     memory_hard_limit(
             size_t limit = std::numeric_limits<size_t>::max())

@@ -167,12 +167,6 @@ void memory_hard_limit::notify_pressure_relieved() {
 void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta) {
     rg->_total_memory += delta;
 
-    if (rg->_total_memory > rg->soft_limit_threshold()) {
-        rg->notify_soft_pressure();
-    } else {
-        rg->notify_soft_relief();
-    }
-
     if (rg->_total_memory > rg->throttle_threshold()) {
         rg->notify_pressure();
     } else if (rg->under_pressure()) {
