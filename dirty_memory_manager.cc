@@ -168,7 +168,7 @@ template <region_group_or_memory_hard_limit RG>
 void do_update(RG* rg, RG*& top_relief, ssize_t delta) {
     rg->_total_memory += delta;
 
-    if (rg->_total_memory >= rg->soft_limit_threshold()) {
+    if (rg->_total_memory > rg->soft_limit_threshold()) {
         rg->notify_soft_pressure();
     } else {
         rg->notify_soft_relief();
