@@ -463,7 +463,7 @@ public:
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Returns false if the snapshot is older than existing one,
     // the passed snapshot will be dropped in this case.
-    bool apply_snapshot(snapshot_descriptor snp, size_t traling, bool local);
+    bool apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local);
 
     std::optional<std::pair<read_id, index_t>> start_read_barrier(server_id requester);
 
