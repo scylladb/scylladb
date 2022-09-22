@@ -176,23 +176,6 @@ bool do_update_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
     return false;
 }
 
-void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
-    rg->_total_memory += delta;
-
-    if (rg->_total_memory > rg->soft_limit_threshold()) {
-        rg->notify_soft_pressure();
-    } else {
-        rg->notify_soft_relief();
-    }
-
-    if (rg->_total_memory > rg->throttle_threshold()) {
-        rg->notify_pressure();
-    } else if (rg->under_pressure()) {
-        rg->notify_relief();
-        top_relief = rg;
-    }
-}
-
 void memory_hard_limit::update(ssize_t delta) {
     if (do_update_and_check_relief(this, delta)) {
         notify_pressure_relieved();
@@ -204,7 +187,21 @@ void region_group::update(ssize_t delta) {
     region_group* top_relief_region_group = nullptr;
     bool top_relief_memory_hard_limit = false;
 
-    do_update(this, top_relief_region_group, delta);
+    _total_memory += delta;
+
+    if (_total_memory > soft_limit_threshold()) {
+        notify_soft_pressure();
+    } else {
+        notify_soft_relief();
+    }
+
+    if (_total_memory > throttle_threshold()) {
+        notify_pressure();
+    } else if (under_pressure()) {
+        notify_relief();
+        top_relief_region_group = this;
+    }
+
     if (_parent) {
         top_relief_memory_hard_limit = do_update_and_check_relief(_parent, delta);
     }
