@@ -23,9 +23,9 @@ For example:
 
    > SELECT * FROM system.large_rows;
 
-      keyspace_name | table_name | sstable_name                                                                         | row_size | partition_key | clustering_key | compaction_time
-      --------------+------------+--------------------------------------------------------------------------------------+----------+---------------+----------------+---------------------------------
-      mykeyspace    |         gr | /var/lib/scylla/data/mykeyspace/gr-67d502908ea211e98d05000000000000/mc-1-big-Data.db |  1206130 |             1 |              1 | 2019-06-14 13:03:24.039000+0000
+      keyspace_name | table_name | sstable_name     | row_size | partition_key | clustering_key | compaction_time
+      --------------+------------+------------------+----------+---------------+----------------+---------------------------------
+      mykeyspace    |         gr | md-1-big-Data.db |  1206130 |             1 |              1 | 2019-06-14 13:03:24.039000+0000
 
   
 ================================================  =================================================================================
@@ -65,9 +65,9 @@ For example:
     > SELECT * FROM system.large_cells;
 
 
-    keyspace_name | table_name | sstable_name                                                                         | cell_size | partition_key | clustering_key | column_name | compaction_time
-    --------------+------------+--------------------------------------------------------------------------------------+-----------+---------------+----------------+-------------+---------------------------------
-    mykeyspace    |         gr | /var/lib/scylla/data/mykeyspace/gr-67d502908ea211e98d05000000000000/mc-1-big-Data.db |   1206115 |             1 |              1 |        link | 2019-06-14 13:03:24.034000+0000
+    keyspace_name | table_name | sstable_name     | cell_size | partition_key | clustering_key | column_name | compaction_time
+    --------------+------------+------------------+-----------+---------------+----------------+-------------+---------------------------------
+    mykeyspace    |         gr | md-1-big-Data.db |   1206115 |             1 |              1 |        link | 2019-06-14 13:03:24.034000+0000
    
   
 ================================================  =================================================================================

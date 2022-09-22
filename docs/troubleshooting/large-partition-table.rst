@@ -35,10 +35,10 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name                                                                       | partition_size | partition_key                                       | rows   | compaction_time
-   --------------+------------+------------------------------------------------------------------------------------+----------------+-----------------------------------------------------+--------+--------------------------
-          demodb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cba79c008e4f11e8908a000000000001/la-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34
-          testdb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cbs45c008e4f11e3418a000871000002/la-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows   | compaction_time
+   --------------+------------+------------------+----------------+-----------------------------------------------------+--------+--------------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34
+          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34
   
 ================================================  =================================================================================
 Parameter                                         Description
@@ -75,9 +75,9 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name                                                                       | partition_size | partition_key                                       | rows | compaction_time
-   --------------+------------+------------------------------------------------------------------------------------+----------------+-----------------------------------------------------+------+--------------------------
-          demodb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cba79c008e4f11e8908a000000000001/la-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows | compaction_time
+   --------------+------------+------------------+----------------+-----------------------------------------------------+------+--------------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34
 
 
 .. _large-partition-table-configure:
