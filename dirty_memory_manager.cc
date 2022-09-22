@@ -164,15 +164,16 @@ void memory_hard_limit::notify_pressure_relieved() {
     }
 }
 
-void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta) {
+bool do_update_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
     rg->_total_memory += delta;
 
     if (rg->_total_memory > rg->throttle_threshold()) {
         rg->notify_pressure();
     } else if (rg->under_pressure()) {
         rg->notify_relief();
-        top_relief = rg;
+        return true;
     }
+    return false;
 }
 
 void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
@@ -193,28 +194,23 @@ void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
 }
 
 void memory_hard_limit::update(ssize_t delta) {
-    // Most-enclosing group which was relieved.
-    memory_hard_limit* top_relief = nullptr;
-
-    do_update(this, top_relief, delta);
-
-    if (top_relief) {
-        top_relief->notify_pressure_relieved();
+    if (do_update_and_check_relief(this, delta)) {
+        notify_pressure_relieved();
     }
 }
 
 void region_group::update(ssize_t delta) {
     // Most-enclosing group which was relieved.
     region_group* top_relief_region_group = nullptr;
-    memory_hard_limit* top_relief_memory_hard_limit = nullptr;
+    bool top_relief_memory_hard_limit = false;
 
     do_update(this, top_relief_region_group, delta);
     if (_parent) {
-        do_update(_parent, top_relief_memory_hard_limit, delta);
+        top_relief_memory_hard_limit = do_update_and_check_relief(_parent, delta);
     }
 
     if (top_relief_memory_hard_limit) {
-        top_relief_memory_hard_limit->notify_pressure_relieved();
+        _parent->notify_pressure_relieved();
     } else if (top_relief_region_group) {
         top_relief_region_group->notify_pressure_relieved();
     }

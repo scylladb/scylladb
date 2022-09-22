@@ -189,7 +189,7 @@ public:
     void add(region_group* child);
     void del(region_group* child);
 
-    friend void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta);
+    friend bool do_update_and_check_relief(memory_hard_limit* rg, ssize_t delta);
 
     friend class region_group;
 };
@@ -372,7 +372,6 @@ private:
     virtual void del(region* child) override; // from region_listener
 
     friend void do_update(region_group* rg, region_group*& top_relief, ssize_t delta);
-    friend void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta);
     friend class test_region_group;
     friend class memory_hard_limit;
 };
