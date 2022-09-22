@@ -27,6 +27,7 @@ namespace db {
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
     using skip_flush = bool_class<class skip_flush_tag>;
+    using snap_views = bool_class<class snap_views_tag>;
 
     struct snapshot_details {
         int64_t live;
@@ -66,7 +67,7 @@ public:
      * @param tables a vector of tables names to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf = skip_flush::no);
+    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snap_views, skip_flush sf = skip_flush::no);
 
     /**
      * Takes the snapshot of a specific column family. A snapshot name must be specified.
@@ -75,7 +76,7 @@ public:
      * @param columnFamilyName the column family to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf = skip_flush::no);
+    future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, snap_views, skip_flush sf = skip_flush::no);
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
@@ -101,7 +102,7 @@ private:
     std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
-    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, skip_flush sf = skip_flush::no);
+    future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snap_views, skip_flush sf = skip_flush::no);
 };
 
 }
