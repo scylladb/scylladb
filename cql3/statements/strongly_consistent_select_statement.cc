@@ -14,7 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 
-#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/restrictions/analyzed_where.hh"
 #include "cql3/query_processor.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
@@ -61,7 +61,7 @@ bool is_selecting_only_value(const cql3::selection::selection& selection) {
 strongly_consistent_select_statement::strongly_consistent_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                                            lw_shared_ptr<const parameters> parameters,
                                                                            ::shared_ptr<selection::selection> selection,
-                                                                           ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+                                                                           ::shared_ptr<const restrictions::analyzed_where_clause> restrictions,
                                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                                            bool is_reversed,
                                                                            ordering_comparator_type ordering_comparator,

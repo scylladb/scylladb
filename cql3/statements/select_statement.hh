@@ -33,7 +33,7 @@ namespace selection {
 
 namespace restrictions {
     class restrictions;
-    class statement_restrictions;
+    class analyzed_where_clause;
 } // namespace restrictions
 
 namespace statements {
@@ -56,7 +56,7 @@ protected:
     uint32_t _bound_terms;
     lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;
-    const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
+    const ::shared_ptr<const restrictions::analyzed_where_clause> _restrictions;
     const bool _restrictions_need_filtering;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
@@ -88,7 +88,7 @@ public:
             uint32_t bound_terms,
             lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection,
-            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<const restrictions::analyzed_where_clause> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
             bool is_reversed,
             ordering_comparator_type ordering_comparator,
@@ -131,7 +131,7 @@ public:
 
     query::partition_slice make_partition_slice(const query_options& options) const;
 
-    const ::shared_ptr<const restrictions::statement_restrictions> get_restrictions() const;
+    const ::shared_ptr<const restrictions::analyzed_where_clause> get_restrictions() const;
 
     bool has_group_by() const { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
 
@@ -157,7 +157,7 @@ public:
                      uint32_t bound_terms,
                      lw_shared_ptr<const parameters> parameters,
                      ::shared_ptr<selection::selection> selection,
-                     ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+                     ::shared_ptr<const restrictions::analyzed_where_clause> restrictions,
                      ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                      bool is_reversed,
                      ordering_comparator_type ordering_comparator,
@@ -181,7 +181,7 @@ public:
                                                                     uint32_t bound_terms,
                                                                     lw_shared_ptr<const parameters> parameters,
                                                                     ::shared_ptr<selection::selection> selection,
-                                                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                                    ::shared_ptr<restrictions::analyzed_where_clause> restrictions,
                                                                     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                                     bool is_reversed,
                                                                     ordering_comparator_type ordering_comparator,
@@ -194,7 +194,7 @@ public:
                                    uint32_t bound_terms,
                                    lw_shared_ptr<const parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
-                                   ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+                                   ::shared_ptr<const restrictions::analyzed_where_clause> restrictions,
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,

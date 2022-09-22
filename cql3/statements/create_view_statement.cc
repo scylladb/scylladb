@@ -18,7 +18,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "cql3/column_identifier.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/restrictions/analyzed_where.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/statements/select_statement.hh"
@@ -79,7 +79,7 @@ static bool validate_primary_key(
         const column_definition* def,
         const std::unordered_set<const column_definition*>& base_pk,
         bool has_non_pk_column,
-        const restrictions::statement_restrictions& restrictions) {
+        const restrictions::analyzed_where_clause& restrictions) {
 
     if (def->type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Cannot use MultiCell column '{}' in PRIMARY KEY of materialized view", def->name_as_text()));

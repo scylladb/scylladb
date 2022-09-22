@@ -12,7 +12,7 @@
 #include "query_pager.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/query_options.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/restrictions/analyzed_where.hh"
 #include "log.hh"
 #include "service/storage_proxy.hh"
 #include "to_string.hh"
@@ -237,14 +237,14 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
 }
 
 class filtering_query_pager : public query_pager {
-    const ::shared_ptr<const cql3::restrictions::statement_restrictions> _filtering_restrictions;
+    const ::shared_ptr<const cql3::restrictions::analyzed_where_clause> _filtering_restrictions;
 public:
     filtering_query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
-                ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions)
+                ::shared_ptr<const cql3::restrictions::analyzed_where_clause> filtering_restrictions)
         : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges))
         , _filtering_restrictions(std::move(filtering_restrictions))
         {}
@@ -469,11 +469,11 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
-        ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions) {
+        ::shared_ptr<const cql3::restrictions::analyzed_where_clause> filtering_restrictions) {
     // If partition row limit is applied to paging, we still need to fall back
     // to filtering the results to avoid extraneous rows on page breaks.
     if (!filtering_restrictions && cmd->slice.partition_row_limit() < query::max_rows_if_set) {
-        filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(s, true);
+        filtering_restrictions = ::make_shared<cql3::restrictions::analyzed_where_clause>(s, true);
     }
     if (filtering_restrictions) {
         return std::make_unique<filtering_query_pager>(proxy, std::move(s), std::move(selection), state,

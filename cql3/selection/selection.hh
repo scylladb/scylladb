@@ -27,7 +27,7 @@ class metadata;
 class query_options;
 
 namespace restrictions {
-class statement_restrictions;
+class analyzed_where_clause;
 }
 
 namespace selection {
@@ -215,7 +215,7 @@ public:
         }
     };
     class restrictions_filter {
-        const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
+        const ::shared_ptr<const restrictions::analyzed_where_clause> _restrictions;
         const query_options& _options;
         const bool _skip_pk_restrictions;
         const bool _skip_ck_restrictions;
@@ -230,7 +230,7 @@ public:
         mutable std::optional<partition_key> _last_pkey;
         mutable bool _is_first_partition_on_page = true;
     public:
-        explicit restrictions_filter(::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        explicit restrictions_filter(::shared_ptr<const restrictions::analyzed_where_clause> restrictions,
                 const query_options& options,
                 uint64_t remaining,
                 schema_ptr schema,

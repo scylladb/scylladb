@@ -11,7 +11,7 @@
 #include "view_info.hh"
 #include "timeout_config.hh"
 #include "service/pager/query_pagers.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/restrictions/analyzed_where.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include <boost/range/adaptors.hpp>
