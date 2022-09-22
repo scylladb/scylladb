@@ -147,9 +147,6 @@ public:
 class region_group;
 class memory_hard_limit;
 
-template <typename T>
-concept region_group_or_memory_hard_limit = std::same_as<T, region_group> || std::same_as<T, memory_hard_limit>;
-
 class memory_hard_limit {
     region_group* _subgroup = nullptr;
 
@@ -211,8 +208,7 @@ public:
     void add(region_group* child);
     void del(region_group* child);
 
-    template <region_group_or_memory_hard_limit RG>
-    friend void do_update(RG* rg, RG*& top_relief, ssize_t delta);
+    friend void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta);
 
     friend class region_group;
 };
@@ -394,8 +390,8 @@ private:
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
 
-    template <region_group_or_memory_hard_limit RG>
-    friend void do_update(RG* rg, RG*& top_relief, ssize_t delta);
+    friend void do_update(region_group* rg, region_group*& top_relief, ssize_t delta);
+    friend void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta);
     friend class test_region_group;
     friend class memory_hard_limit;
 };

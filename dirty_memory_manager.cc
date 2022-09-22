@@ -164,8 +164,24 @@ void memory_hard_limit::notify_pressure_relieved() {
     }
 }
 
-template <region_group_or_memory_hard_limit RG>
-void do_update(RG* rg, RG*& top_relief, ssize_t delta) {
+void do_update(memory_hard_limit* rg, memory_hard_limit*& top_relief, ssize_t delta) {
+    rg->_total_memory += delta;
+
+    if (rg->_total_memory > rg->soft_limit_threshold()) {
+        rg->notify_soft_pressure();
+    } else {
+        rg->notify_soft_relief();
+    }
+
+    if (rg->_total_memory > rg->throttle_threshold()) {
+        rg->notify_pressure();
+    } else if (rg->under_pressure()) {
+        rg->notify_relief();
+        top_relief = rg;
+    }
+}
+
+void do_update(region_group* rg, region_group*& top_relief, ssize_t delta) {
     rg->_total_memory += delta;
 
     if (rg->_total_memory > rg->soft_limit_threshold()) {
