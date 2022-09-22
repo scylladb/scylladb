@@ -106,6 +106,11 @@ public:
         db::system_keyspace& sys_ks,
         raft_group0_client& client);
 
+    // Return true if Raft is enabled (but not necessarily having
+    // an active group 0 - e.g. in case we haven't completed an
+    // upgrade of a heterogeneous cluster yet.
+    bool is_raft_enabled() const { return _raft_gr.is_enabled(); }
+
     // Call before destroying the object.
     future<> abort();
 

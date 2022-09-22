@@ -401,12 +401,13 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
 
-    assert(_group0);
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
-
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
+    if (_group0->is_raft_enabled()) {
+        auto my_id = co_await _group0->load_or_create_my_id();
+        app_states.emplace(gms::application_state::RAFT_SERVER_ID, versioned_value::raft_server_id(my_id.id));
+    }
     app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
@@ -437,6 +438,9 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto generation_number = co_await db::system_keyspace::increment_and_get_generation();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
+
+    assert(_group0);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
 
     auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
@@ -1322,6 +1326,13 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "schema_version", utils::UUID(value.value));
     } else if (state == application_state::HOST_ID) {
         co_await update_table(endpoint, "host_id", utils::UUID(value.value));
+    } else if (state == application_state::RAFT_SERVER_ID && _feature_service.supports_raft_cluster_mgmt) {
+        auto server_id = utils::UUID(value.value);
+        if (server_id == utils::UUID{}) {
+            slogger.error("empty raft server id in application state for host {} ", endpoint);
+        } else {
+            co_await update_table(endpoint, "raft_server_id", server_id);
+        }
     } else if (state == application_state::SUPPORTED_FEATURES) {
         co_await update_table(endpoint, "supported_features", value.value);
     }

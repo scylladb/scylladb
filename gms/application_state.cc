@@ -25,6 +25,7 @@ static const std::map<application_state, sstring> application_state_names = {
     {application_state::REMOVAL_COORDINATOR,    "REMOVAL_COORDINATOR"},
     {application_state::INTERNAL_IP,            "INTERNAL_IP"},
     {application_state::RPC_ADDRESS,            "RPC_ADDRESS"},
+    {application_state::RAFT_SERVER_ID,         "RAFT_SERVER_ID"},
     {application_state::SEVERITY,               "SEVERITY"},
     {application_state::NET_VERSION,            "NET_VERSION"},
     {application_state::HOST_ID,                "HOST_ID"},

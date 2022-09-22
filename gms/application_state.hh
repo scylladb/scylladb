@@ -38,8 +38,11 @@ enum class application_state {
     IGNORE_MSB_BITS,
     CDC_GENERATION_ID,
     SNITCH_NAME,
-    // pad to allow adding new states to existing cluster
-    X10,
+    // RAFT ID is a server identifier which is maintained
+    // and gossiped in addition to HOST_ID because it's truly
+    // unique: any new node gets a new RAFT ID, while may keep
+    // its existing HOST ID, e.g. if it's replacing an existing node.
+    RAFT_SERVER_ID,
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m);
