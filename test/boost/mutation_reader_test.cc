@@ -597,10 +597,10 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
                 .next_partition()
                 .produces_partition_start(pkeys[1])
                 .produces_end_of_stream()
-                .fast_forward_to(position_range(position_in_partition::before_key(ckeys[2]), position_in_partition::after_key(ckeys[2])))
+                .fast_forward_to(position_range(position_in_partition::before_key(ckeys[2]), position_in_partition::after_key(*s.schema(), ckeys[2])))
                 .produces_row_with_key(ckeys[2])
                 .produces_end_of_stream()
-                .fast_forward_to(position_range(position_in_partition::after_key(ckeys[2]), position_in_partition::after_all_clustered_rows()))
+                .fast_forward_to(position_range(position_in_partition::after_key(*s.schema(), ckeys[2]), position_in_partition::after_all_clustered_rows()))
                 .produces_row_with_key(ckeys[3])
                 .produces_end_of_stream()
                 .next_partition()
@@ -648,13 +648,13 @@ SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping
             .next_partition()
             .produces_partition_start(pkeys[1])
             .produces_end_of_stream()
-            .fast_forward_to(position_range(position_in_partition::before_key(ckeys[0]), position_in_partition::after_key(ckeys[3])))
+            .fast_forward_to(position_range(position_in_partition::before_key(ckeys[0]), position_in_partition::after_key(*s.schema(), ckeys[3])))
             .produces_row_with_key(ckeys[0])
             .produces_row_with_key(ckeys[1])
             .produces_row_with_key(ckeys[2])
             .produces_row_with_key(ckeys[3])
             .produces_end_of_stream()
-            .fast_forward_to(position_range(position_in_partition::after_key(ckeys[6]), position_in_partition::after_all_clustered_rows()))
+            .fast_forward_to(position_range(position_in_partition::after_key(*s.schema(), ckeys[6]), position_in_partition::after_all_clustered_rows()))
             .produces_row_with_key(ckeys[7])
             .produces_row_with_key(ckeys[8])
             .produces_row_with_key(ckeys[9])
@@ -1127,7 +1127,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
             mutation result(m1.schema(), m1.decorated_key());
 
             rd.consume_pausable([&] (mutation_fragment&& mf) {
-                if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
+                if (mf.position().has_clustering_key() && !mf.range(*s).overlaps(*s, prange.start(), prange.end())) {
                     BOOST_FAIL(format("Received fragment which is not relevant for the slice: {}, slice: {}", mutation_fragment::printer(*s, mf), range));
                 }
                 result.partition().apply(*s, std::move(mf));
@@ -3518,12 +3518,12 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_non_monotonic_positions) {
         push_mf(partition_start(pkey, {}));
         for (int i = 0; i < 10; ++i) {
             const auto ckey = s.make_ckey(i);
-            const auto pos = i % 2 ? position_in_partition::after_key(ckey) : position_in_partition::before_key(ckey);
+            const auto pos = i % 2 ? position_in_partition::after_key(*s.schema(), ckey) : position_in_partition::before_key(ckey);
             for (int j = 0; j < 10; ++j) {
                 push_mf(range_tombstone_change(pos, tombstone(s.new_timestamp(), {})));
             }
         }
-        push_mf(range_tombstone_change(position_in_partition::after_key(s.make_ckey(11)), tombstone{}));
+        push_mf(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(11)), tombstone{}));
         push_mf(partition_end{});
 
         auto mut_opt = mut_builder.consume_end_of_stream();
@@ -3570,7 +3570,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
     const auto& pkey2 = pkeys[1];
 
     const auto first_rtc = range_tombstone_change(position_in_partition::before_key(s.make_ckey(0)), tombstone{s.new_timestamp(), {}});
-    const auto last_rtc = range_tombstone_change(position_in_partition::after_key(s.make_ckey(11)), tombstone{});
+    const auto last_rtc = range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(11)), tombstone{});
 
     size_t buffer_size = 0;
 
@@ -3749,7 +3749,7 @@ struct clustering_order_merger_test_generator {
             auto ck = mk_ck(k);
             positions.push_back(position_in_partition::before_key(ck));
             positions.push_back(position_in_partition::for_key(ck));
-            positions.push_back(position_in_partition::after_key(ck));
+            positions.push_back(position_in_partition::after_key(*_s, ck));
         }
         positions.push_back(position_in_partition::after_all_clustered_rows());
 

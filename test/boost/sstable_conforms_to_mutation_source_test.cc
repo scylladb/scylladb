@@ -159,7 +159,7 @@ static std::vector<position_range> random_ranges(const std::vector<clustering_ke
                 positions.emplace_back(position_in_partition::clustering_row_tag_t{}, std::move(ckp));
                 break;
             default:
-                positions.emplace_back(position_in_partition::after_clustering_row_tag_t{}, std::move(ckp));
+                positions.emplace_back(position_in_partition_view::after_all_prefixed(std::move(ckp)));
                 break;
         }
     }

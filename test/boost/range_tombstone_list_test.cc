@@ -500,8 +500,8 @@ static std::vector<range_tombstone> make_random() {
                     tombstone(dist(gen), gc_now));
         } else {
             rts.emplace_back(
-                    position_in_partition::after_key(key),
-                    position_in_partition::after_key(key),
+                    position_in_partition::after_key(*s, key),
+                    position_in_partition::after_key(*s, key),
                     tombstone(dist(gen), gc_now));
         }
     }

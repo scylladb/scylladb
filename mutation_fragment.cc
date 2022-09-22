@@ -258,12 +258,12 @@ position_in_partition_view mutation_fragment::position() const
     return visit([] (auto& mf) -> position_in_partition_view { return mf.position(); });
 }
 
-position_range mutation_fragment::range() const {
+position_range mutation_fragment::range(const schema& s) const {
     switch (_kind) {
     case kind::static_row:
         return position_range::for_static_row();
     case kind::clustering_row:
-        return position_range(position_in_partition(position()), position_in_partition::after_key(key()));
+        return position_range(position_in_partition(position()), position_in_partition::after_key(s, key()));
     case kind::partition_start:
         return position_range(position_in_partition(position()), position_in_partition::for_static_row());
     case kind::partition_end:

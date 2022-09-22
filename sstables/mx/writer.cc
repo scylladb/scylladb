@@ -503,7 +503,7 @@ struct rt_marker {
         if (kind == bound_kind_m::incl_start || kind == bound_kind_m::excl_end_incl_start) {
             return position_in_partition_view::before_key(clustering);
         }
-        return position_in_partition_view::after_key(clustering);
+        return position_in_partition_view::after_all_prefixed(clustering);
     }
 
     // We need this one to uniformly write rows and RT markers inside write_clustered().

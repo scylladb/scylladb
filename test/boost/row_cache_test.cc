@@ -2121,7 +2121,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions_reversed) {
                     .produces_range_tombstone_change(start_change(reversed(rt2)))
                     .produces_range_tombstone_change(range_tombstone_change(reversed(rt2).end_position(), rt1.tomb))
                     .produces_row_with_key(s.make_ckey(2))
-                    .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(s.make_ckey(1)), {}))
+                    .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(1)), {}))
                     .produces_partition_end()
                     .produces_end_of_stream();
         }

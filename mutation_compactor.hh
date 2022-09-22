@@ -446,7 +446,7 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
         if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition::after_key(_last_pos), tombstone{});
+            auto rtc = range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), tombstone{});
             // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
             auto prev_tombstone = _effective_tombstone;
             do_consume(std::move(rtc), consumer, gc_consumer);
@@ -539,7 +539,7 @@ public:
             consume(*std::exchange(_last_static_row, {}), consumer, nc);
         }
         if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition_view::after_key(_last_pos), _effective_tombstone);
+            auto rtc = range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _effective_tombstone);
             do_consume(std::move(rtc), consumer, nc);
         }
     }
@@ -574,7 +574,7 @@ public:
         partition_start ps(std::move(_last_dk), _partition_tombstone);
         if (_effective_tombstone) {
             return detached_compaction_state{std::move(ps), std::move(_last_static_row),
-                    range_tombstone_change(position_in_partition_view::after_key(_last_pos), _effective_tombstone)};
+                    range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _effective_tombstone)};
         } else {
             return detached_compaction_state{std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
         }

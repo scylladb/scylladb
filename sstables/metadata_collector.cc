@@ -38,7 +38,7 @@ void metadata_collector::update_min_max_components(position_in_partition_view po
     // This is how callers expect prefixes to be interpreted.
     const auto is_prefix_row = pos.is_clustering_row() && !pos.key().is_full(_schema);
     const auto min_pos = is_prefix_row ? position_in_partition_view::before_key(pos) : pos;
-    const auto max_pos = is_prefix_row ? position_in_partition_view::after_key(pos) : pos;
+    const auto max_pos = is_prefix_row ? position_in_partition_view::after_all_prefixed(pos) : pos;
 
     if (!_min_clustering_pos || cmp(min_pos, *_min_clustering_pos) < 0) {
         mdclogger.trace("{}: setting min_clustering_key={}", _name, position_in_partition_view::printer(_schema, min_pos));

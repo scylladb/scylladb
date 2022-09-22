@@ -80,6 +80,8 @@ enum class partition_region : uint8_t {
     partition_end,
 };
 
+struct view_and_holder;
+
 std::ostream& operator<<(std::ostream&, partition_region);
 std::string_view to_string(partition_region);
 partition_region parse_partition_region(std::string_view);
@@ -168,12 +170,18 @@ public:
         return {clustering_row_tag_t(), ck};
     }
 
-    static position_in_partition_view after_key(const clustering_key& ck) {
+    // Returns a view, as the first element of the returned pair, to before_key(pos._ck)
+    // if pos.is_clustering_row() else returns pos as-is.
+    // The second element of the pair needs to be kept alive as long as the first element is used.
+    // The returned view is valid as long as the view passed to this method is valid.
+    static view_and_holder after_key(const schema&, position_in_partition_view);
+
+    static position_in_partition_view after_all_prefixed(const clustering_key& ck) {
         return {partition_region::clustered, bound_weight::after_all_prefixed, &ck};
     }
 
-    // Returns a view to after_key(pos._ck) if pos.is_clustering_row() else returns pos as-is.
-    static position_in_partition_view after_key(position_in_partition_view pos) {
+    // Returns a view to after_all_prefixed(pos._ck) if pos.is_clustering_row() else returns pos as-is.
+    static position_in_partition_view after_all_prefixed(position_in_partition_view pos) {
         return {partition_region::clustered, pos._bound_weight == bound_weight::equal ? bound_weight::after_all_prefixed : pos._bound_weight, pos._ck};
     }
 
@@ -266,13 +274,27 @@ public:
     explicit position_in_partition(static_row_tag_t) : _type(partition_region::static_row) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _type(partition_region::clustered), _ck(std::move(ck)) { }
-    position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
-        // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
-        : _type(partition_region::clustered), _bound_weight(bound_weight::after_all_prefixed), _ck(std::move(ck)) { }
-    position_in_partition(after_clustering_row_tag_t, position_in_partition_view pos)
+    position_in_partition(after_clustering_row_tag_t, const schema& s, clustering_key_prefix ck)
+        : _type(partition_region::clustered)
+        , _bound_weight(bound_weight::after_all_prefixed)
+        , _ck(std::move(ck))
+    {
+        if (clustering_key::make_full(s, *_ck)) { // Refs #1446
+            _bound_weight = bound_weight::before_all_prefixed;
+        }
+    }
+    position_in_partition(after_clustering_row_tag_t, const schema& s, position_in_partition_view pos)
+        : position_in_partition(after_clustering_row_tag_t(), s, position_in_partition(pos))
+    { }
+    position_in_partition(after_clustering_row_tag_t, const schema& s, position_in_partition&& pos)
         : _type(partition_region::clustered)
         , _bound_weight(pos._bound_weight != bound_weight::equal ? pos._bound_weight : bound_weight::after_all_prefixed)
-        , _ck(*pos._ck) { }
+        , _ck(std::move(pos._ck))
+    {
+        if (pos._bound_weight == bound_weight::equal && _ck && clustering_key::make_full(s, *_ck)) { // Refs #1446
+            _bound_weight = bound_weight::before_all_prefixed;
+        }
+    }
     position_in_partition(before_clustering_row_tag_t, clustering_key_prefix ck)
         : _type(partition_region::clustered), _bound_weight(bound_weight::before_all_prefixed), _ck(std::move(ck)) { }
     position_in_partition(before_clustering_row_tag_t, position_in_partition_view pos)
@@ -323,15 +345,19 @@ public:
         return {before_clustering_row_tag_t(), std::move(ck)};
     }
 
-    static position_in_partition after_key(clustering_key ck) {
-        return {after_clustering_row_tag_t(), std::move(ck)};
+    static position_in_partition after_key(const schema& s, clustering_key ck) {
+        return {after_clustering_row_tag_t(), s, std::move(ck)};
     }
 
     // If given position is a clustering row position, returns a position
     // right after it. Otherwise returns it unchanged.
     // The position "pos" must be a clustering position.
-    static position_in_partition after_key(position_in_partition_view pos) {
-        return {after_clustering_row_tag_t(), pos};
+    static position_in_partition after_key(const schema& s, position_in_partition_view pos) {
+        return {after_clustering_row_tag_t(), s, pos};
+    }
+
+    static position_in_partition after_key(const schema& s, position_in_partition&& pos) noexcept {
+        return {after_clustering_row_tag_t(), s, std::move(pos)};
     }
 
     static position_in_partition for_key(clustering_key ck) {
@@ -571,6 +597,25 @@ public:
         return position_in_partition(_type, ::reversed(_bound_weight), std::move(_ck));
     }
 };
+
+struct view_and_holder {
+    position_in_partition_view view;
+    std::optional<position_in_partition> holder;
+};
+
+inline
+view_and_holder position_in_partition_view::after_key(const schema& s, position_in_partition_view pos) {
+    if (!pos.is_clustering_row()) {
+        return {pos, std::nullopt};
+    }
+    if (pos.key().is_full(s)) {
+        return {position_in_partition_view::after_all_prefixed(pos.key()), std::nullopt};
+    }
+    // FIXME: This wouldn't be needed if we had a bound weight to represent this.
+    auto res = position_in_partition::after_key(s, clustering_key(pos.key()));
+    position_in_partition_view res_view = res;
+    return {std::move(res_view), std::move(res)};
+}
 
 inline
 position_in_partition position_in_partition::for_range_start(const query::clustering_range& r) {
