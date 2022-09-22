@@ -37,14 +37,14 @@ db::nop_large_data_handler nop_lp_handler;
 db::config test_db_config;
 gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
 
-column_family_for_tests::data::data()
-    : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
+table_for_tests::data::data()
+    : semaphore(reader_concurrency_semaphore::no_limits{}, "table_for_tests")
 { }
 
-column_family_for_tests::data::~data() {}
+table_for_tests::data::~data() {}
 
-column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager)
-    : column_family_for_tests(
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager)
+    : table_for_tests(
         sstables_manager,
         schema_builder(some_keyspace, some_column_family)
             .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
@@ -52,8 +52,8 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     )
 { }
 
-class column_family_for_tests::table_state : public compaction::table_state {
-    column_family_for_tests::data& _data;
+class table_for_tests::table_state : public compaction::table_state {
+    table_for_tests::data& _data;
     sstables::sstables_manager& _sstables_manager;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
     tombstone_gc_state _tombstone_gc_state;
@@ -62,7 +62,7 @@ private:
         return *_data.cf;
     }
 public:
-    explicit table_state(column_family_for_tests::data& data, sstables::sstables_manager& sstables_manager)
+    explicit table_state(table_for_tests::data& data, sstables::sstables_manager& sstables_manager)
             : _data(data)
             , _sstables_manager(sstables_manager)
             , _tombstone_gc_state(nullptr)
@@ -93,7 +93,7 @@ public:
         return table().get_compaction_strategy();
     }
     reader_permit make_compaction_reader_permit() const override {
-        return _data.semaphore.make_tracking_only_permit(&*schema(), "column_family_for_tests::table_state", db::no_timeout);
+        return _data.semaphore.make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout);
     }
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _sstables_manager;
@@ -122,7 +122,7 @@ public:
     }
 };
 
-column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
     : _data(make_lw_shared<data>())
 {
     _data->s = s;
@@ -138,11 +138,11 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cm.add(*_data->table_s);
 }
 
-compaction::table_state& column_family_for_tests::as_table_state() noexcept {
+compaction::table_state& table_for_tests::as_table_state() noexcept {
     return *_data->table_s;
 }
 
-future<> column_family_for_tests::stop() {
+future<> table_for_tests::stop() {
     auto data = _data;
     co_await data->cm.remove(*data->table_s);
     co_await when_all_succeed(data->cm.stop(), data->semaphore.stop()).discard_result();

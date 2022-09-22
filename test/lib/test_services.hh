@@ -37,7 +37,7 @@
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 
-struct column_family_for_tests {
+struct table_for_tests {
     class table_state;
     struct data {
         schema_ptr s;
@@ -54,9 +54,9 @@ struct column_family_for_tests {
     };
     lw_shared_ptr<data> _data;
 
-    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager);
+    explicit table_for_tests(sstables::sstables_manager& sstables_manager);
 
-    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
+    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
 
     schema_ptr schema() { return _data->s; }
 
