@@ -10,9 +10,30 @@
 
 namespace cql3 {
 namespace restrictions {
+extern logging::logger rlogger;
+
+using namespace expr;
+
+static void assert_contains_only_partition_key_columns(const expr::expression& e) {
+    const column_value* non_partition_column =
+        find_in_expression<column_value>(e, [](const column_value& cval) { return !cval.col->is_partition_key(); });
+
+    if (non_partition_column != nullptr) {
+        on_internal_error(
+            rlogger,
+            format("partition_key_restrictions were given an expression that contains a non-parition column: {}",
+                   non_partition_column->col->name_as_text()));
+    }
+}
+
 partition_key_restrictions::partition_key_restrictions(expr::expression partition_restrictions, schema_ptr table_schema)
     : _table_schema(std::move(table_schema)), _partition_restrictions(std::move(partition_restrictions)) {
-    // TODO
+    if (!is_prepared(_partition_restrictions)) {
+        on_internal_error(rlogger, format("partition_key_restrictions were given an unprepared expression: {}",
+                                          _partition_restrictions));
+    }
+
+    assert_contains_only_partition_key_columns(_partition_restrictions);
 }
 }  // namespace restrictions
 }  // namespace cql3
