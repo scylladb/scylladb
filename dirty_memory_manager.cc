@@ -56,13 +56,13 @@ void
 memory_hard_limit::add(region_group* child) {
     assert(!_subgroup);
     _subgroup = child;
-    update(child->_total_memory);
+    update_hard(child->_total_memory);
 }
 
 void
 memory_hard_limit::del(region_group* child) {
     _subgroup = nullptr;
-    update(-child->_total_memory);
+    update_hard(-child->_total_memory);
 }
 
 void
@@ -103,7 +103,7 @@ region_group::moved(region* old_address, region* new_address) {
 bool
 region_group::execution_permitted() noexcept {
     return !(this->under_pressure()
-                || (_parent && _parent->under_pressure()));
+                || (_parent && _parent->under_hard_pressure()));
 }
 
 void
@@ -158,27 +158,27 @@ void region_group::notify_pressure_relieved() {
     _relief.signal();
 }
 
-void memory_hard_limit::notify_pressure_relieved() {
+void memory_hard_limit::notify_hard_pressure_relieved() {
     if (_subgroup) {
         _subgroup->notify_pressure_relieved();
     }
 }
 
-bool do_update_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
-    rg->_total_memory += delta;
+bool do_update_hard_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
+    rg->_hard_total_memory += delta;
 
-    if (rg->_total_memory > rg->throttle_threshold()) {
-        rg->notify_pressure();
-    } else if (rg->under_pressure()) {
-        rg->notify_relief();
+    if (rg->_hard_total_memory > rg->hard_throttle_threshold()) {
+        rg->notify_hard_pressure();
+    } else if (rg->under_hard_pressure()) {
+        rg->notify_hard_relief();
         return true;
     }
     return false;
 }
 
-void memory_hard_limit::update(ssize_t delta) {
-    if (do_update_and_check_relief(this, delta)) {
-        notify_pressure_relieved();
+void memory_hard_limit::update_hard(ssize_t delta) {
+    if (do_update_hard_and_check_relief(this, delta)) {
+        notify_hard_pressure_relieved();
     }
 }
 
@@ -203,11 +203,11 @@ void region_group::update(ssize_t delta) {
     }
 
     if (_parent) {
-        top_relief_memory_hard_limit = do_update_and_check_relief(_parent, delta);
+        top_relief_memory_hard_limit = do_update_hard_and_check_relief(_parent, delta);
     }
 
     if (top_relief_memory_hard_limit) {
-        _parent->notify_pressure_relieved();
+        _parent->notify_hard_pressure_relieved();
     } else if (top_relief_region_group) {
         top_relief_region_group->notify_pressure_relieved();
     }

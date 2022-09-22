@@ -1731,7 +1731,7 @@ class dirty_mem_mgr():
         self.ref = ref
 
     def real_dirty(self):
-        return int(self.ref['_real_region_group']['_total_memory'])
+        return int(self.ref['_real_region_group']['_hard_total_memory'])
 
     def virt_dirty(self):
         return int(self.ref['_virtual_region_group']['_total_memory'])

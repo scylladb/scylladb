@@ -150,46 +150,46 @@ class memory_hard_limit;
 class memory_hard_limit {
     region_group* _subgroup = nullptr;
 
-    size_t _total_memory = 0;
+    size_t _hard_total_memory = 0;
 
-    size_t _limit;
+    size_t _hard_limit;
 
-    bool _under_pressure = false;
+    bool _under_hard_pressure = false;
 public:
-    bool under_pressure() const noexcept {
-        return _under_pressure;
+    bool under_hard_pressure() const noexcept {
+        return _under_hard_pressure;
     }
 
 private:
-    void notify_pressure() noexcept {
-        _under_pressure = true;
+    void notify_hard_pressure() noexcept {
+        _under_hard_pressure = true;
     }
 
-    void notify_relief() noexcept {
-        _under_pressure = false;
+    void notify_hard_relief() noexcept {
+        _under_hard_pressure = false;
     }
 
-    size_t throttle_threshold() const noexcept {
-        return _limit;
+    size_t hard_throttle_threshold() const noexcept {
+        return _hard_limit;
     }
 public:
     memory_hard_limit(
             size_t limit = std::numeric_limits<size_t>::max())
-            : _limit(limit) {
+            : _hard_limit(limit) {
     }
 
-    void notify_pressure_relieved();
+    void notify_hard_pressure_relieved();
 
-    void update(ssize_t delta);
+    void update_hard(ssize_t delta);
 
-    size_t memory_used() const noexcept {
-        return _total_memory;
+    size_t hard_memory_used() const noexcept {
+        return _hard_total_memory;
     }
 
     void add(region_group* child);
     void del(region_group* child);
 
-    friend bool do_update_and_check_relief(memory_hard_limit* rg, ssize_t delta);
+    friend bool do_update_hard_and_check_relief(memory_hard_limit* rg, ssize_t delta);
 
     friend class region_group;
 };
@@ -526,27 +526,27 @@ public:
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update(-delta);
+        _real_region_group.update_hard(-delta);
         _virtual_region_group.update(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update(delta);
+        _real_region_group.update_hard(delta);
         _virtual_region_group.update(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
     void pin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update(delta);
+        _real_region_group.update_hard(delta);
     }
 
     void unpin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update(-delta);
+        _real_region_group.update_hard(-delta);
     }
 
     size_t real_dirty_memory() const noexcept {
-        return _real_region_group.memory_used();
+        return _real_region_group.hard_memory_used();
     }
 
     size_t virtual_dirty_memory() const noexcept {
@@ -608,7 +608,7 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
     bool blocked = 
         !(rg->_blocked_requests.empty() && !rg->under_pressure());
     if (!blocked && _parent) {
-        blocked = _parent->under_pressure();
+        blocked = _parent->under_hard_pressure();
     }
 
     if (!blocked) {

@@ -74,7 +74,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_GE(ssize_t(one->occupancy().used_space()), ssize_t(one_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(one->occupancy().total_space()), ssize_t(one->occupancy().used_space()));
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one->occupancy().total_space());
 
         constexpr size_t two_count = 8 * base_count;
         std::vector<managed_ref<int>> two_objs;
@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         BOOST_REQUIRE_GE(ssize_t(two->occupancy().used_space()), ssize_t(two_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(two->occupancy().total_space()), ssize_t(two->occupancy().used_space()));
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space() + two->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one_and_two.memory_used());
 
         constexpr size_t three_count = 32 * base_count;
         std::vector<managed_ref<int>> three_objs;
@@ -97,7 +97,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t(three_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one_and_two.memory_used());
 
         constexpr size_t four_count = 4 * base_count;
         std::vector<managed_ref<int>> four_objs;
@@ -121,27 +121,27 @@ SEASTAR_TEST_CASE(test_region_groups) {
         three->merge(*four);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one_and_two.memory_used());
         BOOST_REQUIRE_EQUAL(just_four.memory_used(), 0);
 
         three->merge(*five);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one_and_two.memory_used());
 
         with_allocator(two->allocator(), [&] {
             two_objs.clear();
         });
         two.reset();
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), one_and_two.memory_used());
 
         with_allocator(one->allocator(), [&] {
             one_objs.clear();
         });
         one.reset();
         BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), 0);
-        BOOST_REQUIRE_EQUAL(all.memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), 0);
 
         with_allocator(three->allocator(), [&] {
             three_objs.clear();
@@ -150,7 +150,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         three.reset();
         four.reset();
         five.reset();
-        BOOST_REQUIRE_EQUAL(all.memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(all.hard_memory_used(), 0);
     });
 }
 
