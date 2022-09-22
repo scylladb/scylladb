@@ -20,15 +20,18 @@ enum class mutation_fragment_stream_validation_level {
 /// Low level fragment stream validator.
 ///
 /// Tracks and validates the monotonicity of the passed in fragment kinds,
-/// position in partition, token or partition keys. Any subset of these
-/// can be used, but what is used have to be consistent across the entire
-/// stream.
+/// position in partition, token or partition keys.
 class mutation_fragment_stream_validator {
     const ::schema& _schema;
     mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
     tombstone _current_tombstone;
+
+private:
+    bool validate(dht::token t, const partition_key* pkey);
+    bool validate(mutation_fragment_v2::kind kind, std::optional<position_in_partition_view> pos,
+        std::optional<tombstone> new_current_tombstone);
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
 
@@ -124,26 +127,27 @@ public:
     }
     /// The previous valid position.
     ///
-    /// Not meaningful, when operator()(position_in_partition_view) is not used.
+    /// Call only if operator()(position_in_partition_view) was used.
     const position_in_partition& previous_position() const {
         return _prev_pos;
     }
     /// Get the current effective tombstone
     ///
-    /// Not meaningful, when operator()(mutation_fragment_v2) is not used.
+    /// Call only if operator()(mutation_fragment_v2) or
+    /// operator()(mutation_fragment_v2::kind, position_in_partition_view, std::optional<tombstone>)
+    /// was not used.
     tombstone current_tombstone() const {
         return _current_tombstone;
     }
     /// The previous valid partition key.
     ///
-    /// Only valid if `operator()(const dht::decorated_key&)` or
-    /// `operator()(dht::token)` was used.
+    /// Call only if operator()(dht::token) or operator()(const dht::decorated_key&) was used.
     dht::token previous_token() const {
         return _prev_partition_key.token();
     }
     /// The previous valid partition key.
     ///
-    /// Only valid if `operator()(const dht::decorated_key&)` was used.
+    /// Call only if operator()(const dht::decorated_key&) was used.
     const dht::decorated_key& previous_partition_key() const {
         return _prev_partition_key;
     }
