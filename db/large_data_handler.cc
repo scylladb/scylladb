@@ -148,7 +148,8 @@ future<> cql_table_large_data_handler::record_large_cells(const sstables::sstabl
         auto ck_str = key_to_str(*clustering_key, s);
         return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("/{}/{}", ck_str, column_name), extra_fields, ck_str, column_name);
     } else {
-        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name);
+        auto desc = format("static {}", cell_type);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name);
     }
 }
 
