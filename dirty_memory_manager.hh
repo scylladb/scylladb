@@ -151,8 +151,6 @@ template <typename T>
 concept region_group_or_memory_hard_limit = std::same_as<T, region_group> || std::same_as<T, memory_hard_limit>;
 
 class memory_hard_limit {
-    sstring _name;
-
     region_group* _subgroup = nullptr;
 
     size_t _total_memory = 0;
@@ -197,10 +195,9 @@ private:
 
 
 public:
-    memory_hard_limit(sstring name = "(unnamed region_group)",
+    memory_hard_limit(
             size_t limit = std::numeric_limits<size_t>::max())
-            : _name(std::move(name))
-            , _limit(limit) {
+            : _limit(limit) {
     }
 
     void notify_pressure_relieved();
@@ -533,7 +530,7 @@ public:
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
     dirty_memory_manager()
         : _db(nullptr)
-        , _real_region_group("memtable", std::numeric_limits<size_t>::max())
+        , _real_region_group(std::numeric_limits<size_t>::max())
         , _virtual_region_group("memtable (virtual)", &_real_region_group,
                 dirty_memory_manager_logalloc::reclaim_config{
                     .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
