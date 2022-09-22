@@ -144,10 +144,14 @@ public:
     bool empty() const noexcept { return _blocked_requests.empty(); }
 };
 
-class region_group;
-class memory_hard_limit;
+// Groups regions for the purpose of statistics.  Can be nested.
+// Interfaces to regions via region_listener
+class region_group : public region_listener {
+    reclaim_config _cfg;
 
-class memory_hard_limit {
+    bool _under_pressure = false;
+    bool _under_soft_pressure = false;
+
     region_group* _subgroup = nullptr;
 
     size_t _hard_total_memory = 0;
@@ -155,12 +159,11 @@ class memory_hard_limit {
     size_t _hard_limit;
 
     bool _under_hard_pressure = false;
-public:
+
     bool under_hard_pressure() const noexcept {
         return _under_hard_pressure;
     }
 
-private:
     void notify_hard_pressure() noexcept {
         _under_hard_pressure = true;
     }
@@ -172,35 +175,17 @@ private:
     size_t hard_throttle_threshold() const noexcept {
         return _hard_limit;
     }
-public:
-    memory_hard_limit(
-            size_t limit = std::numeric_limits<size_t>::max())
-            : _hard_limit(limit) {
-    }
 
     void notify_hard_pressure_relieved();
 
+public:
     void update_hard(ssize_t delta);
 
     size_t hard_memory_used() const noexcept {
         return _hard_total_memory;
     }
 
-    void add(region_group* child);
-    void del(region_group* child);
-
-    friend bool do_update_hard_and_check_relief(memory_hard_limit* rg, ssize_t delta);
-
-    friend class region_group;
-};
-
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
-class region_group : public region_listener {
-    reclaim_config _cfg;
-
-    bool _under_pressure = false;
-    bool _under_soft_pressure = false;
+    friend bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta);
 
 public:
     bool under_pressure() const noexcept {
@@ -244,7 +229,6 @@ private:
     }
     using region_heap = dirty_memory_manager_logalloc::region_heap;
 
-    memory_hard_limit* _parent = nullptr;
     size_t _total_memory = 0;
 
     region_heap _regions;
@@ -278,11 +262,7 @@ public:
     // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
     // (given to run_when_memory_available()) when they must be deferred due to lack of memory
     // at the time the call to run_when_memory_available() was made.
-    region_group(sstring name = "(unnamed region_group)",
-            reclaim_config cfg = {},
-            scheduling_group deferred_work_sg = default_scheduling_group()) noexcept
-        : region_group(std::move(name), nullptr, std::move(cfg), deferred_work_sg) {}
-    region_group(sstring name, memory_hard_limit* parent, reclaim_config cfg = {},
+    region_group(sstring name = "(unnamed region group)", reclaim_config cfg = {}, size_t memory_hard_limit = std::numeric_limits<size_t>::max(),
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
@@ -291,9 +271,6 @@ public:
         // called.
         if (reclaimer_can_block()) {
             assert(_shutdown_requested);
-        }
-        if (_parent) {
-            _parent->del(this);
         }
     }
     region_group& operator=(const region_group&) = delete;
@@ -429,9 +406,6 @@ class dirty_memory_manager {
     bool _db_shutdown_requested = false;
 
     replica::database* _db;
-    // The _real_region_group protects against actual dirty memory usage hitting the maximum. Usage
-    // for this group is the real dirty memory usage of the system.
-    dirty_memory_manager_logalloc::memory_hard_limit _real_region_group;
     // The _virtual_region_group accounts for virtual memory usage. It is defined as the real dirty
     // memory usage minus bytes that were already written to disk.
     dirty_memory_manager_logalloc::region_group _virtual_region_group;
@@ -505,11 +479,10 @@ public:
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
     dirty_memory_manager()
         : _db(nullptr)
-        , _real_region_group(std::numeric_limits<size_t>::max())
-        , _virtual_region_group("memtable (virtual)", &_real_region_group,
+        , _virtual_region_group("memtable (virtual)",
                 dirty_memory_manager_logalloc::reclaim_config{
                     .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
-                })
+                }, std::numeric_limits<size_t>::max())
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
@@ -526,27 +499,27 @@ public:
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update_hard(-delta);
+        _virtual_region_group.update_hard(-delta);
         _virtual_region_group.update(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update_hard(delta);
+        _virtual_region_group.update_hard(delta);
         _virtual_region_group.update(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
     void pin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update_hard(delta);
+        _virtual_region_group.update_hard(delta);
     }
 
     void unpin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update_hard(-delta);
+        _virtual_region_group.update_hard(-delta);
     }
 
     size_t real_dirty_memory() const noexcept {
-        return _real_region_group.hard_memory_used();
+        return _virtual_region_group.hard_memory_used();
     }
 
     size_t virtual_dirty_memory() const noexcept {
@@ -607,8 +580,8 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
     auto rg = this;
     bool blocked = 
         !(rg->_blocked_requests.empty() && !rg->under_pressure());
-    if (!blocked && _parent) {
-        blocked = _parent->under_hard_pressure();
+    if (!blocked) {
+        blocked = under_hard_pressure();
     }
 
     if (!blocked) {

@@ -53,19 +53,6 @@ dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_re
 }
 
 void
-memory_hard_limit::add(region_group* child) {
-    assert(!_subgroup);
-    _subgroup = child;
-    update_hard(child->_total_memory);
-}
-
-void
-memory_hard_limit::del(region_group* child) {
-    _subgroup = nullptr;
-    update_hard(-child->_total_memory);
-}
-
-void
 region_group::add(region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
     assert(!child->_heap_handle);
@@ -103,7 +90,7 @@ region_group::moved(region* old_address, region* new_address) {
 bool
 region_group::execution_permitted() noexcept {
     return !(this->under_pressure()
-                || (_parent && _parent->under_hard_pressure()));
+                || (under_hard_pressure()));
 }
 
 void
@@ -138,16 +125,12 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
     });
 }
 
-region_group::region_group(sstring name, memory_hard_limit *parent,
-        reclaim_config cfg, scheduling_group deferred_work_sg)
-    : _cfg(std::move(cfg))
-    , _parent(parent)
+region_group::region_group(sstring name,
+        reclaim_config cfg, size_t memory_hard_limit, scheduling_group deferred_work_sg)
+    : _cfg(std::move(cfg)), _hard_limit(memory_hard_limit)
     , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {
-    if (_parent) {
-        _parent->add(this);
-    }
 }
 
 bool region_group::reclaimer_can_block() const {
@@ -158,13 +141,11 @@ void region_group::notify_pressure_relieved() {
     _relief.signal();
 }
 
-void memory_hard_limit::notify_hard_pressure_relieved() {
-    if (_subgroup) {
-        _subgroup->notify_pressure_relieved();
-    }
+void region_group::notify_hard_pressure_relieved() {
+    notify_pressure_relieved();
 }
 
-bool do_update_hard_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
+bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta) {
     rg->_hard_total_memory += delta;
 
     if (rg->_hard_total_memory > rg->hard_throttle_threshold()) {
@@ -176,7 +157,7 @@ bool do_update_hard_and_check_relief(memory_hard_limit* rg, ssize_t delta) {
     return false;
 }
 
-void memory_hard_limit::update_hard(ssize_t delta) {
+void region_group::update_hard(ssize_t delta) {
     if (do_update_hard_and_check_relief(this, delta)) {
         notify_hard_pressure_relieved();
     }
@@ -202,12 +183,10 @@ void region_group::update(ssize_t delta) {
         top_relief_region_group = this;
     }
 
-    if (_parent) {
-        top_relief_memory_hard_limit = do_update_hard_and_check_relief(_parent, delta);
-    }
+    top_relief_memory_hard_limit = do_update_hard_and_check_relief(this, delta);
 
     if (top_relief_memory_hard_limit) {
-        _parent->notify_hard_pressure_relieved();
+        notify_hard_pressure_relieved();
     } else if (top_relief_region_group) {
         top_relief_region_group->notify_pressure_relieved();
     }
