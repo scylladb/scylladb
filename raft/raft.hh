@@ -48,7 +48,7 @@ using read_id = internal::tagged_uint64<struct read_id_tag>;
 // This value is disseminated between cluster member
 // through regular log replication as part of a configuration
 // log entry. Upon receiving it a server passes it down to
-// RPC module through add_server() call where it is deserialized
+// RPC module through on_configuration_change() call where it is deserialized
 // and used to obtain connection info for the node `id`. After a server
 // is added to the RPC module RPC's send functions can be used to communicate
 // with it using its `id`.
@@ -620,13 +620,19 @@ public:
         const std::vector<config_member>& add,
         const std::vector<server_id>& del) = 0;
 
-    // When a new server is learn this function is called with the
-    // info about the server.
-    virtual void add_server(server_address) = 0;
-
-    // When a server is removed from local config this call is
-    // executed.
-    virtual void remove_server(server_id id) = 0;
+    // When a configuration is changed this function is called with the
+    // info about the changes. It is also called when a new server
+    // starts and its configuration is loaded from raft storage.
+    //
+    // In fact, today we always call this function first, just
+    // with the added and only then with the removed servers, to
+    // simplify RPC's job of delivering a batch of messages
+    // addressing both  added and removed servers. Passing the
+    // added servers first, then passing a batch, and then passing
+    // the removed servers makes it easier for RPC to deliver all
+    // messages in the batch.
+    virtual void on_configuration_change(server_address_set add,
+            server_address_set del) = 0;
 
     // Stop the RPC instance by aborting the work that can be
     // aborted and waiting for all the rest to complete any

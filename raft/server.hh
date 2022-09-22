@@ -106,9 +106,9 @@ public:
     // Does not preempt before adding entry to this server's
     // in-memory log.
     //
-    // Provided node_info is passed to rpc::add_server() for each
-    // new server and rpc::remove_server() is called for each
-    // departing server.
+    // Provided node_info is passed to
+    // rpc::on_configuration_change() for each added or removed
+    // server.
     // struct node_info is expected to contain connection
     // information/credentials which is then used by RPC.
     // Can be called on a leader only, otherwise throws not_a_leader.

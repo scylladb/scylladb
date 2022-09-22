@@ -53,8 +53,8 @@ public:
         const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) override;
 
-    void add_server(raft::server_address) override;
-    void remove_server(raft::server_id id) override;
+    virtual void on_configuration_change(raft::server_address_set add,
+        raft::server_address_set del) override;
     future<> abort() override;
 
     // Dispatchers to the `rpc_server` upon receiving an rpc message

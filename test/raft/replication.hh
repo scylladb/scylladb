@@ -765,13 +765,13 @@ public:
         return _net[id]->_client->execute_modify_config(_id, add, del, nullptr);
     }
 
-    void add_server(raft::server_address addr) override {
-        _known_peers.insert(addr);
-        ++_servers_added;
-    }
-    void remove_server(raft::server_id id) override {
-        _known_peers.erase(server_addr_from_id(id));
-        ++_servers_removed;
+    void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
+        _known_peers.merge(add);
+        _servers_added += add.size();
+        for (const auto& addr: del) {
+            _known_peers.erase(addr);
+        }
+        _servers_removed += del.size();
     }
 
     const raft::server_address_set& known_peers() const {

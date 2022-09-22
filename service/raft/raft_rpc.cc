@@ -158,17 +158,22 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::
         });
 }
 
-void raft_rpc::add_server(raft::server_address addr) {
-    auto inet_addr = raft_addr_to_inet_addr(addr.info);
-    // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
-    // while entries learnt upon receiving an rpc message should be expirable.
-    _address_map.set(addr.id, inet_addr, false);
-    _on_server_update(addr.id, true);
-}
-
-void raft_rpc::remove_server(raft::server_id id) {
-    _on_server_update(id, false);
-    _address_map.set_expiring_flag(id);
+void
+raft_rpc::on_configuration_change(raft::server_address_set add, raft::server_address_set del) {
+    for (const auto& addr: add) {
+        auto inet_addr = raft_addr_to_inet_addr(addr.info);
+        // Entries explicitly managed via `rpc::on_configuration_change() should NOT be
+        // expirable.
+        _address_map.set(addr.id, inet_addr, false);
+        _on_server_update(addr.id, true);
+    }
+    for (const auto& addr: del) {
+        // RPC 'send' may yield before resolving IP address,
+        // e.g. on _shutdown_gate, so keep the deleted
+        // entries in the map for a bit.
+        _address_map.set_expiring_flag(addr.id);
+        _on_server_update(addr.id, false);
+    }
 }
 
 future<> raft_rpc::abort() {
