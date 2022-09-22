@@ -162,6 +162,7 @@ private:
     unsigned _nr_rx_added = 0;
     // Limit the number of nodes to stream in parallel to reduce memory pressure with large cluster.
     seastar::semaphore _limiter{16};
+    size_t _nr_total_ranges = 0;
 };
 
 } // dht

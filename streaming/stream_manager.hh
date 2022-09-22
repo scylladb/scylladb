@@ -11,6 +11,7 @@
 #pragma once
 #include "streaming/stream_fwd.hh"
 #include "streaming/progress_info.hh"
+#include "streaming/stream_reason.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "utils/updateable_value.hh"
@@ -96,6 +97,7 @@ private:
     uint64_t _total_outgoing_bytes{0};
     semaphore _mutation_send_limiter{256};
     seastar::metrics::metric_groups _metrics;
+    std::unordered_map<streaming::stream_reason, float> _finished_percentage;
 
     utils::updateable_value<uint32_t> _io_throughput_mbs;
     serialized_action _io_throughput_updater = serialized_action([this] { return update_io_throughput(_io_throughput_mbs()); });
@@ -184,6 +186,9 @@ private:
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
     future<> update_io_throughput(uint32_t value_mbs);
+
+public:
+    void update_finished_percentage(streaming::stream_reason reason, float percentage);
 };
 
 } // namespace streaming

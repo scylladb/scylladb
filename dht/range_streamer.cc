@@ -243,6 +243,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effec
 
 future<> range_streamer::stream_async() {
     auto nr_ranges_remaining = nr_ranges_to_stream();
+    _nr_total_ranges = nr_ranges_remaining;
     logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
     auto start = lowres_clock::now();
     return do_for_each(_to_stream, [this, start, description = _description] (auto& stream) {
@@ -279,6 +280,12 @@ future<> range_streamer::stream_async() {
                     }
                     sp.execute().discard_result().get();
                     ranges_to_stream.clear();
+                    // Update finished percentage
+                    auto remaining = nr_ranges_to_stream();
+                    float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - remaining) / (float)_nr_total_ranges;
+                    _stream_manager.local().update_finished_percentage(_reason, percentage);
+                    logger.info("Finished {} out of {} ranges for {}, finished percentage={}",
+                            _nr_total_ranges - remaining, _nr_total_ranges, _reason, percentage);
                 };
                 try {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {

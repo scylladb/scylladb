@@ -45,12 +45,38 @@ stream_manager::stream_manager(db::config& cfg,
         (void)_io_throughput_updater.trigger_later();
     }
 
+    _finished_percentage[streaming::stream_reason::bootstrap] = 1;
+    _finished_percentage[streaming::stream_reason::decommission] = 1;
+    _finished_percentage[streaming::stream_reason::removenode] = 1;
+    _finished_percentage[streaming::stream_reason::rebuild] = 1;
+    _finished_percentage[streaming::stream_reason::repair] = 1;
+    _finished_percentage[streaming::stream_reason::replace] = 1;
+
+    auto ops_label_type = sm::label("ops");
     _metrics.add_group("streaming", {
         sm::make_counter("total_incoming_bytes", [this] { return _total_incoming_bytes; },
                         sm::description("Total number of bytes received on this shard.")),
 
         sm::make_counter("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::bootstrap]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::decommission]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::removenode]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::rebuild]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::repair]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
     });
 }
 
@@ -363,6 +389,10 @@ shared_ptr<stream_session> stream_manager::get_session(streaming::plan_id plan_i
         throw std::runtime_error(err);
     }
     return coordinator->get_or_create_session(*this, from);
+}
+
+void stream_manager::update_finished_percentage(streaming::stream_reason reason, float percentage) {
+    _finished_percentage[reason] = percentage;
 }
 
 } // namespace streaming
