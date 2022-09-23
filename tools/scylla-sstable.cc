@@ -738,43 +738,6 @@ public:
     }
 };
 
-// scribble here, then call with --operation=custom
-class custom_consumer : public sstable_consumer {
-    schema_ptr _schema;
-    reader_permit _permit;
-public:
-    explicit custom_consumer(schema_ptr s, reader_permit p, const bpo::variables_map&)
-        : _schema(std::move(s)), _permit(std::move(p))
-    { }
-    virtual future<> consume_stream_start() override {
-        return make_ready_future<>();
-    }
-    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_start&& ps) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(static_row&& sr) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(clustering_row&& cr) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_end&& pe) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume_sstable_end() override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<> consume_stream_end() override {
-        return make_ready_future<>();
-    }
-};
-
 stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
     auto close_rd = deferred_close(rd);
     if (consumer.consume_sstable_start(sst).get() == stop_iteration::yes) {
@@ -2634,15 +2597,6 @@ following example python script:
 )",
             {"bucket"},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
-/* custom */
-    {"custom",
-            "Hackable custom operation for expert users, until scripting support is implemented",
-R"(
-Poor man's scripting support. Aimed at developers as it requires editing C++
-source code and re-building the binary. Will be replaced by proper scripting
-support soon (don't quote me on that).
-)",
-            sstable_consumer_operation<custom_consumer>},
 /* validate */
     {"validate",
             "Validate the sstable(s), same as scrub in validate mode",
