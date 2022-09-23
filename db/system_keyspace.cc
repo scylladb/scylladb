@@ -941,11 +941,11 @@ schema_ptr system_keyspace::discovery() {
         return schema_builder(NAME, DISCOVERY, id)
             // This is a single-partition table with key 'peers'
             .with_column("key", utf8_type, column_kind::partition_key)
-            // Opaque connection properties. See `raft::server_info`.
-            .with_column("server_info", bytes_type, column_kind::clustering_key)
+            // Peer ip address
+            .with_column("ip_addr", inet_addr_type, column_kind::clustering_key)
             // The ID of the group 0 server on that peer.
             // May be unknown during discovery, then it's set to UUID 0.
-            .with_column("raft_id", uuid_type)
+            .with_column("raft_server_id", uuid_type)
             .set_comment("State of cluster discovery algorithm: the set of discovered peers")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)

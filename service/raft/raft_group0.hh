@@ -34,15 +34,15 @@ public:
 
     // See `discovery::discovery`.
     // The provided seed list will be extended with already known persisted peers.
-    // `self` must be the same across restarts.
-    static future<persistent_discovery> make(raft::server_address self, peer_list seeds, cql3::query_processor&);
+    // `my_addr` must be the same across restarts.
+    static future<persistent_discovery> make(discovery_peer my_addr, peer_list seeds, cql3::query_processor&);
 
     // Run the discovery algorithm to find information about group 0.
     future<group0_info> run(
         netw::messaging_service&,
         gate::holder pause_shutdown,
         abort_source&,
-        raft::server_address my_addr);
+        discovery_peer my_addr);
 
     // Must be called and waited for before destroying the object.
     // Must not be called concurrently with `run`.
@@ -54,12 +54,12 @@ public:
 
 private:
     // See `discovery::response`.
-    void response(raft::server_address from, const peer_list& peers);
+    void response(discovery_peer from, const peer_list& peers);
 
     // See `discovery::tick`.
     future<tick_output> tick();
 
-    persistent_discovery(raft::server_address, const peer_list&, cql3::query_processor&);
+    persistent_discovery(discovery_peer my_addr, const peer_list&, cql3::query_processor&);
 };
 
 class raft_group0 {
@@ -185,7 +185,8 @@ private:
     // (in particular, we may become that leader).
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(raft::server_id my_id, const std::vector<raft::server_info>& seeds);
+    future<group0_info> discover_group0(raft::server_id my_id,
+        const std::vector<gms::inet_address>& seeds);
 
     // Creates or joins group 0 and switches schema/topology changes to use group 0.
     // Can be restarted after a crash. Does nothing if the procedure was already finished once.
@@ -223,7 +224,7 @@ private:
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0(std::vector<raft::server_info> seeds, bool as_voter);
+    future<> join_group0(std::vector<gms::inet_address> seeds, bool as_voter);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.
