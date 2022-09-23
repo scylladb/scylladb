@@ -8,6 +8,7 @@ Troubleshooting Scylla
    
    support/index   
    startup/index
+   upgrade/index
    cluster/index
    modeling/index
    storage/index
