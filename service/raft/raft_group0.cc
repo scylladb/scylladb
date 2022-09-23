@@ -134,31 +134,32 @@ static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messagin
     co_return state;
 }
 
-future<raft::server_address> raft_group0::load_my_addr() {
+future<raft::server_id> raft_group0::load_my_id() {
     assert(this_shard_id() == 0);
 
     auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
     if (!id) {
-        on_internal_error(group0_log, "load_my_addr(): server ID for group 0 missing");
+        on_internal_error(group0_log, "load_my_id(): server ID for group 0 missing");
     }
 
-    co_return raft::server_address{id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
+    co_return id;
 }
 
-seastar::future<raft::server_address> raft_group0::load_or_create_my_addr() {
+seastar::future<raft::server_id> raft_group0::load_or_create_my_id() {
     assert(this_shard_id() == 0);
     auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
     if (id == raft::server_id{}) {
         id = raft::server_id::create_random_id();
         co_await db::system_keyspace::set_raft_server_id(id.id);
     }
-    co_return raft::server_address{id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
+    co_return id;
 }
 
-raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_address my_addr) {
+raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id) {
+    raft::server_address my_addr{my_id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
     _raft_gr.address_map().set(my_addr);
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
-    auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_addr.id,
+    auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_id,
             [this] (gms::inet_address addr, raft::server_id raft_id, bool added) {
                 // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.
                 // See #6403.
@@ -173,7 +174,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
             });
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_addr.id);
+    auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_id);
     auto& persistence_ref = *storage;
     auto* cl = _qp.proxy().get_db().local().commitlog();
     auto config = raft::server::configuration {
@@ -191,7 +192,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         config.snapshot_threshold_log_size = config.max_log_size / 2;
         config.snapshot_trailing_size = config.snapshot_threshold_log_size / 2;
     };
-    auto server = raft::create_server(my_addr.id, std::move(rpc), std::move(state_machine),
+    auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
 
     // initialize the corresponding timer to tick the raft server instance
@@ -207,11 +208,12 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 }
 
 future<group0_info>
-raft_group0::discover_group0(raft::server_address my_addr, const std::vector<raft::server_info>& seed_infos) {
+raft_group0::discover_group0(raft::server_id my_id, const std::vector<raft::server_info>& seed_infos) {
     std::vector<raft::server_address> seeds;
     for (auto& info : seed_infos) {
         seeds.emplace_back(raft::server_id{}, info);
     }
+    raft::server_address my_addr{my_id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
 
     auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(seeds), _qp));
     co_return co_await futurize_invoke([this, &p_discovery, my_addr = std::move(my_addr)] () mutable {
@@ -343,10 +345,10 @@ future<> raft_group0::abort() {
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     assert(group0_id != raft::group_id{});
 
-    auto my_addr = co_await load_my_addr();
+    auto my_id = co_await load_my_id();
 
-    group0_log.info("Server {} is starting group 0 with id {}", my_addr.id, group0_id);
-    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_addr));
+    group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
+    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id));
     _group0.emplace<raft::group_id>(group0_id);
 }
 
@@ -361,11 +363,11 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
     }
 
     raft::server* server = nullptr;
-    auto my_addr = co_await load_or_create_my_addr();
-    group0_log.info("{} found no local group 0. Discovering...", my_addr.id);
+    auto my_id = co_await load_or_create_my_id();
+    group0_log.info("server {} found no local group 0. Discovering...", my_id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_addr, seeds);
-        group0_log.info("server {} found group 0 with id {}, leader {}", my_addr.id, g0_info.group0_id, g0_info.addr.id);
+        auto g0_info = co_await discover_group0(my_id, seeds);
+        group0_log.info("server {} found group 0 with id {}, leader {}", my_id, g0_info.group0_id, g0_info.addr.id);
 
         if (server && group0_id != g0_info.group0_id) {
             // `server` is not `nullptr` so we finished discovery in an earlier iteration and found a group 0 ID.
@@ -379,18 +381,19 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
             // TODO: link to the manual recovery docs
         }
         group0_id = g0_info.group0_id;
+        raft::server_address my_addr{my_id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
 
         if (server == nullptr) {
             // This is the first time discovery is run. Create and start a Raft server for group 0 on this node.
             raft::configuration initial_configuration;
-            if (g0_info.addr.id == my_addr.id) {
+            if (g0_info.addr.id == my_id) {
                 // We were chosen as the discovery leader.
                 // We should start a new group with this node as voter.
-                group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_addr.id);
+                group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_id);
                 initial_configuration.current.emplace(my_addr, true);
             }
             // Bootstrap the initial configuration
-            co_await raft_sys_table_storage(_qp, group0_id, my_addr.id).bootstrap(std::move(initial_configuration));
+            co_await raft_sys_table_storage(_qp, group0_id, my_id).bootstrap(std::move(initial_configuration));
             co_await start_server_for_group0(group0_id);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
@@ -401,10 +404,10 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
         }
 
         assert(server);
-        if (server->get_configuration().contains(my_addr.id)) {
+        if (server->get_configuration().contains(my_id)) {
             // True if we started a new group or completed a configuration change initiated earlier.
-            group0_log.info("server {} already in group 0 (id {}) as {}", group0_id, my_addr.id,
-                    server->get_configuration().can_vote(my_addr.id)? "voter" : "non-voter");
+            group0_log.info("server {} already in group 0 (id {}) as {}", my_id, group0_id,
+                    server->get_configuration().can_vote(my_id)? "voter" : "non-voter");
             break;
         }
 
@@ -426,7 +429,7 @@ future<> raft_group0::join_group0(std::vector<raft::server_info> seeds, bool as_
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
     _group0 = group0_id;
-    group0_log.info("{} joined group 0 with id {}", my_addr.id, group0_id);
+    group0_log.info("server {} joined group 0 with group id {}", my_id, group0_id);
 }
 
 static future<bool> wait_for_peers_to_enter_synchronize_state(
@@ -525,11 +528,12 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
 future<> raft_group0::finish_setup_after_join() {
     if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
-        auto my_addr = co_await load_my_addr();
-        if (!_raft_gr.group0().get_configuration().can_vote(my_addr.id)) {
+        auto my_id = co_await load_my_id();
+        if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
             // Just bootstrapped and joined as non-voter. Become a voter.
             auto pause_shutdown = _shutdown_gate.hold();
+            raft::server_address my_addr{my_id, inet_addr_to_raft_addr(_gossiper.get_broadcast_address())};
             co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
             group0_log.info("finish_setup_after_join: became a group 0 voter.");
 
