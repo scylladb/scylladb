@@ -161,8 +161,7 @@ void region_group::update_hard(ssize_t delta) {
 
 void region_group::update(ssize_t delta) {
     // Most-enclosing group which was relieved.
-    region_group* top_relief_region_group = nullptr;
-    bool top_relief_memory_hard_limit = false;
+    bool relief = false;
 
     _total_memory += delta;
 
@@ -176,15 +175,13 @@ void region_group::update(ssize_t delta) {
         notify_pressure();
     } else if (under_pressure()) {
         notify_relief();
-        top_relief_region_group = this;
+        relief = true;
     }
 
-    top_relief_memory_hard_limit = do_update_hard_and_check_relief(delta);
+    relief |= do_update_hard_and_check_relief(delta);
 
-    if (top_relief_memory_hard_limit) {
+    if (relief) {
         notify_pressure_relieved();
-    } else if (top_relief_region_group) {
-        top_relief_region_group->notify_pressure_relieved();
     }
 }
 
