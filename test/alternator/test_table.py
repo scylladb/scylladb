@@ -11,7 +11,8 @@ import pytest
 import time
 import threading
 from botocore.exceptions import ClientError
-from util import list_tables, unique_table_name, create_test_table, random_string, new_test_table
+from util import list_tables, multiset, unique_table_name, create_test_table, random_string, new_test_table
+from re import fullmatch
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -552,3 +553,60 @@ def test_concurrent_create_and_delete_table(dynamodb, table_def, fails_without_c
                     time.sleep(1)
                     continue
                 raise
+
+# Test that DeleteTable returns correct TableDescription (issue #11472)
+def test_delete_table_description(dynamodb):
+    table_name = unique_table_name()
+
+    table = create_table(dynamodb, table_name)
+    table.meta.client.get_waiter('table_exists').wait(TableName=table_name)
+    got = table.delete()['TableDescription']
+
+    assert got['TableName'] == table_name
+    assert got['TableStatus'] == 'DELETING'
+
+    # as far as we still return incorrect CreationDateTime we check only field existence (issue #5013)
+    # when fix #5013 add CreationDateTime value checking here.
+    # Seems currently DynamoDB doesn't return CreationDateTime on DeleteTable so we disabled this assertion temporarily.
+    # Check when DynamoDB will support it later and re-enable the field's verification.
+
+    # assert 'CreationDateTime' in got
+
+    assert 'TableId' in got
+    assert fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', got['TableId'])
+
+    assert 'TableArn' in got and got['TableArn'].startswith('arn:')
+
+    expected_schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ]
+    }
+    assert got['KeySchema'] == expected_schema['KeySchema']
+    # The list of attribute definitions may be arbitrarily reordered
+    assert multiset(got['AttributeDefinitions']) == multiset(expected_schema['AttributeDefinitions'])
+
+    assert got['BillingModeSummary']['BillingMode'] == 'PAY_PER_REQUEST'
+    assert 'LastUpdateToPayPerRequestDateTime' in got['BillingModeSummary']
+    assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] == got['CreationDateTime']
+
+    assert got['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0
+    assert got['ProvisionedThroughput']['WriteCapacityUnits'] == 0
+    assert got['ProvisionedThroughput']['ReadCapacityUnits'] == 0
+
+# Test that DeleteTable returns correct TableDescription (issue #11472) and has no not implemented fields (see #5026 issue)
+# after any field implementation move its testing code to the 'test_delete_table_description' test
+@pytest.mark.xfail(reason="#5026: TableDescription still doesn't implement these fields")
+def test_delete_table_description_missing_fields(dynamodb):
+    table_name = unique_table_name()
+
+    table = create_table(dynamodb, table_name)
+    table.meta.client.get_waiter('table_exists').wait(TableName=table_name)
+    got = table.delete()['TableDescription']
+
+    assert 'TableSizeBytes' in got
+    assert 'ItemCount' in got
