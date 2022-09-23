@@ -33,6 +33,11 @@ struct group0_info {
     raft::group_id group0_id;
     raft::server_id id;
     gms::inet_address ip_addr;
+    // The list of peers as known to the member of the cluster.
+    // Helps prompt the address map of the joining member so that
+    // it can quickly route messages to existing cluster members
+    // without waiting for gossip.
+    std::vector<discovery_peer> peers;
     bool operator==(const group0_info& rhs) const {
         return rhs.group0_id == group0_id && rhs.id == id && rhs.ip_addr == ip_addr;
     }

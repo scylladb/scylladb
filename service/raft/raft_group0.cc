@@ -142,8 +142,12 @@ void raft_group0::init_rpc_verbs() {
         return peer_exchange(std::move(peers));
     });
 
-    ser::group0_rpc_verbs::register_group0_modify_config(&_ms, [this] (const rpc::client_info&, rpc::opt_time_point,
+    ser::group0_rpc_verbs::register_group0_modify_config(&_ms, [this] (const rpc::client_info& cinfo, rpc::opt_time_point,
             raft::group_id gid, std::vector<raft::config_member> add, std::vector<raft::server_id> del) {
+        auto addr = netw::messaging_service::get_source(cinfo).addr;
+        if (!add.empty()) {
+            _raft_gr.address_map().add_or_update_entry(add.front().addr.id, addr);
+        }
         return _raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
     });
 
@@ -312,7 +316,8 @@ future<group0_info> persistent_discovery::run(
                 // operations. Currently it's unused.
                 .group0_id = raft::group_id{utils::UUID_gen::get_time_UUID()},
                 .id = my_addr.id,
-                .ip_addr = my_addr.ip_addr
+                .ip_addr = my_addr.ip_addr,
+                .peers = _discovery.get_peer_list()
             };
         }
 
@@ -357,6 +362,13 @@ future<group0_info> persistent_discovery::run(
         }(std::ref(*this), ms, pause_shutdown, std::move(std::get<discovery::request_list>(output)), tracker);
 
         if (auto g0_info = co_await tracker.get()) {
+            // Store the peers from the leader or from an existing
+            // member of group 0. The stored peers are used as
+            // initial state of the raft address map. Having a
+            // non-empty initial state allows to quickly start
+            // exchanging raft messages without waiting for gossip
+            // to settle, speeding up the boot.
+            co_await store_discovered_peers(_qp, g0_info->peers);
             co_return *g0_info;
         }
     }
@@ -369,6 +381,14 @@ future<> raft_group0::abort() {
 
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     assert(group0_id != raft::group_id{});
+    auto peers = co_await load_discovered_peers(_qp);
+    for (auto& peer : peers) {
+        if (peer.ip_addr != gms::inet_address{}) {
+            // Do not update the mapping if it is already present - the
+            // persistent information may be already obsolete.
+            _raft_gr.address_map().add_or_update_entry(peer.id, peer.ip_addr);
+        }
+    }
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = co_await load_my_id();
@@ -910,6 +930,7 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
                 // the request when it arrives.
                 .id = _raft_gr.group0().id(),
                 .ip_addr = _gossiper.get_broadcast_address(),
+                .peers = co_await load_discovered_peers(_qp)
             }};
         }
     }, _group0);

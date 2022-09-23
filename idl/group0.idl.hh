@@ -20,6 +20,7 @@ struct group0_info {
     raft::group_id group0_id;
     raft::server_id id;
     gms::inet_address ip_addr;
+    std::vector<service::discovery_peer> peers;
 };
 
 struct group0_peer_exchange {
