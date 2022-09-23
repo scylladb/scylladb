@@ -160,18 +160,6 @@ class region_group : public region_listener {
 
     bool _under_hard_pressure = false;
 
-    bool under_hard_pressure() const noexcept {
-        return _under_hard_pressure;
-    }
-
-    void notify_hard_pressure() noexcept {
-        _under_hard_pressure = true;
-    }
-
-    void notify_hard_relief() noexcept {
-        _under_hard_pressure = false;
-    }
-
     size_t hard_throttle_threshold() const noexcept {
         return _hard_limit;
     }
@@ -581,7 +569,7 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
     bool blocked = 
         !(rg->_blocked_requests.empty() && !rg->under_pressure());
     if (!blocked) {
-        blocked = under_hard_pressure();
+        blocked = _under_hard_pressure;
     }
 
     if (!blocked) {

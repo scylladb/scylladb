@@ -90,7 +90,7 @@ region_group::moved(region* old_address, region* new_address) {
 bool
 region_group::execution_permitted() noexcept {
     return !(this->under_pressure()
-                || (under_hard_pressure()));
+                || (_under_hard_pressure));
 }
 
 void
@@ -149,9 +149,9 @@ bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta) {
     rg->_hard_total_memory += delta;
 
     if (rg->_hard_total_memory > rg->hard_throttle_threshold()) {
-        rg->notify_hard_pressure();
-    } else if (rg->under_hard_pressure()) {
-        rg->notify_hard_relief();
+        rg->_under_hard_pressure = true;
+    } else if (rg->_under_hard_pressure) {
+        rg->_under_hard_pressure = false;
         return true;
     }
     return false;
