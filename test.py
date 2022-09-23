@@ -30,6 +30,7 @@ import yaml
 
 from abc import ABC, abstractmethod
 from io import StringIO
+import psutil
 from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
@@ -330,10 +331,18 @@ class PythonTestSuite(TestSuite):
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
         cluster_size = self.cfg.get("cluster_size", 1)
-        pool_size = cfg.get("pool_size", 2)
+        cfg_pool_size = cfg.get("pool_size", 2)
 
         self.create_cluster = self.get_cluster_factory(cluster_size)
-        self.clusters = Pool(pool_size, self.create_cluster)
+
+        # Max 1 scylla server per core
+        cores = psutil.cpu_count(logical=False)
+        parallel_clusters = int(cores / cluster_size)
+        parallel_clusters = 1 if parallel_clusters == 0 else parallel_clusters   # At least one
+        cluster_pool_size = min(cfg_pool_size, parallel_clusters)
+        logging.info("Setting up Cluster pool of size %s (config %s)", cluster_pool_size,
+                     cfg_pool_size)
+        self.clusters = Pool(cluster_pool_size, self.create_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
         def create_server(cluster_name: str, seeds: List[str]):
