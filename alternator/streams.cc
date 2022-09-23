@@ -1096,7 +1096,7 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
     }
 }
 
-void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
+void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp) {
     auto& opts = schema.cdc_options();
     if (opts.enabled()) {
         auto db = sp.data_dictionary();

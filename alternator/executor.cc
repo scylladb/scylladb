@@ -60,6 +60,27 @@ logging::logger elogger("alternator-executor");
 
 namespace alternator {
 
+enum class table_status {
+    active = 0,
+    creating,
+    updating,
+    deleting
+};
+
+static sstring_view table_status_to_sstring(table_status tbl_status) {
+    switch(tbl_status) {
+        case table_status::active:
+            return "ACTIVE";
+        case table_status::creating:
+            return "CREATING";
+        case table_status::updating:
+            return "UPDATING";
+        case table_status::deleting:
+            return "DELETING";
+    }
+    return "UKNOWN";
+}
+
 static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type);
 
 static map_type attrs_type() {
@@ -413,22 +434,8 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
         schema.ks_name(), schema.cf_name(), index_name));
 }
 
-bool is_alternator_keyspace(const sstring& ks_name) {
-    return ks_name.find(executor::KEYSPACE_NAME_PREFIX) == 0;
-}
-
-sstring executor::table_name(const schema& s) {
-    return s.cf_name();
-}
-
-future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
-    _stats.api_operations.describe_table++;
-    elogger.trace("Describing table {}", request);
-
-    schema_ptr schema = get_table(_proxy, request);
-
-    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
-
+static rjson::value fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy const& proxy)
+{
     rjson::value table_description = rjson::empty_object();
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
@@ -439,9 +446,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     // We don't currently do this in Alternator - instead CreateTable waits
     // until the table is really available. So/ DescribeTable returns either
     // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
-    // The other states (CREATING, UPDATING, DELETING) are not currently
-    // returned.
-    rjson::add(table_description, "TableStatus", "ACTIVE");
+    // The states CREATING and UPDATING are not currently returned.
+    rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
     // FIXME: Instead of hardcoding, we should take into account which mode was chosen
@@ -458,9 +464,9 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
 
     std::unordered_map<std::string,std::string> key_attribute_types;
     // Add base table's KeySchema and collect types for AttributeDefinitions:
-    describe_key_schema(table_description, *schema, key_attribute_types);
+    executor::describe_key_schema(table_description, *schema, key_attribute_types);
 
-    data_dictionary::table t = _proxy.data_dictionary().find_column_family(schema);
+    data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
     if (!t.views().empty()) {
         rjson::value gsi_array = rjson::empty_array();
         rjson::value lsi_array = rjson::empty_array();
@@ -476,7 +482,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
             rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
-            describe_key_schema(view_entry, *vptr, key_attribute_types);
+            executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
             // Add projection type
             rjson::value projection = rjson::empty_object();
             rjson::add(projection, "ProjectionType", "ALL");
@@ -504,10 +510,29 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     }
     rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
-    supplement_table_stream_info(table_description, *schema, _proxy);
-    
-    // FIXME: still missing some response fields (issue #5026)
+    executor::supplement_table_stream_info(table_description, *schema, proxy);
 
+    // FIXME: still missing some response fields (issue #5026)
+    return table_description;
+}
+
+bool is_alternator_keyspace(const sstring& ks_name) {
+    return ks_name.find(executor::KEYSPACE_NAME_PREFIX) == 0;
+}
+
+sstring executor::table_name(const schema& s) {
+    return s.cf_name();
+}
+
+future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.describe_table++;
+    elogger.trace("Describing table {}", request);
+
+    schema_ptr schema = get_table(_proxy, request);
+
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+
+    rjson::value table_description = fill_table_description(schema, table_status::active, _proxy);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
@@ -522,6 +547,9 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     tracing::add_table_name(trace_state, keyspace_name, table_name);
     auto& p = _proxy.container();
+
+    schema_ptr schema = get_table(_proxy, request);
+    rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
 
     co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
@@ -540,10 +568,6 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         co_await mm.announce(std::move(m), std::move(group0_guard));
     });
 
-    // FIXME: need more attributes?
-    rjson::value table_description = rjson::empty_object();
-    rjson::add(table_description, "TableName", rjson::from_string(table_name));
-    rjson::add(table_description, "TableStatus", "DELETING");
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(table_description));
     elogger.trace("returning {}", response);
