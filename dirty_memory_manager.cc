@@ -126,8 +126,8 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
 }
 
 region_group::region_group(sstring name,
-        reclaim_config cfg, size_t memory_hard_limit, scheduling_group deferred_work_sg)
-    : _cfg(std::move(cfg)), _hard_limit(memory_hard_limit)
+        reclaim_config cfg, scheduling_group deferred_work_sg)
+    : _cfg(std::move(cfg))
     , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {

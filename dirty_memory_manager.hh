@@ -67,6 +67,7 @@ using reclaim_stop_callback = noncopyable_function<void () noexcept>;
 struct reclaim_config {
     size_t hard_limit = std::numeric_limits<size_t>::max();
     size_t soft_limit = hard_limit;
+    size_t absolute_hard_limit = std::numeric_limits<size_t>::max();
     reclaim_start_callback start_reclaiming = [] () noexcept {};
     reclaim_stop_callback stop_reclaiming = [] () noexcept {};
 };
@@ -156,12 +157,10 @@ class region_group : public region_listener {
 
     size_t _hard_total_memory = 0;
 
-    size_t _hard_limit;
-
     bool _under_hard_pressure = false;
 
     size_t hard_throttle_threshold() const noexcept {
-        return _hard_limit;
+        return _cfg.absolute_hard_limit;
     }
 public:
     void update_hard(ssize_t delta);
@@ -248,7 +247,7 @@ public:
     // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
     // (given to run_when_memory_available()) when they must be deferred due to lack of memory
     // at the time the call to run_when_memory_available() was made.
-    region_group(sstring name = "(unnamed region group)", reclaim_config cfg = {}, size_t memory_hard_limit = std::numeric_limits<size_t>::max(),
+    region_group(sstring name = "(unnamed region group)", reclaim_config cfg = {},
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
@@ -468,7 +467,7 @@ public:
         , _virtual_region_group("memtable (virtual)",
                 dirty_memory_manager_logalloc::reclaim_config{
                     .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
-                }, std::numeric_limits<size_t>::max())
+                })
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 

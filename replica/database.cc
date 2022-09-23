@@ -452,8 +452,9 @@ dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t thresho
     , _virtual_region_group("memtable (virtual)", dirty_memory_manager_logalloc::reclaim_config{
             .hard_limit = threshold / 2,
             .soft_limit = threshold * soft_limit / 2,
+            .absolute_hard_limit = threshold,
             .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this)
-      }, threshold, deferred_work_sg)
+      }, deferred_work_sg)
     , _flush_serializer(1)
     , _waiting_flush(flush_when_needed()) {}
 
