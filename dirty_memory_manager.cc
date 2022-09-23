@@ -146,13 +146,12 @@ void region_group::notify_hard_pressure_relieved() {
 }
 
 bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
-    auto rg = this;
-    rg->_hard_total_memory += delta;
+    _hard_total_memory += delta;
 
-    if (rg->_hard_total_memory > rg->hard_throttle_threshold()) {
-        rg->_under_hard_pressure = true;
-    } else if (rg->_under_hard_pressure) {
-        rg->_under_hard_pressure = false;
+    if (_hard_total_memory > hard_throttle_threshold()) {
+        _under_hard_pressure = true;
+    } else if (_under_hard_pressure) {
+        _under_hard_pressure = false;
         return true;
     }
     return false;
