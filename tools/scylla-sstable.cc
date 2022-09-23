@@ -31,6 +31,7 @@
 #include "types/set.hh"
 #include "types/map.hh"
 #include "tools/json_writer.hh"
+#include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
@@ -2400,6 +2401,26 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
 }
 
+void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& manager, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+    const auto merge = vm.count("merge");
+    const auto partitions = partition_set(0, {}, decorated_key_equal(*schema));
+    if (!vm.count("script-file")) {
+        throw std::invalid_argument("error: missing required option '--script-file'");
+    }
+    const auto script_file = vm["script-file"].as<std::string>();
+    auto script_params = vm["script-arg"].as<program_options::string_map>();
+    auto consumer = make_lua_sstable_consumer(schema, permit, script_file, std::move(script_params)).get();
+    consumer->consume_stream_start().get();
+    consume_sstables(schema, permit, sstables, merge, false, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+        return consume_reader(std::move(rd), consumer, sst, partitions, false);
+    });
+    consumer->consume_stream_end().get();
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
@@ -2478,6 +2499,8 @@ const std::vector<option> all_options {
     typed_option<std::string>("output-dir", ".", "directory to place the output files to"),
     typed_option<int64_t>("generation", "generation of generated sstable"),
     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
+    typed_option<std::string>("script-file", "script file to load and execute"),
+    typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
 };
 
 const std::vector<operation> operations{
@@ -2685,6 +2708,17 @@ for more information on this operation, including the schema of the JSON input.
 )",
             {"input-file", "output-dir", "generation", "validation-level"},
             write_operation},
+    {"script",
+            "Run a script on content of an sstable",
+R"(
+Read the sstable(s) and pass the resulting fragment stream to the script
+specified by `--script-file`. Currently only Lua scripts are supported.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#script
+for more information on this operation, including the API documentation.
+)",
+            {"merge", "script-file", "script-arg"},
+            script_operation},
 };
 
 } // anonymous namespace
