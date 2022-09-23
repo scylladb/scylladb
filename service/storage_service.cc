@@ -105,7 +105,11 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
-        , _snitch_reconfigure([this] { return snitch_reconfigured(); })
+        , _snitch_reconfigure([this] {
+            return container().invoke_on(0, [] (auto& ss) {
+                return ss.snitch_reconfigured();
+            });
+        })
 {
     register_metrics();
 
@@ -3255,8 +3259,8 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 }
 
 future<> storage_service::snitch_reconfigured() {
-    return container().invoke_on(0, [] (auto& ss) {
-        return ss.mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
+    assert(this_shard_id() == 0);
+        return mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) {
             // re-read local rack and DC info
             auto endpoint = utils::fb_utilities::get_broadcast_address();
             auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
@@ -3267,7 +3271,6 @@ future<> storage_service::snitch_reconfigured() {
             tmptr->update_topology(endpoint, std::move(dr));
             return make_ready_future<>();
         });
-    });
 }
 
 void storage_service::init_messaging_service() {
