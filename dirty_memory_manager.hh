@@ -173,7 +173,8 @@ public:
         return _hard_total_memory;
     }
 
-    friend bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta);
+private:
+    bool do_update_hard_and_check_relief(ssize_t delta);
 
 public:
     bool under_pressure() const noexcept {

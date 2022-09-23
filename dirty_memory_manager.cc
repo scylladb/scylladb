@@ -145,7 +145,8 @@ void region_group::notify_hard_pressure_relieved() {
     notify_pressure_relieved();
 }
 
-bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta) {
+bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
+    auto rg = this;
     rg->_hard_total_memory += delta;
 
     if (rg->_hard_total_memory > rg->hard_throttle_threshold()) {
@@ -158,7 +159,7 @@ bool do_update_hard_and_check_relief(region_group* rg, ssize_t delta) {
 }
 
 void region_group::update_hard(ssize_t delta) {
-    if (do_update_hard_and_check_relief(this, delta)) {
+    if (do_update_hard_and_check_relief(delta)) {
         notify_hard_pressure_relieved();
     }
 }
@@ -183,7 +184,7 @@ void region_group::update(ssize_t delta) {
         top_relief_region_group = this;
     }
 
-    top_relief_memory_hard_limit = do_update_hard_and_check_relief(this, delta);
+    top_relief_memory_hard_limit = do_update_hard_and_check_relief(delta);
 
     if (top_relief_memory_hard_limit) {
         notify_hard_pressure_relieved();
