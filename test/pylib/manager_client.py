@@ -151,18 +151,15 @@ class ManagerClient():
         """Start specified server"""
         logger.debug("ManagerClient starting %s", server_id)
         await self._get_text(f"/cluster/server/{server_id}/start")
-        self._driver_update()
 
     async def server_restart(self, server_id: str) -> None:
         """Restart specified server"""
         logger.debug("ManagerClient restarting %s", server_id)
         await self._get_text(f"/cluster/server/{server_id}/restart")
-        self._driver_update()
 
     async def server_add(self) -> str:
         """Add a new server"""
         server_id = await self._get_text("/cluster/addserver")
-        self._driver_update()
         logger.debug("ManagerClient added %s", server_id)
         return server_id
 
@@ -170,7 +167,6 @@ class ManagerClient():
         """Remove a specified server"""
         logger.debug("ManagerClient removing %s", server_id)
         await self._get_text(f"/cluster/removeserver/{server_id}")
-        self._driver_update()
 
     async def server_get_config(self, server_id: str) -> dict[str, object]:
         resp = await self._get(f"/cluster/server/{server_id}/get_config")
