@@ -163,9 +163,6 @@ class region_group : public region_listener {
     size_t hard_throttle_threshold() const noexcept {
         return _hard_limit;
     }
-
-    void notify_hard_pressure_relieved();
-
 public:
     void update_hard(ssize_t delta);
 

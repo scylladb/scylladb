@@ -141,10 +141,6 @@ void region_group::notify_pressure_relieved() {
     _relief.signal();
 }
 
-void region_group::notify_hard_pressure_relieved() {
-    notify_pressure_relieved();
-}
-
 bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
     _hard_total_memory += delta;
 
@@ -159,7 +155,7 @@ bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
 
 void region_group::update_hard(ssize_t delta) {
     if (do_update_hard_and_check_relief(delta)) {
-        notify_hard_pressure_relieved();
+        notify_pressure_relieved();
     }
 }
 
@@ -186,7 +182,7 @@ void region_group::update(ssize_t delta) {
     top_relief_memory_hard_limit = do_update_hard_and_check_relief(delta);
 
     if (top_relief_memory_hard_limit) {
-        notify_hard_pressure_relieved();
+        notify_pressure_relieved();
     } else if (top_relief_region_group) {
         top_relief_region_group->notify_pressure_relieved();
     }
