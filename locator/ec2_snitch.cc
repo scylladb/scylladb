@@ -21,7 +21,8 @@ future<> ec2_snitch::load_config(bool prefer_local) {
     using namespace boost::algorithm;
 
     if (this_shard_id() == io_cpu_id()) {
-        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ).then([this, prefer_local](sstring az) {
+        auto token = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt).get0();
+        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ, token).then([this, prefer_local](sstring az) {
             assert(az.size());
 
             std::vector<std::string> splits;
@@ -63,17 +64,26 @@ future<> ec2_snitch::start() {
     });
 }
 
-future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cmd) {
+future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cmd, std::optional<sstring> token) {
     return connect(socket_address(inet_address{addr}, port))
-    .then([this, addr, cmd] (connected_socket fd) {
+    .then([this, addr, cmd, token] (connected_socket fd) {
         _sd = std::move(fd);
         _in = _sd.input();
         _out = _sd.output();
-        _zone_req = sstring("GET ") + cmd +
-                    sstring(" HTTP/1.1\r\nHost: ") +addr +
-                    sstring("\r\n\r\n");
 
-        return _out.write(_zone_req.c_str()).then([this] {
+        if (token) {
+            _req = sstring("GET ") + cmd +
+                   sstring(" HTTP/1.1\r\nHost: ") +addr +
+                   sstring("\r\nX-aws-ec2-metadata-token: ") + *token +
+                   sstring("\r\n\r\n");
+        } else {
+            _req = sstring("PUT ") + cmd +
+                   sstring(" HTTP/1.1\r\nHost: ") + addr +
+                   sstring("\r\nX-aws-ec2-metadata-token-ttl-seconds: 60") +
+                   sstring("\r\n\r\n");
+        }
+
+        return _out.write(_req.c_str()).then([this] {
             return _out.flush();
         });
     }).then([this] {
@@ -85,6 +95,12 @@ future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cm
 
             // Read HTTP response header first
             auto _rsp = _parser.get_parsed_response();
+            auto rc = _rsp->_status_code;
+            // Verify EC2 instance metadata access
+            if (rc == 403) {
+                return make_exception_future<sstring>(std::runtime_error("Error: Unauthorized response received when trying to communicate with instance metadata service."));
+            }
+
             auto it = _rsp->_headers.find("Content-Length");
             if (it == _rsp->_headers.end()) {
                 return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");
