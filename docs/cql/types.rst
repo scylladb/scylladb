@@ -271,6 +271,9 @@ messages sent by a user”, “events registered by a sensor”...), then collec
 (with clustering columns) should be used. A collection can be **frozen** or **non-frozen**.
 A non-frozen collection can be modified, i.e., have an element added or removed. A
 frozen collection can only be updated as a whole. By default, a collection is non-frozen.
+
+Performance of collections operation is inferior compared to :ref:`User Defined Types <udts>`. More `here <https://www.scylladb.com/2017/12/07/performance-udt/>`_.
+
 To declare a frozen collection, use ``FROZEN`` keyword:
 
 .. code-block:: cql
