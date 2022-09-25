@@ -105,7 +105,11 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
-        , _snitch_reconfigure([this] { return snitch_reconfigured(); })
+        , _snitch_reconfigure([this] {
+            return container().invoke_on(0, [] (auto& ss) {
+                return ss.snitch_reconfigured();
+            });
+        })
 {
     register_metrics();
 
@@ -210,10 +214,6 @@ bool storage_service::is_first_node() {
 
 bool storage_service::should_bootstrap() {
     return !_sys_ks.local().bootstrap_complete() && !is_first_node();
-}
-
-future<> storage_service::snitch_reconfigured() {
-    return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
 /* Broadcasts the chosen tokens through gossip,
@@ -3258,19 +3258,24 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     });
 }
 
-future<> storage_service::update_topology(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-            // re-read local rack and DC info
-            auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-            auto dr = locator::endpoint_dc_rack {
-                .dc = snitch->get_datacenter(endpoint),
-                .rack = snitch->get_rack(endpoint),
-            };
-            tmptr->update_topology(endpoint, std::move(dr));
-            return make_ready_future<>();
-        });
+future<> storage_service::snitch_reconfigured() {
+    assert(this_shard_id() == 0);
+    co_await mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) -> future<> {
+        // re-read local rack and DC info
+        auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        auto dr = locator::endpoint_dc_rack {
+            .dc = snitch->get_datacenter(endpoint),
+            .rack = snitch->get_rack(endpoint),
+        };
+        tmptr->update_topology(endpoint, std::move(dr));
+        return make_ready_future<>();
     });
+
+    if (_gossiper.is_enabled()) {
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        co_await _gossiper.add_local_application_state(snitch->get_app_states());
+    }
 }
 
 void storage_service::init_messaging_service() {

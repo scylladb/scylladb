@@ -212,7 +212,6 @@ private:
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
-    future<> update_topology(inet_address endpoint);
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return get_token_metadata_ptr()->clone_async().then([] (token_metadata tm) {

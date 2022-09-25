@@ -171,22 +171,8 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             local_s->set_my_dc_and_rack(_my_dc, _my_rack);
             local_s->set_prefer_local(_prefer_local);
         }).then([this] {
-            // FIXME -- tests don't start gossiper
-            if (!local().get_gossiper().local_is_initialized()) {
-                return make_ready_future<>();
-            }
-
             return seastar::async([this] {
                 _reconfigured();
-
-                // spread the word...
-                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    auto& gossiper = local_snitch_ptr.get_local_gossiper();
-                    if (gossiper.is_enabled()) {
-                        return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
-                    }
-                    return make_ready_future<>();
-                }).get();
             });
         });
     }
