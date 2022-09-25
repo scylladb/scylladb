@@ -275,6 +275,10 @@ public:
         , _ck(*pos._ck) { }
     position_in_partition(before_clustering_row_tag_t, clustering_key_prefix ck)
         : _type(partition_region::clustered), _bound_weight(bound_weight::before_all_prefixed), _ck(std::move(ck)) { }
+    position_in_partition(before_clustering_row_tag_t, position_in_partition_view pos)
+        : _type(partition_region::clustered)
+        , _bound_weight(pos._bound_weight != bound_weight::equal ? pos._bound_weight : bound_weight::before_all_prefixed)
+        , _ck(*pos._ck) { }
     position_in_partition(range_tag_t, bound_view bv)
         : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind())), _ck(bv.prefix()) { }
     position_in_partition(range_tag_t, bound_kind kind, clustering_key_prefix&& prefix)
@@ -306,6 +310,13 @@ public:
 
     static position_in_partition after_all_clustered_rows() {
         return {position_in_partition::range_tag_t(), bound_view::top()};
+    }
+
+    // If given position is a clustering row position, returns a position
+    // right before it. Otherwise, returns it unchanged.
+    // The position "pos" must be a clustering position.
+    static position_in_partition before_key(position_in_partition_view pos) {
+        return {before_clustering_row_tag_t(), pos};
     }
 
     static position_in_partition before_key(clustering_key ck) {
