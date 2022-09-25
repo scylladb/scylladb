@@ -64,7 +64,7 @@ By default, the superuser credentials are username cassandra, password cassandra
 
    cqlsh -u cassandra -p cassandra
 
-.. note:: The cassandra user is special. When you try to login with this username, it is required to usen EACH_QUORUM consistency level(CL) for replies. On the other hand, your own user requires LOCAL_ONE consistency level.
+.. note:: The cassandra user is special. When you try to login with this username, it is required to usen QUORUM consistency level(CL) for replies. On the other hand, your own user requires LOCAL_ONE consistency level.
           This can be a problematic in certain situations, such as adding or removing DCs. In such cases the cassandra user won't be able to login.
           Creating a superuser role and assigning yourself to the role is definitely the best way forward. Refer to :doc:`RBAC </operating-scylla/security/rbac-usecase>` for an example of how to create roles and refer to :doc:`Grant Authorization </operating-scylla/security/authorization>` for information on using the grant clause.
 
