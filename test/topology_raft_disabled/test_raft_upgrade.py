@@ -14,7 +14,6 @@ from cassandra.cluster import NoHostAvailable
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 
-@pytest.mark.skip(reason="Flaky on Jenkins, driver disconnects from a node and does not reconnect.")
 @pytest.mark.asyncio
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
     start = time.time()
@@ -45,6 +44,14 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
         restarts.append(restart(srv))
 
     await asyncio.gather(*restarts)
+
+    # Workaround for scylladb/python-driver#170: the existing driver session may not reconnect, create a new one
+    logging.info(f"Reconnecting driver")
+    manager.driver_close()
+    await manager.driver_connect()
+    cql = manager.cql
+    assert(cql)
+    random_tables.set_cql(cql)
 
     deadline = time.time() + 300
     # Using `servers` doesn't work for the `host` parameter in `cql.run_async` (we need objects of type `Host`).
