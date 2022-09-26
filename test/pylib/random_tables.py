@@ -243,6 +243,9 @@ class RandomTables():
         cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
                      "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
+    def set_cql(self, cql: CassandraSession) -> None:
+        self.cql = cql
+
     async def add_tables(self, ntables: int = 1, ncolumns: int = 5) -> None:
         """Add random tables to the list.
         ntables specifies how many tables.
