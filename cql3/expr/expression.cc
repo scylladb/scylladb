@@ -1779,13 +1779,35 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
     return cql3::raw_value::make_value(boolean_type->decompose(binop_result));
 }
 
+cql3::raw_value evaluate(const conjunction& conj, const evaluation_inputs& inputs) {
+    for (const expression& child : conj.children) {
+        cql3::raw_value child_val = evaluate(child, inputs);
+        if (child_val.is_null()) {
+            // We could treat NULL as false, but this sounds wrong.
+            // The user can always just write `something IS NOT NULL`.
+            throw exceptions::invalid_request_exception("NULL value found inside AND conjunction");
+        }
+        if (child_val.is_unset_value()) {
+            throw exceptions::invalid_request_exception("UNSET_VALUE found inside AND conjunction");
+        }
+        if (child_val.is_empty_value()) {
+            throw exceptions::invalid_request_exception("empty value found inside AND conjunction");
+        }
+        bool bool_child_val = child_val.view().deserialize<bool>(*boolean_type);
+        if (!bool_child_val) {
+            return cql3::raw_value::make_value(boolean_type->decompose(false));
+        }
+    }
+    return cql3::raw_value::make_value(boolean_type->decompose(true));
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
             return evaluate(binop, inputs);
         },
-        [](const conjunction&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a conjunction");
+        [&](const conjunction& conj) -> cql3::raw_value {
+            return evaluate(conj, inputs);
         },
         [](const token&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate token");
