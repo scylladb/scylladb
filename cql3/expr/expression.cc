@@ -1723,10 +1723,60 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
+cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
+    if (binop.order == comparison_order::clustering) {
+        throw exceptions::invalid_request_exception("Can't evaluate a binary operator with SCYLLA_CLUSTERING_BOUND");
+    }
+
+    bool binop_result;
+
+    switch (binop.op) {
+        case oper_t::EQ: {
+            binop_result = equal(binop.lhs, binop.rhs, inputs);
+            break;
+        }
+        case oper_t::NEQ: {
+            binop_result = !equal(binop.lhs, binop.rhs, inputs);
+            break;
+        }
+        case oper_t::LT:
+        case oper_t::LTE:
+        case oper_t::GT:
+        case oper_t::GTE: {
+            binop_result = limits(binop.lhs, binop.op, binop.rhs, inputs);
+            break;
+        }
+        case oper_t::CONTAINS: {
+            cql3::raw_value val = evaluate(binop.rhs, inputs);
+            binop_result = contains(binop.lhs, val.view(), inputs);
+            break;
+        }
+        case oper_t::CONTAINS_KEY: {
+            cql3::raw_value val = evaluate(binop.rhs, inputs);
+            binop_result = contains_key(binop.lhs, val.view(), inputs);
+            break;
+        }
+        case oper_t::LIKE: {
+            cql3::raw_value val = evaluate(binop.rhs, inputs);
+            binop_result = like(binop.lhs, val.view(), inputs);
+            break;
+        }
+        case oper_t::IN: {
+            binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
+            break;
+        }
+        default: {
+            throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", binop));
+        }
+    };
+
+    return cql3::raw_value::make_value(boolean_type->decompose(binop_result));
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
-        [](const binary_operator&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a binary_operator");
+        [&](const binary_operator& binop) -> cql3::raw_value {
+            return evaluate(binop, inputs);
         },
         [](const conjunction&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a conjunction");
