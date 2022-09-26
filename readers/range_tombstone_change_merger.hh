@@ -81,6 +81,15 @@ public:
         }
     }
 
+    tombstone peek() const {
+        const stream_tombstone* tomb = get_tombstone();
+        if (tomb) {
+            return tomb->tombstone;
+        } else {
+            return {};
+        }
+    }
+
     void clear() {
         _tombstones.clear();
         _current_tombstone = {};
