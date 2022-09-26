@@ -98,6 +98,13 @@ Real get_real(Real max, RandomEngine& engine) {
     return get_real<Real>(Real{0}, max, engine);
 }
 
+/// Returns true with probability p.
+/// p = 1.0 means 100%.
+inline
+bool with_probability(double p) {
+    return get_real<double>(1, gen()) < p;
+}
+
 template <typename Real, typename RandomEngine>
 Real get_real(RandomEngine& engine) {
     return get_real<Real>(Real{0}, std::numeric_limits<Real>::max(), engine);
