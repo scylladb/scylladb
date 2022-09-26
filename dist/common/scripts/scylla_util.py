@@ -197,6 +197,8 @@ def is_system_partition(dev):
     return (uuid in SYSTEM_PARTITION_UUIDS)
 
 def is_unused_disk(dev):
+    # resolve symlink to real path
+    dev = os.path.realpath(dev)
     # dev is not in /sys/class/block/, like /dev/nvme[0-9]+
     if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/', ''))):
         return False
