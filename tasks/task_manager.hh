@@ -318,21 +318,31 @@ public:
             co_await _gate.close();
             _tm.unregister_module(_name);
         }
+    private:
+        future<foreign_task_ptr> get_parent(task_info parent) {
+            return _tm.container().invoke_on(parent.shard, [id = parent.id] (task_manager& tm) mutable {
+                const auto& all_tasks = tm.get_all_tasks();
+                if (auto it = all_tasks.find(id); it != all_tasks.end()) {
+                    return make_ready_future<foreign_task_ptr>(it->second);
+                } else {
+                    return make_exception_future<foreign_task_ptr>(task_manager::task_not_found(id));
+                }
+            });
+        }
 
+        future<> add_child(foreign_task_ptr task, foreign_task_ptr child) {
+            return _tm.container().invoke_on(task.get_owner_shard(), [task = std::move(task), child = std::move(child)] (task_manager& tm) mutable {
+                task->add_child(std::move(child));
+            });
+        }
+    public:
         template<typename T>
         requires std::is_base_of_v<task_manager::task::impl, T>
         future<task_id> make_task(unsigned shard, task_id id = task_id::create_null_id(), std::string keyspace = "", std::string table = "", std::string type = "", std::string entity = "", task_info parent_d = task_info{}) {
             foreign_task_ptr parent;
             uint64_t sequence_number = 0;
             if (parent_d) {
-                parent = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id] (task_manager& tm) mutable -> future<foreign_task_ptr> {
-                    const auto& all_tasks = tm.get_all_tasks();
-                    if (auto it = all_tasks.find(id); it != all_tasks.end()) {
-                        co_return it->second;
-                    } else {
-                        co_return coroutine::return_exception(task_manager::task_not_found(id));
-                    }
-                });
+                parent = co_await get_parent(parent_d);
                 sequence_number = parent->get_sequence_number();
             }
 
@@ -344,11 +354,21 @@ public:
             id = task->id();
 
             if (parent_d) {
-                co_await _tm.container().invoke_on(parent.get_owner_shard(), [task = std::move(parent), child = std::move(task)] (task_manager& tm) mutable {
-                    task->add_child(std::move(child));
-                });
+                co_await add_child(std::move(parent), std::move(task));
             }
             co_return id;
+        }
+
+        // Responsibility for task_impl_ptr correctness is put on caller.
+        future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = task_info{}) {
+            auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr));
+            foreign_task_ptr parent;
+            if (parent_d) {
+                parent = co_await get_parent(parent_d);
+                task->get_status().sequence_number = parent->get_sequence_number();
+                co_await add_child(std::move(parent), make_foreign(task));
+            }
+            co_return task;
         }
     };
 public:
