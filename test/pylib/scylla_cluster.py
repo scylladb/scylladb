@@ -710,6 +710,9 @@ class ScyllaClusterManager:
 
     async def start(self) -> None:
         """Get first cluster, setup API"""
+        if self.is_running:
+            logging.warning("ScyllaClusterManager already running")
+            return
         await self._get_cluster()
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
@@ -741,6 +744,7 @@ class ScyllaClusterManager:
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
+        self.is_running = False
 
     async def _get_cluster(self) -> None:
         self.cluster = await self.clusters.get()
@@ -875,7 +879,6 @@ async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], tes
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
     manager = ScyllaClusterManager(test_name, clusters, test_path)
-    await manager.start()
     try:
         yield manager
     finally:
