@@ -23,17 +23,29 @@ public:
         // automatically snapshot state machine after applying
         // this number of entries
         size_t snapshot_threshold = 1024;
-        // how many entries to leave in the log after tacking a snapshot
+        // Automatically snapshot state machine if the log memory usage exceeds this value.
+        // The value is in bytes.
+        // Must be smaller than max_log_size.
+        // It is recommended to set this value to no more than half of the max_log_size,
+        // so that snapshots are taken in advance and there is no backpressure due to max_log_size.
+        size_t snapshot_threshold_log_size = 2 * 1024 * 1024;
+        // how many entries to leave in the log after taking a snapshot
         size_t snapshot_trailing = 200;
+        // Limit on the total number of bytes, consumed by snapshot trailing entries.
+        // Must be smaller than snapshot_threshold_log_size.
+        // It is recommended to set this value to no more than half of snapshot_threshold_log_size
+        // so that not all memory is held for trailing when taking a snapshot.
+        size_t snapshot_trailing_size = 1 * 1024 * 1024;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
-        // Max number of entries of in-memory part of the log after
+        // Limit in bytes on the size of in-memory part of the log after
         // which requests are stopped to be admitted until the log
-        // is shrunk back by a snapshot. Should be greater than
-        // whatever the default number of trailing log entries
-        // is configured by the snapshot, otherwise the state
-        // machine will deadlock on attempt to submit a new entry.
-        size_t max_log_size = 5000;
+        // is shrunk back by a snapshot.
+        // The following condition must be satisfied:
+        // max_command_size <= max_log_size - snapshot_trailing_size
+        // this ensures that trailing log entries won't block incoming commands and at least
+        // one command can fit in the log
+        size_t max_log_size = 4 * 1024 * 1024;
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
         // If set to true, forward configuration and entries from
@@ -43,8 +55,11 @@ public:
         bool enable_forwarding = true;
 
         // Max size of a single command, add_entry with a bigger command will throw command_is_too_big_error.
-        // The value of zero means no limit.
-        size_t max_command_size = 0;
+        // The following condition must be satisfied:
+        // max_command_size <= max_log_size - snapshot_trailing_size
+        // this ensures that trailing log entries won't block incoming commands and at least
+        // one command can fit in the log
+        size_t max_command_size = 100 * 1024;
         // A callback to invoke if one of internal server
         // background activities has stopped because of an error.
         std::function<void(std::exception_ptr e)> on_background_error;

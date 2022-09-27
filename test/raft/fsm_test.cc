@@ -248,7 +248,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     add_entry(log, cfg);
     BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
     // apply snapshot truncates the log and resets last_conf_idx()
-    log.apply_snapshot(log_snapshot(log, log.last_idx()), 0);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 0, 0);
     BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
     BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
@@ -263,7 +263,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // entries, despite that trailing is given, a gap
     // between old log entries and a snapshot would violate
     // log continuity.
-    log.apply_snapshot(log_snapshot(log, log.last_idx() + index_t{GAP}), GAP * 2);
+    log.apply_snapshot(log_snapshot(log, log.last_idx() + index_t{GAP}), GAP * 2, std::numeric_limits<size_t>::max());
     BOOST_CHECK(log.empty());
     BOOST_CHECK_EQUAL(log.next_idx(), log.get_snapshot().idx + index_t{1});
     add_entry(log, log_entry::dummy{});
@@ -271,31 +271,31 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     add_entry(log, log_entry::dummy{});
     BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
     // Set trailing longer than the length of the log.
-    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3, std::numeric_limits<size_t>::max());
     BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
     // Set trailing the same length as the current log length
     add_entry(log, log_entry::dummy{});
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
-    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3, std::numeric_limits<size_t>::max());
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
     BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     add_entry(log, log_entry::dummy{});
     // Set trailing shorter than the length of the log
-    log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 1, std::numeric_limits<size_t>::max());
     BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
     // check that configuration from snapshot is used and not config entries from a trailing
     add_entry(log, cfg);
     add_entry(log, cfg);
     add_entry(log, log_entry::dummy{});
     auto snp_idx = log.last_idx();
-    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10, std::numeric_limits<size_t>::max());
     BOOST_CHECK_EQUAL(log.last_conf_idx(), snp_idx);
     // Check that configuration from the log is used if it has higher index then snapshot idx
     add_entry(log, log_entry::dummy{});
     snp_idx = log.last_idx();
     add_entry(log, cfg);
     add_entry(log, cfg);
-    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10, std::numeric_limits<size_t>::max());
     BOOST_CHECK_EQUAL(log.last_conf_idx(), log.last_idx());
 }
 
@@ -1689,13 +1689,13 @@ BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
         // If iteration count is large, this helps save some
         // memory
         if (rolladice(1./1000)) {
-            A.get_log().apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0);
+            A.get_log().apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0, 0);
         }
         if (rolladice(1./100)) {
-            B.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+            B.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0, 0);
         }
         if (rolladice(1./5000)) {
-            C.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+            C.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0, 0);
         }
     }
     BOOST_CHECK(A.is_leader());
@@ -1731,7 +1731,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote, false);
     A.tick();
     raft::snapshot_descriptor A_snp{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
-    A.apply_snapshot(A_snp, 0, true);
+    A.apply_snapshot(A_snp, 0, 0, true);
     A.tick();
     communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
@@ -1756,7 +1756,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote, true);
     A.tick();
     A_snp = raft::snapshot_descriptor{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
-    A.apply_snapshot(A_snp, 0, true);
+    A.apply_snapshot(A_snp, 0, 0, true);
     A.tick();
     communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
@@ -2060,9 +2060,9 @@ BOOST_AUTO_TEST_CASE(test_reject_outdated_remote_snapshot) {
     auto snp_term = B.get_log().term_for(snp_idx);
     BOOST_CHECK(snp_term);
     auto snp = raft::snapshot_descriptor{.idx = index_t{1}, .term = *snp_term, .config = cfg};
-    BOOST_CHECK(!B.apply_snapshot(snp, 0, false));
+    BOOST_CHECK(!B.apply_snapshot(snp, 0, 0, false));
     // But it should apply this snapshot if it's locally generated
-    BOOST_CHECK(B.apply_snapshot(snp, 0, true));
+    BOOST_CHECK(B.apply_snapshot(snp, 0, 0, true));
 }
 
 // A server should sometimes become a candidate even though it is outside the current configuration,
@@ -2276,7 +2276,7 @@ BOOST_AUTO_TEST_CASE(test_append_entry_inside_snapshot) {
     C.step(A_id, std::move(append));
     (void)C.get_output();
     // C snapshots the log
-    C.apply_snapshot(log_snapshot(C.get_log(), C.log_last_idx()), 0, true);
+    C.apply_snapshot(log_snapshot(C.get_log(), C.log_last_idx()), 0, 0, true);
 
     // Try to add one more entry
     A.add_entry(log_entry::dummy{});
