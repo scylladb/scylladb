@@ -82,7 +82,7 @@ def simple_no_clustering_table(cql, keyspace):
 
 def simple_clustering_table(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, s int STATIC, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk1 int, pk2 int, ck1 int, ck2 int, v int, s int STATIC, PRIMARY KEY ((pk1, pk2), ck1, ck2)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
@@ -91,24 +91,24 @@ def simple_clustering_table(cql, keyspace):
             x = random.randrange(0, 8)
             if x == 0:
                 # ttl
-                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0) USING TTL 6000")
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk1, pk2, ck1, ck2, v) VALUES ({pk}, {pk}, {ck}, {ck}, 0) USING TTL 6000")
             elif x == 1:
                 # row tombstone
-                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk} AND ck = {ck}")
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk1 = {pk} AND pk2 = {pk} AND ck1 = {ck} AND ck2 = {ck}")
             elif x == 2:
                 # cell tombstone
-                cql.execute(f"DELETE v FROM {keyspace}.{table} WHERE pk = {pk} AND ck = {ck}")
+                cql.execute(f"DELETE v FROM {keyspace}.{table} WHERE pk1 = {pk} AND pk2 = {pk} AND ck1 = {ck} AND ck2 = {ck}")
             elif x == 3:
                 # range tombstone
                 l = ck * 10
                 u = ck * 11
-                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk} AND ck > {l} AND ck < {u}")
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk1 = {pk} AND pk2 = {pk} AND ck1 > {l} AND ck1 < {u}")
             else:
                 # live row
-                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0)")
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk1, pk2, ck1, ck2, v) VALUES ({pk}, {pk}, {ck}, {ck}, 0)")
 
         if pk == 5:
-            cql.execute(f"UPDATE {keyspace}.{table} SET s = 10 WHERE pk = {pk}")
+            cql.execute(f"UPDATE {keyspace}.{table} SET s = 10 WHERE pk1 = {pk} AND pk2 = {pk}")
             nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
@@ -118,7 +118,7 @@ def simple_clustering_table(cql, keyspace):
 
 def clustering_table_with_collection(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v map<int, text>, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v1 map<int, text>, v2 set<int>, v3 list<int>, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
@@ -126,7 +126,9 @@ def clustering_table_with_collection(cql, keyspace):
         for ck in range(0, 10):
             map_vals = {f"{p}: '{c}'" for p in range(0, pk) for c in range(0, ck)}
             map_str = ", ".join(map_vals)
-            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{{map_str}}})")
+            set_list_vals = list(range(0, pk))
+            set_list_str = ", ".join(map(str, set_list_vals))
+            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v1, v2, v3) VALUES ({pk}, {ck}, {{{map_str}}}, {{{set_list_str}}}, [{set_list_str}])")
         if pk == 5:
             nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -259,3 +261,280 @@ def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, 
             actual_json = json.loads(actual_out)["sstables"]["anonymous"]
 
             assert actual_json == original_json
+
+
+def script_consume_test_table_factory(cql, keyspace):
+    table = util.unique_name()
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, s int STATIC, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+
+    cql.execute(schema)
+
+    partitions = 4
+
+    for sst in range(0, 2):
+        for pk in range(sst * partitions, (sst + 1) * partitions):
+            # static row
+            cql.execute(f"UPDATE {keyspace}.{table} SET s = 10 WHERE pk = {pk}")
+            # range tombstone
+            cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk} AND ck >= 0 AND ck <= 4")
+            # 2 rows
+            for ck in range(0, 4):
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0)")
+
+        nodetool.flush(cql, f"{keyspace}.{table}")
+
+    return table, schema
+
+
+def test_scylla_sstable_script_consume_sstable(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, "..", "test_scylla_sstable_script_consume_sstable.lua")
+
+    script = """
+wr = Scylla.new_json_writer()
+i = 0
+
+function arg(args, arg)
+    ret = nil
+    wr:key(arg)
+    if args[arg] then
+        ret = tonumber(args[arg])
+        wr:int(ret)
+    else
+        wr:null()
+    end
+    return ret
+end
+
+function basename(path)
+    s, e = string.find(string.reverse(path), '/', 1, true)
+    return string.sub(path, #path - s + 2)
+end
+
+function consume_stream_start(args)
+    wr:start_object()
+    start_sst = arg(args, "start_sst")
+    end_sst = arg(args, "end_sst")
+    wr:key("content")
+    wr:start_array()
+end
+
+function consume_sstable_start(sst)
+    wrote_ps = false
+    i = i + 1
+    if i == start_sst then
+        return false
+    end
+    wr:string(basename(sst.filename))
+end
+
+function consume_partition_start(ps)
+    if not wrote_ps then
+        wr:string("ps")
+        wrote_ps = true
+    end
+end
+
+function consume_sstable_end()
+    if i == end_sst then
+        return false
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+    wr:end_object()
+end
+"""
+    with open(script_file, 'w') as f:
+        f.write(script)
+
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        sst1 = os.path.basename(sstables[0])
+        sst2 = os.path.basename(sstables[1])
+        def run_scenario(script_args, expected):
+            print(f"Scenario: '{script_args}'\n")
+            if script_args:
+                script_args = ["--script-arg", script_args]
+            else:
+                script_args = []
+            script_args = [scylla_path, "sstable", "script", "--schema-file", schema_file, "--script-file", script_file] + script_args + sstables[0:2]
+            res = json.loads(subprocess.check_output(script_args))
+            assert res == expected
+
+        run_scenario("", {'start_sst': None, 'end_sst': None, 'content': [sst1, "ps", sst2, "ps"]})
+        run_scenario("start_sst=1", {'start_sst': 1, 'end_sst': None, 'content': [sst2, "ps"]})
+        run_scenario("start_sst=2", {'start_sst': 2, 'end_sst': None, 'content': [sst1, "ps"]})
+        run_scenario("start_sst=1:end_sst=1", {'start_sst': 1, 'end_sst': 1, 'content': []})
+        run_scenario("start_sst=2:end_sst=2", {'start_sst': 2, 'end_sst': 2, 'content': [sst1, "ps"]})
+        run_scenario("end_sst=1", {'start_sst': None, 'end_sst': 1, 'content': [sst1, "ps"]})
+        run_scenario("end_sst=2", {'start_sst': None, 'end_sst': 2, 'content': [sst1, "ps", sst2, "ps"]})
+
+
+def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_data_dir):
+    class bound:
+        @staticmethod
+        def unpack_value(value):
+            if isinstance(value, tuple):
+                return value
+            else:
+                return None, value
+
+        def __init__(self, value, weight):
+            self.token, self.value = self.unpack_value(value)
+            self.weight = weight
+
+        def tri_cmp(self, value):
+            if self.token is None and self.value is None:
+                assert(self.weight)
+                return -self.weight
+            token, value = self.unpack_value(value)
+            if token is None:
+                res = 0
+            else:
+                res = int(token) - int(self.token)
+            if res == 0 and not value is None and not self.value is None :
+                res = int(value) - int(self.value)
+            return res if res else -self.weight
+
+        def get_value(self, lookup_table, is_start):
+            if self.token is None and self.value is None:
+                return '-inf' if is_start else '+inf'
+            if self.value is None:
+                return "t{}".format(int(self.token))
+            return lookup_table[self.value]
+
+        @staticmethod
+        def before(value):
+            return bound(value, -1)
+
+        @staticmethod
+        def at(value):
+            return bound(value, 0)
+
+        @staticmethod
+        def after(value):
+            return bound(value, 1)
+
+
+    class interval:
+        def __init__(self, start_bound, end_bound):
+            self.start = start_bound
+            self.end = end_bound
+
+        def contains(self, value):
+            return self.start.tri_cmp(value) >= 0 and self.end.tri_cmp(value) <= 0
+
+
+    def summarize_dump(dump):
+        summary = []
+        for partition in list(dump["sstables"].items())[0][1]:
+            partition_summary = {"pk": partition["key"]["value"], "token": partition["key"]["token"], "frags": []}
+            if "static_row" in partition:
+                partition_summary["frags"].append(("sr", None))
+            for clustering_fragment in partition.get("clustering_elements", []):
+                type_str = "cr" if clustering_fragment["type"] == "clustering-row" else "rtc"
+                partition_summary["frags"].append((type_str, clustering_fragment["key"]["value"]))
+            summary.append(partition_summary)
+        return summary
+
+    def filter_summary(summary, partition_ranges, clustering_ranges):
+        if not partition_ranges:
+            return summary
+        filtered_summary = []
+        for partition in summary:
+            if any(map(lambda x: interval.contains(x, (partition["token"], partition["pk"])), partition_ranges)):
+                filtered_summary.append({"pk": partition["pk"], "token": partition["token"], "frags": []})
+                for (t, k) in partition["frags"]:
+                    if t == "rtc" or k is None or not clustering_ranges or any(map(lambda x: interval.contains(x, k), clustering_ranges)):
+                        filtered_summary[-1]["frags"].append((t, k))
+
+        return filtered_summary
+
+    def serialize_ranges(prefix, ranges, lookup_table):
+        serialized_ranges = []
+        i = 0
+        for r in ranges:
+            s = r.start.get_value(lookup_table, True)
+            e = r.end.get_value(lookup_table, False)
+            serialized_ranges.append("{}{}={}{},{}{}".format(
+                prefix,
+                i,
+                "(" if s == '-inf' or r.start.weight > 0 else "[",
+                s,
+                e,
+                ")" if e == '+inf' or r.end.weight < 0 else "]"))
+            i = i + 1
+        return serialized_ranges
+
+    scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
+    script_file = os.path.join(scripts_path, 'slice.lua')
+
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        reference_summary = summarize_dump(json.loads(subprocess.check_output([scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--merge"] + sstables)))
+
+        # same order as in dump
+        pks = [(p["token"], p["pk"]) for p in reference_summary]
+        cks = set()
+        for p in reference_summary:
+            for t, ck in p["frags"]:
+                if not ck is None:
+                    cks.add(ck)
+        cks = sorted(list(cks))
+        serialized_pk_lookup = {pk: subprocess.check_output([scylla_path, "types", "serialize", "--full-compound", "-t", "Int32Type", "--", pk]).strip().decode() for t, pk in pks}
+        serialized_ck_lookup = {ck: subprocess.check_output([scylla_path, "types", "serialize", "--prefix-compound", "-t", "Int32Type", "--", ck]).strip().decode() for ck in cks}
+
+        script_common_args = [scylla_path, "sstable", "script", "--schema-file", schema_file, "--merge", "--script-file", script_file]
+
+        def run_scenario(scenario, partition_ranges, clustering_ranges):
+            print(f"running scenario {scenario}")
+            script_args = serialize_ranges("pr", partition_ranges, serialized_pk_lookup) + serialize_ranges("cr", clustering_ranges, serialized_ck_lookup)
+            if script_args:
+                script_args = ["--script-arg"] + [":".join(script_args)]
+            print(f"script_args={script_args}")
+            expected = filter_summary(reference_summary, partition_ranges, clustering_ranges)
+            out = subprocess.check_output(script_common_args + script_args + sstables)
+            summary = summarize_dump(json.loads(out))
+            assert summary == expected
+
+        run_scenario("no args", [], [])
+        run_scenario("full range", [interval(bound.before(None), bound.after(None))], [])
+        run_scenario("(pks[0], +inf)", [interval(bound.after(pks[0]), bound.after(None))], [])
+        run_scenario("(-inf, pks[-3]]", [interval(bound.before(None), bound.after(pks[-3]))], [])
+        run_scenario("[pks[2], pks[-2]]", [interval(bound.before(pks[2]), bound.after(pks[-2]))], [])
+        run_scenario("[pks[0], pks[1]], [pks[2], pks[3]]", [interval(bound.before(pks[1]), bound.after(pks[2])), interval(bound.before(pks[3]), bound.after(pks[4]))], [])
+        run_scenario("[t:pks[2], t:pks[-2]]", [interval(bound.before((pks[2][0], None)), bound.after((pks[-2][0], None)))], [])
+        run_scenario("full pk range | [-inf, cks[2]]", [interval(bound.before(None), bound.after(None))], [interval(bound.before(None), bound.after(cks[2]))])
+        run_scenario("[pks[0], pks[1]] | (cks[0], cks[1]], (cks[2], +inf)", [interval(bound.before(pks[1]), bound.after(pks[2]))],
+                     [interval(bound.after(cks[0]), bound.after(cks[1])), interval(bound.after(cks[2]), bound.after(None))])
+
+
+@pytest.mark.parametrize("table_factory", [
+        simple_no_clustering_table,
+        simple_clustering_table,
+        clustering_table_with_collection,
+        clustering_table_with_udt,
+        table_with_counters,
+])
+def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
+    scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
+    slice_script_path = os.path.join(scripts_path, 'slice.lua')
+    dump_script_path = os.path.join(scripts_path, 'dump.lua')
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json"]
+        script_common_args = [scylla_path, "sstable", "script", "--schema-file", schema_file]
+
+        # without --merge
+        cxx_json = json.loads(subprocess.check_output(dump_common_args + sstables))
+        dump_lua_json = json.loads(subprocess.check_output(script_common_args + ["--script-file", dump_script_path] + sstables))
+        slice_lua_json = json.loads(subprocess.check_output(script_common_args + ["--script-file", slice_script_path] + sstables))
+
+        assert dump_lua_json == cxx_json
+        assert slice_lua_json == cxx_json
+
+        # with --merge
+        cxx_json = json.loads(subprocess.check_output(dump_common_args + ["--merge"] + sstables))
+        dump_lua_json = json.loads(subprocess.check_output(script_common_args + ["--merge", "--script-file", dump_script_path] + sstables))
+        slice_lua_json = json.loads(subprocess.check_output(script_common_args + ["--merge", "--script-file", slice_script_path] + sstables))
+
+        assert dump_lua_json == cxx_json
+        assert slice_lua_json == cxx_json
