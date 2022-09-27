@@ -1770,8 +1770,21 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
             break;
         }
-        default: {
-            throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", binop));
+        case oper_t::IS_NOT: {
+            cql3::raw_value lhs_val = evaluate(binop.lhs, inputs);
+            if (lhs_val.is_unset_value()) {
+                throw exceptions::invalid_request_exception("UNSET_VALUE found on left hand side of IS NOT operator");
+            }
+
+            cql3::raw_value rhs_val = evaluate(binop.rhs, inputs);
+            if (rhs_val.is_unset_value()) {
+                throw exceptions::invalid_request_exception("UNSET_VALUE found on right hand side of IS NOT operator");
+            }
+            if (!rhs_val.is_null()) {
+                throw exceptions::invalid_request_exception("IS NOT operator accepts only NULL as its right side");
+            }
+            binop_result = !lhs_val.is_null();
+            break;
         }
     };
 
