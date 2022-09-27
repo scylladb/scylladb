@@ -1841,6 +1841,10 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 
 future<uint64_t> sstable::validate(reader_permit permit, const io_priority_class& pc, abort_source& abort,
         std::function<void(sstring)> error_handler) {
+    if (_version >= sstable_version_types::mc) {
+        co_return co_await mx::validate(shared_from_this(), std::move(permit), pc, abort, std::move(error_handler));
+    }
+
     auto reader = make_crawling_reader(_schema, permit, pc, nullptr);
 
     uint64_t errors = 0;
