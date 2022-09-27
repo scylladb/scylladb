@@ -331,12 +331,10 @@ future<> raft_group0_client::init() {
 }
 
 future<std::pair<rwlock::holder, group0_upgrade_state>> raft_group0_client::get_group0_upgrade_state() {
-    if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
-        auto holder = co_await _upgrade_lock.hold_read_lock();
+    auto holder = co_await _upgrade_lock.hold_read_lock();
 
-        if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
-            co_return std::pair{std::move(holder), _upgrade_state};
-        }
+    if (_upgrade_state == group0_upgrade_state::use_pre_raft_procedures) {
+        co_return std::pair{std::move(holder), _upgrade_state};
     }
 
     co_return std::pair{rwlock::holder{}, _upgrade_state};
