@@ -452,7 +452,7 @@ class dumping_consumer : public sstable_consumer {
                 }
                 _writer.EndArray();
             } else {
-                _writer.String("<unknown>");
+                _writer.Null();
             }
 
             _writer.EndObject();
@@ -465,7 +465,7 @@ class dumping_consumer : public sstable_consumer {
                     write(mv, cdef.type);
                 });
             } else {
-                _writer.String("<unknown>");
+                _writer.Null();
             }
         }
         void write(const row& r, column_kind kind) {
