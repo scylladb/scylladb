@@ -433,20 +433,24 @@ class dumping_consumer : public sstable_consumer {
             std::function<void(size_t, bytes_view)> write_key;
             std::function<void(size_t, atomic_cell_view)> write_value;
             if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-                write_key = [this, t] (size_t, bytes_view k) { _writer.Key(t->name_comparator()->to_string(k)); };
-                write_value = [this, t] (size_t, atomic_cell_view v) { write(v, t->value_comparator()); };
+                write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
+                write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
             } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-                write_key = [this] (size_t i, bytes_view) { _writer.Key(format("{}", i)); };
+                write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
                 write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
             }
 
             if (write_key && write_value) {
-                _writer.StartObject();
+                _writer.StartArray();
                 for (size_t i = 0; i < mv.cells.size(); ++i) {
+                    _writer.StartObject();
+                    _writer.Key("key");
                     write_key(i, mv.cells[i].first);
+                    _writer.Key("value");
                     write_value(i, mv.cells[i].second);
+                    _writer.EndObject();
                 }
-                _writer.EndObject();
+                _writer.EndArray();
             } else {
                 _writer.String("<unknown>");
             }
@@ -2608,10 +2612,13 @@ $FROZEN_COLLECTION is the same as a $REGULAR_CELL, with type = "frozen-collectio
 $COLLECTION := {
     "type": "collection",
     "tombstone": $TOMBSTONE, // optional
-    "cells": {
-        "$key": $REGULAR_CELL,
+    "cells": [
+        {
+            "key": String,
+            "value": $REGULAR_CELL
+        },
         ...
-    }
+    ]
 }
 
 $CLUSTERING_ROW := {
