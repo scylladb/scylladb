@@ -67,6 +67,14 @@ public:
         _scheduling_group = sg;
         _worker_state->cv.broadcast();
     }
+    auto make_region_space_guard() {
+        return defer([&, dirty_before = _region.occupancy().total_space()] {
+            auto dirty_after = _region.occupancy().total_space();
+            if (_on_space_freed && dirty_before > dirty_after) {
+                _on_space_freed(dirty_before - dirty_after);
+            }
+        });
+    }
 };
 
 inline
@@ -135,6 +143,14 @@ public:
     // Must be invoked under owning allocator.
     void clear() noexcept {
         _impl->clear();
+    }
+
+    // Returns a guard object which when freed calls the on_space_freed callback with the amount
+    // of memory freed in the region in terms of total_space() during the time the guard was
+    // alive.
+    // The guard must not outlive the cleaner.
+    auto make_region_space_guard() {
+        return _impl->make_region_space_guard();
     }
 
     // Enqueues v for destruction.

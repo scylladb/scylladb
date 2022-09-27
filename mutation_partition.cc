@@ -2558,12 +2558,7 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
                 return stop_iteration::no;
             }
             try {
-                auto notify = defer([&, dirty_before = region.occupancy().total_space()] {
-                    auto dirty_after = region.occupancy().total_space();
-                    if (_on_space_freed && dirty_before > dirty_after) {
-                        _on_space_freed(dirty_before - dirty_after);
-                    }
-                });
+                auto dirty_guard = make_region_space_guard();
                 return _worker_state->alloc_section(region, [&] {
                     return snp.merge_partition_versions(_app_stats);
                 });
