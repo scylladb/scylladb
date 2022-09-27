@@ -385,14 +385,25 @@ class dumping_consumer : public sstable_consumer {
             _writer.StartObject();
             _writer.Key("is_live");
             _writer.Bool(cell.is_live());
+            _writer.Key("type");
+            if (type->is_counter()) {
+                if (cell.is_counter_update()) {
+                    _writer.String("counter-update");
+                } else {
+                    _writer.String("counter-shards");
+                }
+            } else if (type->is_collection()) {
+                _writer.String("frozen-collection");
+            } else {
+                _writer.String("regular");
+            }
             _writer.Key("timestamp");
             _writer.Int64(cell.timestamp());
             if (type->is_counter()) {
+                _writer.Key("value");
                 if (cell.is_counter_update()) {
-                    _writer.Key("value");
                     _writer.Int64(cell.counter_update_value());
                 } else {
-                    _writer.Key("shards");
                     write(counter_cell_view(cell));
                 }
             } else {
@@ -2008,7 +2019,13 @@ class json_mutation_stream_parser {
                             ret.ok = error("invalid clustering element type: {}, expected clustering-row or range-tombstone-change", *_string);
                         }
                     } else if (top(1) == state::in_column) {
-                        if (_key == "ttl") {
+                        if (_key == "type") {
+                            if (*_string != "regular") {
+                                ret.ok = error("unsupported cell type {}, currently only regular cells are supported", *_string);
+                            } else {
+                                ret.ok = true;
+                            }
+                        } else if (_key == "ttl") {
                             ret.ok = parse_ttl();
                         } else if (_key == "expiry") {
                             ret.ok = parse_expiry();
@@ -2291,7 +2308,7 @@ class json_mutation_stream_parser {
                     if (_key == "timestamp") {
                         return push(state::before_integer);
                     }
-                    if (_key == "ttl" || _key == "expiry" || _key == "value" || _key == "deletion_time") {
+                    if (_key == "type" || _key == "ttl" || _key == "expiry" || _key == "value" || _key == "deletion_time") {
                         return push(state::before_string);
                     }
                     return unexpected(_key);
@@ -2553,30 +2570,24 @@ $TOMBSTONE := {
 }
 
 $COLUMNS := {
-    "$column_name": $REGULAR_CELL | $COUNTER_CELL | $COLLECTION,
+    "$column_name": $REGULAR_CELL | $COUNTER_SHARDS_CELL | $COUNTER_UPDATE_CELL | $FROZEN_COLLECTION | $COLLECTION,
     ...
 }
 
-$REGULAR_CELL := $REGULAR_LIVE_CELL | $REGULAR_DEAD_CELL
-
-$REGULAR_LIVE_CELL := {
-    "is_live": true,
+$REGULAR_CELL := {
+    "is_live": Bool, // is the cell live or not
+    "type": "regular",
     "timestamp": Int64,
     "ttl": String, // gc_clock::duration - optional
     "expiry": String, // YYYY-MM-DD HH:MM:SS - optional
-    "value": String
+    "value": String // only if is_live == true
 }
 
-$REGULAR_DEAD_CELL := {
-    "is_live": false,
-    "timestamp": Int64,
-    "deletion_time": String // YYYY-MM-DD HH:MM:SS
-}
-
-$COUNTER_CELL := {
+$COUNTER_SHARDS_CELL := {
     "is_live": true,
+    "type": "counter-shards",
     "timestamp": Int64,
-    "shards": [$COUNTER_SHARD, ...]
+    "value": [$COUNTER_SHARD, ...]
 }
 
 $COUNTER_SHARD := {
@@ -2585,7 +2596,17 @@ $COUNTER_SHARD := {
     "clock": Int64
 }
 
+$COUNTER_UPDATE_CELL := {
+    "is_live": true,
+    "type": "counter-update",
+    "timestamp": Int64,
+    "value": Int64
+}
+
+$FROZEN_COLLECTION is the same as a $REGULAR_CELL, with type = "frozen-collection".
+
 $COLLECTION := {
+    "type": "collection",
     "tombstone": $TOMBSTONE, // optional
     "cells": {
         "$key": $REGULAR_CELL,
