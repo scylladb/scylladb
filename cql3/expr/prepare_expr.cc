@@ -928,8 +928,22 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [] (const constant&) -> std::optional<expression> {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
-        [&] (const binary_operator&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "binary_operators are not yet reachable via prepare_expression()");
+        [&] (const binary_operator& binop) -> std::optional<expression> {
+            if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
+                throw exceptions::invalid_request_exception(
+                    format("binary operator produces a boolean value, which doesn't match the type: {} of {}",
+                           receiver->type->name(), receiver->name->text()));
+            }
+
+            binary_operator result = prepare_binary_operator(binop, db, *schema_opt);
+
+            // A binary operator where both sides of the equation are known can be evaluated to a boolean value.
+            // This only applies to operators in the CQL order, operations in the clustering order should only be
+            // of form (clustering_column1, colustering_column2) < SCYLLA_CLUSTERING_BOUND(1, 2).
+            if (is<constant>(result.lhs) && is<constant>(result.rhs) && result.order == comparison_order::cql) {
+                return constant(evaluate(result, query_options::DEFAULT), boolean_type);
+            }
+            return result;
         },
         [&] (const conjunction& conj) -> std::optional<expression> {
             return prepare_conjunction(conj, db, keyspace, schema_opt, receiver);
