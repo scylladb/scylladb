@@ -277,9 +277,7 @@ class ScyllaServer:
                          protocol_version=4,
                          auth_provider=auth) as cluster:
                 with cluster.connect() as session:
-                    session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
-                                    "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
-                    session.execute("DROP KEYSPACE k")
+                    session.execute("SELECT * FROM system.local")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=[self.hostname],
