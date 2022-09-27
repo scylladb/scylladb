@@ -373,18 +373,18 @@ bool contains(const expression& collection_val, const raw_value_view& value, con
 }
 
 /// True iff a column is a map containing \p key.
-bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
+bool contains_key(const expression& collection_val, cql3::raw_value_view key, const evaluation_inputs& inputs) {
     if (!key) {
         // CONTAINS_KEY NULL should evaluate to NULL/false
         return false;
     }
-    auto type = col.col->type;
-    const auto collection = get_value(col, inputs);
-    if (!collection) {
+    const data_type collection_type = type_of(collection_val);
+    const managed_bytes_opt collection_bytes = evaluate(collection_val, inputs).to_managed_bytes_opt();
+    if (!collection_bytes) {
         return false;
     }
-    const auto data_map = value_cast<map_type_impl::native_type>(type->deserialize(managed_bytes_view(*collection)));
-    auto key_type = static_pointer_cast<const collection_type_impl>(type)->name_comparator();
+    const auto data_map = value_cast<map_type_impl::native_type>(collection_type->deserialize(managed_bytes_view(*collection_bytes)));
+    auto key_type = static_pointer_cast<const collection_type_impl>(collection_type)->name_comparator();
     auto found = key.with_linearized([&] (bytes_view k_bv) {
         using entry = std::pair<data_value, data_value>;
         return std::find_if(data_map.begin(), data_map.end(), [&] (const entry& element) {
