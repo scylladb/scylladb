@@ -362,10 +362,11 @@ bool contains(const data_value& collection, const raw_value_view& value) {
 }
 
 /// True iff a column is a collection containing value.
-bool contains(const column_value& col, const raw_value_view& value, const evaluation_inputs& inputs) {
-    const auto collection = get_value(col, inputs);
-    if (collection) {
-        return contains(col.col->type->deserialize(managed_bytes_view(*collection)), value);
+bool contains(const expression& collection_val, const raw_value_view& value, const evaluation_inputs& inputs) {
+    const data_type collection_type = type_of(collection_val);
+    const managed_bytes_opt collection_bytes = evaluate(collection_val, inputs).to_managed_bytes_opt();
+    if (collection_bytes) {
+        return contains(collection_type->deserialize(managed_bytes_view(*collection_bytes)), value);
     } else {
         return false;
     }
