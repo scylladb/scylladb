@@ -440,12 +440,16 @@ std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, con
 namespace {
 
 /// True iff cv matches the CQL LIKE pattern.
-bool like(const column_value& cv, const raw_value_view& pattern, const evaluation_inputs& inputs) {
-    if (!cv.col->type->is_string()) {
+bool like(const expression& string_val, const raw_value_view& pattern, const evaluation_inputs& inputs) {
+    if (!type_of(string_val)->is_string()) {
+        expression::printer val_printer {
+            .expr_to_print = string_val,
+            .debug_mode = false
+        };
         throw exceptions::invalid_request_exception(
-                format("LIKE is allowed only on string types, which {} is not", cv.col->name_as_text()));
+                format("LIKE is allowed only on string types, which {} is not", val_printer));
     }
-    auto value = get_value(cv, inputs);
+    const managed_bytes_opt value = evaluate(string_val, inputs).to_managed_bytes_opt();
     // TODO: reuse matchers.
     if (pattern && value) {
         return value->with_linearized([&pattern] (bytes_view linearized_value) {
