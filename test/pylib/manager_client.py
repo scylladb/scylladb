@@ -47,6 +47,11 @@ class ManagerClient():
         self.conn = aiohttp.UnixConnector(path=self.sock_path)
         self.session = aiohttp.ClientSession(connector=self.conn)
 
+    async def stop(self):
+        """Close client session and close driver"""
+        await self.session.close()
+        self.driver_close()
+
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
