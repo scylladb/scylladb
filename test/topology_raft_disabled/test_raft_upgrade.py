@@ -17,7 +17,7 @@ from test.pylib.random_tables import RandomTables
 @pytest.mark.asyncio
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
     start = time.time()
-    servers = await manager.servers()
+    servers = await manager.running_servers()
 
     cql = manager.cql
     assert(cql)

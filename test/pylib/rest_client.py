@@ -5,9 +5,13 @@
 #
 """Asynchronous helper for Scylla REST API operations.
 """
+import logging
 import os.path
 from typing import Optional
 import aiohttp
+
+
+logger = logging.getLogger(__name__)
 
 
 class RESTSession:
@@ -110,3 +114,31 @@ class TCPRESTClient:
 
     def _resource_uri(self, resource: str, host: str) -> str:
         return f"http://{host}:{self.port}{resource}"
+
+
+class ScyllaRESTAPIClient():
+    """Async Scylla REST API client"""
+
+    def __init__(self, port: int = 10000):
+        self.client = TCPRESTClient(port)
+
+    async def close(self):
+        """Close session"""
+        await self.client.close()
+
+    async def get_host_id(self, server_id: str):
+        """Get server id (UUID)"""
+        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_id)
+        host_uuid = host_uuid.lstrip('"').rstrip('"')
+        return host_uuid
+
+    async def remove_node(self, initiator_ip: str, server_uuid: str) -> None:
+        """Initiate remove node of server_uuid in initiator initiator_ip"""
+        resp = await self.client.post("/storage_service/remove_node", params={"host_id": server_uuid},
+                                   host=initiator_ip)
+        logger.info("remove_node status %s for %s", resp.status, server_uuid)
+
+    async def decommission_node(self, node_ip: str) -> None:
+        """Initiate remove node of server_uuid in initiator initiator_ip"""
+        resp = await self.client.post("/storage_service/decommission", host=node_ip)
+        logger.debug("decommission_node status %s for %s", resp.status, node_ip)

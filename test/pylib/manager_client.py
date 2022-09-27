@@ -11,7 +11,7 @@
 
 from typing import List, Optional, Callable
 import logging
-from test.pylib.rest_client import UnixRESTClient
+from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 
@@ -25,6 +25,7 @@ class ManagerClient():
         sock_path (str): path to an AF_UNIX socket where Manager server is listening
         con_gen (Callable): generator function for CQL driver connection to a cluster
     """
+    # pylint: disable=too-many-public-methods
 
     def __init__(self, sock_path: str, port: int, use_ssl: bool,
                  con_gen: Optional[Callable[[List[str], int, bool], CassandraSession]]) -> None:
@@ -35,16 +36,18 @@ class ManagerClient():
         self.cql: Optional[CassandraSession] = None
         # A client for communicating with ScyllaClusterManager (server)
         self.client = UnixRESTClient(sock_path)
+        self.api = ScyllaRESTAPIClient()
 
     async def stop(self):
-        """Close client session and driver"""
+        """Close api, client, and driver"""
+        await self.api.close()
         await self.client.close()
         self.driver_close()
 
     async def driver_connect(self) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
-            servers = await self.servers()
+            servers = await self.running_servers()
             logger.debug("driver connecting to %s", servers)
             self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
             self.cql = self.ccluster.connect()
@@ -102,9 +105,9 @@ class ManagerClient():
         resp = await self.client.get_text("/cluster/replicas")
         return int(resp)
 
-    async def servers(self) -> List[str]:
+    async def running_servers(self) -> List[str]:
         """Get list of running servers"""
-        host_list = await self.client.get_text("/cluster/servers")
+        host_list = await self.client.get_text("/cluster/running-servers")
         return host_list.split(",")
 
     async def mark_dirty(self) -> None:
@@ -141,6 +144,21 @@ class ManagerClient():
         logger.debug("ManagerClient added %s", server_id)
         return server_id
 
+    # TODO: only pass UUID
+    async def remove_node(self, initiator_ip: str, to_remove_ip: str, to_remove_uuid: str) -> None:
+        """Invoke remove node Scylla REST API for a specified server"""
+        logger.debug("ManagerClient remove node %s %s on initiator %s", to_remove_ip,
+                     to_remove_uuid, initiator_ip)
+        await self.client.get_text(
+                f"/cluster/remove-node/{initiator_ip}/{to_remove_ip}/{to_remove_uuid}")
+        self._driver_update()
+
+    async def decommission_node(self, to_remove_ip: str) -> None:
+        """Tell a node to decommission with Scylla REST API"""
+        logger.debug("ManagerClient decommission node %s", to_remove_ip)
+        await self.client.get_text(f"/cluster/decommission-node/{to_remove_ip}")
+        self._driver_update()
+
     async def server_get_config(self, server_id: str) -> dict[str, object]:
         resp = await self.client.get(f"/cluster/server/{server_id}/get_config")
         if resp.status != 200:
@@ -152,3 +170,7 @@ class ManagerClient():
                                        {"key": key, "value": value})
         if resp.status != 200:
             raise Exception(await resp.text())
+
+    async def get_host_id(self, server_id: str) -> None:
+        """Get host id through Scylla REST API"""
+        return await self.api.get_host_id(server_id)
