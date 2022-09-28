@@ -146,9 +146,10 @@ future<> cql_table_large_data_handler::record_large_cells(const sstables::sstabl
     if (clustering_key) {
         const schema &s = *sst.get_schema();
         auto ck_str = key_to_str(*clustering_key, s);
-        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("{} {}", ck_str, column_name), extra_fields, ck_str, column_name);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("/{}/{}", ck_str, column_name), extra_fields, ck_str, column_name);
     } else {
-        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, column_name, extra_fields, data_value::make_null(utf8_type), column_name);
+        auto desc = format("static {}", cell_type);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name);
     }
 }
 
@@ -158,7 +159,7 @@ future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable
     if (clustering_key) {
         const schema &s = *sst.get_schema();
         std::string ck_str = key_to_str(*clustering_key, s);
-        return try_record("row", sst, partition_key, int64_t(row_size), "row", ck_str, extra_fields,  ck_str);
+        return try_record("row", sst, partition_key, int64_t(row_size), "row", format("/{}", ck_str), extra_fields,  ck_str);
     } else {
         return try_record("row", sst, partition_key, int64_t(row_size), "static row", "", extra_fields, data_value::make_null(utf8_type));
     }

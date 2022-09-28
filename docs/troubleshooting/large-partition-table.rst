@@ -35,10 +35,10 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name                                                                       | partition_size | partition_key                                       | compaction_time
-   --------------+------------+------------------------------------------------------------------------------------+----------------+-----------------------------------------------------+--------------------------
-          demodb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cba79c008e4f11e8908a000000000001/la-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 2018-07-23 08:10:34
-          testdb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cbs45c008e4f11e3418a000871000002/la-7-big-Data.db |     1188816032 | {key: pk{000400000001}, token:-3169959284402457813} | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows   | compaction_time
+   --------------+------------+------------------+----------------+-----------------------------------------------------+--------+--------------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34
+          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34
   
 ================================================  =================================================================================
 Parameter                                         Description
@@ -49,9 +49,11 @@ table_name                                        The name of a table containing
 ------------------------------------------------  ---------------------------------------------------------------------------------
 sstable_name                                      The name of SSTable containing the large partition
 ------------------------------------------------  ---------------------------------------------------------------------------------
-partition_size                                    The size of the partition
+partition_size                                    The size of the partition in this sstable
 ------------------------------------------------  ---------------------------------------------------------------------------------
 partition_key                                     The value of a partition key that identifies the large partition
+------------------------------------------------  ---------------------------------------------------------------------------------
+rows                                              The number of rows in the partition in this sstable
 ------------------------------------------------  ---------------------------------------------------------------------------------
 compaction_time                                   Time when compaction last occurred
 ================================================  =================================================================================
@@ -73,9 +75,9 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name                                                                       | partition_size | partition_key                                       | compaction_time
-   --------------+------------+------------------------------------------------------------------------------------+----------------+-----------------------------------------------------+--------------------------
-          demodb |       tmcr | /var/lib/scylla/data/demodb/tmcr-cba79c008e4f11e8908a000000000001/la-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows | compaction_time
+   --------------+------------+------------------+----------------+-----------------------------------------------------+------+--------------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34
 
 
 .. _large-partition-table-configure:
@@ -83,14 +85,17 @@ Example output:
 Configure
 ^^^^^^^^^
 
-Configure the detection threshold of large partitions with the ``compaction_large_partition_warning_threshold_mb`` parameter (default: 1000MB) in the scylla.yaml configuration file.
-Partitions bigger than this threshold are reported in the ``system.large_partitions`` table and generate a warning in the Scylla log (refer to :doc:`log </getting-started/logging/>`).
+Configure the detection thresholds of large partitions with the ``compaction_large_partition_warning_threshold_mb`` parameter (default: 1000MB)
+and the ``compaction_rows_count_warning_threshold`` paramater (default 100000)
+in the scylla.yaml configuration file.
+Partitions that are bigger than the size threshold and/or hold more than the rows count threshold are reported in the ``system.large_partitions`` table and generate a warning in the Scylla log (refer to :doc:`log </getting-started/logging/>`).
 
-For example (set to 500MB):
+For example (set to 500MB / 50000, respectively):
 
 .. code-block:: console
 
    compaction_large_partition_warning_threshold_mb: 500
+   compaction_rows_count_warning_threshold: 50000
 
 
 Storing
@@ -108,6 +113,7 @@ Large partitions are stored in a system table with the following schema:
        sstable_name text,
        partition_size bigint,
        partition_key text,
+       rows bigint,
        compaction_time timestamp,
        PRIMARY KEY ((keyspace_name, table_name), sstable_name, partition_size, partition_key)
    ) WITH CLUSTERING ORDER BY (sstable_name ASC, partition_size DESC, partition_key ASC)

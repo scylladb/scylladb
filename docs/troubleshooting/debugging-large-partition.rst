@@ -17,12 +17,11 @@ Any of the following:
 
      seastar_memory - oversized allocation: 2842624 bytes, please report
 
-* A warning of "too many rows" is issued when writing to a table (usually happens during a compaction):
+* A warning of "Writing large (partition|row|cell)" is issued when writing to a table (usually happens during a compaction):
 
   .. code-block:: none
 
-     Nov 26 07:36:29 hostname scylla[24314]:  [shard 9] large_partition - Writing a partition with too many rows [Some_KS/Some_table:PK_VAL1] (211663 rows)
-     Nov 26 08:36:19 hostname scylla[24314]:  [shard 34] large_partition - Writing a partition with too many rows [Some_KS/Some_table:PK_VAL2] (171994 rows)
+     WARN  2022-09-22 17:33:11,075 [shard 1]large_data - Writing large partition Some_KS/Some_table: PK[/CK[/COL]] (SIZE bytes) to SSTABLE_NAME
 
   In this case, refer to :ref:`Troubleshooting Large Partition Tables <large-partition-table-configure>` for more information.
 
