@@ -50,8 +50,7 @@ duration and applies it as a timeout specific to a single particular query.
 The parameter is supported for prepared statements as well.
 The parameter acts as part of the USING clause, and thus can be combined with other
 parameters - like timestamps and time-to-live.
-In order for this parameter to be effective for read operations as well, it's possible
-to attach USING clause to SELECT statements.
+For example, one can use ``USING TIMEOUT ... and TTL ...`` to specify both a non-default timeout and a ttl.
 
 Examples:
 ```cql
@@ -59,6 +58,9 @@ Examples:
 ```
 ```cql
 	INSERT INTO t(a,b,c) VALUES (1,2,3) USING TIMESTAMP 42 AND TIMEOUT 50ms;
+```
+```cql
+	TRUNCATE TABLE t USING TIMEOUT 5m;
 ```
 
 Working with prepared statements works as usual - the timeout parameter can be
@@ -70,6 +72,12 @@ explicitly defined or provided as a marker:
 ```cql
 	INSERT INTO t(a,b,c) VALUES (?,?,?) USING TIMESTAMP 42 AND TIMEOUT 50ms;
 ```
+
+The timeout parameter can be applied to the following data modification queries:
+INSERT, UPDATE, DELETE, PRUNE MATERIALIZED VIEW, BATCH,
+and to the TRUNCATE data definition query.
+
+In addition, the timeout parameter can be applied to SELECT queries as well.
 
 ## Keyspace storage options
 

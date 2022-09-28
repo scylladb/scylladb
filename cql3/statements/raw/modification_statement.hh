@@ -39,7 +39,7 @@ private:
     const bool _if_not_exists;
     const bool _if_exists;
 protected:
-    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
+    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions = {}, bool if_not_exists = false, bool if_exists = false);
 
 public:
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;

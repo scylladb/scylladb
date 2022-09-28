@@ -6,7 +6,8 @@
 
 from util import new_test_keyspace, unique_name, unique_key_int
 import pytest
-from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout
+from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException
+from cassandra.cluster import NoHostAvailable
 from cassandra.util import Duration
 
 def r(regex):
@@ -146,9 +147,32 @@ def test_invalid_timeout(scylla_only, cql, table1):
     # Scylla only supports ms granularity for timeouts
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s5ns")
     invalid(f"SELECT * FROM {table} USING TIMEOUT -10ms")
+
+    def invalid_syntax(stmt):
+        with pytest.raises(SyntaxException):
+            cql.execute(stmt)
+
     # For select statements, it's not allowed to specify timestamp or ttl,
     # since they bear no meaning
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
-    invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
-    invalid (f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
+    invalid_syntax(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
+    invalid_syntax(f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")
+
+def test_truncate_using_timeout(scylla_only, cql, table1):
+    table = table1
+    key = unique_key_int()
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1)")
+    res = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 1"))
+    assert len(res) == 1
+    cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 1000s")
+    res = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 1"))
+    assert len(res) == 0
+    with pytest.raises(NoHostAvailable):
+        cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 0s")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"TRUNCATE TABLE {table} USING TTL 1")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"TRUNCATE TABLE {table} USING TIMESTAMP 123456789")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 1h AND TTL 42")
