@@ -1,11 +1,16 @@
 OS Support by Platform and Version
 ==================================
 
-The following matrix shows which Operating Systems, Platforms, and Containers / Instance Engines are supported with which versions of Scylla.
+The following matrix shows which Linux Distribution, Containers, and images are supported with which versions of ScyllaDB.
 
-Scylla requires a fix to the XFS append introduced in kernel 3.15 (back-ported to 3.10 in RHEL/CentOS).
-Scylla will not run with earlier kernel versions. Details in `Scylla issue 885 <https://github.com/scylladb/scylla/issues/885>`_.
+Where *Supported* in this scope means:
 
+- A binary installation package is available to `download <https://www.scylladb.com/download/>`_.
+- The download and install procedures are tested as part of ScyllaDB release process for each version.
+- An automated install is included from :doc:`ScyllaDB Web Installer for Linux tool </getting-started/install-scylla/scylla-web-installer.html>` (for latest versions)
+
+You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-prerequisites>`_ on other x86_64 or aarch64 platforms, without any guarantees.
+  
 .. note::
 
    Scylla Open Source supports x86_64 for all versions and aarch64 starting from Scylla 4.6 and nightly build. In particular, aarch64 support includes AWS EC2 Graviton.
@@ -23,7 +28,7 @@ Scylla Open Source
 
 
 +--------------------------+----------------------------------+-----------------------------+---------+-------+
-| Platform                 |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
+| Linux Distribution       |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
 |                          |                                  |                             | RHEL    | RHEL  |
 +--------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 | Scylla Version / Version | 14.04| 16.04| 18.04|20.04 |22.04 | 8    | 9    |  10   |  11   | 7       |   8   |
@@ -67,7 +72,7 @@ Scylla Enterprise
    For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
 
 +--------------------------+-----------------------------------+---------------------------+--------+-------+
-| Platform                 |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
+| Linux Distribution       |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
 |                          |                                   |                           | RHEL   | RHEL  |
 +--------------------------+------+------+------+------+-------+------+------+------+------+--------+-------+
 | Scylla Version / Version | 14.04| 16.04| 18.04| 20.04| 22.04 | 8    | 9    | 10   | 11   |  7     | 8     |
