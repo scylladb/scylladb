@@ -168,7 +168,6 @@ def test_gsi_empty_value(test_table_gsi_2):
         test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
 
 # Verify that a GSI is correctly listed in describe_table
-@pytest.mark.xfail(reason="DescribeTable for GSI misses IndexSizeBytes, ItemCount, Projection, IndexStatus")
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     assert 'Table' in desc
@@ -177,15 +176,25 @@ def test_gsi_describe(test_table_gsi_1):
     assert len(gsis) == 1
     gsi = gsis[0]
     assert gsi['IndexName'] == 'hello'
-    assert 'IndexSizeBytes' in gsi     # actual size depends on content
-    assert 'ItemCount' in gsi
     assert gsi['Projection'] == {'ProjectionType': 'ALL'}
-    assert gsi['IndexStatus'] == 'ACTIVE'
     assert gsi['KeySchema'] == [{'KeyType': 'HASH', 'AttributeName': 'c'},
                                 {'KeyType': 'RANGE', 'AttributeName': 'p'}]
     # The index's ARN should look like the table's ARN followed by /index/<indexname>.
     assert gsi['IndexArn'] == desc['Table']['TableArn'] + '/index/hello'
     # TODO: check also ProvisionedThroughput
+
+# In addition to the basic listing of an GSI in DescribeTable tested above,
+# in this test we check additional fields that should appear in each GSI's
+# description.
+@pytest.mark.xfail(reason="issues #7550, #11466, #11471")
+def test_gsi_describe_fields(test_table_gsi_1):
+    desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
+    gsis = desc['Table']['GlobalSecondaryIndexes']
+    assert len(gsis) == 1
+    gsi = gsis[0]
+    assert 'IndexSizeBytes' in gsi    # actual size depends on content
+    assert 'ItemCount' in gsi
+    assert gsi['IndexStatus'] == 'ACTIVE'
 
 # When a GSI's key includes an attribute not in the base table's key, we
 # need to remember to add its type to AttributeDefinitions.
