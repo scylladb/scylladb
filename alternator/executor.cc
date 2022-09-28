@@ -459,6 +459,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
             describe_key_schema(view_entry, *vptr, key_attribute_types);
+            // Add projection type
+            rjson::value projection = rjson::empty_object();
+            rjson::add(projection, "ProjectionType", "ALL");
+            // FIXME: we have to get ProjectionType from the schema when it is added
+            rjson::add(view_entry, "Projection", std::move(projection));
             // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
             rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
             rjson::push_back(index_array, std::move(view_entry));
