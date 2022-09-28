@@ -1087,7 +1087,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     elogger.trace("Updating table {}", request);
 
     static const std::vector<sstring> unsupported = {
-        "AttributeDefinitions", 
         "GlobalSecondaryIndexUpdates", 
         "ProvisionedThroughput",
         "ReplicaUpdates",
