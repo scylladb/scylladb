@@ -329,14 +329,13 @@ class PythonTestSuite(TestSuite):
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-        topology = self.cfg.get("topology", {"class": "simple", "replication_factor": 1})
+        cluster_size = self.cfg.get("cluster_size", 1)
+        pool_size = cfg.get("pool_size", 2)
 
-        self.create_cluster = self.topology_for_class(topology["class"], topology)
+        self.create_cluster = self.get_cluster_factory(cluster_size)
+        self.clusters = Pool(pool_size, self.create_cluster)
 
-        self.clusters = Pool(cfg.get("pool_size", 2), self.create_cluster)
-
-    def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
-
+    def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
         def create_server(cluster_name: str, seeds: List[str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
@@ -365,16 +364,12 @@ class PythonTestSuite(TestSuite):
             self.artifacts.add_exit_artifact(self, server.stop_artifact)
             return server
 
-        if class_name.lower() == "simple":
-            async def create_cluster():
-                cluster = ScyllaCluster(int(cfg["replication_factor"]),
-                                        create_server)
-                await cluster.install_and_start()
-                return cluster
+        async def create_cluster() -> ScyllaCluster:
+            cluster = ScyllaCluster(cluster_size, create_server)
+            await cluster.install_and_start()
+            return cluster
 
-            return create_cluster
-        else:
-            raise RuntimeError("Unsupported topology name")
+        return create_cluster
 
     def build_test_list(self) -> List[str]:
         """For pytest, search for directories recursively"""
