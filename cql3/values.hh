@@ -307,6 +307,7 @@ public:
     friend class raw_value_view;
 
     friend bool operator==(const raw_value& v1, const raw_value& v2);
+    friend std::ostream& operator<<(std::ostream& os, const raw_value& value);
 };
 
 }
