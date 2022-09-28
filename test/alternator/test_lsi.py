@@ -242,6 +242,7 @@ def test_lsi_describe(test_table_lsi_4):
     assert(sorted([lsi['IndexName'] for lsi in lsis]) == ['hello_x1', 'hello_x2', 'hello_x3', 'hello_x4'])
     for lsi in lsis:
         assert lsi['IndexArn'] == desc['Table']['TableArn'] + '/index/' + lsi['IndexName']
+    assert lsi['Projection'] == {'ProjectionType': 'ALL'}
 
 # In addition to the basic listing of an LSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each LSI's
@@ -250,7 +251,7 @@ def test_lsi_describe(test_table_lsi_4):
 # fields, LSIs do not. IndexStatus is not needed because LSIs cannot be
 # added after the base table is created, and ProvisionedThroughput isn't
 # needed because an LSI shares its provisioning with the base table.
-@pytest.mark.xfail(reason="issues #7550, #11466, #11470")
+@pytest.mark.xfail(reason="issues #7550, #11466")
 def test_lsi_describe_fields(test_table_lsi_1):
     desc = test_table_lsi_1.meta.client.describe_table(TableName=test_table_lsi_1.name)
     assert 'Table' in desc
@@ -263,7 +264,6 @@ def test_lsi_describe_fields(test_table_lsi_1):
     assert 'ItemCount' in lsi
     assert not 'IndexStatus' in lsi
     assert not 'ProvisionedThroughput' in lsi
-    assert lsi['Projection'] == {'ProjectionType': 'ALL'}
     assert lsi['KeySchema'] == [{'KeyType': 'HASH', 'AttributeName': 'p'},
                                 {'KeyType': 'RANGE', 'AttributeName': 'b'}]
     # The index's ARN should look like the table's ARN followed by /index/<indexname>.
