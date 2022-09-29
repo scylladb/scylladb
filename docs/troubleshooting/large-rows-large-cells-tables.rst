@@ -31,17 +31,17 @@ For example:
 ================================================  =================================================================================
 Parameter                                         Description
 ================================================  =================================================================================
-keyspace_name                                     The keyspace name that holds the large partition
+keyspace_name                                     The keyspace name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-table_name                                        The table name that holds the large partition
+table_name                                        The table name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-sstable_name                                      The SSTable name that holds the large partition
+sstable_name                                      The SSTable name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
 row_size                                          The size of the row in bytes
 ------------------------------------------------  ---------------------------------------------------------------------------------
-clustering_key                                     The clustering key that holds the large row
+clustering_key                                    The clustering key that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-compaction_time                                   Time when compaction occur
+compaction_time                                   Time when compaction occurred
 ================================================  =================================================================================
 
 * Search within all the large rows for a specific keyspace and or table.
@@ -73,21 +73,21 @@ For example:
 ================================================  =================================================================================
 Parameter                                         Description
 ================================================  =================================================================================
-keyspace_name                                     The keyspace name that holds the large partition
+keyspace_name                                     The keyspace name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-table_name                                        The table name that holds the large partition
+table_name                                        The table name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-sstable_name                                      The SSTable name that holds the large partition
+sstable_name                                      The SSTable name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-cell_size                                         The size of the row, in bytes
+cell_size                                         The size of the cell, in bytes
 ------------------------------------------------  ---------------------------------------------------------------------------------
-clustering_key                                     The clustering key that holds the large row
+clustering_key                                    The clustering key of the row that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
 column_name                                       The column of the large cell 
 ------------------------------------------------  ---------------------------------------------------------------------------------
 collection_elements                               The number of elements in the large collection cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-compaction_time                                   Time when compaction occur
+compaction_time                                   Time when compaction occurred
 ================================================  =================================================================================
 
 * Search within all the large cells for a specific keyspace and or table.
