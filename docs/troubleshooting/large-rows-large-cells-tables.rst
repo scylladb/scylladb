@@ -104,6 +104,7 @@ Configure the detection threshold of large rows and large cells with the corresp
 
 * ``compaction_large_row_warning_threshold_mb`` parameter (default: 10MB).
 * ``compaction_large_cell_warning_threshold_mb`` parameter (default: 1MB).
+* ``compaction_collection_elements_count_warning_threshold`` parameter (default: 10000).
 
 Once the threshold is reached, the relevant information is captured in the ``system.large_rows`` / ``system.large_cells`` tables.
 In addition,  a warning message is logged in the Scylla log (refer to :doc:`logging </getting-started/logging>`).

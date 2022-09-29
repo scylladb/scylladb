@@ -410,6 +410,9 @@ commitlog_total_space_in_mb: -1
 # Log a warning when row number is larger than this value
 # compaction_rows_count_warning_threshold: 100000
 
+# Log a warning when writing a collection containing more elements than this value
+# compaction_collection_elements_count_warning_threshold: 10000
+
 # How long the coordinator should wait for seq or index scans to complete
 # range_request_timeout_in_ms: 10000
 # How long the coordinator should wait for writes to complete
