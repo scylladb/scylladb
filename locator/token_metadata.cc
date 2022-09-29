@@ -101,8 +101,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.update_endpoint(ep, std::move(dr));
+    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
+        _topology.update_endpoint(ep, std::move(dr), pend);
     }
 
     /**
@@ -1031,8 +1031,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
-    _impl->update_topology(ep, std::move(dr));
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
+    _impl->update_topology(ep, std::move(dr), pend);
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
@@ -1243,6 +1243,7 @@ inline future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
     co_await utils::clear_gently(_current_locations);
+    co_await utils::clear_gently(_pending_locations);
     co_return;
 }
 
@@ -1254,11 +1255,23 @@ topology::topology(const topology& other)
         : _dc_endpoints(other._dc_endpoints)
         , _dc_racks(other._dc_racks)
         , _current_locations(other._current_locations)
+        , _pending_locations(other._pending_locations)
 {
 }
 
-void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
+void topology::remove_pending_location(const inet_address& ep) {
+    if (ep != utils::fb_utilities::get_broadcast_address()) {
+        _pending_locations.erase(ep);
+    }
+}
+
+void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend)
 {
+    if (pend) {
+        _pending_locations[ep] = std::move(dr);
+        return;
+    }
+
     auto current = _current_locations.find(ep);
 
     if (current != _current_locations.end()) {
@@ -1271,6 +1284,7 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
     _dc_endpoints[dr.dc].insert(ep);
     _dc_racks[dr.dc][dr.rack].insert(ep);
     _current_locations[ep] = std::move(dr);
+    remove_pending_location(ep);
 }
 
 void topology::remove_endpoint(inet_address ep)
@@ -1278,6 +1292,7 @@ void topology::remove_endpoint(inet_address ep)
     auto cur_dc_rack = _current_locations.find(ep);
 
     if (cur_dc_rack == _current_locations.end()) {
+        remove_pending_location(ep);
         return;
     }
 
@@ -1293,14 +1308,18 @@ void topology::remove_endpoint(inet_address ep)
     _current_locations.erase(cur_dc_rack);
 }
 
-bool topology::has_endpoint(inet_address ep) const
+bool topology::has_endpoint(inet_address ep, pending with_pending) const
 {
-    return _current_locations.contains(ep);
+    return _current_locations.contains(ep) || (with_pending && _pending_locations.contains(ep));
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     if (_current_locations.contains(ep)) {
         return _current_locations.at(ep);
+    }
+
+    if (_pending_locations.contains(ep)) {
+        return _pending_locations.at(ep);
     }
 
     on_internal_error(tlogger, format("Node {} is not in topology", ep));

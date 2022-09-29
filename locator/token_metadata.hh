@@ -52,10 +52,12 @@ public:
 
     future<> clear_gently() noexcept;
 
+    using pending = bool_class<struct pending_tag>;
+
     /**
      * Stores current DC/rack assignment for ep
      */
-    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
+    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend);
 
     /**
      * Removes current DC/rack assignment for ep
@@ -65,7 +67,7 @@ public:
     /**
      * Returns true iff contains given endpoint
      */
-    bool has_endpoint(inet_address) const;
+    bool has_endpoint(inet_address, pending with_pending = pending::no) const;
 
     const std::unordered_map<sstring,
                            std::unordered_set<inet_address>>&
@@ -113,6 +115,7 @@ private:
      * Comparator.compare would
      */
     int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    void remove_pending_location(const inet_address& ep);
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
@@ -127,6 +130,7 @@ private:
 
     /** reverse-lookup map: endpoint -> current known dc/rack assignment */
     std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
+    std::unordered_map<inet_address, endpoint_dc_rack> _pending_locations;
 
     bool _sort_by_proximity = true;
 };
@@ -182,7 +186,7 @@ public:
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
-    void update_topology(inet_address ep, endpoint_dc_rack dr);
+    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend = topology::pending::no);
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
