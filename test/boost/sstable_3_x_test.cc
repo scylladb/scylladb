@@ -5137,7 +5137,7 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
 namespace {
 struct large_row_handler : public db::large_data_handler {
     using callback_t = std::function<void(const schema& s, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, uint64_t row_size)>;
+            const clustering_key_prefix* clustering_key, uint64_t row_size, const column_definition* cdef, uint64_t cell_size)>;
     callback_t callback;
 
     large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, callback_t callback)
@@ -5150,19 +5150,21 @@ struct large_row_handler : public db::large_data_handler {
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
         const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, clustering_key, row_size);
+        callback(*s, partition_key, clustering_key, row_size, nullptr, 0);
         return make_ready_future<>();
     }
 
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const override {
+        const schema_ptr s = sst.get_schema();
+        callback(*s, partition_key, clustering_key, 0, &cdef, cell_size);
         return make_ready_future<>();
     }
 
     virtual future<> record_large_partitions(const sstables::sstable& sst,
         const sstables::key& partition_key, uint64_t partition_size, uint64_t rows_count) const override {
         const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, nullptr, rows_count);
+        callback(*s, partition_key, nullptr, rows_count, nullptr, 0);
         return make_ready_future<>();
     }
 
@@ -5176,7 +5178,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
         std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t row_size) {
+                     const clustering_key_prefix* clustering_key, uint64_t row_size,
+                     const column_definition* cdef, uint64_t cell_size) {
         BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
         BOOST_REQUIRE_LT(i, expected.size());
         BOOST_REQUIRE_GT(row_size, threshold);
@@ -5243,7 +5246,8 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
     bool logged = false;
     auto f = [&logged, &expected, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
-                     const clustering_key_prefix* clustering_key, uint64_t rows_count) {
+                     const clustering_key_prefix* clustering_key, uint64_t rows_count,
+                     const column_definition* cdef, uint64_t cell_size) {
         BOOST_REQUIRE_GT(rows_count, threshold);
         BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
         logged = true;
