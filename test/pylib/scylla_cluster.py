@@ -471,7 +471,6 @@ class ScyllaCluster:
         self.create_server = create_server
         self.running: Dict[str, ScyllaServer] = {}  # started servers
         self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
-        self.removed: Set[str] = set()              # servers stopped and uninstalled (can't return)
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
         # cluster was modified in a way it should not be used in subsequent tests
@@ -606,8 +605,6 @@ class ScyllaCluster:
         if server_id in self.stopped:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"Server {server_id} already stopped")
-        if server_id in self.removed:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} removed")
         if server_id not in self.running:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
@@ -625,8 +622,6 @@ class ScyllaCluster:
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"Server {server_id} already started")
-        if server_id in self.removed:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} removed")
         if server_id not in self.stopped:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
@@ -647,18 +642,7 @@ class ScyllaCluster:
 
     async def server_remove(self, server_id: str) -> ActionReturn:
         """Remove a specified server"""
-        self.is_dirty = True
-        logging.info("Cluster %s removing server %s", self, server_id)
-        if server_id in self.running:
-            server = self.running.pop(server_id)
-            await server.stop_gracefully()
-        elif server_id in self.stopped:
-            server = self.stopped.pop(server_id)
-        else:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
-        await server.uninstall()
-        self.removed.add(server_id)
-        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} removed")
+        raise NotImplementedError
 
     def get_config(self, server_id: str) -> ActionReturn:
         """Get conf/scylla.yaml of the given server as a dictionary.
