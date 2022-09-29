@@ -2290,8 +2290,14 @@ public:
         };
 
         size_t row_count = row_count_dist(_gen);
-        for (size_t i = 0; i < row_count; ++i) {
-            auto ckey = make_random_key();
+
+        std::unordered_set<clustering_key, clustering_key::hashing, clustering_key::equality> keys(
+                0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema));
+        while (keys.size() < row_count) {
+            keys.emplace(make_random_key());
+        }
+
+        for (auto&& ckey : keys) {
             is_continuous continuous = is_continuous(_bool_dist(_gen));
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
