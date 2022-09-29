@@ -18,19 +18,20 @@ namespace db {
 
 nop_large_data_handler::nop_large_data_handler()
     : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
-          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {
+          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {
     // Don't require start() to be called on nop large_data_handler.
     start();
 }
 
-large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
+large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
         : _partition_threshold_bytes(partition_threshold_bytes)
         , _row_threshold_bytes(row_threshold_bytes)
         , _cell_threshold_bytes(cell_threshold_bytes)
         , _rows_count_threshold(rows_count_threshold)
+        , _collection_elements_count_threshold(collection_elements_count_threshold)
 {
-    large_data_logger.debug("partition_threshold_bytes={} row_threshold_bytes={} cell_threshold_bytes={} rows_count_threshold={}",
-        partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold);
+    large_data_logger.debug("partition_threshold_bytes={} row_threshold_bytes={} cell_threshold_bytes={} rows_count_threshold={} collection_elements_count_threshold={}",
+        partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, _collection_elements_count_threshold);
 }
 
 future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) {

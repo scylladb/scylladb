@@ -5142,7 +5142,7 @@ struct large_row_handler : public db::large_data_handler {
 
     large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, uint64_t cell_threshold_bytes, callback_t callback)
         : large_data_handler(std::numeric_limits<uint64_t>::max(), large_rows_threshold, cell_threshold_bytes,
-            rows_count_threshold)
+            rows_count_threshold, std::numeric_limits<uint64_t>::max())
         , callback(std::move(callback)) {
         start();
     }

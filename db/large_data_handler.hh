@@ -54,10 +54,11 @@ private:
     uint64_t _row_threshold_bytes;
     uint64_t _cell_threshold_bytes;
     uint64_t _rows_count_threshold;
+    uint64_t _collection_elements_count_threshold;
     mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold);
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
@@ -113,6 +114,9 @@ public:
     uint64_t get_rows_count_threshold() const noexcept {
         return _rows_count_threshold;
     }
+    uint64_t get_collection_elements_count_threshold() const noexcept {
+        return _collection_elements_count_threshold;
+    }
 
     static sstring sst_filename(const sstables::sstable& sst);
 
@@ -126,8 +130,8 @@ protected:
 
 class cql_table_large_data_handler : public large_data_handler {
 public:
-    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
-        : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold) {}
+    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
+        : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, collection_elements_count_threshold) {}
 
 protected:
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows) const override;
