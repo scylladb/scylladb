@@ -16,7 +16,7 @@ import stat
 import distro
 from pathlib import Path
 from scylla_util import *
-from subprocess import run
+from subprocess import run, SubprocessError
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -159,10 +159,6 @@ if __name__ == '__main__':
         raise Exception(f'Failed to get UUID of {fsdev}')
 
     uuidpath = f'/dev/disk/by-uuid/{uuid}'
-    if not os.path.exists(uuidpath):
-        raise Exception(f'{uuidpath} is not found')
-    if not stat.S_ISBLK(os.stat(uuidpath).st_mode):
-        raise Exception(f'{uuidpath} is not block device')
 
     after = 'local-fs.target'
     wants = ''
@@ -202,8 +198,16 @@ WantedBy=multi-user.target
     systemd_unit.reload()
     if args.raid_level != '0':
         md_service.start()
-    mount = systemd_unit(mntunit_bn)
-    mount.start()
+    try:
+        mount = systemd_unit(mntunit_bn)
+        mount.start()
+    except SubprocessError as e:
+        if not os.path.exists(uuidpath):
+            print(f'\nERROR: {uuidpath} is not found\n')
+        elif not stat.S_ISBLK(os.stat(uuidpath).st_mode):
+            print(f'\nERROR: {uuidpath} is not block device\n')
+        raise e
+
     if args.enable_on_nextboot:
         mount.enable()
     uid = pwd.getpwnam('scylla').pw_uid
