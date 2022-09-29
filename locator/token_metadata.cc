@@ -743,11 +743,18 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         return;
     }
     std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
+    std::unordered_set<inet_address> endpoints;
     for (const auto& x : new_pending_ranges) {
         if (can_yield) {
             seastar::thread::maybe_yield();
         }
         map[x.first].emplace(x.second);
+        auto ins = endpoints.emplace(x.second);
+        if (ins.second) { // insertion took place, i.e. -- new endpoint
+            if (!_topology.has_endpoint(x.second, topology::pending::yes)) {
+                on_internal_error(tlogger, format("token_metadata_impl: {} must be member or pending to set pending tokens", x.second));
+            }
+        }
     }
 
     // construct a interval map to speed up the search
