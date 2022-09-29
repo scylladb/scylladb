@@ -31,10 +31,8 @@
 #include "replica/database.hh"
 #include "cell_locking.hh"
 #include "compaction/compaction_manager.hh"
-#include "db/large_data_handler.hh"
 #include "sstables/sstables_manager.hh"
 
-extern db::nop_large_data_handler nop_lp_handler;
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 

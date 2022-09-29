@@ -9,6 +9,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "db/config.hh"
+#include "db/large_data_handler.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
