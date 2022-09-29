@@ -471,7 +471,7 @@ class ScyllaCluster:
         self.create_server = create_server
         self.running: Dict[str, ScyllaServer] = {}  # started servers
         self.stopped: Dict[str, ScyllaServer] = {}  # servers no longer running but present
-        self.removed: Set[str] = set()              # servers stopped and uninstalled (can't return)
+        self.removed: Dict[str, ScyllaServer] = {}  # non-reusable stopped servers
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
         # cluster was modified in a way it should not be used in subsequent tests
@@ -499,7 +499,7 @@ class ScyllaCluster:
         self.is_dirty = True
         logging.info("Uninstalling cluster")
         await self.stop()
-        await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
+        await asyncio.gather(*(s.uninstall() for s in itertools.chain(self.stopped.values(), self.removed.values())))
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
@@ -531,8 +531,9 @@ class ScyllaCluster:
         server = self.create_server(self.name, self._seeds())
         self.is_dirty = True
         try:
-            logging.info("Cluster %s adding server", server)
+            logging.info("Cluster %s adding new server", self)
             await server.install_and_start()
+            logging.info("Cluster %s added server %s", self, server.host)
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(exc))
@@ -656,8 +657,7 @@ class ScyllaCluster:
             server = self.stopped.pop(server_id)
         else:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
-        await server.uninstall()
-        self.removed.add(server_id)
+        self.removed[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} removed")
 
     def get_config(self, server_id: str) -> ActionReturn:
