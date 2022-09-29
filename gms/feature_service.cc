@@ -123,6 +123,7 @@ std::set<std::string_view> feature_service::supported_feature_set() {
         "CORRECT_STATIC_COMPACT_IN_MC"sv,
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
+        "LARGE_COLLECTION_DETECTION"sv,
     };
 
     for (auto& [name, f_ref] : _registered_features) {
