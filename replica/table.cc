@@ -606,6 +606,8 @@ table::seal_active_memtable(flush_permit&& flush_permit) noexcept {
                     allowed_retries--;
                 } else if (auto ep = try_catch<std::system_error>(ex)) {
                     allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
+                } else if (auto ep = try_catch<storage_io_error>(ex)) {
+                    allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
                 } else {
                     allowed_retries = 0;
                 }
