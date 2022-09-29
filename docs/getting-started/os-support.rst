@@ -3,11 +3,11 @@ OS Support by Platform and Version
 
 The following matrix shows which Linux Distribution, Containers, and images are supported with which versions of ScyllaDB.
 
-Where *Supported* in this scope means:
+Where *supported* in this scope means:
 
 - A binary installation package is available to `download <https://www.scylladb.com/download/>`_.
 - The download and install procedures are tested as part of ScyllaDB release process for each version.
-- An automated install is included from :doc:`ScyllaDB Web Installer for Linux tool </getting-started/install-scylla/scylla-web-installer.html>` (for latest versions)
+- An automated install is included from :doc:`ScyllaDB Web Installer for Linux tool </getting-started/install-scylla/scylla-web-installer>` (for latest versions)
 
 You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-prerequisites>`_ on other x86_64 or aarch64 platforms, without any guarantees.
   
@@ -28,7 +28,7 @@ Scylla Open Source
 
 
 +--------------------------+----------------------------------+-----------------------------+---------+-------+
-| Linux Distribution       |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
+| Linux Distributions      |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
 |                          |                                  |                             | RHEL    | RHEL  |
 +--------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 | Scylla Version / Version | 14.04| 16.04| 18.04|20.04 |22.04 | 8    | 9    |  10   |  11   | 7       |   8   |
@@ -72,7 +72,7 @@ Scylla Enterprise
    For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
 
 +--------------------------+-----------------------------------+---------------------------+--------+-------+
-| Linux Distribution       |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
+| Linux Distributions      |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
 |                          |                                   |                           | RHEL   | RHEL  |
 +--------------------------+------+------+------+------+-------+------+------+------+------+--------+-------+
 | Scylla Version / Version | 14.04| 16.04| 18.04| 20.04| 22.04 | 8    | 9    | 10   | 11   |  7     | 8     |
