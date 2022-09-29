@@ -11,6 +11,7 @@
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
+#include "gms/feature_service.hh"
 
 static logging::logger large_data_logger("large_data");
 
@@ -103,9 +104,16 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
     return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
 }
 
-cql_table_large_data_handler::cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
+cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service& feat,
+        uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
     : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, collection_elements_count_threshold)
-    {}
+    , _feat(feat)
+{
+    _feat.large_collection_detection.when_enabled([this] {
+        large_data_logger.debug("Enabled large_collection detection");
+        // FIXME: set the record_large_cell function
+    });
+}
 
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,

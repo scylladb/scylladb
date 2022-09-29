@@ -129,8 +129,10 @@ protected:
 };
 
 class cql_table_large_data_handler : public large_data_handler {
+    gms::feature_service& _feat;
 public:
-    explicit cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
+    explicit cql_table_large_data_handler(gms::feature_service& feat,
+            uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
 
 protected:
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows) const override;
