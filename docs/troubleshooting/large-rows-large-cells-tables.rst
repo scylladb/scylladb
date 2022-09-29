@@ -65,9 +65,9 @@ For example:
     > SELECT * FROM system.large_cells;
 
 
-    keyspace_name | table_name | sstable_name     | cell_size | partition_key | clustering_key | column_name | compaction_time
-    --------------+------------+------------------+-----------+---------------+----------------+-------------+---------------------------------
-    mykeyspace    |         gr | md-1-big-Data.db |   1206115 |             1 |              1 |        link | 2019-06-14 13:03:24.034000+0000
+    keyspace_name | table_name | sstable_name     | cell_size | partition_key | clustering_key | column_name | collection_elements | compaction_time                
+    --------------+------------+------------------+-----------+---------------+----------------+-------------+---------------------+---------------------------------
+    mykeyspace    |         gr | md-1-big-Data.db |   1206115 |             1 |              1 |        link |               17042 | 2019-06-14 13:03:24.034000+0000
    
   
 ================================================  =================================================================================
@@ -84,6 +84,8 @@ cell_size                                         The size of the row, in bytes
 clustering_key                                     The clustering key that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
 column_name                                       The column of the large cell 
+------------------------------------------------  ---------------------------------------------------------------------------------
+collection_elements                               The number of elements in the large collection cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
 compaction_time                                   Time when compaction occur
 ================================================  =================================================================================
@@ -149,6 +151,7 @@ Large rows and large cells are stored in system tables with the following schema
       partition_key text,
       clustering_key text,
       column_name text,
+      collection_elements bigint,
       compaction_time timestamp,
       PRIMARY KEY ((keyspace_name, table_name), sstable_name, cell_size, partition_key, clustering_key, column_name)
   ) WITH CLUSTERING ORDER BY (sstable_name ASC, cell_size DESC, partition_key ASC, clustering_key ASC, column_name ASC)
