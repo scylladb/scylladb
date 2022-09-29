@@ -686,7 +686,7 @@ private:
     void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const uint64_t row_size);
     void maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size);
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements);
 
     // Writes single atomic cell
     void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell, const column_definition& cdef,
@@ -991,13 +991,23 @@ void writer::maybe_record_large_rows(const sstables::sstable& sst, const sstable
 }
 
 void writer::maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
-    auto& entry = _large_data_stats.map.at(large_data_type::cell_size);
-    if (entry.max_value < cell_size) {
-        entry.max_value = cell_size;
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
+    auto& cell_size_entry = _large_data_stats.map.at(large_data_type::cell_size);
+    if (cell_size_entry.max_value < cell_size) {
+        cell_size_entry.max_value = cell_size;
     }
+    auto& collection_elements_entry = _large_data_stats.map.at(large_data_type::elements_in_collection);
+    if (collection_elements_entry.max_value < collection_elements) {
+        collection_elements_entry.max_value = collection_elements;
+    }
+    // FIXME: pass collection_elements to large_data_handler
     if (_sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, cell_size).get0()) {
-        entry.above_threshold++;
+        if (cell_size > cell_size_entry.threshold) {
+            cell_size_entry.above_threshold++;
+        }
+        if (collection_elements > collection_elements_entry.threshold) {
+            collection_elements_entry.above_threshold++;
+        }
     };
 }
 
@@ -1067,7 +1077,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
     // We record collections in write_collection, so ignore them here
     if (cdef.is_atomic()) {
         uint64_t size = writer.size() - current_pos;
-        maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size);
+        maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size, 0);
     }
 
     _c_stats.update_timestamp(cell.timestamp());
@@ -1118,23 +1128,25 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         const column_definition& cdef, collection_mutation_view collection, const row_time_properties& properties,
         bool has_complex_deletion) {
     uint64_t current_pos = writer.size();
+    uint64_t collection_elements = 0;
     collection.with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
         if (has_complex_deletion) {
             write_delta_deletion_time(writer, mview.tomb);
             _c_stats.update(mview.tomb);
         }
 
-        write_vint(writer, mview.cells.size());
+        collection_elements = mview.cells.size();
+        write_vint(writer, collection_elements);
         if (!mview.cells.empty()) {
             ++_c_stats.column_count;
         }
         for (const auto& [cell_path, cell]: mview.cells) {
-            ++_c_stats.cells_count;
             write_cell(writer, clustering_key, cell, cdef, properties, cell_path);
         }
+        _c_stats.cells_count += collection_elements;
     });
     uint64_t size = writer.size() - current_pos;
-    maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size);
+    maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size, collection_elements);
 }
 
 void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind, const row& row_body,
