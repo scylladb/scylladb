@@ -517,7 +517,13 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
                     return execute_add_entry(leader, command, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    return _rpc->send_add_entry(leader, command);
+                    try {
+                        return _rpc->send_add_entry(leader, command);
+                    } catch (const raft::transport_error&) {
+                        logger.trace("[{}] send_add_entry on {} resulted in raft::transport_error; "
+                                     "rethrow as commit_status_unknown", _id, leader);
+                        throw raft::commit_status_unknown();
+                    }
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
@@ -616,7 +622,13 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
                     return execute_modify_config(leader, add, del, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    return _rpc->send_modify_config(leader, add, del);
+                    try {
+                        return _rpc->send_modify_config(leader, add, del);
+                    } catch (const raft::transport_error&) {
+                        logger.trace("[{}] send_modify_config on {} resulted in raft::transport_error; "
+                                     "rethrow as commit_status_unknown", _id, leader);
+                        throw raft::commit_status_unknown();
+                    }
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
@@ -1189,8 +1201,8 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             bool need_retry = false;
             try {
                 res = co_await get_read_idx(leader, as);
-            } catch (const intermittent_connection_error& e) {
-                logger.trace("[{}] read_barrier on {} resulted in raft::intermittent_connection_error; retrying", _id, leader);
+            } catch (const transport_error& e) {
+                logger.trace("[{}] read_barrier on {} resulted in raft::transport_error; retrying", _id, leader);
                 need_retry = true;
             }
             if (need_retry) {

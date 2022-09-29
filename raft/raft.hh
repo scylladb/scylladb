@@ -293,8 +293,10 @@ struct state_machine_error: public error {
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
 };
 
-struct intermittent_connection_error: public error {
-    intermittent_connection_error() : error("Intermittent connection error") {}
+// Should be thrown by the rpc implementation to signal that the connection to the peer has been lost.
+// It's unspecified if any actions caused by rpc were actually performed on the target node.
+struct transport_error: public error {
+    transport_error() : error("Transport error") {}
 };
 
 struct command_is_too_big_error: public error {
@@ -576,7 +578,7 @@ public:
     virtual void send_read_quorum_reply(server_id id, const read_quorum_reply& read_quorum_reply) = 0;
 
     // Forward a read barrier request to the leader.
-    // Should throw a raft::intermittent_connection_error if the target host is unreachable.
+    // Should throw a raft::transport_error if the target host is unreachable.
     // In this case, the call will be retried after some time,
     // possibly with a different server_id if the leader has changed by then.
     virtual future<read_barrier_reply> execute_read_barrier_on_leader(server_id id) = 0;
@@ -590,6 +592,7 @@ public:
 
     // Send a configuration change request to the leader. Block until the
     // leader replies.
+    // Should throw a raft::transport_error if the target host is unreachable.
     virtual future<add_entry_reply> send_modify_config(server_id id,
         const std::vector<config_member>& add,
         const std::vector<server_id>& del) = 0;
