@@ -2347,18 +2347,23 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
     });
 }
 
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, bool skip_flush) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, db::snapshot_ctl::snap_views snap_views, bool skip_flush) {
     if (!skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
     }
     auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
     co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
+    if (snap_views) {
+        for (const auto& vp : table_shards[this_shard_id()]->views()) {
+            co_await snapshot_table_on_all_shards(sharded_db, ks_name, vp->cf_name(), tag, db::snapshot_ctl::snap_views::no, skip_flush);
+        }
+    }
 }
 
-future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), skip_flush] (auto& table_name) {
-        return snapshot_table_on_all_shards(sharded_db, ks_name, std::move(table_name), tag, skip_flush);
+future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_ctl::snap_views snap_views, bool skip_flush) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), snap_views, skip_flush] (auto& table_name) {
+        return snapshot_table_on_all_shards(sharded_db, ks_name, std::move(table_name), tag, snap_views, skip_flush);
     });
 }
 

@@ -1312,7 +1312,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::take_snapshot.set(r, [&ctx, &snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
         apilog.info("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
@@ -1330,7 +1330,13 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 if (keynames.size() > 1) {
                     throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
                 }
-                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
+                for (const auto& table_name : column_families) {
+                    auto& t = ctx.db.local().find_column_family(keynames[0], table_name);
+                    if (t.schema()->is_view()) {
+                        throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
+                    }
+                }
+                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, db::snapshot_ctl::snap_views::yes, sf);
             }
             co_return json_void();
         } catch (...) {
@@ -1400,7 +1406,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
             f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
-                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::skip_flush::no, db::snapshot_ctl::allow_view_snapshots::yes);
+                // We always pass here db::snapshot_ctl::snap_views::no since:
+                // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
+                // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
+                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::snap_views::no, db::snapshot_ctl::skip_flush::no);
             });
         }
 
