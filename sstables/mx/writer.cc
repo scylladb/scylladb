@@ -1000,8 +1000,7 @@ void writer::maybe_record_large_cells(const sstables::sstable& sst, const sstabl
     if (collection_elements_entry.max_value < collection_elements) {
         collection_elements_entry.max_value = collection_elements;
     }
-    // FIXME: pass collection_elements to large_data_handler
-    if (_sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, cell_size).get0()) {
+    if (_sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, cell_size, collection_elements).get0()) {
         if (cell_size > cell_size_entry.threshold) {
             cell_size_entry.above_threshold++;
         }

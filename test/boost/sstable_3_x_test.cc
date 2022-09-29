@@ -5155,7 +5155,7 @@ struct large_row_handler : public db::large_data_handler {
     }
 
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const override {
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const override {
         const schema_ptr s = sst.get_schema();
         callback(*s, partition_key, clustering_key, 0, &cdef, cell_size);
         return make_ready_future<>();

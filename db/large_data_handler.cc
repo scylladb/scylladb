@@ -140,7 +140,7 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
 }
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const {
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
     auto column_name = cdef.name_as_text();
     std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
     static const std::vector<sstring> extra_fields{"clustering_key", "column_name"};
