@@ -1152,10 +1152,18 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     bool replacing_pending_ranges = _replacing_nodes_pending_ranges_updater.contains(endpoint);
     if (replacing_pending_ranges) {
         _replacing_nodes_pending_ranges_updater.erase(endpoint);
-        slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
+    }
+
+    if (!is_member || replacing_pending_ranges) {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
+        if (replacing_pending_ranges) {
+            slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
+            co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
+        }
+        if (!is_member) {
+            tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::topology::pending::yes);
+        }
         co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
