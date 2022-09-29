@@ -1044,15 +1044,13 @@ clustering_interval_set mutation_partition_v2::get_continuity(const schema& s, i
     auto prev_pos = position_in_partition::before_all_clustered_rows();
     while (i != _rows.end()) {
         if (i->continuous() == cont) {
-            result.add(s, position_range(std::move(prev_pos), position_in_partition(i->position())));
+            result.add(s, position_range(std::move(prev_pos), position_in_partition::before_key(i->position())));
         }
-        if (i->position().is_clustering_row() && bool(i->dummy()) == !bool(cont)) {
-            result.add(s, position_range(position_in_partition(i->position()),
-                position_in_partition::after_key(s, i->position().key())));
+        if (i->position().is_clustering_row() && cont) {
+            result.add(s, position_range(position_in_partition::before_key(i->position()),
+                                         position_in_partition::after_key(s, i->position())));
         }
-        prev_pos = i->position().is_clustering_row()
-            ? position_in_partition::after_key(s, i->position().key())
-            : position_in_partition(i->position());
+        prev_pos = position_in_partition::after_key(s, i->position());
         ++i;
     }
     if (cont) {
