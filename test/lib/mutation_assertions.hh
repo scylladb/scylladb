@@ -13,6 +13,7 @@
 #include "mutation.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "log.hh"
+#include "clustering_interval_set.hh"
 
 extern logging::logger testlog;
 
@@ -84,7 +85,10 @@ public:
 
     mutation_partition_assertion& has_same_continuity(const mutation_partition& other) {
         if (!_m.equal_continuity(*_schema, other)) {
-            BOOST_FAIL(format("Continuity doesn't match: {}\n ...and: {}", mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
+            auto expected = other.get_continuity(*_schema, is_continuous::yes);
+            auto got = _m.get_continuity(*_schema, is_continuous::yes);
+            BOOST_FAIL(format("Continuity doesn't match, expected: {}\nbut got: {}, mutation before: {}\n ...and after: {}",
+                              expected, got, mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
