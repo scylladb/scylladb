@@ -36,12 +36,10 @@
 #include "schema_fwd.hh"
 #include "db/view/view.hh"
 #include "db/snapshot-ctl.hh"
-#include "gms/feature.hh"
 #include "memtable.hh"
 #include "row_cache.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
-#include "sstables/sstable_set.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
 #include "db/view/view_stats.hh"
@@ -53,20 +51,16 @@
 #include "reader_concurrency_semaphore.hh"
 #include "db/timeout_clock.hh"
 #include "querier.hh"
-#include "mutation_query.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
-#include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
 #include "db/rate_limiter.hh"
-#include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_manager.hh"
@@ -96,6 +90,7 @@ class compaction_descriptor;
 class compaction_completion_desc;
 class sstables_manager;
 class compaction_data;
+class sstable_set;
 
 }
 
