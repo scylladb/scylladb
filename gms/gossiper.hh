@@ -632,7 +632,10 @@ public:
         future<> update_generation_number(int64_t n);
 
         direct_fd_pinger(gossiper& g) : _gossiper(g) {}
+
     public:
+        direct_fd_pinger(const direct_fd_pinger&) = delete;
+
         // Allocate a new endpoint_id for `addr`, or if one already exists, return it.
         // Call only on shard 0.
         direct_failure_detector::pinger::endpoint_id allocate_id(gms::inet_address addr);
