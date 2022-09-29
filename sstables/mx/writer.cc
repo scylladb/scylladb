@@ -17,6 +17,7 @@
 #include "db/config.hh"
 #include "atomic_cell.hh"
 #include "utils/exceptions.hh"
+#include "db/large_data_handler.hh"
 
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>

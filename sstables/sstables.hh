@@ -39,7 +39,6 @@
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
 #include "sstable_version.hh"
-#include "db/large_data_handler.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -56,6 +55,10 @@
 
 class sstable_assertions;
 class cached_file;
+
+namespace db {
+class large_data_handler;
+}
 
 namespace sstables {
 
