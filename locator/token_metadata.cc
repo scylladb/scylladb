@@ -1299,7 +1299,11 @@ bool topology::has_endpoint(inet_address ep) const
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
-    return _current_locations.at(ep);
+    if (_current_locations.contains(ep)) {
+        return _current_locations.at(ep);
+    }
+
+    on_internal_error(tlogger, format("Node {} is not in topology", ep));
 }
 
 // FIXME -- both methods below should rather return data from the
