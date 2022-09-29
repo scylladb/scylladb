@@ -21,13 +21,13 @@ namespace service {
 logging::logger rslog("raft_group_registry");
 
 class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
-    gms::gossiper::direct_fd_pinger _fd_pinger;
+    gms::gossiper::direct_fd_pinger& _fd_pinger;
     raft_address_map<>& _address_map;
 
     std::unordered_set<gms::inet_address> _alive_set;
 
 public:
-    direct_fd_proxy(gms::gossiper::direct_fd_pinger fd_pinger, raft_address_map<>& address_map)
+    direct_fd_proxy(gms::gossiper::direct_fd_pinger& fd_pinger, raft_address_map<>& address_map)
             : _fd_pinger(fd_pinger), _address_map(address_map) {
     }
 
