@@ -99,6 +99,10 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--max-networking-io-control-blocks', '100',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
+    '--abort-on-lsa-bad-alloc', '1',
+    '--abort-on-seastar-bad-alloc',
+    '--abort-on-internal-error', '1',
+    '--abort-on-ebadf', '1'
 ]
 
 
