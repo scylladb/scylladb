@@ -1144,10 +1144,12 @@ future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_stat
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
-    if (get_token_metadata().is_member(endpoint)) {
+    bool is_member = get_token_metadata().is_member(endpoint);
+    if (is_member) {
         co_await notify_up(endpoint);
     }
-    if (_replacing_nodes_pending_ranges_updater.contains(endpoint)) {
+    bool replacing_pending_ranges = _replacing_nodes_pending_ranges_updater.contains(endpoint);
+    if (replacing_pending_ranges) {
         _replacing_nodes_pending_ranges_updater.erase(endpoint);
         slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
         auto tmlock = co_await get_token_metadata_lock();
