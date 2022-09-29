@@ -130,6 +130,9 @@ protected:
 
 class cql_table_large_data_handler : public large_data_handler {
     gms::feature_service& _feat;
+    std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items)> _record_large_cells;
+    std::optional<std::any> _feat_listener;
 public:
     explicit cql_table_large_data_handler(gms::feature_service& feat,
             uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
@@ -140,6 +143,12 @@ protected:
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const override;
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
+
+private:
+    future<> internal_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items) const;
+    future<> internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items) const;
 };
 
 class nop_large_data_handler : public large_data_handler {

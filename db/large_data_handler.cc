@@ -96,7 +96,7 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
         });
     }
     future<> large_cells = make_ready_future<>();
-    if (above_threshold(ldt::cell_size)) {
+    if (above_threshold(ldt::cell_size) || above_threshold(ldt::elements_in_collection)) {
         large_cells = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_CELLS);
         });
@@ -108,12 +108,16 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
         uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
     : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, collection_elements_count_threshold)
     , _feat(feat)
-{
-    _feat.large_collection_detection.when_enabled([this] {
+    , _record_large_cells([this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
+        return internal_record_large_cells(sst, pk, ck, cdef, cell_size, collection_elements);
+    })
+    , _feat_listener(_feat.large_collection_detection.when_enabled([this] {
         large_data_logger.debug("Enabled large_collection detection");
-        // FIXME: set the record_large_cell function
-    });
-}
+        _record_large_cells = [this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
+            return internal_record_large_cells_and_collections(sst, pk, ck, cdef, cell_size, collection_elements);
+        };
+    }))
+{}
 
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
@@ -153,6 +157,11 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
+    return _record_large_cells(sst, partition_key, clustering_key, cdef, cell_size, collection_elements);
+}
+
+future<> cql_table_large_data_handler::internal_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
     auto column_name = cdef.name_as_text();
     std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
     static const std::vector<sstring> extra_fields{"clustering_key", "column_name"};
@@ -163,6 +172,21 @@ future<> cql_table_large_data_handler::record_large_cells(const sstables::sstabl
     } else {
         auto desc = format("static {}", cell_type);
         return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name);
+    }
+}
+
+future<> cql_table_large_data_handler::internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
+    auto column_name = cdef.name_as_text();
+    std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
+    static const std::vector<sstring> extra_fields{"clustering_key", "column_name", "collection_elements"};
+    if (clustering_key) {
+        const schema &s = *sst.get_schema();
+        auto ck_str = key_to_str(*clustering_key, s);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("/{}/{}", ck_str, column_name), extra_fields, ck_str, column_name, data_value((int64_t)collection_elements));
+    } else {
+        auto desc = format("static {}", cell_type);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name, data_value((int64_t)collection_elements));
     }
 }
 
