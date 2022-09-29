@@ -103,6 +103,10 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
     return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
 }
 
+cql_table_large_data_handler::cql_table_large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
+    : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, collection_elements_count_threshold)
+    {}
+
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
         std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) {
