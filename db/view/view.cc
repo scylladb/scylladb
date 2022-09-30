@@ -2254,17 +2254,20 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto consumer = compact_for_query_v2<view_builder::consumer>(
+    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
             *step.reader.schema(),
             now,
             step.pslice,
             batch_size,
-            query::max_partitions,
-            view_builder::consumer{*this, step, now});
-    if (auto mfp = step.reader.peek().get(); mfp && !mfp->is_partition_start()) {
-        consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
-    }
+            query::max_partitions);
+    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
+    if (auto ds = std::move(*compaction_state).detach_state()) {
+        if (ds->current_tombstone) {
+            step.reader.unpop_mutation_fragment(mutation_fragment_v2(*step.reader.schema(), step.reader.permit(), std::move(*ds->current_tombstone)));
+        }
+        step.reader.unpop_mutation_fragment(mutation_fragment_v2(*step.reader.schema(), step.reader.permit(), std::move(ds->partition_start)));
+    }
 
     _as.check();
 
