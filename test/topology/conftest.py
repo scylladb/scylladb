@@ -159,9 +159,10 @@ async def manager(request, manager_internal):
     """Per test fixture to notify Manager client object when tests begin so it can
     perform checks for cluster state.
     """
-    await manager_internal.before_test(request.node.name)
+    test_case_name = request.node.name
+    await manager_internal.before_test(test_case_name)
     yield manager_internal
-    await manager_internal.after_test(request.node.name)
+    await manager_internal.after_test(test_case_name)
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object

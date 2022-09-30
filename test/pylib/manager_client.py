@@ -74,13 +74,13 @@ class ManagerClient():
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
-    async def before_test(self, test_name: str) -> None:
+    async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
-        logger.debug("before_test for %s", test_name)
+        logger.debug("before_test for %s", test_case_name)
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
-        resp = await self._get(f"/cluster/before-test/{test_name}")
+        resp = await self._get(f"/cluster/before-test/{test_case_name}")
         if resp.status != 200:
             raise RuntimeError(f"Failed before test check {await resp.text()}")
         if self.cql is None:
@@ -88,10 +88,10 @@ class ManagerClient():
             # await self._wait_for_cluster()
             await self.driver_connect()  # Connect driver to new cluster
 
-    async def after_test(self, test_name: str) -> None:
+    async def after_test(self, test_case_name: str) -> None:
         """Tell harness this test finished"""
-        logger.debug("after_test for %s", test_name)
-        await self._get(f"/cluster/after-test/{test_name}")
+        logger.debug("after_test for %s", test_case_name)
+        await self._get(f"/cluster/after-test/{test_case_name}")
 
     async def _get(self, resource: str) -> aiohttp.ClientResponse:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html

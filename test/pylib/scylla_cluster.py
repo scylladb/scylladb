@@ -703,12 +703,12 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self, test_name: str) -> None:
+    async def _before_test(self, test_case_name: str) -> None:
         if self.cluster.is_dirty:
             await self.clusters.steal()
             await self.cluster.stop()
             await self._get_cluster()
-        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_case_name)
         self.cluster.before_test(self.test_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
@@ -741,8 +741,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
         self.app.router.add_get('/cluster/servers', self._cluster_servers)
-        self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
-        self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
+        self.app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
+        self.app.router.add_get('/cluster/after-test/{test_case_name}', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
         self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
         self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
@@ -778,13 +778,13 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running))}")
 
     async def _before_test_req(self, _request) -> aiohttp.web.Response:
-        await self._before_test(_request.match_info['test_name'])
+        await self._before_test(_request.match_info['test_case_name'])
         return aiohttp.web.Response(text="OK")
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
-        test_name = _request.match_info['test_name']
+        test_case_name = _request.match_info['test_case_name']
         assert self.cluster is not None
-        self.cluster.after_test(test_name)
+        self.cluster.after_test(test_case_name)
         self.is_after_test_ok = True
         return aiohttp.web.Response(text="True")
 
