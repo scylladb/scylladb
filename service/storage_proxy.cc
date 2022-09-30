@@ -54,6 +54,7 @@
 #include <boost/outcome/result.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
+#include "query_ranges_to_vnodes.hh"
 #include "schema_registry.hh"
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>
@@ -68,6 +69,7 @@
 #include "utils/histogram_metrics_helper.hh"
 #include "service/paxos/prepare_summary.hh"
 #include "service/migration_manager.hh"
+#include "service/client_state.hh"
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
