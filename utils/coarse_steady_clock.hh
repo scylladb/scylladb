@@ -32,6 +32,12 @@ struct coarse_steady_clock {
         clock_gettime(CLOCK_MONOTONIC_COARSE, &tp);
         return time_point(std::chrono::seconds(tp.tv_sec) + std::chrono::nanoseconds(tp.tv_nsec));
     };
+
+    static duration get_resolution() noexcept {
+        timespec tp;
+        clock_getres(CLOCK_MONOTONIC_COARSE, &tp);
+        return std::chrono::seconds(tp.tv_sec) + std::chrono::nanoseconds(tp.tv_nsec);
+    }
 };
 
 };

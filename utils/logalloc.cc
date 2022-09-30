@@ -1094,6 +1094,12 @@ public:
 struct reclaim_timer {
     using extra_logger = noncopyable_function<void(log_level)>;
 private:
+    // CLOCK_MONOTONIC_COARSE is not quite what we want -- to look for stalls,
+    // we want thread time, not wall time. Wall time will give false positives
+    // if the process is descheduled.
+    // For this reason Seastar uses CLOCK_THREAD_CPUTIME_ID in its stall detector.
+    // Unfortunately, CLOCK_THREAD_CPUTIME_ID_COARSE does not exist.
+    // It's not an important problem, though.
     using clock = utils::coarse_steady_clock;
     struct stats {
         occupancy_stats region_occupancy;
@@ -1427,7 +1433,28 @@ size_t segment_pool::segments_in_use() const noexcept {
 }
 
 reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_t memory_to_release, size_t segments_to_release, tracker::impl& tracker, segment_pool& segment_pool, extra_logger extra_logs)
-    : _duration_threshold(engine().get_blocked_reactor_notify_ms())
+    : _duration_threshold(
+            // We only report reclaim stalls when their measured duration is
+            // bigger than the threshold by at least one measurement error
+            // (clock resolution). This prevents false positives.
+            //
+            // Explanation for the 10us: The clock value is not always an
+            // integral multiply of its resolution. In the case of coarse
+            // clocks, resolution only describes the frequency of syncs with
+            // the hardware clock -- no effort is made to round the values to
+            // resolution. Therefore, tick durations vary slightly in both
+            // directions. We subtract something slightly bigger than these
+            // variations, to accomodate blocked-reactor-notify-ms values which
+            // are multiplies of resolution.
+            // E.g. with kernel CONFIG_HZ=250, coarse clock resolution is 4ms.
+            // If also we also have blocked-reactor-notify-ms=4, then we would
+            // like to report two-tick stalls, since they have durations of
+            // 4ms-8ms. But two-tick durations can be just slightly smaller
+            // than 8ms (e.g. 7999us) due to the inaccuracy. So we set the
+            // threshold not to (blocked_reactor_notify_ms + resolution) = 8000us,
+            // but to (blocked_reactor_notify_ms + resolution - 10us) = 7990us,
+            // to account for this.
+            engine().get_blocked_reactor_notify_ms() + std::max(0ns, clock::get_resolution() - 10us))
     , _name(name)
     , _preemptible(preemptible)
     , _memory_to_release(memory_to_release)
