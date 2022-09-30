@@ -680,6 +680,9 @@ class ScyllaClusterManager:
 
     def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
         self.test_uname: str = test_uname
+        # The currently running test case with self.test_uname prepended, e.g.
+        # test_topology.1::test_add_server_add_column
+        self.current_test_case_full_name: str = ''
         self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
@@ -708,8 +711,9 @@ class ScyllaClusterManager:
             await self.clusters.steal()
             await self.cluster.stop()
             await self._get_cluster()
-        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_case_name)
-        self.cluster.before_test(test_case_name)
+        self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
+        self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
 
@@ -784,7 +788,12 @@ class ScyllaClusterManager:
     async def _after_test(self, _request) -> aiohttp.web.Response:
         test_case_name = _request.match_info['test_case_name']
         assert self.cluster is not None
-        self.cluster.after_test(test_case_name)
+        assert self.current_test_case_full_name
+        logging.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
+        try:
+            self.cluster.after_test(self.current_test_case_full_name)
+        finally:
+            self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         return aiohttp.web.Response(text="True")
 
