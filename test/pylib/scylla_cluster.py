@@ -530,13 +530,14 @@ class ScyllaCluster:
         server = self.create_server(self.name, self._seeds())
         self.is_dirty = True
         try:
-            logging.info("Cluster %s adding server", server)
+            logging.info("Cluster %s adding server...", self)
             await server.install_and_start()
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(exc))
             raise
         self.running[server.host] = server
+        logging.info("Cluster %s added server %s", self, server)
         return server.host
 
     def endpoint(self) -> str:
@@ -565,7 +566,9 @@ class ScyllaCluster:
             return None
 
     def __str__(self):
-        return f"{{{', '.join(str(c) for c in self.running)}}}"
+        running = f"{{{', '.join(str(c) for c in self.running)}}}"
+        stopped = f"{{{', '.join(str(c) for c in self.stopped)}}}"
+        return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
