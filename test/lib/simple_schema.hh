@@ -29,7 +29,7 @@ public:
 private:
     friend class global_simple_schema;
 
-    schema_ptr _s;
+    schema_ptr _s = nullptr;
     api::timestamp_type _timestamp = api::min_timestamp;
     const column_definition* _v_def = nullptr;
     table_schema_version _v_def_version;
@@ -60,14 +60,15 @@ public:
     }
 public:
     simple_schema(with_static ws = with_static::yes)
-        : _s(schema_builder("ks", "cf")
+        : _ws(ws)
+    {
+        auto sb = schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", utf8_type, column_kind::clustering_key)
             .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
-            .with_column("v", utf8_type)
-            .build())
-        , _ws(ws)
-    { }
+            .with_column("v", utf8_type);
+        _s = sb.build();
+    }
 
     sstring cql() const {
         return format("CREATE TABLE ks.cf (pk text, ck text, v text, s1 text{}, PRIMARY KEY (pk, ck))", _ws ? " static" : "");
