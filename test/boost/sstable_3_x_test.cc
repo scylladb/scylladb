@@ -5140,8 +5140,8 @@ struct large_row_handler : public db::large_data_handler {
             const clustering_key_prefix* clustering_key, uint64_t row_size, const column_definition* cdef, uint64_t cell_size)>;
     callback_t callback;
 
-    large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, callback_t callback)
-        : large_data_handler(std::numeric_limits<uint64_t>::max(), large_rows_threshold, std::numeric_limits<uint64_t>::max(),
+    large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, uint64_t cell_threshold_bytes, callback_t callback)
+        : large_data_handler(std::numeric_limits<uint64_t>::max(), large_rows_threshold, cell_threshold_bytes,
             rows_count_threshold)
         , callback(std::move(callback)) {
         start();
@@ -5192,7 +5192,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
         ++i;
     };
 
-    large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
+    large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
     cache_tracker tracker;
     test_db_config.host_id = locator::host_id::create_random_id();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
@@ -5253,7 +5253,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
         logged = true;
     };
 
-    large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
+    large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), f);
     cache_tracker tracker;
     test_db_config.host_id = locator::host_id::create_random_id();
     sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
