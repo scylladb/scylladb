@@ -2740,7 +2740,7 @@ static dht::token token_from_long(int64_t value) {
 
 SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
     using value_set = std::unordered_set<int64_t>;
-    using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position_or_view, value_set>;
     using interval_type = interval_map_type::interval_type;
 
     interval_map_type map;
@@ -2750,8 +2750,8 @@ SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-    auto make_pos = [&] (int64_t token) -> compatible_ring_position {
-        return compatible_ring_position(s, dht::ring_position::starting_at(token_from_long(token)));
+    auto make_pos = [&] (int64_t token) -> compatible_ring_position_or_view {
+        return compatible_ring_position_or_view(s, dht::ring_position::starting_at(token_from_long(token)));
     };
 
     auto add = [&] (int64_t start, int64_t end, int gen) {
