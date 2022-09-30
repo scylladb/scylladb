@@ -709,7 +709,7 @@ class ScyllaClusterManager:
             await self.cluster.stop()
             await self._get_cluster()
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_case_name)
-        self.cluster.before_test(self.test_name)
+        self.cluster.before_test(test_case_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
 
