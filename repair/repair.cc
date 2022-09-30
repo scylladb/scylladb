@@ -49,7 +49,7 @@
 
 logging::logger rlogger("repair");
 
-node_ops_info::node_ops_info(utils::UUID ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
+node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
     : ops_uuid(ops_uuid_)
     , as(std::move(as_))
     , ignore_nodes(std::move(ignore_nodes_))
@@ -1134,7 +1134,7 @@ future<> user_requested_repair_task_impl::run() {
 
     return module->run(id, [this, &rs, &db, id, keyspace = _status.keyspace, germs = std::move(_germs),
             cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
-        auto uuid = id.uuid();
+        auto uuid = node_ops_id{id.uuid().uuid()};
 
         bool needs_flush_before_repair = false;
         if (db.features().tombstone_gc_options) {
@@ -1187,7 +1187,7 @@ future<> user_requested_repair_task_impl::run() {
         abort_source as;
         auto off_strategy_updater = seastar::async([this, &rs, uuid = uuid.uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
-            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
+            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
@@ -1216,7 +1216,7 @@ future<> user_requested_repair_task_impl::run() {
 
         auto cleanup_repair_range_history = defer([this, &rs, uuid] () mutable {
             try {
-                rs.cleanup_history(uuid).get();
+                rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
                 rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
             }
