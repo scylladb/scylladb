@@ -12,47 +12,35 @@
 
 #include <variant>
 #include "replica/database_fwd.hh"
-#include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
-#include "query-request.hh"
-#include "query-result.hh"
-#include "query-result-set.hh"
-#include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
-#include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
-#include "db/view/view_update_backlog.hh"
 #include "db/view/node_view_update_backlog.hh"
-#include "utils/histogram.hh"
-#include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
-#include "cache_temperature.hh"
 #include "service_permit.hh"
-#include "service/client_state.hh"
 #include "cdc/stats.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
-#include "query_ranges_to_vnodes.hh"
-#include "partition_range_compat.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
-#include "db/per_partition_rate_limit_info.hh"
 #include "locator/host_id.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
 class frozen_mutation;
+class cache_temperature;
+class query_ranges_to_vnodes_generator;
 
 namespace seastar::rpc {
 
@@ -90,6 +78,8 @@ class paxos_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 class view_update_write_response_handler;
+class client_state;
+class migration_manager;
 struct hint_wrapper;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;

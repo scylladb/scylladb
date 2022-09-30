@@ -18,6 +18,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "partition_slice_builder.hh"
 #include "query-request.hh"
+#include "cache_temperature.hh"
 
 
 namespace service::broadcast_tables {
