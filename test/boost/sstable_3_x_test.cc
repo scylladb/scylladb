@@ -5178,8 +5178,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t row_size) {
         BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
-        BOOST_REQUIRE(i < expected.size());
-        BOOST_REQUIRE(row_size > threshold);
+        BOOST_REQUIRE_LT(i, expected.size());
+        BOOST_REQUIRE_GT(row_size, threshold);
 
         if (clustering_key) {
             BOOST_REQUIRE(expected[i]->equal(s, *clustering_key));
@@ -5244,7 +5244,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     bool logged = false;
     auto f = [&logged, &expected, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t rows_count) {
-        BOOST_REQUIRE(rows_count > threshold);
+        BOOST_REQUIRE_GT(rows_count, threshold);
         BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
         logged = true;
     };
