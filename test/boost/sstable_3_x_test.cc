@@ -5230,6 +5230,63 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
   }
 }
 
+static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, replica::memtable& mt, const partition_key& pk,
+        std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
+    unsigned i = 0;
+    auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
+                     const clustering_key_prefix* clustering_key, uint64_t row_size,
+                     const column_definition* cdef, uint64_t cell_size) {
+        BOOST_TEST_MESSAGE(format("i={} ck={} cell_size={} threshold={}", i, clustering_key ? format("{}", *clustering_key) : "null", cell_size, threshold));
+        BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
+        BOOST_REQUIRE_LT(i, expected.size());
+        BOOST_REQUIRE_GT(cell_size, threshold);
+
+        if (clustering_key) {
+            BOOST_REQUIRE(expected[i]->equal(s, *clustering_key));
+        } else {
+            BOOST_REQUIRE_EQUAL(expected[i], nullptr);
+        }
+        ++i;
+    };
+
+    large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, f);
+    cache_tracker tracker;
+    test_db_config.host_id = locator::host_id::create_random_id();
+    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
+    auto stop_manager = defer([&] { manager.close().get(); });
+    tmpdir dir;
+    auto sst = manager.make_sstable(
+            s, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+
+    // The test provides thresholds values for the large row handler. Whether the handler gets
+    // trigger depends on the size of rows after they are written in the MC format and that size
+    // depends on the encoding statistics (because of variable-length encoding). The original values
+    // were chosen with the default-constructed encoding_stats, so let's keep it that way.
+    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
+    BOOST_REQUIRE_EQUAL(i, expected.size());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    mutation partition = s.new_mutation("pv");
+    const partition_key& pk = partition.key();
+    s.add_static_row(partition, "foo bar zed");
+
+    auto ck1 = s.make_ckey("cv1");
+    s.add_row(partition, ck1, "foo");
+
+    auto ck2 = s.make_ckey("cv2");
+    s.add_row(partition, ck2, "foo bar");
+    for (auto version : test_sstable_versions) {
+        auto mt = make_lw_shared<replica::memtable>(s.schema());
+        mt->apply(partition);
+
+        test_sstable_write_large_cell_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck1, &ck2}, 13, version);
+        test_sstable_write_large_cell_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck2}, 14, version);
+    }
+}
+
 static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
