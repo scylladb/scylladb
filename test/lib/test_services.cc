@@ -7,7 +7,9 @@
  */
 
 #include "test/lib/test_services.hh"
+#include "test/lib/sstable_test_env.hh"
 #include "db/config.hh"
+#include "db/large_data_handler.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
@@ -60,4 +62,13 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cm.enable();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
+}
+
+namespace sstables {
+
+test_env::impl::impl()
+    : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker, memory::stats().total_memory())
+    , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
+{ }
+
 }

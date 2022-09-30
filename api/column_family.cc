@@ -14,7 +14,7 @@
 #include "sstables/metadata_collector.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
-#include "db/system_keyspace_view_types.hh"
+#include "db/system_keyspace.hh"
 #include "db/data_listeners.hh"
 #include "storage_service.hh"
 #include "unimplemented.hh"

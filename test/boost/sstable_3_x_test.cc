@@ -41,6 +41,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/exception_utils.hh"
 #include "db/config.hh"
+#include "db/large_data_handler.hh"
 #include "readers/combined.hh"
 
 #include <boost/range/algorithm/sort.hpp>
