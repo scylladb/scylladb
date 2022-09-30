@@ -91,7 +91,7 @@ class ManagerClient():
     async def after_test(self, test_case_name: str) -> None:
         """Tell harness this test finished"""
         logger.debug("after_test for %s", test_case_name)
-        await self._get(f"/cluster/after-test/{test_case_name}")
+        await self._get(f"/cluster/after-test")
 
     async def _get(self, resource: str) -> aiohttp.ClientResponse:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html

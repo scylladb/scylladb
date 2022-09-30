@@ -746,7 +746,7 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
         self.app.router.add_get('/cluster/servers', self._cluster_servers)
         self.app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
-        self.app.router.add_get('/cluster/after-test/{test_case_name}', self._after_test)
+        self.app.router.add_get('/cluster/after-test', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
         self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
         self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
@@ -786,7 +786,6 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text="OK")
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
-        test_case_name = _request.match_info['test_case_name']
         assert self.cluster is not None
         assert self.current_test_case_full_name
         logging.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
