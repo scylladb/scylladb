@@ -146,13 +146,13 @@ private:
             dht::token_range_vector ranges,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,
             streaming::stream_reason reason,
-            std::optional<utils::UUID> ops_uuid);
+            std::optional<node_ops_id> ops_uuid);
 
     future<> do_sync_data_using_repair(sstring keyspace,
             dht::token_range_vector ranges,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,
             streaming::stream_reason reason,
-            std::optional<utils::UUID> ops_uuid);
+            std::optional<node_ops_id> ops_uuid);
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
             gms::inet_address from,
@@ -198,7 +198,7 @@ public:
     // Abort all the repairs
     future<> abort_all();
 
-    future<> abort_repair_node_ops(utils::UUID ops_uuid);
+    future<> abort_repair_node_ops(node_ops_id ops_uuid);
 
     std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map() noexcept {
         return _repair_metas;

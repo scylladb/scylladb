@@ -27,6 +27,7 @@
 #include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
 #include "repair/hash.hh"
+#include "repair/id.hh"
 #include "repair/sync_boundary.hh"
 
 namespace replica {
@@ -59,16 +60,8 @@ public:
     repair_stopped_exception() : repair_exception("Repair stopped") { }
 };
 
-struct repair_uniq_id {
-    // The integer ID used to identify a repair job. It is currently used by nodetool and http API.
-    int id;
-    // A UUID to identifiy a repair job. We will transit to use UUID over the integer ID.
-    utils::UUID uuid;
-};
-std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
-
 struct node_ops_info {
-    utils::UUID ops_uuid;
+    node_ops_id ops_uuid;
     bool abort = false;
     std::list<gms::inet_address> ignore_nodes;
     void check_abort();
@@ -167,7 +160,7 @@ public:
     int ranges_index = 0;
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
-    std::optional<utils::UUID> _ops_uuid;
+    std::optional<node_ops_id> _ops_uuid;
     bool _hints_batchlog_flushed = false;
 public:
     repair_info(repair_service& repair,
@@ -179,7 +172,7 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
-            std::optional<utils::UUID> ops_uuid,
+            std::optional<node_ops_id> ops_uuid,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
     void abort();
@@ -192,7 +185,7 @@ public:
     const std::vector<sstring>& table_names() {
         return cfs;
     }
-    const std::optional<utils::UUID>& ops_uuid() const {
+    const std::optional<node_ops_id>& ops_uuid() const {
         return _ops_uuid;
     };
 
@@ -254,7 +247,7 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
-    void abort_repair_node_ops(utils::UUID ops_uuid);
+    void abort_repair_node_ops(node_ops_id ops_uuid);
     bool is_aborted(const utils::UUID& uuid);
 };
 
@@ -376,7 +369,7 @@ struct node_ops_cmd_request {
     // Mandatory field, set by all cmds
     node_ops_cmd cmd;
     // Mandatory field, set by all cmds
-    utils::UUID ops_uuid;
+    node_ops_id ops_uuid;
     // Optional field, list nodes to ignore, set by all cmds
     std::list<gms::inet_address> ignore_nodes;
     // Optional field, list leaving nodes, set by decommission and removenode cmd
@@ -388,7 +381,7 @@ struct node_ops_cmd_request {
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
     node_ops_cmd_request(node_ops_cmd command,
-            utils::UUID uuid,
+            node_ops_id uuid,
             std::list<gms::inet_address> ignore = {},
             std::list<gms::inet_address> leaving = {},
             std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
@@ -408,8 +401,8 @@ struct node_ops_cmd_response {
     // Mandatory field, set by all cmds
     bool ok;
     // Optional field, set by query_pending_ops cmd
-    std::list<utils::UUID> pending_ops;
-    node_ops_cmd_response(bool o, std::list<utils::UUID> pending = {})
+    std::list<node_ops_id> pending_ops;
+    node_ops_cmd_response(bool o, std::list<node_ops_id> pending = {})
         : ok(o)
         , pending_ops(std::move(pending)) {
     }

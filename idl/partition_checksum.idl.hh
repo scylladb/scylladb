@@ -13,6 +13,7 @@
 #include "idl/uuid.idl.hh"
 #include "idl/frozen_mutation.idl.hh"
 #include "idl/token.idl.hh"
+#include "repair/id.hh"
 
 class repair_hash {
     uint64_t hash;
@@ -95,11 +96,15 @@ enum class node_ops_cmd : uint32_t {
      repair_updater,
 };
 
+class node_ops_id final {
+    utils::UUID uuid();
+};
+
 struct node_ops_cmd_request {
     // Mandatory field, set by all cmds
     node_ops_cmd cmd;
     // Mandatory field, set by all cmds
-    utils::UUID ops_uuid;
+    node_ops_id ops_uuid;
     // Optional field, list nodes to ignore, set by all cmds
     std::list<gms::inet_address> ignore_nodes;
     // Optional field, list leaving nodes, set by decommission and removenode cmd
@@ -116,7 +121,7 @@ struct node_ops_cmd_response {
     // Mandatory field, set by all cmds
     bool ok;
     // Optional field, set by query_pending_ops cmd
-    std::list<utils::UUID> pending_ops;
+    std::list<node_ops_id> pending_ops;
 };
 
 struct repair_update_system_table_request {
