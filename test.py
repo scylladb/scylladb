@@ -837,7 +837,7 @@ class TopologyTest(PythonTest):
     async def run(self, options: argparse.Namespace) -> Test:
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.shortname, self.suite.clusters, test_path) as manager:
+        async with get_cluster_manager(self.uname, self.suite.clusters, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:

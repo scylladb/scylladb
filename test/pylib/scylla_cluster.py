@@ -678,8 +678,8 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
-        self.test_name: str = test_name
+    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+        self.test_uname: str = test_uname
         self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
@@ -715,14 +715,14 @@ class ScyllaClusterManager:
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
-        logging.info("ScyllaManager stopping for test %s", self.test_name)
+        logging.info("ScyllaManager stopping for test %s", self.test_uname)
         await self.site.stop()
         if not self.cluster.is_dirty:
-            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_name)
+            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
         else:
             logging.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                            self.cluster, self.test_name)
+                            self.cluster, self.test_uname)
             await self.clusters.steal()
             await self.cluster.stop()
         del self.cluster
@@ -858,11 +858,11 @@ class ScyllaClusterManager:
 
 
 @asynccontextmanager
-async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
+async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
         -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_name, clusters, test_path)
+    manager = ScyllaClusterManager(test_uname, clusters, test_path)
     try:
         yield manager
     finally:
