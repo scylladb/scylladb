@@ -29,6 +29,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/index_reader_assertions.hh"
+#include "test/lib/random_utils.hh"
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
@@ -5262,7 +5263,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
     // Generates a pseudo-random number from 1 to 100
-    uint64_t random = (rand() % 100 + 1);
+    uint64_t random = tests::random::get_int(1, 100);
 
     // This test creates a sstable with a given number of rows and test it against a
     // compaction_rows_count_warning_threshold. A warning is triggered when the number of rows
