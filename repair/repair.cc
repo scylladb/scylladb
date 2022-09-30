@@ -1311,8 +1311,7 @@ future<> data_sync_repair_task_impl::run() {
 
     auto id = get_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    return module->run(id, [this, &rs, id, &db, keyspace, &ranges = _ranges, &neighbors = _neighbors, reason = _reason, ops_uuid = _ops_uuid] () mutable {
-        auto cfs = list_column_families(db.local(), keyspace);
+    return module->run(id, [this, &rs, id, &db, keyspace, &ranges = _ranges, &neighbors = _neighbors, reason = _reason, ops_uuid = _ops_uuid, cfs = _cfs] () mutable {
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
             return;
@@ -1378,7 +1377,8 @@ future<> repair_service::do_sync_data_using_repair(
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
         std::optional<node_ops_id> ops_uuid) {
-    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_uuid);
+    auto cfs = list_column_families(get_db().local(), keyspace);
+    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_uuid, std::move(cfs));
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
     task->start();
     co_await task->done();

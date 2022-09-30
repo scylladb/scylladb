@@ -18,6 +18,30 @@ public:
         _status.progress_units = "ranges";
     }
 protected:
+    future<double> gather_child_completed(unsigned i) const {
+        auto& child = _children[i];
+        return smp::submit_to(child.get_owner_shard(), [&child] {
+            return child->get_progress().then([] (auto progress) {
+                return progress.completed;
+            });
+        });
+    }
+
+    virtual double get_total() const {
+        return 1.0;
+    }
+public:
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        unsigned i = 0;
+        tasks::task_manager::task::progress progress{};
+        while (i < _children.size()) {
+            progress.completed += co_await gather_child_completed(i);
+            ++i;
+        }
+        progress.total = get_total();
+        co_return progress;
+    }
+protected:
     repair_uniq_id get_repair_uniq_id() const noexcept {
         return repair_uniq_id{
             .id = _status.sequence_number,
@@ -37,6 +61,7 @@ private:
     std::vector<sstring> _hosts;
     std::vector<sstring> _data_centers;
     std::unordered_set<gms::inet_address> _ignore_nodes;
+    size_t _total;
 public:
     user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes)
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity))
@@ -45,11 +70,16 @@ public:
         , _hosts(std::move(hosts))
         , _data_centers(std::move(data_centers))
         , _ignore_nodes(std::move(ignore_nodes))
+        , _total(_cfs.size() * _ranges.size() * smp::count)
     {}
 protected:
+    virtual double get_total() const noexcept override {
+        return static_cast<double>(_total);
+    }
+
     future<> run() override;
 
-    // TODO: implement abort and progress for user-requested repairs
+    // TODO: implement abort for user-requested repairs
 };
 
 class data_sync_repair_task_impl : public repair_task_impl {
@@ -58,17 +88,26 @@ private:
     std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
     streaming::stream_reason _reason;
     std::optional<node_ops_id> _ops_uuid;
+    std::vector<sstring> _cfs;
+    size_t _total;
 public:
-    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, std::optional<node_ops_id> ops_uuid)
+    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, std::optional<node_ops_id> ops_uuid, std::vector<sstring> cfs)
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity))
         , _ranges(std::move(ranges))
         , _neighbors(std::move(neighbors))
         , _reason(reason)
-        , _ops_uuid(ops_uuid) {}
+        , _ops_uuid(ops_uuid) 
+        , _cfs(std::move(cfs))
+        , _total(_ranges.size() * _cfs.size() * smp::count)
+        {}
 protected:
+    virtual double get_total() const noexcept override {
+        return static_cast<double>(_total);
+    }
+
     future<> run() override;
 
-    // TODO: implement abort and progress for data-sync repairs
+    // TODO: implement abort for data-sync repairs
 };
 
 class shard_repair_task_impl : public repair_task_impl {
@@ -81,6 +120,10 @@ public:
         , _ri(ri)
         , _ex(ex)
     {}
+
+    virtual double get_total() const noexcept override {
+        return static_cast<double>(_ri->ranges_size());
+    }
 protected:
     future<> run() override;
 };
@@ -100,6 +143,14 @@ public:
 
     virtual tasks::is_internal is_internal() const noexcept override {
         return tasks::is_internal::yes;
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        auto state = _status.state;
+        co_return tasks::task_manager::task::progress{
+            .completed = state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed,
+            .total = 1.0
+        };
     }
 protected:
     future<> run() override;
