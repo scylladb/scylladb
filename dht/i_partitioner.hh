@@ -11,6 +11,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/optimized_optional.hh>
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
@@ -317,6 +318,9 @@ class ring_position_view {
     const dht::token* _token; // always not nullptr
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
+private:
+    ring_position_view() noexcept : _token(nullptr), _key(nullptr), _weight(0) { }
+    explicit operator bool() const noexcept { return bool(_token); }
 public:
     using token_bound = ring_position::token_bound;
     struct after_key_tag {};
@@ -404,9 +408,11 @@ public:
     after_key is_after_key() const { return after_key(_weight == 1); }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
+    friend class optimized_optional<ring_position_view>;
 };
 
 using ring_position_ext_view = ring_position_view;
+using ring_position_view_opt = optimized_optional<ring_position_view>;
 
 //
 // Represents position in the ring of partitions, where partitions are ordered
