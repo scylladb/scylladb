@@ -28,6 +28,7 @@
 #include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
 #include "repair/hash.hh"
+#include "repair/id.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 
@@ -84,7 +85,7 @@ std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
 class node_ops_info {
 public:
-    utils::UUID ops_uuid;
+    node_ops_id ops_uuid;
     shared_ptr<abort_source> as;
     std::list<gms::inet_address> ignore_nodes;
 
@@ -94,7 +95,7 @@ private:
     future<> _abort_done = make_ready_future<>();
 
 public:
-    node_ops_info(utils::UUID ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept;
+    node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept;
     node_ops_info(const node_ops_info&) = delete;
     node_ops_info(node_ops_info&&) = delete;
 
@@ -288,7 +289,7 @@ struct node_ops_cmd_request {
     // Mandatory field, set by all cmds
     node_ops_cmd cmd;
     // Mandatory field, set by all cmds
-    utils::UUID ops_uuid;
+    node_ops_id ops_uuid;
     // Optional field, list nodes to ignore, set by all cmds
     std::list<gms::inet_address> ignore_nodes;
     // Optional field, list leaving nodes, set by decommission and removenode cmd
@@ -300,7 +301,7 @@ struct node_ops_cmd_request {
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
     node_ops_cmd_request(node_ops_cmd command,
-            utils::UUID uuid,
+            node_ops_id uuid,
             std::list<gms::inet_address> ignore = {},
             std::list<gms::inet_address> leaving = {},
             std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
@@ -320,8 +321,8 @@ struct node_ops_cmd_response {
     // Mandatory field, set by all cmds
     bool ok;
     // Optional field, set by query_pending_ops cmd
-    std::list<utils::UUID> pending_ops;
-    node_ops_cmd_response(bool o, std::list<utils::UUID> pending = {})
+    std::list<node_ops_id> pending_ops;
+    node_ops_cmd_response(bool o, std::list<node_ops_id> pending = {})
         : ok(o)
         , pending_ops(std::move(pending)) {
     }
