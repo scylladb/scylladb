@@ -377,18 +377,22 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
 
-        return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
+        std::vector<frozen_mutation_and_schema> mutations;
+        auto timeout = *t;
+        {
+            co_await coroutine::parallel_for_each(std::move(fms), [&] (frozen_mutation& fm) {
+                // Note: not a coroutine, since get_schema_for_write() rarely blocks.
                 // FIXME: optimise for cases when all fms are in the same schema
                 auto schema_version = fm.schema_version();
-                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                return get_schema_for_write(schema_version, std::move(src_addr)).then([&] (schema_ptr s) mutable {
                     mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
                 });
-            }).then([&sp = _sp, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
-                return sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
             });
-        });
+            {
+                auto& sp = _sp;
+                co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+            }
+        }
     }
 
     future<rpc::no_wait_type> handle_write(
