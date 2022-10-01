@@ -170,6 +170,8 @@ future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s
     const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
                     large_table_name);
+    large_data_logger.debug("Dropping entries from {}: ks = {}, table = {}, sst = {}",
+            large_table_name, s.ks_name(), s.cf_name(), sstable_name);
     return db::qctx->execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
             .discard_result()
             .handle_exception([&s, sstable_name, large_table_name] (std::exception_ptr ep) {
