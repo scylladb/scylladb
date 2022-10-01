@@ -660,54 +660,54 @@ private:
     future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>>
     handle_read_digest(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd, ::compat::wrapping_partition_range pr,
+            query::read_command cmd1, ::compat::wrapping_partition_range pr,
             rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+        if (cmd1.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        if (!cmd1.max_result_size) {
+            cmd1.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
-        return do_with(std::move(pr), _sp.shared_from_this(), std::move(trace_state_ptr),
-                [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info]
-                    (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
+        {
             p->get_stats().replica_digest_reads++;
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, t, da, rate_limit_info] (schema_ptr s) {
+            schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+            {
                 auto pr2 = ::compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
-            }).then_wrapped([this, p, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) mutable {
+                future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f = co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
 
                 using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
 
                 if (!f.failed()) {
                     auto&& [d, t, c, p] = f.get();
-                    return make_ready_future<final_tuple_type>(d, t, std::move(c), replica::exception_variant(), std::move(p));
+                    co_return final_tuple_type(d, t, std::move(c), replica::exception_variant(), std::move(p));
                 }
 
                 std::exception_ptr eptr = f.get_exception();
                 if (p->features().typed_errors_in_read_rpc) {
                     replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
                     if (ex) {
-                        return make_ready_future<final_tuple_type>(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
+                        co_return final_tuple_type(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
                     }
                 }
 
-                return make_exception_future<final_tuple_type>(std::move(eptr));
-            });
-        });
+                co_return coroutine::exception(std::move(eptr));
+            }
+        }
     }
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
