@@ -1344,6 +1344,7 @@ const char* to_string(sstables::large_data_type t) {
         case sstables::large_data_type::row_size: return "row_size";
         case sstables::large_data_type::cell_size: return "cell_size";
         case sstables::large_data_type::rows_in_partition: return "rows_in_partition";
+        case sstables::large_data_type::elements_in_collection: return "elements_in_collection";
     }
     std::abort();
 }

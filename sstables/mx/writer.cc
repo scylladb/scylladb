@@ -777,6 +777,12 @@ public:
                         .threshold = _sst.get_large_data_handler().get_rows_count_threshold(),
                     }
                 },
+                {
+                    large_data_type::elements_in_collection,
+                    large_data_stats_entry{
+                        .threshold = _sst.get_large_data_handler().get_collection_elements_count_threshold(),
+                    }
+                },
             }})
     {
         // This can be 0 in some cases, which is albeit benign, can wreak havoc
