@@ -72,6 +72,7 @@
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -399,7 +400,10 @@ private:
             netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
             auto schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-            auto&& apply_fn, auto&& forward_fn) {
+            auto&& apply_fn1, auto&& forward_fn1) {
+        auto apply_fn = std::move(apply_fn1);
+        auto forward_fn = std::move(forward_fn1);
+
         tracing::trace_state_ptr trace_state_ptr;
 
         if (trace_info) {
@@ -408,6 +412,10 @@ private:
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
+
+        auto trace_done = defer([&] {
+            tracing::trace(trace_state_ptr, "Mutation handling is done");
+        });
 
         storage_proxy::clock_type::time_point timeout;
         if (!t) {
@@ -422,32 +430,33 @@ private:
             replica::exception_variant local;
         };
 
-        return do_with(std::move(in), _sp.shared_from_this(), errors_info{}, [this, src_addr = std::move(src_addr),
-                       forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
-                       schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
-                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
+        const auto& m = in;
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        errors_info errors;
+        {
             ++p->get_stats().received_mutations;
             p->get_stats().forwarded_mutations += forward.size();
-            return when_all(
-                // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize_invoke([this, timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
-                                      apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
+            std::tuple<future<>, future<>> _ = co_await when_all(
+                coroutine::lambda([&] () -> future<> {
+                  try {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})
-                                         .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
-                        return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
-                    });
-                }).then([this, &p, reply_to, shard, response_id, trace_state_ptr] () {
+                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
+                    {
+                        // Note: blocks due to execution_stage in replica::database::apply()
+                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
+                    }
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                     // lots of unsent responses, which can OOM our shard.
                     //
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
-                    return send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                            shard, response_id, p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                    auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
+                            shard, response_id, p->get_view_update_backlog()));
+                    {
                         f.ignore_ready_future();
-                    });
-                }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
+                    }
+                  } catch (...) {
+                    std::exception_ptr eptr = std::current_exception();
                     errors.count++;
                     errors.local = replica::try_encode_replica_exception(eptr);
                     seastar::log_level l = seastar::log_level::warn;
@@ -457,41 +466,43 @@ private:
                         l = seastar::log_level::debug;
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                  }
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
-                                  timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
+                [&] {
+                  // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
+                  return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
+                    // Note: not a coroutine, since forward_fn() typically returns a ready future
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
                     return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
                                       tracing::make_trace_info(trace_state_ptr))
-                            .then_wrapped([&p, &errors] (future<> f) {
+                            .then_wrapped([&] (future<> f) {
                         if (f.failed()) {
                             ++p->get_stats().forwarding_errors;
                             errors.count++;
                         };
                         f.ignore_ready_future();
                     });
-                })
-            ).then_wrapped([this, trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
+                  });
+                }
+            );
+            {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
-                auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors.count) {
-                    fut = send_mutation_failed(
+                    auto f = co_await coroutine::as_future(send_mutation_failed(
                             netw::messaging_service::msg_addr{reply_to, shard},
                             trace_state_ptr,
                             shard,
                             response_id,
                             errors.count,
                             p->get_view_update_backlog(),
-                            std::move(errors.local)).then_wrapped([] (future<> f) {
+                            std::move(errors.local)));
+                    {
                         f.ignore_ready_future();
-                        return netw::messaging_service::no_wait();
-                    });
+                    }
                 }
-                return fut.finally([trace_state_ptr] {
-                    tracing::trace(trace_state_ptr, "Mutation handling is done");
-                });
-            });
-        });
+                co_return netw::messaging_service::no_wait();
+            }
+        }
     }
 
     future<rpc::no_wait_type> receive_mutation_handler(
