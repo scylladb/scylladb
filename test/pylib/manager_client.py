@@ -31,10 +31,10 @@ class ManagerClient():
     conn: aiohttp.UnixConnector
     session: aiohttp.ClientSession
 
-    def __init__(self, sock_path: str, port: int, ssl: bool,
+    def __init__(self, sock_path: str, port: int, use_ssl: bool,
                  con_gen: Optional[Callable[[List[str], int, bool], CassandraSession]]) -> None:
         self.port = port
-        self.ssl = ssl
+        self.use_ssl = use_ssl
         self.con_gen = con_gen
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
@@ -57,7 +57,7 @@ class ManagerClient():
         if self.con_gen is not None:
             servers = await self.servers()
             logger.debug("driver connecting to %s", servers)
-            self.ccluster = self.con_gen(servers, self.port, self.ssl)
+            self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
             self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
