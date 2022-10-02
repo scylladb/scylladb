@@ -105,8 +105,12 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
 }
 
 cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service& feat,
-        uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
-    : large_data_handler(partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, collection_elements_count_threshold)
+        utils::updateable_value<uint32_t> partition_threshold_mb,
+        utils::updateable_value<uint32_t> row_threshold_mb,
+        utils::updateable_value<uint32_t> cell_threshold_mb,
+        utils::updateable_value<uint32_t> rows_count_threshold,
+        utils::updateable_value<uint32_t> collection_elements_count_threshold)
+    : large_data_handler(partition_threshold_mb() * MB, row_threshold_mb() * MB, cell_threshold_mb() * MB, rows_count_threshold(), collection_elements_count_threshold())
     , _feat(feat)
     , _record_large_cells([this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
         return internal_record_large_cells(sst, pk, ck, cdef, cell_size, collection_elements);
@@ -117,6 +121,11 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
             return internal_record_large_cells_and_collections(sst, pk, ck, cdef, cell_size, collection_elements);
         };
     }))
+    , _partition_threshold_mb_updater(_partition_threshold_bytes, std::move(partition_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _row_threshold_mb_updater(_row_threshold_bytes, std::move(row_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _cell_threshold_mb_updater(_cell_threshold_bytes, std::move(cell_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _rows_count_threshold_updater(_rows_count_threshold, std::move(rows_count_threshold))
+    , _collection_elements_count_threshold_updater(_collection_elements_count_threshold, std::move(collection_elements_count_threshold))
 {}
 
 template <typename... Args>

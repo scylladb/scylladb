@@ -12,6 +12,7 @@
 #include "schema_fwd.hh"
 #include "system_keyspace.hh"
 #include "sstables/shared_sstable.hh"
+#include "utils/updateable_value.hh"
 
 namespace sstables {
 class sstable;
@@ -50,11 +51,15 @@ private:
     }
 
     bool _running = false;
+
+protected:
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
     uint64_t _cell_threshold_bytes;
     uint64_t _rows_count_threshold;
     uint64_t _collection_elements_count_threshold;
+
+private:
     mutable large_data_handler::stats _stats;
 
 public:
@@ -131,11 +136,24 @@ protected:
 class cql_table_large_data_handler : public large_data_handler {
     gms::feature_service& _feat;
     std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items)> _record_large_cells;
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements)> _record_large_cells;
     std::optional<std::any> _feat_listener;
+
+    static constexpr uint64_t MB = 1024 * 1024;
+
+    using threshold_updater = utils::transforming_value_updater<uint64_t, uint32_t>;
+    threshold_updater _partition_threshold_mb_updater;
+    threshold_updater _row_threshold_mb_updater;
+    threshold_updater _cell_threshold_mb_updater;
+    threshold_updater _rows_count_threshold_updater;
+    threshold_updater _collection_elements_count_threshold_updater;
 public:
     explicit cql_table_large_data_handler(gms::feature_service& feat,
-            uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
+            utils::updateable_value<uint32_t> partition_threshold_mb,
+            utils::updateable_value<uint32_t> row_threshold_mb,
+            utils::updateable_value<uint32_t> cell_threshold_mb,
+            utils::updateable_value<uint32_t> rows_count_threshold,
+            utils::updateable_value<uint32_t> collection_elements_count_threshold);
 
 protected:
     virtual future<> record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows) const override;
@@ -146,9 +164,9 @@ protected:
 
 private:
     future<> internal_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items) const;
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
     future<> internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
-            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_items) const;
+            const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
 };
 
 class nop_large_data_handler : public large_data_handler {
