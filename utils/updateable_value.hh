@@ -14,6 +14,7 @@
 #include <vector>
 #include <functional>
 #include "observable.hh"
+#include "serialized_action.hh"
 #include "seastarx.hh"
 
 namespace utils {
@@ -209,5 +210,30 @@ updateable_value<T>::observe(std::function<void (const T&)> callback) const {
     auto* src = source();
     return src ? src->observe(std::move(callback)) : dummy_observer<T>();
 }
+
+// Automatically updates a value from a utils::updateable_value
+// Where they can be of different types.
+// An optional transfom function can provide an additional transformation
+// when updating the value, like multiplying it by a factor for unit conversion,
+// for example.
+template <typename ValueType, typename UpdateableValueType>
+class transforming_value_updater {
+    ValueType& _value;
+    utils::updateable_value<UpdateableValueType> _updateable_value;
+    serialized_action _updater;
+    utils::observer<UpdateableValueType> _observer;
+
+public:
+    transforming_value_updater(ValueType& value, utils::updateable_value<UpdateableValueType> updateable_value,
+            std::function<ValueType (UpdateableValueType)> transform = [] (UpdateableValueType uv) { return static_cast<ValueType>(uv); })
+        : _value(value)
+        , _updateable_value(std::move(updateable_value))
+        , _updater([this, transform = std::move(transform)] {
+                _value = transform(_updateable_value());
+                return make_ready_future<>();
+          })
+        , _observer(_updateable_value.observe(_updater.make_observer()))
+    {}
+};
 
 }
