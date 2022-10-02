@@ -530,13 +530,14 @@ class ScyllaCluster:
         server = self.create_server(self.name, self._seeds())
         self.is_dirty = True
         try:
-            logging.info("Cluster %s adding server", server)
+            logging.info("Cluster %s adding server...", self)
             await server.install_and_start()
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           server.hostname, server.workdir.name, str(exc))
             raise
         self.running[server.host] = server
+        logging.info("Cluster %s added server %s", self, server)
         return server.host
 
     def endpoint(self) -> str:
@@ -565,7 +566,9 @@ class ScyllaCluster:
             return None
 
     def __str__(self):
-        return f"{{{', '.join(str(c) for c in self.running)}}}"
+        running = f"{{{', '.join(str(c) for c in self.running)}}}"
+        stopped = f"{{{', '.join(str(c) for c in self.stopped)}}}"
+        return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
@@ -678,8 +681,11 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_name: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
-        self.test_name: str = test_name
+    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+        self.test_uname: str = test_uname
+        # The currently running test case with self.test_uname prepended, e.g.
+        # test_topology.1::test_add_server_add_column
+        self.current_test_case_full_name: str = ''
         self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
@@ -703,26 +709,27 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self, test_name: str) -> None:
+    async def _before_test(self, test_case_name: str) -> None:
         if self.cluster.is_dirty:
             await self.clusters.steal()
             await self.cluster.stop()
             await self._get_cluster()
-        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, test_name)
-        self.cluster.before_test(self.test_name)
+        self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
+        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
+        self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
-        logging.info("ScyllaManager stopping for test %s", self.test_name)
+        logging.info("ScyllaManager stopping for test %s", self.test_uname)
         await self.site.stop()
         if not self.cluster.is_dirty:
-            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_name)
+            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
         else:
             logging.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                            self.cluster, self.test_name)
+                            self.cluster, self.test_uname)
             await self.clusters.steal()
             await self.cluster.stop()
         del self.cluster
@@ -741,8 +748,8 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
         self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
         self.app.router.add_get('/cluster/servers', self._cluster_servers)
-        self.app.router.add_get('/cluster/before-test/{test_name}', self._before_test_req)
-        self.app.router.add_get('/cluster/after-test/{test_name}', self._after_test)
+        self.app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
+        self.app.router.add_get('/cluster/after-test', self._after_test)
         self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
         self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
         self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
@@ -778,13 +785,17 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text=f"{','.join(sorted(self.cluster.running))}")
 
     async def _before_test_req(self, _request) -> aiohttp.web.Response:
-        await self._before_test(_request.match_info['test_name'])
+        await self._before_test(_request.match_info['test_case_name'])
         return aiohttp.web.Response(text="OK")
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
-        test_name = _request.match_info['test_name']
         assert self.cluster is not None
-        self.cluster.after_test(test_name)
+        assert self.current_test_case_full_name
+        logging.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
+        try:
+            self.cluster.after_test(self.current_test_case_full_name)
+        finally:
+            self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         return aiohttp.web.Response(text="True")
 
@@ -858,11 +869,11 @@ class ScyllaClusterManager:
 
 
 @asynccontextmanager
-async def get_cluster_manager(test_name: str, clusters: Pool[ScyllaCluster], test_path: str) \
+async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
         -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_name, clusters, test_path)
+    manager = ScyllaClusterManager(test_uname, clusters, test_path)
     try:
         yield manager
     finally:
