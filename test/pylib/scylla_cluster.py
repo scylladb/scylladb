@@ -643,10 +643,6 @@ class ScyllaCluster:
             return ret
         return await self.server_start(server_id)
 
-    async def server_remove(self, server_id: str) -> ActionReturn:
-        """Remove a specified server"""
-        raise NotImplementedError
-
     def get_config(self, server_id: str) -> ActionReturn:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
@@ -757,7 +753,6 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
-        self.app.router.add_get('/cluster/removeserver/{id}', self._cluster_server_remove)
         self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
         self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
 
@@ -839,14 +834,6 @@ class ScyllaClusterManager:
         assert self.cluster
         server_id = await self.cluster.add_server()
         return aiohttp.web.Response(text=server_id)
-
-    async def _cluster_server_remove(self, _request) -> aiohttp.web.Response:
-        """Remove a specified server"""
-        assert self.cluster
-        server_id = _request.match_info['id']
-        if not await self.cluster.server_remove(server_id):
-            return aiohttp.web.Response(status=500, text=f"Host {server_id} not found")
-        return aiohttp.web.Response(text="OK")
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Get conf/scylla.yaml of the given server as a dictionary."""
