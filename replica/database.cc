@@ -448,11 +448,13 @@ void backlog_controller::update_controller(float shares) {
 
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
-    : dirty_memory_manager_logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
-    , _real_dirty_reclaimer(threshold)
-    , _db(&db)
-    , _real_region_group("memtable", _real_dirty_reclaimer, deferred_work_sg)
-    , _virtual_region_group("memtable (virtual)", &_real_region_group, *this, deferred_work_sg)
+    : _db(&db)
+    , _virtual_region_group("memtable (virtual)", dirty_memory_manager_logalloc::reclaim_config{
+            .hard_limit = threshold / 2,
+            .soft_limit = threshold * soft_limit / 2,
+            .absolute_hard_limit = threshold,
+            .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this)
+      }, deferred_work_sg)
     , _flush_serializer(1)
     , _waiting_flush(flush_when_needed()) {}
 
@@ -1730,9 +1732,7 @@ future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
     return std::move(_waiting_flush).then([this] {
-        return _virtual_region_group.shutdown().then([this] {
-            return _real_region_group.shutdown();
-        });
+        return _virtual_region_group.shutdown();
     });
 }
 

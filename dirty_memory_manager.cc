@@ -44,26 +44,12 @@ region_evictable_occupancy_ascending_less_comparator::operator()(size_tracked_re
     return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
 }
 
-region_group_reclaimer region_group::no_reclaimer;
-
 uint64_t region_group::top_region_evictable_space() const noexcept {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
 dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_region() noexcept {
     return _regions.empty() ? nullptr : _regions.top();
-}
-
-void
-region_group::add(region_group* child) {
-    _subgroups.push_back(child);
-    update(child->_total_memory);
-}
-
-void
-region_group::del(region_group* child) {
-    _subgroups.erase(std::find(_subgroups.begin(), _subgroups.end(), child));
-    update(-child->_total_memory);
 }
 
 void
@@ -103,9 +89,15 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return do_for_each_parent(this, [] (auto rg) noexcept {
-        return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
-    }) == nullptr;
+    return !(this->under_pressure()
+                || (_under_hard_pressure));
+}
+
+void
+allocation_queue::execute_one() {
+    auto req = std::move(_blocked_requests.front());
+    _blocked_requests.pop_front();
+    req->allocate();
 }
 
 future<>
@@ -118,9 +110,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
                 }
 
                 if (!_blocked_requests.empty() && execution_permitted()) {
-                    auto req = std::move(_blocked_requests.front());
-                    _blocked_requests.pop_front();
-                    req->allocate();
+                    _blocked_requests.execute_one();
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 } else {
                     // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
@@ -135,59 +125,79 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
     });
 }
 
-region_group::region_group(sstring name, region_group *parent,
-        region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
-    : _parent(parent)
-    , _reclaimer(reclaimer)
+region_group::region_group(sstring name,
+        reclaim_config cfg, scheduling_group deferred_work_sg)
+    : _cfg(std::move(cfg))
     , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {
-    if (_parent) {
-        _parent->add(this);
-    }
 }
 
 bool region_group::reclaimer_can_block() const {
-    return _reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max();
+    return throttle_threshold() != std::numeric_limits<size_t>::max();
 }
 
-void region_group::notify_relief() {
+void region_group::notify_pressure_relieved() {
     _relief.signal();
-    for (region_group* child : _subgroups) {
-        child->notify_relief();
+}
+
+bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
+    _hard_total_memory += delta;
+
+    if (_hard_total_memory > hard_throttle_threshold()) {
+        _under_hard_pressure = true;
+    } else if (_under_hard_pressure) {
+        _under_hard_pressure = false;
+        return true;
+    }
+    return false;
+}
+
+void region_group::update_hard(ssize_t delta) {
+    if (do_update_hard_and_check_relief(delta)) {
+        notify_pressure_relieved();
     }
 }
 
 void region_group::update(ssize_t delta) {
     // Most-enclosing group which was relieved.
-    region_group* top_relief = nullptr;
+    bool relief = false;
 
-    do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
-        rg->_total_memory += delta;
+    _total_memory += delta;
 
-        if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
-            rg->_reclaimer.notify_soft_pressure();
-        } else {
-            rg->_reclaimer.notify_soft_relief();
-        }
+    if (_total_memory > soft_limit_threshold()) {
+        notify_soft_pressure();
+    } else {
+        notify_soft_relief();
+    }
 
-        if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
-            rg->_reclaimer.notify_pressure();
-        } else if (rg->_reclaimer.under_pressure()) {
-            rg->_reclaimer.notify_relief();
-            top_relief = rg;
-        }
+    if (_total_memory > throttle_threshold()) {
+        notify_pressure();
+    } else if (under_pressure()) {
+        notify_relief();
+        relief = true;
+    }
 
-        return stop_iteration::no;
-    });
+    relief |= do_update_hard_and_check_relief(delta);
 
-    if (top_relief) {
-        top_relief->notify_relief();
+    if (relief) {
+        notify_pressure_relieved();
     }
 }
 
-void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
+future<>
+region_group::shutdown() noexcept {
+    _shutdown_requested = true;
+    _relief.signal();
+    return std::move(_releaser);
+}
+
+void allocation_queue::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
+}
+
+allocation_queue::allocation_queue(allocation_queue::on_request_expiry on_expiry)
+        : _blocked_requests(std::move(on_expiry)) {
 }
 
 }
