@@ -602,63 +602,63 @@ class ScyllaCluster:
         for server in itertools.chain(self.running.values(), self.stopped.values()):
             server.write_log_marker(f"------ Ending test {name} ------\n")
 
-    async def server_stop(self, server_id: str, gracefully: bool) -> ActionReturn:
+    async def server_stop(self, server_ip: str, gracefully: bool) -> ActionReturn:
         """Stop a server. No-op if already stopped."""
-        logging.info("Cluster %s stopping server %s", self, server_id)
-        if server_id in self.stopped:
+        logging.info("Cluster %s stopping server %s", self, server_ip)
+        if server_ip in self.stopped:
             return ScyllaCluster.ActionReturn(success=True,
-                                              msg=f"Server {server_id} already stopped")
-        if server_id not in self.running:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+                                              msg=f"Server {server_ip} already stopped")
+        if server_ip not in self.running:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_ip} unknown")
         self.is_dirty = True
-        server = self.running.pop(server_id)
+        server = self.running.pop(server_ip)
         if gracefully:
             await server.stop_gracefully()
         else:
             await server.stop()
-        self.stopped[server_id] = server
-        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} stopped")
+        self.stopped[server_ip] = server
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_ip} stopped")
 
-    async def server_start(self, server_id: str) -> ActionReturn:
+    async def server_start(self, server_ip: str) -> ActionReturn:
         """Start a stopped server"""
         logging.info("Cluster %s starting server", self)
-        if server_id in self.running:
+        if server_ip in self.running:
             return ScyllaCluster.ActionReturn(success=True,
-                                              msg=f"Server {server_id} already started")
-        if server_id not in self.stopped:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+                                              msg=f"Server {server_ip} already started")
+        if server_ip not in self.stopped:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_ip} unknown")
         self.is_dirty = True
-        server = self.stopped.pop(server_id)
+        server = self.stopped.pop(server_ip)
         server.seeds = self._seeds()
         await server.start()
-        self.running[server_id] = server
-        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_id} started")
+        self.running[server_ip] = server
+        return ScyllaCluster.ActionReturn(success=True, msg=f"Server {server_ip} started")
 
-    async def server_restart(self, server_id: str) -> ActionReturn:
+    async def server_restart(self, server_ip: str) -> ActionReturn:
         """Restart a running server"""
-        logging.info("Cluster %s restarting server %s", self, server_id)
-        ret = await self.server_stop(server_id, gracefully=True)
+        logging.info("Cluster %s restarting server %s", self, server_ip)
+        ret = await self.server_stop(server_ip, gracefully=True)
         if not ret.success:
-            logging.error("Cluster %s failed to stop server %s", self, server_id)
+            logging.error("Cluster %s failed to stop server %s", self, server_ip)
             return ret
-        return await self.server_start(server_id)
+        return await self.server_start(server_ip)
 
-    def get_config(self, server_id: str) -> ActionReturn:
+    def get_config(self, server_ip: str) -> ActionReturn:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
-        server = self._find_server(server_id)
+        server = self._find_server(server_ip)
         if not server:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_ip} unknown")
         return ScyllaCluster.ActionReturn(success=True, data=server.get_config())
 
-    def update_config(self, server_id: str, key: str, value: object) -> ActionReturn:
+    def update_config(self, server_ip: str, key: str, value: object) -> ActionReturn:
         """Update conf/scylla.yaml of the given server by setting `value` under `key`.
            If the server is running, reload the config with a SIGHUP.
            Marks the cluster as dirty.
            Fails if the server cannot be found."""
-        server = self._find_server(server_id)
+        server = self._find_server(server_ip)
         if not server:
-            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_ip} unknown")
         self.is_dirty = True
         server.update_config(key, value)
         return ScyllaCluster.ActionReturn(success=True)
@@ -832,8 +832,8 @@ class ScyllaClusterManager:
     async def _cluster_server_add(self, _request) -> aiohttp.web.Response:
         """Add a new server"""
         assert self.cluster
-        server_id = await self.cluster.add_server()
-        return aiohttp.web.Response(text=server_id)
+        server_ip = await self.cluster.add_server()
+        return aiohttp.web.Response(text=server_ip)
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Get conf/scylla.yaml of the given server as a dictionary."""
