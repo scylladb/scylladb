@@ -48,10 +48,10 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
         return snitch.local()->get_name();
     });
 
-    httpd::storage_service_json::update_snitch.set(r, [](std::unique_ptr<request> req) {
+    httpd::storage_service_json::update_snitch.set(r, [&snitch](std::unique_ptr<request> req) {
         locator::snitch_config cfg;
         cfg.name = req->get_query_param("ep_snitch_class_name");
-        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
+        return locator::i_endpoint_snitch::reset_snitch(snitch, cfg).then([] {
             return make_ready_future<json::json_return_type>(json::json_void());
         });
     });

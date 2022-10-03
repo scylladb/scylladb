@@ -69,7 +69,7 @@ future<> one_test(const std::string& property_fname1,
             snitch_config cfg;
             cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
             cfg.properties_file_name = fname2.string();
-            i_endpoint_snitch::reset_snitch(cfg).get();
+            i_endpoint_snitch::reset_snitch(snitch, cfg).get();
 
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed "
