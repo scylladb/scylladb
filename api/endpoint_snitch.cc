@@ -11,6 +11,7 @@
 #include "locator/production_snitch_base.hh"
 #include "endpoint_snitch.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include "utils/fb_utilities.hh"
 
 namespace api {
@@ -46,12 +47,22 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
     httpd::endpoint_snitch_info_json::get_snitch_name.set(r, [&snitch] (const_req req) {
         return snitch.local()->get_name();
     });
+
+    httpd::storage_service_json::update_snitch.set(r, [](std::unique_ptr<request> req) {
+        locator::snitch_config cfg;
+        cfg.name = req->get_query_param("ep_snitch_class_name");
+        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
+    });
+
 }
 
 void unset_endpoint_snitch(http_context& ctx, routes& r) {
     httpd::endpoint_snitch_info_json::get_datacenter.unset(r);
     httpd::endpoint_snitch_info_json::get_rack.unset(r);
     httpd::endpoint_snitch_info_json::get_snitch_name.unset(r);
+    httpd::storage_service_json::update_snitch.unset(r);
 }
 
 }
