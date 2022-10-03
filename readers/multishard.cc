@@ -796,57 +796,54 @@ future<> shard_reader_v2::close() noexcept {
 }
 
 future<> shard_reader_v2::do_fill_buffer() {
-    auto fill_buf_fut = make_ready_future<remote_fill_buffer_result_v2>();
-
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader_v2>> reader;
         remote_fill_buffer_result_v2 result;
     };
 
-    if (!_reader) {
-        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema)] () -> future<reader_and_buffer_fill_result> {
-            auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
-                        schema_ptr s,
-                        reader_permit permit,
-                        const dht::partition_range& pr,
-                        const query::partition_slice& ps,
-                        const io_priority_class& pc,
-                        tracing::trace_state_ptr ts,
-                        streamed_mutation::forwarding,
-                        mutation_reader::forwarding fwd_mr) {
-                return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
-            });
-            auto s = gs.get();
-            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout());
-            auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
-                        s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+    auto res = co_await std::invoke([&] () -> future<remote_fill_buffer_result_v2> {
+        if (!_reader) {
+            reader_and_buffer_fill_result res = co_await smp::submit_to(_shard, coroutine::lambda([this, gs = global_schema_ptr(_schema)] () -> future<reader_and_buffer_fill_result> {
+                auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
+                            schema_ptr s,
+                            reader_permit permit,
+                            const dht::partition_range& pr,
+                            const query::partition_slice& ps,
+                            const io_priority_class& pc,
+                            tracing::trace_state_ptr ts,
+                            streamed_mutation::forwarding,
+                            mutation_reader::forwarding fwd_mr) {
+                    return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
+                });
+                auto s = gs.get();
+                auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout());
+                auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
+                            s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
 
-            std::exception_ptr ex;
-            try {
-                tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                reader_permit::used_guard ug{rreader->permit()};
-                co_await rreader->fill_buffer();
-                auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
-                co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
-            } catch (...) {
-                ex = std::current_exception();
-            }
-            co_await rreader->close();
-            std::rethrow_exception(std::move(ex));
-        }).then([this] (reader_and_buffer_fill_result res) {
+                std::exception_ptr ex;
+                try {
+                    tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+                    reader_permit::used_guard ug{rreader->permit()};
+                    co_await rreader->fill_buffer();
+                    auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
+                    co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                co_await rreader->close();
+                std::rethrow_exception(std::move(ex));
+            }));
             _reader = std::move(res.reader);
-            return std::move(res.result);
-        });
-    } else {
-        fill_buf_fut = smp::submit_to(_shard, [this] () mutable {
-            reader_permit::used_guard ug{_reader->permit()};
-            return _reader->fill_buffer().then([this, ug = std::move(ug)] {
-                return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
-            });
-        });
-    }
+            co_return std::move(res.result);
+        } else {
+            co_return co_await smp::submit_to(_shard, coroutine::lambda([this] () -> future<remote_fill_buffer_result_v2>  {
+                reader_permit::used_guard ug{_reader->permit()};
+                co_await _reader->fill_buffer();
+                co_return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
+            }));
+        }
+    });
 
-    auto res = co_await(std::move(fill_buf_fut));
     reserve_additional(res.buffer->size());
     for (const auto& mf : *res.buffer) {
         push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
