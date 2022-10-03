@@ -279,7 +279,7 @@ def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
             # to have increased. Add some time to that, to account for
             # extremely overloaded test machines.
             start_time = time.time()
-            while time.time() < start_time + alternator_ttl_period_in_seconds + 60:
+            while time.time() < start_time + alternator_ttl_period_in_seconds + 120:
                 if not 'Item' in table.get_item(Key={'p': p0}):
                     break
                 time.sleep(0.1)
