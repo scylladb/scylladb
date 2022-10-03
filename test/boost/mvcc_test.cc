@@ -744,7 +744,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
 
             auto m1 = base_m; // continuous in [-inf, 0]
             m1.partition().clustered_row(*s, ss.make_ckey(0), is_dummy::no, is_continuous::no);
-            m1.partition().clustered_row(*s, position_in_partition::after_all_clustered_rows(), is_dummy::no, is_continuous::no);
+            m1.partition().clustered_row(*s, position_in_partition::after_all_clustered_rows(), is_dummy::yes, is_continuous::no);
 
             {
                 logalloc::reclaim_lock rl(r);
