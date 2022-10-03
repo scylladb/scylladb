@@ -530,15 +530,21 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
-            auto reply = co_await [&] {
+            auto reply = co_await [&]() -> future<add_entry_reply> {
                 if (leader == _id) {
                     logger.trace("[{}] an entry proceeds on a leader", id());
                     // Make a copy of the command since we may still
                     // retry and forward it.
-                    return execute_add_entry(leader, command, as);
+                    co_return co_await execute_add_entry(leader, command, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    return _rpc->send_add_entry(leader, command);
+                    try {
+                        co_return co_await _rpc->send_add_entry(leader, command);
+                    } catch (const transport_error& e) {
+                        logger.trace("[{}] send_add_entry on {} resulted in {}; "
+                                     "rethrow as commit_status_unknown", _id, leader, e);
+                        throw raft::commit_status_unknown();
+                    }
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
@@ -630,14 +636,20 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
-            auto reply = co_await [&] {
+            auto reply = co_await [&]() -> future<add_entry_reply> {
                 if (leader == _id) {
                     // Make a copy since of the params since we may
                     // still retry and forward them.
-                    return execute_modify_config(leader, add, del, as);
+                    co_return co_await execute_modify_config(leader, add, del, as);
                 } else {
                     logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    return _rpc->send_modify_config(leader, add, del);
+                    try {
+                        co_return co_await _rpc->send_modify_config(leader, add, del);
+                    } catch (const transport_error& e) {
+                        logger.trace("[{}] send_modify_config on {} resulted in {}; "
+                                     "rethrow as commit_status_unknown", _id, leader, e);
+                        throw raft::commit_status_unknown();
+                    }
                 }
             }();
             if (std::holds_alternative<raft::entry_id>(reply)) {
@@ -1214,8 +1226,8 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             bool need_retry = false;
             try {
                 res = co_await get_read_idx(leader, as);
-            } catch (const intermittent_connection_error& e) {
-                logger.trace("[{}] read_barrier on {} resulted in raft::intermittent_connection_error; retrying", _id, leader);
+            } catch (const transport_error& e) {
+                logger.trace("[{}] read_barrier on {} resulted in {}; retrying", _id, leader, e);
                 need_retry = true;
             }
             if (need_retry) {
