@@ -44,32 +44,18 @@ distro_extra_cflags = ''
 distro_extra_ldflags = ''
 distro_extra_cmake_args = []
 employ_ld_trickery = True
+has_wasmtime = False
+use_wasmtime_as_library = False
 
 # distro-specific setup
 def distro_setup_nix():
-    global os_ids, employ_ld_trickery
-    global distro_extra_ldflags, distro_extra_cflags, distro_extra_cmake_args
-
+    global os_ids, employ_ld_trickery, has_wasmtime, use_wasmtime_as_library
     os_ids = ['linux']
     employ_ld_trickery = False
+    has_wasmtime = True
+    use_wasmtime_as_library = True
 
-    libdirs = list(dict.fromkeys(os.environ.get('CMAKE_LIBRARY_PATH').split(':')))
-    incdirs = list(dict.fromkeys(os.environ.get('CMAKE_INCLUDE_PATH').split(':')))
-
-    # add nix {lib,inc}dirs to relevant flags, mimicing nix versions of cmake & autotools.
-    # also add rpaths to make sure that any built executables can run in place.
-    distro_extra_ldflags = ' '.join([ '-rpath ' + path + ' -L' + path for path in libdirs ]);
-    distro_extra_cflags = ' '.join([ '-isystem ' + path for path in incdirs ])
-
-    # indexers like clangd may or may not know which stdc++ or glibc
-    # the compiler was configured with, so make the relevant paths
-    # explicit on each compilation command line:
-    implicit_cflags = os.environ.get('IMPLICIT_CFLAGS').strip()
-    distro_extra_cflags += ' ' + implicit_cflags
-    # also propagate to cmake-built dependencies:
-    distro_extra_cmake_args = ['-DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES:INTERNAL=' + implicit_cflags]
-
-if os.environ.get('NIX_BUILD_TOP'):
+if os.environ.get('NIX_CC'):
         distro_setup_nix()
 
 # distribution "internationalization", converting package names.
@@ -1423,7 +1409,8 @@ if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
         modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
 
-has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
+if not has_wasmtime:
+    has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
 
 if has_wasmtime:
     if platform.machine() == 'aarch64':
@@ -1755,6 +1742,8 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                 ])
 if has_wasmtime:
     print("Found wasmtime dependency, linking with libwasmtime")
+    if use_wasmtime_as_library:
+        libs += " -lwasmtime"
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
@@ -1936,7 +1925,7 @@ with open(buildfile, 'w') as f:
                     for src in srcs
                     if src.endswith('.cc')]
             objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
-            if has_wasmtime:
+            if has_wasmtime and not use_wasmtime_as_library:
                 objs.append('/usr/lib64/libwasmtime.a')
             has_thrift = False
             for dep in deps[binary]:
