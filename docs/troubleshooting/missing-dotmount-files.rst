@@ -11,21 +11,21 @@ The problem may occur when you upgrade ScylaDB Open Source 4.6 or later to a ver
 the ``/etc/systemd/system/var-lib-scylla.mount`` and ``/etc/systemd/system/var-lib-systemd-coredump.mount`` are 
 deleted by RPM.
 
-To avoid losing the files, the :doc:`upgrade procedure </upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-rpm/>` 
-includes a step to backup the .mount files:
-
+To avoid losing the files, the upgrade procedure includes a step to backup the .mount files. The following 
+example shows the command to backup the files before the :doc:`upgrade from version 5.0 </upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-rpm/>`:
 
 .. code-block:: console
 
-    for conf in $( rpm -qc $(rpm -qa | grep scylla) | grep -v contains ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf $conf.backup-4.3; done
+    for conf in $( rpm -qc $(rpm -qa | grep scylla) | grep -v contains ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf $conf.backup-5.0; done
  
-However, if you don't backup the .mount before the upgrade, the files may be lost.
+If you don't backup the .mount files before the upgrade, the files may be lost.
 
 
 Solution
 ^^^^^^^^
 
-To fix this problem, you need to manually restore .mount files.
+If you didn't backup the .mount files before the upgrade and the files were deleted during the upgrade, 
+you need to restore them manually.
 
 To restore ``/etc/systemd/system/var-lib-systemd-coredump.mount``, run the following:
 
