@@ -599,7 +599,7 @@ future<> raft_group0::leave_group0() {
 
     // Note: if this gets stuck due to a failure, the DB admin can abort.
     // FIXME: this gets stuck without failures if we're the leader (#10833)
-    co_return co_await _raft_gr.group0().modify_config({}, {my_id}, &_abort_source);
+    co_return co_await remove_from_raft_config(my_id);
 }
 
 future<> raft_group0::remove_from_group0(gms::inet_address node) {
@@ -685,8 +685,27 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
         "remove_from_group0({}): found the node in group 0 configuration, Raft ID: {}. Proceeding with the remove...",
         node, *their_id);
 
-    // TODO: add a timeout+retry mechanism? This could get stuck (and _abort_source is only called on shutdown).
-    co_return co_await _raft_gr.group0().modify_config({}, {*their_id}, &_abort_source);
+    co_await remove_from_raft_config(*their_id);
+}
+
+future<> raft_group0::remove_from_raft_config(raft::server_id id) {
+    static constexpr auto max_retry_period = std::chrono::seconds{1};
+    auto retry_period = std::chrono::milliseconds{10};
+
+    // TODO: add a timeout mechanism? This could get stuck (and _abort_source is only called on shutdown).
+    while (true) {
+        try {
+            co_await _raft_gr.group0().modify_config({}, {id}, &_abort_source);
+            break;
+        } catch (const raft::commit_status_unknown& e) {
+            group0_log.info("remove_from_raft_config({}): modify_config returned \"{}\", retrying", id, e);
+        }
+        retry_period *= 2;
+        if (retry_period > max_retry_period) {
+            retry_period = max_retry_period;
+        }
+        co_await sleep_abortable(retry_period, _abort_source);
+    }
 }
 
 bool raft_group0::joined_group0() const {
