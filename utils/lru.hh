@@ -13,12 +13,24 @@
 
 class evictable {
     friend class lru;
+    // For bookkeeping, we want the unlinking of evictables to be explicit.
+    // E.g. if the cache's internal data structure consists of multiple lists, we would
+    // like to know which list is an element being removed from.
+    // Therefore, we are using auto_unlink only to be able to call unlink() in the move constructor
+    // and we do NOT rely on automatic unlinking in _lru_link's destructor.
+    // It's the programmer's responsibility. to call lru::remove on the evictable before its destruction.
+    // Failure to do so is a bug, and it will trigger an assertion in the destructor.
     using lru_link_type = boost::intrusive::list_member_hook<
         boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
     lru_link_type _lru_link;
 protected:
     // Prevent destruction via evictable pointer. LRU is not aware of allocation strategy.
-    ~evictable() = default;
+    // Prevent destruction of a linked evictable. While we could unlink the evictable here
+    // in the destructor, we can't perform proper accounting for that without access to the
+    // head of the containing list.
+    ~evictable() {
+        assert(!_lru_link.is_linked());
+    }
 public:
     evictable() = default;
     evictable(evictable&& o) noexcept;
