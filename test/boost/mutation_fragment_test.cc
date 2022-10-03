@@ -605,3 +605,41 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
     check_invalid_after(rtc, {&ps, &sr});
     check_invalid_after(pe, {&sr, &cr, &rtc, &pe});
 }
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_mixed_api_usage) {
+    simple_schema ss;
+
+    const auto dkeys = ss.make_pkeys(3);
+    const auto& dk_ = dkeys[0];
+    const auto& dk0 = dkeys[1];
+    const auto& dk1 = dkeys[2];
+    const auto ck0 = ss.make_ckey(0);
+    const auto ck1 = ss.make_ckey(1);
+    const auto ck2 = ss.make_ckey(2);
+    const auto ck3 = ss.make_ckey(3);
+
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
+    auto stop_sem = deferred_stop(sem);
+    auto permit = sem.make_tracking_only_permit(ss.schema().get(), get_name(), db::no_timeout);
+
+    mutation_fragment_stream_validator validator(*ss.schema());
+
+    using mf_kind = mutation_fragment_v2::kind;
+
+    BOOST_REQUIRE(validator(mf_kind::partition_start, {}));
+    BOOST_REQUIRE(validator(dk_.token()));
+    BOOST_REQUIRE(validator(mf_kind::static_row, position_in_partition_view(position_in_partition_view::static_row_tag_t{}), {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, position_in_partition_view::for_key(ck0), {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
+    BOOST_REQUIRE(!validator(mf_kind::clustering_row, position_in_partition_view::for_key(ck0), {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, position_in_partition_view::for_key(ck1), {}));
+    BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
+    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition_view::after_key(ck1), {}));
+    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition_view::after_key(ck1), {}));
+    BOOST_REQUIRE(validator(mf_kind::partition_end, {}));
+    BOOST_REQUIRE(validator(dk0));
+    BOOST_REQUIRE(!validator(dk0));
+}
