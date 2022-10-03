@@ -1389,18 +1389,18 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     //
     // Drop column mapping entries for dropped tables since these will not be TTLed automatically
     // and will stay there forever if we don't clean them up manually
-        co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&proxy] (global_schema_ptr& gs) -> future<> {
-            co_await store_column_mapping(proxy, gs.get(), false);
-        });
-        co_await max_concurrent_for_each(tables_diff.altered, max_concurrent, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
-            co_await when_all_succeed(
-                store_column_mapping(proxy, altered.old_schema.get(), true),
-                store_column_mapping(proxy, altered.new_schema.get(), false));
-        });
-        co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&proxy] (schema_diff::dropped_schema& dropped) -> future<> {
-            schema_ptr s = dropped.schema.get();
-            co_await drop_column_mapping(s->id(), s->version());
-        });
+    co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&proxy] (global_schema_ptr& gs) -> future<> {
+        co_await store_column_mapping(proxy, gs.get(), false);
+    });
+    co_await max_concurrent_for_each(tables_diff.altered, max_concurrent, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
+        co_await when_all_succeed(
+            store_column_mapping(proxy, altered.old_schema.get(), true),
+            store_column_mapping(proxy, altered.new_schema.get(), false));
+    });
+    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&proxy] (schema_diff::dropped_schema& dropped) -> future<> {
+        schema_ptr s = dropped.schema.get();
+        co_await drop_column_mapping(s->id(), s->version());
+    });
 }
 
 static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
