@@ -40,7 +40,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     snitch_config cfg;
     cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
     cfg.properties_file_name = fname.string();
-    auto& snitch = locator::i_endpoint_snitch::snitch_instance();
+    auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
+    auto& snitch = *snitch_i;
 
     return snitch.start(cfg).then([&snitch] {
         return snitch.invoke_on_all(&locator::snitch_ptr::start);
@@ -77,13 +78,15 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                         } else {
                             BOOST_CHECK(true);
                         }
-                        return snitch.stop();
+                        return make_ready_future<>();
                     });
                 });
             } catch (std::exception& e) {
                 BOOST_CHECK(!exp_result);
                 return make_ready_future<>();
             }
+        }).finally([ snitch_i = std::move(snitch_i) ] () mutable {
+            return snitch_i->stop().finally([snitch_i = std::move(snitch_i)] {});
         });
 }
 

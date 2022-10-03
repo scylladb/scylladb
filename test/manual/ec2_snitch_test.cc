@@ -37,7 +37,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     snitch_config cfg;
     cfg.name = "Ec2Snitch";
     cfg.properties_file_name = fname.string();
-    auto& snitch = i_endpoint_snitch::snitch_instance();
+    auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
+    auto& snitch = *snitch_i;
     return snitch.start(cfg).then([&snitch] () {
         return snitch.invoke_on_all(&snitch_ptr::start);
     }).then_wrapped([&snitch, exp_result] (auto&& f) {
@@ -80,7 +81,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 BOOST_CHECK(!exp_result);
                 return make_ready_future<>();
             }
-        });
+        }).finally([ snitch_i = std::move(snitch_i) ] {});
 }
 
 #define GOSSIPING_TEST_CASE(tag, exp_res) \

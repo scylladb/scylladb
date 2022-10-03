@@ -422,6 +422,7 @@ sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
+sharded<locator::snitch_ptr> *the_snitch;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -519,6 +520,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::forward_service> forward_service;
     sharded<gms::gossiper> gossiper;
+    sharded<locator::snitch_ptr> snitch;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -546,7 +548,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
 
         return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
           try {
@@ -712,11 +714,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
             supervisor::notify("creating snitch");
+            debug::the_snitch = &snitch;
             snitch_config snitch_cfg;
             snitch_cfg.name = cfg->endpoint_snitch();
             snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
             snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
-            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
             snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
                 snitch.stop().get();

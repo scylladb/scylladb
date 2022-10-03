@@ -39,7 +39,7 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
         auto my_address = utils::fb_utilities::get_broadcast_address();
-        sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+        sharded<snitch_ptr> snitch;
 
         try {
             path fname1(test_files_subdir);

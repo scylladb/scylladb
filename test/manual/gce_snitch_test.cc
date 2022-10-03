@@ -84,7 +84,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
-            sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            sharded<snitch_ptr> snitch;
             snitch.start(cfg).get();
             snitch.invoke_on_all(&snitch_ptr::start).get();
             if (!exp_result) {

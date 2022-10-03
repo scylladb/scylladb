@@ -193,7 +193,7 @@ void simple_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
-    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+    sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
@@ -277,7 +277,7 @@ void heavy_origin_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
-    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+    sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
