@@ -1,5 +1,7 @@
 #include "locator/ec2_snitch.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/do_with.hh>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -67,6 +69,30 @@ future<> ec2_snitch::start() {
 }
 
 future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cmd) {
+    return do_with(int(0), [this, addr, port, cmd] (int& i) {
+        return repeat_until_value([this, addr, port, cmd, &i]() -> future<std::optional<sstring>> {
+            ++i;
+            return aws_api_call_once(addr, port, cmd).then([] (auto res) {
+                return make_ready_future<std::optional<sstring>>(std::move(res));
+            }).handle_exception([&i] (auto ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (const std::system_error &e) {
+                    logger().error(e.what());
+                    if (i >= AWS_API_CALL_RETRIES - 1) {
+                        logger().error("Maximum number of retries exceeded");
+                        throw e;
+                    }
+                }
+                return sleep(AWS_API_CALL_RETRY_INTERVAL).then([] {
+                    return make_ready_future<std::optional<sstring>>(std::nullopt);
+                });
+            });
+        });
+    });
+}
+
+future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstring cmd) {
     return connect(socket_address(inet_address{addr}, port))
     .then([this, addr, cmd] (connected_socket fd) {
         _sd = std::move(fd);

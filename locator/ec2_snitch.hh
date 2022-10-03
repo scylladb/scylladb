@@ -16,6 +16,8 @@ public:
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/latest/meta-data/placement/availability-zone";
     static constexpr const char* AWS_QUERY_SERVER_ADDR = "169.254.169.254";
     static constexpr uint16_t AWS_QUERY_SERVER_PORT = 80;
+    static constexpr int AWS_API_CALL_RETRIES = 5;
+    static constexpr auto AWS_API_CALL_RETRY_INTERVAL = std::chrono::seconds{5};
 
     ec2_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
     virtual future<> start() override;
@@ -32,5 +34,6 @@ private:
     output_stream<char> _out;
     http_response_parser _parser;
     sstring _zone_req;
+    future<sstring> aws_api_call_once(sstring addr, uint16_t port, const sstring cmd);
 };
 } // namespace locator
