@@ -118,7 +118,7 @@ public:
         entry_ptr(const entry_ptr&) noexcept = default;
         entry_ptr& operator=(std::nullptr_t) noexcept {
             if (_ref) {
-                if (_ref.unique()) {
+                if (_ref.unique() && _ref->ready()) {
                     _ref->_parent->_lru.add(*_ref);
                 }
                 _ref = nullptr;
@@ -172,6 +172,7 @@ public:
     ~partition_index_cache() {
         with_allocator(_region.allocator(), [&] {
             _cache.clear_and_dispose([this] (entry* e) noexcept {
+                _lru.remove(*e);
                 on_evicted(*e);
             });
         });
@@ -260,6 +261,7 @@ public:
                 if (i->is_referenced()) {
                     ++i;
                 } else {
+                    _lru.remove(*i);
                     on_evicted(*i);
                     i = i.erase(key_less_comparator());
                 }
