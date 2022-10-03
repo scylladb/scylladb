@@ -111,7 +111,9 @@ public:
         explicit entry_ptr(lsa::weak_ptr<entry> ref)
             : _ref(std::move(ref))
         {
-            _ref->unlink_from_lru();
+            if (_ref->is_linked()) {
+                _ref->_parent->_lru.remove(*_ref);
+            }
         }
         ~entry_ptr() { *this = nullptr; }
         entry_ptr(entry_ptr&&) noexcept = default;

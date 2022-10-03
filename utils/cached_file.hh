@@ -79,7 +79,9 @@ private:
         // because it will not be linked in the LRU.
         ptr_type share() noexcept {
             if (_use_count++ == 0) {
-                unlink_from_lru();
+                if (is_linked()) {
+                    parent->_lru.remove(*this);
+                }
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
         }
