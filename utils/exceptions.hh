@@ -36,5 +36,5 @@ public:
         return _what.c_str();
     }
 
-    const std::error_code& code() const { return _code; }
+    const std::error_code& code() const noexcept { return _code; }
 };
