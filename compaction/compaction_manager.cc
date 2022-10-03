@@ -616,6 +616,20 @@ future<> compaction_manager::really_do_stop() {
     });
 }
 
+template <typename Ex>
+requires std::is_base_of_v<std::exception, Ex> &&
+requires (const Ex& ex) {
+    { ex.code() } noexcept -> std::same_as<const std::error_code&>;
+}
+auto swallow_enospc(const Ex& ex) noexcept {
+    if (ex.code().value() != ENOSPC) {
+        return make_exception_future<>(std::make_exception_ptr(ex));
+    }
+
+    cmlog.warn("Got ENOSPC on stop, ignoring...");
+    return make_ready_future<>();
+}
+
 void compaction_manager::do_stop() noexcept {
     if (_state == state::none || _state == state::stopped) {
         return;
@@ -623,7 +637,10 @@ void compaction_manager::do_stop() noexcept {
 
     try {
         _state = state::stopped;
-        _stop_future = really_do_stop();
+        _stop_future = really_do_stop()
+            .handle_exception_type([] (const std::system_error& ex) { return swallow_enospc(ex); })
+            .handle_exception_type([] (const storage_io_error& ex) { return swallow_enospc(ex); })
+        ;
     } catch (...) {
         try {
             cmlog.error("Failed to stop the manager: {}", std::current_exception());
