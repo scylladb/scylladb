@@ -205,7 +205,8 @@ public:
             mutation_application_stats& app_stats);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
             mutation_application_stats& app_stats);
-
+    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
+            mutation_application_stats& app_stats, preemption_check, apply_resume&);
 
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker.
