@@ -594,9 +594,9 @@ private:
     run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
     large_data_stats_entry _partition_size_entry;
+    large_data_stats_entry _rows_in_partition_entry;
     large_data_stats_entry _row_size_entry;
     large_data_stats_entry _cell_size_entry;
-    large_data_stats_entry _rows_in_partition_entry;
     large_data_stats_entry _elements_in_collection_entry;
 
     void init_file_writers();
@@ -761,6 +761,11 @@ public:
                         .threshold = _sst.get_large_data_handler().get_partition_threshold_bytes(),
                     }
                 )
+        , _rows_in_partition_entry(
+                    large_data_stats_entry{
+                        .threshold = _sst.get_large_data_handler().get_rows_count_threshold(),
+                    }
+                )
         , _row_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_row_threshold_bytes(),
@@ -769,11 +774,6 @@ public:
         , _cell_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_cell_threshold_bytes(),
-                    }
-                )
-        , _rows_in_partition_entry(
-                    large_data_stats_entry{
-                        .threshold = _sst.get_large_data_handler().get_rows_count_threshold(),
                     }
                 )
         , _elements_in_collection_entry(
@@ -1470,9 +1470,9 @@ void writer::consume_end_of_stream() {
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {
             { large_data_type::partition_size, std::move(_partition_size_entry) },
+            { large_data_type::rows_in_partition, std::move(_rows_in_partition_entry) },
             { large_data_type::row_size, std::move(_row_size_entry) },
             { large_data_type::cell_size, std::move(_cell_size_entry) },
-            { large_data_type::rows_in_partition, std::move(_rows_in_partition_entry) },
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
