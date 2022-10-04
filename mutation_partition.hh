@@ -1090,7 +1090,7 @@ struct apply_resume {
         return *this;
     }
 
-    operator bool() const { return _stage != stage::done; }
+    explicit operator bool() const { return _stage != stage::done; }
 
     static apply_resume merging_rows() {
         return {stage::merging_rows, position_in_partition::for_partition_start()};
