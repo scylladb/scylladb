@@ -21,6 +21,20 @@ def get_cur_cpuset():
     cpuset = cfg.get('CPUSET')
     return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
 
+def cpu_mask_is_zero(cpu_mask):
+    """
+    The cpu_mask is a comma-separated list of 32-bit hex values with possibly omitted zero components,
+            e.g. 0xffff,,0xffff
+    We want to estimate if the whole mask is all-zeros.
+    :param cpu_mask: hwloc-calc generated CPU mask
+    :return: True if mask is zero, False otherwise
+    """
+    for cur_cpu_mask in cpu_mask.split(','):
+        if cur_cpu_mask and int(cur_cpu_mask, 16) != 0:
+            return False
+
+    return True
+
 def get_irq_cpu_mask():
     """
     Return an irq_cpu_mask corresponding to a value written in cpuset.conf
@@ -60,7 +74,14 @@ def get_irq_cpu_mask():
     hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
         format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
 
-    return out(hwloc_cmd).strip()
+    irq_cpu_mask = out(hwloc_cmd).strip()
+
+    # If the generated mask turns out to be all-zeros then it means that all present CPUs are used in cpuset.conf.
+    # In such a case irq_cpu_mask has to be all-CPUs too, a.k.a. MQ mode.
+    if cpu_mask_is_zero(irq_cpu_mask):
+        irq_cpu_mask = out("/opt/scylladb/bin/hwloc-calc all").strip()
+
+    return irq_cpu_mask
 
 def create_perftune_conf(cfg):
     """
