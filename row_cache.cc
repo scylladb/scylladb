@@ -67,10 +67,7 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_met
     }
 
     _region.make_evictable([this] {
-        return with_allocator(_region.allocator(), [this] {
-          // Removing a partition may require reading large keys when we rebalance
-          // the rbtree, so linearize anything we read
-           try {
+        return with_allocator(_region.allocator(), [this] () noexcept {
             if (!_garbage.empty()) {
                 _garbage.clear_some();
                 return memory::reclaiming_result::reclaimed_something;
@@ -81,12 +78,6 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_met
             }
             current_tracker = this;
             return _lru.evict();
-           } catch (std::bad_alloc&) {
-            // Bad luck, linearization during partition removal caused us to
-            // fail.  Drop the entire cache so we can make forward progress.
-            clear();
-            return memory::reclaiming_result::reclaimed_something;
-           }
         });
     });
 }
