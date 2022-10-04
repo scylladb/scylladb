@@ -17,35 +17,23 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/enum.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/distributed.hh>
 #include <unordered_set>
 #include <unordered_map>
 #include <variant>
 #include "types.hh"
-#include "clustering_key_filter.hh"
-#include <seastar/core/enum.hh>
-#include "compress.hh"
-#include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
-#include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>
 #include "encoding_stats.hh"
 #include "filter.hh"
-#include "exceptions.hh"
-#include "query-request.hh"
-#include "compound_compat.hh"
 #include "utils/disk-error-handler.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
-#include "sstable_version.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
-#include "sstables/open_info.hh"
 #include "sstables/generation_type.hh"
-#include "query-request.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
@@ -80,6 +68,8 @@ class sstable_writer;
 class sstable_writer_v2;
 class sstables_manager;
 class metadata_collector;
+
+struct foreign_sstable_open_info;
 
 template<typename T>
 concept ConsumeRowsContext =

@@ -12,6 +12,7 @@
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/sstables.hh"
 #include "sstables/types.hh"
+#include "clustering_key_filter.hh"
 #include "concrete_types.hh"
 
 namespace sstables {

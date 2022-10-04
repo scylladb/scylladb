@@ -25,6 +25,7 @@
 #include "schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/open_info.hh"
 #include "types/user.hh"
 #include "types/set.hh"
 #include "types/map.hh"
