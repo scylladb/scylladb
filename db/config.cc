@@ -808,7 +808,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
     , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails")
     , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, 12, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters")
-    , virtual_dirty_soft_limit(this, "virtual_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of virtual dirty memory expressed as a portion of the hard limit")
+    , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit")
     , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default) "
         "bytes written to data file. Value must be between 0 and 1.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, size_t(1) << 20, "Warn about memory allocations above this size; set to zero to disable")

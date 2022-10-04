@@ -58,7 +58,7 @@ region_group::add(region* child_r) {
     assert(!child->_heap_handle);
     child->_heap_handle = std::make_optional(_regions.push(child));
     region_group_binomial_group_sanity_check(_regions);
-    update_virtual(child_r->occupancy().total_space());
+    update_unspooled(child_r->occupancy().total_space());
 }
 
 void
@@ -67,7 +67,7 @@ region_group::del(region* child_r) {
     if (child->_heap_handle) {
         _regions.erase(*std::exchange(child->_heap_handle, std::nullopt));
         region_group_binomial_group_sanity_check(_regions);
-        update_virtual(-child_r->occupancy().total_space());
+        update_unspooled(-child_r->occupancy().total_space());
     }
 }
 
@@ -89,7 +89,7 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return !(this->under_virtual_pressure()
+    return !(this->under_unspooled_pressure()
                 || (_under_real_pressure));
 }
 
@@ -134,10 +134,10 @@ region_group::region_group(sstring name,
 }
 
 bool region_group::reclaimer_can_block() const {
-    return virtual_throttle_threshold() != std::numeric_limits<size_t>::max();
+    return unspooled_throttle_threshold() != std::numeric_limits<size_t>::max();
 }
 
-void region_group::notify_virtual_pressure_relieved() {
+void region_group::notify_unspooled_pressure_relieved() {
     _relief.signal();
 }
 
@@ -155,33 +155,33 @@ bool region_group::do_update_real_and_check_relief(ssize_t delta) {
 
 void region_group::update_real(ssize_t delta) {
     if (do_update_real_and_check_relief(delta)) {
-        notify_virtual_pressure_relieved();
+        notify_unspooled_pressure_relieved();
     }
 }
 
-void region_group::update_virtual(ssize_t delta) {
+void region_group::update_unspooled(ssize_t delta) {
     // Most-enclosing group which was relieved.
     bool relief = false;
 
-    _virtual_total_memory += delta;
+    _unspooled_total_memory += delta;
 
-    if (_virtual_total_memory > virtual_soft_limit_threshold()) {
-        notify_virtual_soft_pressure();
+    if (_unspooled_total_memory > unspooled_soft_limit_threshold()) {
+        notify_unspooled_soft_pressure();
     } else {
-        notify_virtual_soft_relief();
+        notify_unspooled_soft_relief();
     }
 
-    if (_virtual_total_memory > virtual_throttle_threshold()) {
-        notify_virtual_pressure();
-    } else if (under_virtual_pressure()) {
-        notify_virtual_relief();
+    if (_unspooled_total_memory > unspooled_throttle_threshold()) {
+        notify_unspooled_pressure();
+    } else if (under_unspooled_pressure()) {
+        notify_unspooled_relief();
         relief = true;
     }
 
     relief |= do_update_real_and_check_relief(delta);
 
     if (relief) {
-        notify_virtual_pressure_relieved();
+        notify_unspooled_pressure_relieved();
     }
 }
 

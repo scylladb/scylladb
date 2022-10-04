@@ -247,7 +247,7 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
     });
 }
 
-SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
+SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
     return seastar::async([] {
         schema_ptr s = schema_builder("ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
@@ -287,14 +287,14 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
             current_ring[0] = part0_update;
         }
 
-        std::vector<size_t> virtual_dirty_values;
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        std::vector<size_t> unspooled_dirty_values;
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
         auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority()));
         flush_reader_check.produces_partition(current_ring[0]);
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
         while ((*rd1)().get0()) ;
         close_rd1.close_now();
@@ -302,12 +302,12 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         logalloc::shard_tracker().full_compaction();
 
         flush_reader_check.produces_partition(current_ring[2]);
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_end_of_stream();
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        std::reverse(virtual_dirty_values.begin(), virtual_dirty_values.end());
-        BOOST_REQUIRE(std::is_sorted(virtual_dirty_values.begin(), virtual_dirty_values.end()));
+        std::reverse(unspooled_dirty_values.begin(), unspooled_dirty_values.end());
+        BOOST_REQUIRE(std::is_sorted(unspooled_dirty_values.begin(), unspooled_dirty_values.end()));
     });
 }
 
@@ -409,8 +409,8 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        std::vector<size_t> virtual_dirty_values;
-        virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+        std::vector<size_t> unspooled_dirty_values;
+        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
         auto rd = mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority());
         auto close_rd = deferred_close(rd);
@@ -423,13 +423,13 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
                 logalloc::shard_tracker().full_compaction();
                 mfopt = rd().get0();
             }
-            virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
+            unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         }
 
         BOOST_REQUIRE(!rd().get0());
 
-        std::reverse(virtual_dirty_values.begin(), virtual_dirty_values.end());
-        BOOST_REQUIRE(std::is_sorted(virtual_dirty_values.begin(), virtual_dirty_values.end()));
+        std::reverse(unspooled_dirty_values.begin(), unspooled_dirty_values.end());
+        BOOST_REQUIRE(std::is_sorted(unspooled_dirty_values.begin(), unspooled_dirty_values.end()));
     });
 }
 

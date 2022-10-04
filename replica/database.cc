@@ -86,7 +86,7 @@ namespace replica {
 inline
 flush_controller
 make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
-    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -208,10 +208,10 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln(" Regular:\n");
         writeln("  real dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.real_dirty_memory()));
-        writeln("  virt dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.virtual_dirty_memory()));
+        writeln("  virt dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.unspooled_dirty_memory()));
         writeln(" System:\n");
         writeln("  real dirty: {}\n", utils::to_hr_size(_system_dirty_memory_manager.real_dirty_memory()));
-        writeln("  virt dirty: {}\n\n", utils::to_hr_size(_system_dirty_memory_manager.virtual_dirty_memory()));
+        writeln("  virt dirty: {}\n\n", utils::to_hr_size(_system_dirty_memory_manager.unspooled_dirty_memory()));
 
         writeln("Replica:\n");
 
@@ -313,12 +313,12 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
-    , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
+    , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
+    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
     , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
     , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
+        auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
         }
@@ -449,9 +449,9 @@ void backlog_controller::update_controller(float shares) {
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
     : _db(&db)
-    , _region_group("memtable (virtual)", dirty_memory_manager_logalloc::reclaim_config{
-            .virtual_hard_limit = threshold / 2,
-            .virtual_soft_limit = threshold * soft_limit / 2,
+    , _region_group("memtable (unspooled)", dirty_memory_manager_logalloc::reclaim_config{
+            .unspooled_hard_limit = threshold / 2,
+            .unspooled_soft_limit = threshold * soft_limit / 2,
             .real_hard_limit = threshold,
             .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this)
       }, deferred_work_sg)
@@ -466,9 +466,9 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
         sm::make_gauge(namestr + "_dirty_bytes", [this] { return real_dirty_memory(); },
                        sm::description("Holds the current size of a all non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
                                        "Total memory size minus this value represents the amount of available memory. "
-                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+                                       "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge(namestr +"_virtual_dirty_bytes", [this] { return virtual_dirty_memory(); },
+        sm::make_gauge(namestr +"_unspooled_dirty_bytes", [this] { return unspooled_dirty_memory(); },
                        sm::description("Holds the size of used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 }
@@ -492,9 +492,9 @@ database::setup_metrics() {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
                        sm::description("Holds the current size of all (\"regular\", \"system\" and \"streaming\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
                                        "Total memory size minus this value represents the amount of available memory. "
-                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+                                       "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge("virtual_dirty_bytes", [this] { return _dirty_memory_manager.virtual_dirty_memory() + _system_dirty_memory_manager.virtual_dirty_memory(); },
+        sm::make_gauge("unspooled_dirty_bytes", [this] { return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory(); },
                        sm::description("Holds the size of all (\"regular\", \"system\" and \"streaming\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 
