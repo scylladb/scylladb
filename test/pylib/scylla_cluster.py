@@ -714,9 +714,9 @@ class ScyllaClusterManager:
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
         self.sock_path: str = f"{self.manager_dir}/api"
-        self.app = aiohttp.web.Application()
-        self._setup_routes()
-        self.runner = aiohttp.web.AppRunner(self.app)
+        app = aiohttp.web.Application()
+        self._setup_routes(app)
+        self.runner = aiohttp.web.AppRunner(app)
         self.api = ScyllaRESTAPIClient()
 
     async def start(self) -> None:
@@ -763,26 +763,26 @@ class ScyllaClusterManager:
         logging.info("Getting new Scylla cluster %s", self.cluster)
 
 
-    def _setup_routes(self) -> None:
-        self.app.router.add_get('/up', self._manager_up)
-        self.app.router.add_get('/cluster/up', self._cluster_up)
-        self.app.router.add_get('/cluster/is-dirty', self._is_dirty)
-        self.app.router.add_get('/cluster/replicas', self._cluster_replicas)
-        self.app.router.add_get('/cluster/running-servers', self._cluster_running_servers)
-        self.app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
-        self.app.router.add_get('/cluster/after-test', self._after_test)
-        self.app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
-        self.app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
-        self.app.router.add_get('/cluster/server/{id}/stop_gracefully',
-                                self._cluster_server_stop_gracefully)
-        self.app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
-        self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
-        self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
+    def _setup_routes(self, app: aiohttp.web.Application) -> None:
+        app.router.add_get('/up', self._manager_up)
+        app.router.add_get('/cluster/up', self._cluster_up)
+        app.router.add_get('/cluster/is-dirty', self._is_dirty)
+        app.router.add_get('/cluster/replicas', self._cluster_replicas)
+        app.router.add_get('/cluster/running-servers', self._cluster_running_servers)
+        app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
+        app.router.add_get('/cluster/after-test', self._after_test)
+        app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
+        app.router.add_get('/cluster/server/{id}/stop', self._cluster_server_stop)
+        app.router.add_get('/cluster/server/{id}/stop_gracefully',
+                           self._cluster_server_stop_gracefully)
+        app.router.add_get('/cluster/server/{id}/start', self._cluster_server_start)
+        app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
+        app.router.add_get('/cluster/addserver', self._cluster_server_add)
         # TODO: only pass UUID
-        self.app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
-        self.app.router.add_get('/cluster/decommission-node/{ip}', self._cluster_decommission_node)
-        self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
-        self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
+        app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
+        app.router.add_get('/cluster/decommission-node/{ip}', self._cluster_decommission_node)
+        app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
+        app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
