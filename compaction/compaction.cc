@@ -1236,62 +1236,8 @@ public:
 
 class scrub_compaction final : public regular_compaction {
 public:
-    static void report_invalid_partition(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
-            std::string_view action = "") {
-        const auto& schema = validator.schema();
-        const auto& current_key = validator.previous_partition_key();
-        clogger.error("[{} compaction {}.{}] Invalid partition {} ({}), partition is out-of-order compared to previous partition {} ({}){}{}",
-                type,
-                schema.ks_name(),
-                schema.cf_name(),
-                new_key.key().with_schema(schema),
-                new_key,
-                current_key.key().with_schema(schema),
-                current_key,
-                action.empty() ? "" : "; ",
-                action);
-    }
-    static void report_invalid_partition_start(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
-            std::string_view action = "") {
-        const auto& schema = validator.schema();
-        const auto& current_key = validator.previous_partition_key();
-        clogger.error("[{} compaction {}.{}] Invalid partition start for partition {} ({}), previous partition {} ({}) didn't end with a partition-end fragment{}{}",
-                type,
-                schema.ks_name(),
-                schema.cf_name(),
-                new_key.key().with_schema(schema),
-                new_key,
-                current_key.key().with_schema(schema),
-                current_key,
-                action.empty() ? "" : "; ",
-                action);
-    }
-    static void report_invalid_mutation_fragment(compaction_type type, mutation_fragment_stream_validator& validator, const mutation_fragment_v2& mf,
-            std::string_view action = "") {
-        const auto& schema = validator.schema();
-        const auto& key = validator.previous_partition_key();
-        const auto prev_pos = validator.previous_position();
-        clogger.error("[{} compaction {}.{}] Invalid {} fragment{} ({}) in partition {} ({}),"
-                " fragment is out-of-order compared to previous {} fragment{} ({}){}{}",
-                type,
-                schema.ks_name(),
-                schema.cf_name(),
-                mf.mutation_fragment_kind(),
-                mf.has_key() ? format(" with key {}", mf.key().with_schema(schema)) : "",
-                mf.position(),
-                key.key().with_schema(schema),
-                key,
-                prev_pos.region(),
-                prev_pos.has_key() ? format(" with key {}", prev_pos.key().with_schema(schema)) : "",
-                prev_pos,
-                action.empty() ? "" : "; ",
-                action);
-    }
-    static void report_invalid_end_of_stream(compaction_type type, mutation_fragment_stream_validator& validator, std::string_view action = "") {
-        const auto& schema = validator.schema();
-        const auto& key = validator.previous_partition_key();
-        clogger.error("[{} compaction {}.{}] Invalid end-of-stream, last partition {} ({}) didn't end with a partition-end fragment{}{}",
-                type, schema.ks_name(), schema.cf_name(), key.key().with_schema(schema), key, action.empty() ? "" : "; ", action);
+    static void report_validation_error(compaction_type type, const ::schema& schema, sstring what, std::string_view action = "") {
+        clogger.error("[{} compaction {}.{}] {}{}{}", type, schema.ks_name(), schema.cf_name(), what, action.empty() ? "" : "; ", action);
     }
 
 private:
@@ -1314,9 +1260,9 @@ private:
             ++_validation_errors;
         }
 
-        void on_unexpected_partition_start(const mutation_fragment_v2& ps) {
-            auto report_fn = [this, &ps] (std::string_view action = "") {
-                report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(), action);
+        void on_unexpected_partition_start(const mutation_fragment_v2& ps, sstring error) {
+            auto report_fn = [this, error] (std::string_view action = "") {
+                report_validation_error(compaction_type::Scrub, *_schema, error, action);
             };
             maybe_abort_scrub(report_fn);
             report_fn("Rectifying by adding assumed missing partition-end");
@@ -1338,9 +1284,9 @@ private:
             }
         }
 
-        skip on_invalid_partition(const dht::decorated_key& new_key) {
-            auto report_fn = [this, &new_key] (std::string_view action = "") {
-                report_invalid_partition(compaction_type::Scrub, _validator, new_key, action);
+        skip on_invalid_partition(const dht::decorated_key& new_key, sstring error) {
+            auto report_fn = [this, error] (std::string_view action = "") {
+                report_validation_error(compaction_type::Scrub, *_schema, error, action);
             };
             maybe_abort_scrub(report_fn);
             if (_scrub_mode == compaction_type_options::scrub::mode::segregate) {
@@ -1354,9 +1300,9 @@ private:
             return skip::yes;
         }
 
-        skip on_invalid_mutation_fragment(const mutation_fragment_v2& mf) {
-            auto report_fn = [this, &mf] (std::string_view action = "") {
-                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "");
+        skip on_invalid_mutation_fragment(const mutation_fragment_v2& mf, sstring error) {
+            auto report_fn = [this, error] (std::string_view action = "") {
+                report_validation_error(compaction_type::Scrub, *_schema, error, action);
             };
             maybe_abort_scrub(report_fn);
 
@@ -1391,9 +1337,9 @@ private:
             return skip::yes;
         }
 
-        void on_invalid_end_of_stream() {
-            auto report_fn = [this] (std::string_view action = "") {
-                report_invalid_end_of_stream(compaction_type::Scrub, _validator, action);
+        void on_invalid_end_of_stream(sstring error) {
+            auto report_fn = [this, error] (std::string_view action = "") {
+                report_validation_error(compaction_type::Scrub, *_schema, error, action);
             };
             maybe_abort_scrub(report_fn);
             // Handle missing partition_end
@@ -1412,21 +1358,27 @@ private:
                     // and shouldn't be verified. We know the last fragment the
                     // validator saw is a partition-start, passing it another one
                     // will confuse it.
-                    if (!_skip_to_next_partition && !_validator(mf)) {
-                        on_unexpected_partition_start(mf);
+                    if (!_skip_to_next_partition) {
+                        if (auto res = _validator(mf); !res) {
+                            on_unexpected_partition_start(mf, res.what());
+                        }
                         // Continue processing this partition start.
                     }
                     _skip_to_next_partition = false;
                     // Then check that the partition monotonicity stands.
                     const auto& dk = mf.as_partition_start().key();
-                    if (!_validator(dk) && on_invalid_partition(dk) == skip::yes) {
-                        continue;
+                    if (auto res = _validator(dk); !res) {
+                        if (on_invalid_partition(dk, res.what()) == skip::yes) {
+                            continue;
+                        }
                     }
                 } else if (_skip_to_next_partition) {
                     continue;
                 } else {
-                    if (!_validator(mf) && on_invalid_mutation_fragment(mf) == skip::yes) {
-                        continue;
+                    if (auto res = _validator(mf); !res) {
+                        if (on_invalid_mutation_fragment(mf, res.what()) == skip::yes) {
+                            continue;
+                        }
                     }
                 }
                 push_mutation_fragment(std::move(mf));
@@ -1435,8 +1387,8 @@ private:
             _end_of_stream = _reader.is_end_of_stream() && _reader.is_buffer_empty();
 
             if (_end_of_stream) {
-                if (!_validator.on_end_of_stream()) {
-                    on_invalid_end_of_stream();
+                if (auto res = _validator.on_end_of_stream(); !res) {
+                    on_invalid_end_of_stream(res.what());
                 }
             }
         }
@@ -1734,28 +1686,22 @@ future<uint64_t> scrub_validate_mode_validate_reader(flat_mutation_reader_v2 rea
 
             const auto& mf = *mf_opt;
 
+            if (auto res = validator(mf); !res) {
+                scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
+                validator.reset(mf);
+                ++errors;
+            }
             if (mf.is_partition_start()) {
                 const auto& ps = mf.as_partition_start();
-                if (!validator(mf)) {
-                    scrub_compaction::report_invalid_partition_start(compaction_type::Scrub, validator, ps.key());
-                    validator.reset(mf);
-                    ++errors;
-                }
-                if (!validator(ps.key())) {
-                    scrub_compaction::report_invalid_partition(compaction_type::Scrub, validator, ps.key());
+                if (auto res = validator(ps.key()); !res) {
+                    scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
                     validator.reset(ps.key());
-                    ++errors;
-                }
-            } else {
-                if (!validator(mf)) {
-                    scrub_compaction::report_invalid_mutation_fragment(compaction_type::Scrub, validator, mf);
-                    validator.reset(mf);
                     ++errors;
                 }
             }
         }
-        if (!validator.on_end_of_stream()) {
-            scrub_compaction::report_invalid_end_of_stream(compaction_type::Scrub, validator);
+        if (auto res = validator.on_end_of_stream(); !res) {
+            scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, res.what());
             ++errors;
         }
     } catch (...) {
