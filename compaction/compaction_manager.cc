@@ -863,7 +863,7 @@ auto swallow_enospc(const Ex& ex) noexcept {
 }
 
 void compaction_manager::do_stop() noexcept {
-    if (_state == state::none || _state == state::stopped) {
+    if (_state == state::none || _stop_future) {
         return;
     }
 

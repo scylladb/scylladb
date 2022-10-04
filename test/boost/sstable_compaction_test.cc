@@ -5232,3 +5232,22 @@ SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables) {
         BOOST_REQUIRE(cf->get_sstable_set().all()->size() == 1);
     });
 }
+
+// Without commit aba475fe1d24d5c, scylla will fail miserably (either with abort or segfault; depends on the version).
+SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
+    abort_source as;
+
+    auto cfg = compaction_manager::config{ .available_memory = 1 };
+
+    auto cm = compaction_manager(cfg, as);
+    cm.enable();
+
+    testlog.info("requesting abort");
+    as.request_abort();
+
+    testlog.info("draining compaction manager");
+    co_await cm.drain();
+
+    testlog.info("stopping compaction manager");
+    co_await cm.stop();
+}
