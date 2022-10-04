@@ -6116,7 +6116,7 @@ void storage_proxy::retire_view_response_handlers(noncopyable_function<bool(cons
             it->timeout_cb();
         }
         ++it;
-        if (seastar::thread::should_yield()) {
+        if (need_preempt()) {
             view_update_handlers_list::iterator_guard ig{*_view_update_handlers_list, it};
             seastar::thread::yield();
         }
