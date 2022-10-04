@@ -150,7 +150,6 @@ async def manager_internal(event_loop, request):
     port = int(request.config.getoption('port'))
     ssl = bool(request.config.getoption('ssl'))
     manager_int = ManagerClient(request.config.getoption('manager_api'), port, ssl, cluster_con)
-    await manager_int.start()
     yield manager_int
     await manager_int.stop()  # Stop client session and close driver after last test
 
@@ -176,13 +175,15 @@ def cql(manager):
 # These tests should use the "fails_without_raft" fixture. When Raft mode
 # becomes the default, this fixture can be removed.
 @pytest.fixture(scope="function")
-def check_pre_raft(cql):
+def check_pre_raft(manager):
     # If not running on Scylla, return false.
-    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    names = [row.table_name for row in manager.cql.execute(
+            "SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         return False
     # In Scylla, we check Raft mode by inspecting the configuration via CQL.
-    experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    experimental_features = list(manager.cql.execute(
+            "SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
     return not '"raft"' in experimental_features
 
 
@@ -195,7 +196,7 @@ def fails_without_raft(request, check_pre_raft):
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
 # used in tests to make schema changes. Tables are dropped after finished.
 @pytest.fixture(scope="function")
-def random_tables(request, cql):
-    tables = RandomTables(request.node.name, cql, unique_name())
+def random_tables(request, manager):
+    tables = RandomTables(request.node.name, manager, unique_name())
     yield tables
     tables.drop_all()
