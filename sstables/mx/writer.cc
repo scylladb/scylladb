@@ -593,7 +593,11 @@ private:
     } _pi_write_m;
     run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
-    scylla_metadata::large_data_stats _large_data_stats;
+    large_data_stats_entry _partition_size_entry;
+    large_data_stats_entry _row_size_entry;
+    large_data_stats_entry _cell_size_entry;
+    large_data_stats_entry _rows_in_partition_entry;
+    large_data_stats_entry _elements_in_collection_entry;
 
     void init_file_writers();
 
@@ -752,38 +756,31 @@ public:
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(s.is_static_compact_table())
-        , _large_data_stats({{
-                {
-                    large_data_type::partition_size,
+        , _partition_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_partition_threshold_bytes(),
                     }
-                },
-                {
-                    large_data_type::row_size,
+                )
+        , _row_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_row_threshold_bytes(),
                     }
-                },
-                {
-                    large_data_type::cell_size,
+                )
+        , _cell_size_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_cell_threshold_bytes(),
                     }
-                },
-                {
-                    large_data_type::rows_in_partition,
+                )
+        , _rows_in_partition_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_rows_count_threshold(),
                     }
-                },
-                {
-                    large_data_type::elements_in_collection,
+                )
+        , _elements_in_collection_entry(
                     large_data_stats_entry{
                         .threshold = _sst.get_large_data_handler().get_collection_elements_count_threshold(),
                     }
-                },
-            }})
+                )
     {
         // This can be 0 in some cases, which is albeit benign, can wreak havoc
         // in lower-level writer code, so clamp it to [1, +inf) here, which is
@@ -970,8 +967,8 @@ void writer::consume(tombstone t) {
 
 void writer::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
                                            uint64_t partition_size, uint64_t rows) {
-    auto& size_entry = _large_data_stats.map.at(large_data_type::partition_size);
-    auto& row_count_entry = _large_data_stats.map.at(large_data_type::rows_in_partition);
+    auto& size_entry = _partition_size_entry;
+    auto& row_count_entry = _rows_in_partition_entry;
     size_entry.max_value = std::max(size_entry.max_value, partition_size);
     row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
     auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
@@ -981,7 +978,7 @@ void writer::maybe_record_large_partitions(const sstables::sstable& sst, const s
 
 void writer::maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) {
-    auto& entry = _large_data_stats.map.at(large_data_type::row_size);
+    auto& entry = _row_size_entry;
     if (entry.max_value < row_size) {
         entry.max_value = row_size;
     }
@@ -992,11 +989,11 @@ void writer::maybe_record_large_rows(const sstables::sstable& sst, const sstable
 
 void writer::maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
-    auto& cell_size_entry = _large_data_stats.map.at(large_data_type::cell_size);
+    auto& cell_size_entry = _cell_size_entry;
     if (cell_size_entry.max_value < cell_size) {
         cell_size_entry.max_value = cell_size;
     }
-    auto& collection_elements_entry = _large_data_stats.map.at(large_data_type::elements_in_collection);
+    auto& collection_elements_entry = _elements_in_collection_entry;
     if (collection_elements_entry.max_value < collection_elements) {
         collection_elements_entry.max_value = collection_elements;
     }
@@ -1470,7 +1467,15 @@ void writer::consume_end_of_stream() {
     _sst.write_compression(_pc);
     auto features = sstable_enabled_features::all();
     run_identifier identifier{_run_identifier};
-    std::optional<scylla_metadata::large_data_stats> ld_stats(std::move(_large_data_stats));
+    std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
+        .map = {
+            { large_data_type::partition_size, std::move(_partition_size_entry) },
+            { large_data_type::row_size, std::move(_row_size_entry) },
+            { large_data_type::cell_size, std::move(_cell_size_entry) },
+            { large_data_type::rows_in_partition, std::move(_rows_in_partition_entry) },
+            { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
+        }
+    });
     _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
