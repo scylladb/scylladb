@@ -58,7 +58,7 @@ region_group::add(region* child_r) {
     assert(!child->_heap_handle);
     child->_heap_handle = std::make_optional(_regions.push(child));
     region_group_binomial_group_sanity_check(_regions);
-    update(child_r->occupancy().total_space());
+    update_virtual(child_r->occupancy().total_space());
 }
 
 void
@@ -67,7 +67,7 @@ region_group::del(region* child_r) {
     if (child->_heap_handle) {
         _regions.erase(*std::exchange(child->_heap_handle, std::nullopt));
         region_group_binomial_group_sanity_check(_regions);
-        update(-child_r->occupancy().total_space());
+        update_virtual(-child_r->occupancy().total_space());
     }
 }
 
@@ -89,8 +89,8 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return !(this->under_pressure()
-                || (_under_hard_pressure));
+    return !(this->under_virtual_pressure()
+                || (_under_real_pressure));
 }
 
 void
@@ -134,54 +134,54 @@ region_group::region_group(sstring name,
 }
 
 bool region_group::reclaimer_can_block() const {
-    return throttle_threshold() != std::numeric_limits<size_t>::max();
+    return virtual_throttle_threshold() != std::numeric_limits<size_t>::max();
 }
 
-void region_group::notify_pressure_relieved() {
+void region_group::notify_virtual_pressure_relieved() {
     _relief.signal();
 }
 
-bool region_group::do_update_hard_and_check_relief(ssize_t delta) {
-    _hard_total_memory += delta;
+bool region_group::do_update_real_and_check_relief(ssize_t delta) {
+    _real_total_memory += delta;
 
-    if (_hard_total_memory > hard_throttle_threshold()) {
-        _under_hard_pressure = true;
-    } else if (_under_hard_pressure) {
-        _under_hard_pressure = false;
+    if (_real_total_memory > real_throttle_threshold()) {
+        _under_real_pressure = true;
+    } else if (_under_real_pressure) {
+        _under_real_pressure = false;
         return true;
     }
     return false;
 }
 
-void region_group::update_hard(ssize_t delta) {
-    if (do_update_hard_and_check_relief(delta)) {
-        notify_pressure_relieved();
+void region_group::update_real(ssize_t delta) {
+    if (do_update_real_and_check_relief(delta)) {
+        notify_virtual_pressure_relieved();
     }
 }
 
-void region_group::update(ssize_t delta) {
+void region_group::update_virtual(ssize_t delta) {
     // Most-enclosing group which was relieved.
     bool relief = false;
 
-    _total_memory += delta;
+    _virtual_total_memory += delta;
 
-    if (_total_memory > soft_limit_threshold()) {
-        notify_soft_pressure();
+    if (_virtual_total_memory > virtual_soft_limit_threshold()) {
+        notify_virtual_soft_pressure();
     } else {
-        notify_soft_relief();
+        notify_virtual_soft_relief();
     }
 
-    if (_total_memory > throttle_threshold()) {
-        notify_pressure();
-    } else if (under_pressure()) {
-        notify_relief();
+    if (_virtual_total_memory > virtual_throttle_threshold()) {
+        notify_virtual_pressure();
+    } else if (under_virtual_pressure()) {
+        notify_virtual_relief();
         relief = true;
     }
 
-    relief |= do_update_hard_and_check_relief(delta);
+    relief |= do_update_real_and_check_relief(delta);
 
     if (relief) {
-        notify_pressure_relieved();
+        notify_virtual_pressure_relieved();
     }
 }
 

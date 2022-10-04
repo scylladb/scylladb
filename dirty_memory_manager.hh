@@ -65,9 +65,9 @@ using reclaim_start_callback = noncopyable_function<void () noexcept>;
 using reclaim_stop_callback = noncopyable_function<void () noexcept>;
 
 struct reclaim_config {
-    size_t hard_limit = std::numeric_limits<size_t>::max();
-    size_t soft_limit = hard_limit;
-    size_t absolute_hard_limit = std::numeric_limits<size_t>::max();
+    size_t virtual_hard_limit = std::numeric_limits<size_t>::max();
+    size_t virtual_soft_limit = virtual_hard_limit;
+    size_t real_hard_limit = std::numeric_limits<size_t>::max();
     reclaim_start_callback start_reclaiming = [] () noexcept {};
     reclaim_stop_callback stop_reclaiming = [] () noexcept {};
 };
@@ -150,71 +150,71 @@ public:
 class region_group : public region_listener {
     reclaim_config _cfg;
 
-    bool _under_pressure = false;
-    bool _under_soft_pressure = false;
+    bool _under_virtual_pressure = false;
+    bool _under_virtual_soft_pressure = false;
 
     region_group* _subgroup = nullptr;
 
-    size_t _hard_total_memory = 0;
+    size_t _real_total_memory = 0;
 
-    bool _under_hard_pressure = false;
+    bool _under_real_pressure = false;
 
-    size_t hard_throttle_threshold() const noexcept {
-        return _cfg.absolute_hard_limit;
+    size_t real_throttle_threshold() const noexcept {
+        return _cfg.real_hard_limit;
     }
 public:
-    void update_hard(ssize_t delta);
+    void update_real(ssize_t delta);
 
-    size_t hard_memory_used() const noexcept {
-        return _hard_total_memory;
+    size_t real_memory_used() const noexcept {
+        return _real_total_memory;
     }
 
 private:
-    bool do_update_hard_and_check_relief(ssize_t delta);
+    bool do_update_real_and_check_relief(ssize_t delta);
 
 public:
-    bool under_pressure() const noexcept {
-        return _under_pressure;
+    bool under_virtual_pressure() const noexcept {
+        return _under_virtual_pressure;
     }
 
-    bool over_soft_limit() const noexcept {
-        return _under_soft_pressure;
+    bool over_virtual_soft_limit() const noexcept {
+        return _under_virtual_soft_pressure;
     }
 
-    void notify_soft_pressure() noexcept {
-        if (!_under_soft_pressure) {
-            _under_soft_pressure = true;
+    void notify_virtual_soft_pressure() noexcept {
+        if (!_under_virtual_soft_pressure) {
+            _under_virtual_soft_pressure = true;
             _cfg.start_reclaiming();
         }
     }
 
 private:
-    void notify_soft_relief() noexcept {
-        if (_under_soft_pressure) {
-            _under_soft_pressure = false;
+    void notify_virtual_soft_relief() noexcept {
+        if (_under_virtual_soft_pressure) {
+            _under_virtual_soft_pressure = false;
             _cfg.stop_reclaiming();
         }
     }
 
-    void notify_pressure() noexcept {
-        _under_pressure = true;
+    void notify_virtual_pressure() noexcept {
+        _under_virtual_pressure = true;
     }
 
-    void notify_relief() noexcept {
-        _under_pressure = false;
+    void notify_virtual_relief() noexcept {
+        _under_virtual_pressure = false;
     }
 
 public:
-    size_t throttle_threshold() const noexcept {
-        return _cfg.hard_limit;
+    size_t virtual_throttle_threshold() const noexcept {
+        return _cfg.virtual_hard_limit;
     }
 private:
-    size_t soft_limit_threshold() const noexcept {
-        return _cfg.soft_limit;
+    size_t virtual_soft_limit_threshold() const noexcept {
+        return _cfg.virtual_soft_limit;
     }
     using region_heap = dirty_memory_manager_logalloc::region_heap;
 
-    size_t _total_memory = 0;
+    size_t _virtual_total_memory = 0;
 
     region_heap _regions;
 
@@ -233,7 +233,7 @@ private:
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
-    void notify_pressure_relieved();
+    void notify_virtual_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 private: // from region_listener
     virtual void moved(region* old_address, region* new_address) override;
@@ -260,10 +260,10 @@ public:
     }
     region_group& operator=(const region_group&) = delete;
     region_group& operator=(region_group&&) = delete;
-    size_t memory_used() const noexcept {
-        return _total_memory;
+    size_t virtual_memory_used() const noexcept {
+        return _virtual_total_memory;
     }
-    void update(ssize_t delta);
+    void update_virtual(ssize_t delta);
 
     // It would be easier to call update, but it is unfortunately broken in boost versions up to at
     // least 1.59.
@@ -277,7 +277,7 @@ public:
     //    the full update cycle even then.
     virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
         _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
-        update(delta);
+        update_virtual(delta);
     }
 
     virtual void decrease_evictable_usage(region* r) override { // From region_listener
@@ -286,7 +286,7 @@ public:
 
     virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
         decrease_evictable_usage(r);
-        update(delta);
+        update_virtual(delta);
     }
 
     //
@@ -418,7 +418,7 @@ class dirty_memory_manager {
     void start_reclaiming() noexcept;
 
     bool has_pressure() const noexcept {
-        return _virtual_region_group.over_soft_limit();
+        return _virtual_region_group.over_virtual_soft_limit();
     }
 
     unsigned _extraneous_flushes = 0;
@@ -484,39 +484,39 @@ public:
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _virtual_region_group.update_hard(-delta);
-        _virtual_region_group.update(delta);
+        _virtual_region_group.update_real(-delta);
+        _virtual_region_group.update_virtual(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _virtual_region_group.update_hard(delta);
-        _virtual_region_group.update(-delta);
+        _virtual_region_group.update_real(delta);
+        _virtual_region_group.update_virtual(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
     void pin_real_dirty_memory(int64_t delta) {
-        _virtual_region_group.update_hard(delta);
+        _virtual_region_group.update_real(delta);
     }
 
     void unpin_real_dirty_memory(int64_t delta) {
-        _virtual_region_group.update_hard(-delta);
+        _virtual_region_group.update_real(-delta);
     }
 
     size_t real_dirty_memory() const noexcept {
-        return _virtual_region_group.hard_memory_used();
+        return _virtual_region_group.real_memory_used();
     }
 
     size_t virtual_dirty_memory() const noexcept {
-        return _virtual_region_group.memory_used();
+        return _virtual_region_group.virtual_memory_used();
     }
 
     void notify_soft_pressure() {
-        _virtual_region_group.notify_soft_pressure();
+        _virtual_region_group.notify_virtual_soft_pressure();
     }
 
     size_t throttle_threshold() const {
-        return _virtual_region_group.throttle_threshold();
+        return _virtual_region_group.virtual_throttle_threshold();
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
@@ -564,9 +564,9 @@ futurize_t<std::result_of_t<Func()>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
     auto rg = this;
     bool blocked = 
-        !(rg->_blocked_requests.empty() && !rg->under_pressure());
+        !(rg->_blocked_requests.empty() && !rg->under_virtual_pressure());
     if (!blocked) {
-        blocked = _under_hard_pressure;
+        blocked = _under_real_pressure;
     }
 
     if (!blocked) {
