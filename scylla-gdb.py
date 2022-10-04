@@ -1731,10 +1731,10 @@ class dirty_mem_mgr():
         self.ref = ref
 
     def real_dirty(self):
-        return int(self.ref['_virtual_region_group']['_real_total_memory'])
+        return int(self.ref['_region_group']['_real_total_memory'])
 
     def virt_dirty(self):
-        return int(self.ref['_virtual_region_group']['_virtual_total_memory'])
+        return int(self.ref['_region_group']['_virtual_total_memory'])
 
 
 def find_instances(type_name):

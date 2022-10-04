@@ -449,7 +449,7 @@ void backlog_controller::update_controller(float shares) {
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
     : _db(&db)
-    , _virtual_region_group("memtable (virtual)", dirty_memory_manager_logalloc::reclaim_config{
+    , _region_group("memtable (virtual)", dirty_memory_manager_logalloc::reclaim_config{
             .virtual_hard_limit = threshold / 2,
             .virtual_soft_limit = threshold * soft_limit / 2,
             .real_hard_limit = threshold,
@@ -1732,7 +1732,7 @@ future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
     return std::move(_waiting_flush).then([this] {
-        return _virtual_region_group.shutdown();
+        return _region_group.shutdown();
     });
 }
 
@@ -1810,7 +1810,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // memtable. The advantage of doing this is that this is objectively the one that will
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
-                memtable& candidate_memtable = memtable::from_region(*(this->_virtual_region_group.get_largest_region()));
+                memtable& candidate_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
                 memtable_list& mtlist = *(candidate_memtable.get_memtable_list());
 
                 if (!candidate_memtable.region().evictable_occupancy()) {

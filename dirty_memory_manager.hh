@@ -391,9 +391,9 @@ class dirty_memory_manager {
     bool _db_shutdown_requested = false;
 
     replica::database* _db;
-    // The _virtual_region_group accounts for virtual memory usage. It is defined as the real dirty
+    // The _region_group accounts for virtual memory usage. It is defined as the real dirty
     // memory usage minus bytes that were already written to disk.
-    dirty_memory_manager_logalloc::region_group _virtual_region_group;
+    dirty_memory_manager_logalloc::region_group _region_group;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
     // simultaneously can sustain high levels of throughput, the memory is not freed until the
@@ -418,7 +418,7 @@ class dirty_memory_manager {
     void start_reclaiming() noexcept;
 
     bool has_pressure() const noexcept {
-        return _virtual_region_group.over_virtual_soft_limit();
+        return _region_group.over_virtual_soft_limit();
     }
 
     unsigned _extraneous_flushes = 0;
@@ -464,7 +464,7 @@ public:
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
     dirty_memory_manager()
         : _db(nullptr)
-        , _virtual_region_group("memtable (virtual)",
+        , _region_group("memtable (virtual)",
                 dirty_memory_manager_logalloc::reclaim_config{
                     .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
                 })
@@ -472,51 +472,51 @@ public:
         , _waiting_flush(make_ready_future<>()) {}
 
     static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) noexcept {
-        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_virtual_region_group));
+        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
     }
 
     dirty_memory_manager_logalloc::region_group& region_group() noexcept {
-        return _virtual_region_group;
+        return _region_group;
     }
 
     const dirty_memory_manager_logalloc::region_group& region_group() const noexcept {
-        return _virtual_region_group;
+        return _region_group;
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _virtual_region_group.update_real(-delta);
-        _virtual_region_group.update_virtual(delta);
+        _region_group.update_real(-delta);
+        _region_group.update_virtual(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _virtual_region_group.update_real(delta);
-        _virtual_region_group.update_virtual(-delta);
+        _region_group.update_real(delta);
+        _region_group.update_virtual(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
     void pin_real_dirty_memory(int64_t delta) {
-        _virtual_region_group.update_real(delta);
+        _region_group.update_real(delta);
     }
 
     void unpin_real_dirty_memory(int64_t delta) {
-        _virtual_region_group.update_real(-delta);
+        _region_group.update_real(-delta);
     }
 
     size_t real_dirty_memory() const noexcept {
-        return _virtual_region_group.real_memory_used();
+        return _region_group.real_memory_used();
     }
 
     size_t virtual_dirty_memory() const noexcept {
-        return _virtual_region_group.virtual_memory_used();
+        return _region_group.virtual_memory_used();
     }
 
     void notify_soft_pressure() {
-        _virtual_region_group.notify_virtual_soft_pressure();
+        _region_group.notify_virtual_soft_pressure();
     }
 
     size_t throttle_threshold() const {
-        return _virtual_region_group.virtual_throttle_threshold();
+        return _region_group.virtual_throttle_threshold();
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
