@@ -23,6 +23,22 @@ enum class mutation_fragment_stream_validation_level {
 /// Tracks and validates the monotonicity of the passed in fragment kinds,
 /// position in partition, token or partition keys.
 class mutation_fragment_stream_validator {
+public:
+    class validation_result {
+        sstring _what;
+    private:
+        explicit validation_result() = default;
+        explicit validation_result(sstring what) : _what(std::move(what)) { }
+    public:
+        static validation_result invalid(sstring what) { return validation_result(what); }
+        static validation_result valid() { return validation_result(); }
+        bool is_valid() const { return _what.empty(); }
+        const sstring& what() const { return _what; }
+        explicit operator bool() const { return is_valid(); }
+        bool operator!() const { return !is_valid(); }
+    };
+
+private:
     const ::schema& _schema;
     mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
@@ -30,8 +46,8 @@ class mutation_fragment_stream_validator {
     tombstone _current_tombstone;
 
 private:
-    bool validate(dht::token t, const partition_key* pkey);
-    bool validate(mutation_fragment_v2::kind kind, std::optional<position_in_partition_view> pos,
+    validation_result validate(dht::token t, const partition_key* pkey);
+    validation_result validate(mutation_fragment_v2::kind kind, std::optional<position_in_partition_view> pos,
         std::optional<tombstone> new_current_tombstone);
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
@@ -49,8 +65,8 @@ public:
     /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone);
-    bool operator()(mutation_fragment::kind kind);
+    validation_result operator()(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone);
+    validation_result operator()(mutation_fragment::kind kind);
 
     /// Validates the monotonicity of the mutation fragment kind and position.
     ///
@@ -64,8 +80,8 @@ public:
     /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the mutation fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
-    bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
+    validation_result operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
+    validation_result operator()(mutation_fragment::kind kind, position_in_partition_view pos);
 
     /// Validates the monotonicity of the mutation fragment.
     ///
@@ -73,8 +89,8 @@ public:
     /// See said overload for more details.
     ///
     /// \returns true if the mutation fragment kind is valid.
-    bool operator()(const mutation_fragment_v2& mf);
-    bool operator()(const mutation_fragment& mf);
+    validation_result operator()(const mutation_fragment_v2& mf);
+    validation_result operator()(const mutation_fragment& mf);
 
     /// Validates the monotonicity of the token.
     ///
@@ -84,7 +100,7 @@ public:
     /// overload.
     ///
     /// \returns true if the token is valid.
-    bool operator()(dht::token t);
+    validation_result operator()(dht::token t);
 
     /// Validates the monotonicity of the partition.
     ///
@@ -94,7 +110,7 @@ public:
     /// overload.
     ///
     /// \returns true if the partition key is valid.
-    bool operator()(const dht::decorated_key& dk);
+    validation_result operator()(const dht::decorated_key& dk);
 
     /// Reset the state of the validator to the given partition
     ///
@@ -120,7 +136,7 @@ public:
     ///
     /// \returns false if the last partition wasn't closed, i.e. the last
     /// fragment wasn't a `partition_end` fragment.
-    bool on_end_of_stream();
+    validation_result on_end_of_stream();
 
     /// The previous valid fragment kind.
     mutation_fragment_v2::kind previous_mutation_fragment_kind() const {
@@ -171,8 +187,6 @@ class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validation_level _validation_level;
 
 private:
-    sstring full_name() const;
-
     mutation_fragment_stream_validating_filter(const char* name_literal, sstring name_value, const schema& s, mutation_fragment_stream_validation_level level);
 
 public:
@@ -186,6 +200,8 @@ public:
 
     mutation_fragment_stream_validating_filter(mutation_fragment_stream_validating_filter&&) = delete;
     mutation_fragment_stream_validating_filter(const mutation_fragment_stream_validating_filter&) = delete;
+
+    sstring full_name() const;
 
     bool operator()(const dht::decorated_key& dk);
     bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
