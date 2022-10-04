@@ -968,9 +968,6 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                     size_t partition_count = 0;
                     {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
-                        // FIXME: we should really be checking should_yield() here instead of
-                        // need_preempt(). However, should_yield() is currently quite
-                        // expensive and we need to amortize it somehow.
                         do {
                           STAP_PROBE(scylla, row_cache_update_partition_start);
                           {
