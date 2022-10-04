@@ -53,6 +53,8 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "mutation_rebuilder.hh"
+#include "mutation_partition.hh"
+#include "clustering_key_filter.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 
