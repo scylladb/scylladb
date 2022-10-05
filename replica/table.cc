@@ -657,7 +657,19 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
             } catch (...) {
                 ex = std::current_exception();
                 _config.cf_stats->failed_memtables_flushes_count++;
-                auto abort_on_error = [ex] () {
+
+                if (try_catch<std::bad_alloc>(ex)) {
+                    // There is a chance something else will free the memory, so we can try again
+                    allowed_retries--;
+                } else if (auto ep = try_catch<std::system_error>(ex)) {
+                    allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
+                } else if (auto ep = try_catch<storage_io_error>(ex)) {
+                    allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
+                } else {
+                    allowed_retries = 0;
+                }
+
+                if (allowed_retries <= 0) {
                     // At this point we don't know what has happened and it's better to potentially
                     // take the node down and rely on commitlog to replay.
                     //
@@ -666,21 +678,6 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
                     // may end up in an infinite crash loop.
                     tlogger.error("Memtable flush failed due to: {}. Aborting, at {}", ex, current_backtrace());
                     std::abort();
-                };
-                if (try_catch<std::bad_alloc>(ex)) {
-                    // There is a chance something else will free the memory, so we can try again
-                    if (allowed_retries-- <= 0) {
-                        abort_on_error();
-                    }
-                } else if (auto ep = try_catch<std::system_error>(ex)) {
-                    if (ep->code().value() == ENOSPC) {
-                        // Keep on trying
-                        allowed_retries = default_retries;
-                    } else {
-                        abort_on_error();
-                    }
-                } else {
-                    abort_on_error();
                 }
             }
             if (_async_gate.is_closed()) {
