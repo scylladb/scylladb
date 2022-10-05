@@ -126,7 +126,7 @@ class ScyllaRESTAPIClient():
         """Close session"""
         await self.client.close()
 
-    async def get_host_id(self, server_id: str):
+    async def get_host_id(self, server_id: str) -> str:
         """Get server id (UUID)"""
         host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_id)
         host_uuid = host_uuid.lstrip('"').rstrip('"')

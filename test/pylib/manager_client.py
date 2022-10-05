@@ -171,6 +171,6 @@ class ManagerClient():
         if resp.status != 200:
             raise Exception(await resp.text())
 
-    async def get_host_id(self, server_id: str) -> None:
+    async def get_host_id(self, server_id: str) -> str:
         """Get host id through Scylla REST API"""
         return await self.api.get_host_id(server_id)
