@@ -41,6 +41,8 @@ column_family_for_tests::data::data()
     : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
 { }
 
+column_family_for_tests::data::~data() {}
+
 column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager)
     : column_family_for_tests(
         sstables_manager,
@@ -49,6 +51,76 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
             .build()
     )
 { }
+
+class column_family_for_tests::table_state : public compaction::table_state {
+    column_family_for_tests::data& _data;
+    sstables::sstables_manager& _sstables_manager;
+    std::vector<sstables::shared_sstable> _compacted_undeleted;
+    tombstone_gc_state _tombstone_gc_state;
+private:
+    replica::table& table() const noexcept {
+        return *_data.cf;
+    }
+public:
+    explicit table_state(column_family_for_tests::data& data, sstables::sstables_manager& sstables_manager)
+            : _data(data)
+            , _sstables_manager(sstables_manager)
+            , _tombstone_gc_state(nullptr)
+    {
+    }
+    const schema_ptr& schema() const noexcept override {
+        return table().schema();
+    }
+    unsigned min_compaction_threshold() const noexcept override {
+        return schema()->min_compaction_threshold();
+    }
+    bool compaction_enforce_min_threshold() const noexcept override {
+        return true;
+    }
+    const sstables::sstable_set& main_sstable_set() const override {
+        return table().get_sstable_set();
+    }
+    const sstables::sstable_set& maintenance_sstable_set() const override {
+        return table().as_table_state().maintenance_sstable_set();
+    }
+    std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
+        return sstables::get_fully_expired_sstables(*this, sstables, query_time);
+    }
+    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
+        return _compacted_undeleted;
+    }
+    sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
+        return table().get_compaction_strategy();
+    }
+    reader_permit make_compaction_reader_permit() const override {
+        return _data.semaphore.make_tracking_only_permit(&*schema(), "column_family_for_tests::table_state", db::no_timeout);
+    }
+    sstables::sstables_manager& get_sstables_manager() noexcept override {
+        return _sstables_manager;
+    }
+    sstables::shared_sstable make_sstable() const override {
+        return table().make_sstable();
+    }
+    sstables::sstable_writer_config configure_writer(sstring origin) const override {
+        return _sstables_manager.configure_writer(std::move(origin));
+    }
+
+    api::timestamp_type min_memtable_timestamp() const override {
+        return table().min_memtable_timestamp();
+    }
+    future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) override {
+        return make_ready_future<>();
+    }
+    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+        return table().as_table_state().on_compaction_completion(std::move(desc), offstrategy);
+    }
+    bool is_auto_compaction_disabled_by_user() const noexcept override {
+        return false;
+    }
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+        return _tombstone_gc_state;
+    }
+};
 
 column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
     : _data(make_lw_shared<data>())
@@ -62,6 +134,18 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cm.enable();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, replica::column_family::no_commitlog(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
+    _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
+    _data->cm.add(*_data->table_s);
+}
+
+compaction::table_state& column_family_for_tests::as_table_state() noexcept {
+    return *_data->table_s;
+}
+
+future<> column_family_for_tests::stop() {
+    auto data = _data;
+    co_await data->cm.remove(*data->table_s);
+    co_await when_all_succeed(data->cm.stop(), data->semaphore.stop()).discard_result();
 }
 
 namespace sstables {

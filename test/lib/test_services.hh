@@ -31,12 +31,14 @@
 #include "replica/database.hh"
 #include "cell_locking.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/table_state.hh"
 #include "sstables/sstables_manager.hh"
 
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 
 struct column_family_for_tests {
+    class table_state;
     struct data {
         schema_ptr s;
         reader_concurrency_semaphore semaphore;
@@ -46,7 +48,9 @@ struct column_family_for_tests {
         cell_locker_stats cl_stats;
         compaction_manager cm{compaction_manager::for_testing_tag{}};
         lw_shared_ptr<replica::column_family> cf;
+        std::unique_ptr<table_state> table_s;
         data();
+        ~data();
     };
     lw_shared_ptr<data> _data;
 
@@ -65,9 +69,9 @@ struct column_family_for_tests {
 
     compaction_manager& get_compaction_manager() noexcept { return _data->cm; }
 
-    future<> stop() {
-        return when_all_succeed(_data->cm.stop(), _data->semaphore.stop()).discard_result();
-    }
+    compaction::table_state& as_table_state() noexcept;
+
+    future<> stop();
 
     future<> stop_and_keep_alive() {
         return stop().finally([cf = *this] {});
