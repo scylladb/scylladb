@@ -413,7 +413,11 @@ mvcc_partition mvcc_container::make_evictable(const mutation_partition& mp) {
     return with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return mvcc_partition(_schema, partition_entry::make_evictable(*_schema, mp), *this, true);
+            auto p = mvcc_partition(_schema, partition_entry::make_evictable(*_schema, mp), *this, true);
+            if (_tracker) {
+                _tracker->insert(p.entry());
+            }
+            return p;
         });
     });
 }
@@ -1146,22 +1150,25 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
             auto&& s = *table.schema();
 
             auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            tracker.insert(e);
             auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
 
             {
                 auto&& p1 = snap1->version()->partition();
-                p1.clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::no);
-                p1.clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
-                p1.ensure_last_dummy(s);
+                tracker.insert(
+                    p1.clustered_rows_entry(s, table.make_ckey(0), is_dummy::no, is_continuous::no));
+                tracker.insert(
+                    p1.clustered_rows_entry(s, table.make_ckey(4), is_dummy::no, is_continuous::no));
             }
 
             auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
 
             {
                 auto&& p2 = snap2->version()->partition();
-                p2.clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::yes);
-                p2.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
-                p2.ensure_last_dummy(s);
+                tracker.insert(
+                    p2.clustered_rows_entry(s, table.make_ckey(3), is_dummy::no, is_continuous::yes));
+                tracker.insert(
+                    p2.clustered_rows_entry(s, table.make_ckey(5), is_dummy::no, is_continuous::no));
             }
 
             auto rev_s = s.make_reversed();
@@ -1194,7 +1201,8 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
 
             {
                 auto&& p2 = snap2->version()->partition();
-                p2.clustered_row(s, table.make_ckey(1), is_dummy::no, is_continuous::yes);
+                tracker.insert(
+                    p2.clustered_rows_entry(s, table.make_ckey(1), is_dummy::no, is_continuous::yes));
             }
 
             {

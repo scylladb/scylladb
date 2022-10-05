@@ -685,8 +685,8 @@ mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     return i->row();
 }
 
-deletable_row&
-mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
+rows_entry&
+mutation_partition::clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     check_schema(s);
     auto i = _rows.find(pos, rows_entry::tri_compare(s));
     if (i == _rows.end()) {
@@ -694,7 +694,12 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
             current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
         i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
-    return i->row();
+    return *i;
+}
+
+deletable_row&
+mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
+    return clustered_rows_entry(s, pos, dummy, continuous).row();
 }
 
 deletable_row&
