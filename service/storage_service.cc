@@ -2397,6 +2397,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
 
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
+                slogger.error("removenode[{}]: operation failed: {}. Aborting...", uuid, std::current_exception());
                 // we need to revert the effect of prepare verb the removenode ops is failed
                 req.cmd = node_ops_cmd::removenode_abort;
                 parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
