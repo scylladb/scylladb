@@ -1190,6 +1190,7 @@ bool
 rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
     position_in_partition::equal_compare eq(s);
     return eq(position(), other.position())
+           && _range_tombstone == other._range_tombstone
            && row().equal(column_kind::regular_column, s, other.row(), other_schema);
 }
 
@@ -1544,12 +1545,24 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
     , _link(std::move(o._link))
     , _key(std::move(o._key))
     , _row(std::move(o._row))
+    , _range_tombstone(std::move(o._range_tombstone))
     , _flags(std::move(o._flags))
 {
 }
 
+void rows_entry::compact(const schema& s, tombstone t) {
+    can_gc_fn never_gc = [] (tombstone) { return false; };
+    row().compact_and_expire(s,
+                             t + _range_tombstone,
+                             gc_clock::time_point::min(),  // no TTL expiration
+                             never_gc,                     // no GC
+                             gc_clock::time_point::min()); // no GC
+    // FIXME: Purge redundant _range_tombstone
+}
+
 void rows_entry::replace_with(rows_entry&& o) noexcept {
     swap(o);
+    _range_tombstone = std::move(o._range_tombstone);
     _row = std::move(o._row);
 }
 

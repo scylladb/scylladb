@@ -41,7 +41,6 @@ mutation_partition_v2::mutation_partition_v2(const schema& s, const mutation_par
         , _static_row(s, column_kind::static_column, x._static_row)
         , _static_row_continuous(x._static_row_continuous)
         , _rows()
-        , _row_tombstones(x._row_tombstones)
 #ifdef SEASTAR_DEBUG
         , _schema_version(s.version())
 #endif
@@ -55,79 +54,35 @@ mutation_partition_v2::mutation_partition_v2(const schema& s, const mutation_par
     _rows.clone_from(x._rows, cloner, current_deleter<rows_entry>());
 }
 
-mutation_partition_v2::mutation_partition_v2(const mutation_partition_v2& x, const schema& schema,
-        query::clustering_key_filter_ranges ck_ranges)
-        : _tombstone(x._tombstone)
-        , _static_row(schema, column_kind::static_column, x._static_row)
-        , _static_row_continuous(x._static_row_continuous)
-        , _rows()
-        , _row_tombstones(x._row_tombstones, range_tombstone_list::copy_comparator_only())
-#ifdef SEASTAR_DEBUG
-        , _schema_version(schema.version())
-#endif
-{
-#ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
-#endif
-    try {
-        for(auto&& r : ck_ranges) {
-            for (const rows_entry& e : x.range(schema, r)) {
-                auto ce = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(schema, e));
-                _rows.insert_before_hint(_rows.end(), std::move(ce), rows_entry::tri_compare(schema));
-            }
-            for (auto&& rt : x._row_tombstones.slice(schema, r)) {
-                _row_tombstones.apply(schema, rt.tombstone());
-            }
-        }
-    } catch (...) {
-        _rows.clear_and_dispose(current_deleter<rows_entry>());
-        throw;
-    }
-}
-
-mutation_partition_v2::mutation_partition_v2(mutation_partition_v2&& x, const schema& schema,
-    query::clustering_key_filter_ranges ck_ranges)
-    : _tombstone(x._tombstone)
-    , _static_row(std::move(x._static_row))
-    , _static_row_continuous(x._static_row_continuous)
-    , _rows(std::move(x._rows))
-    , _row_tombstones(schema)
-#ifdef SEASTAR_DEBUG
-    , _schema_version(schema.version())
-#endif
-{
-#ifdef SEASTAR_DEBUG
-    assert(x._schema_version == _schema_version);
-#endif
-    {
-        auto deleter = current_deleter<rows_entry>();
-        auto it = _rows.begin();
-        for (auto&& range : ck_ranges.ranges()) {
-            _rows.erase_and_dispose(it, lower_bound(schema, range), deleter);
-            it = upper_bound(schema, range);
-        }
-        _rows.erase_and_dispose(it, _rows.end(), deleter);
-    }
-    {
-        for (auto&& range : ck_ranges.ranges()) {
-            for (auto&& x_rt : x._row_tombstones.slice(schema, range)) {
-                auto rt = x_rt.tombstone();
-                rt.trim(schema,
-                        position_in_partition_view::for_range_start(range),
-                        position_in_partition_view::for_range_end(range));
-                _row_tombstones.apply(schema, std::move(rt));
-            }
-        }
-    }
-}
-
 mutation_partition_v2::mutation_partition_v2(const schema& s, mutation_partition&& x)
     : _tombstone(x.partition_tombstone())
     , _static_row(std::move(x.static_row()))
     , _static_row_continuous(x.static_row_continuous())
     , _rows(std::move(x.mutable_clustered_rows()))
-    , _row_tombstones(std::move(x.mutable_row_tombstones()))
-{ }
+#ifdef SEASTAR_DEBUG
+    , _schema_version(s.version())
+#endif
+{
+    auto&& tombstones = x.mutable_row_tombstones();
+    if (!tombstones.empty()) {
+        try {
+            mutation_partition_v2 p(s.shared_from_this());
+
+            for (auto&& t: tombstones) {
+                range_tombstone & rt = t.tombstone();
+                p.clustered_rows_entry(s, rt.position(), is_dummy::yes, is_continuous::no);
+                p.clustered_rows_entry(s, rt.end_position(), is_dummy::yes, is_continuous::yes)
+                        .set_range_tombstone(rt.tomb);
+            }
+
+            mutation_application_stats app_stats;
+            apply_monotonically(s, std::move(p), s, app_stats);
+        } catch (...) {
+            _rows.clear_and_dispose(current_deleter<rows_entry>());
+            throw;
+        }
+    }
+}
 
 mutation_partition_v2::mutation_partition_v2(const schema& s, const mutation_partition& x)
     : mutation_partition_v2(s, mutation_partition(s, x))
@@ -155,6 +110,10 @@ void mutation_partition_v2::ensure_last_dummy(const schema& s) {
     }
 }
 
+std::ostream& operator<<(std::ostream& out, const apply_resume& res) {
+    return out << "{" << int(res._stage) << ", " << res._pos << "}";
+}
+
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
 #ifdef SEASTAR_DEBUG
@@ -166,107 +125,121 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
     _static_row_continuous |= p._static_row_continuous;
 
     rows_entry::tri_compare cmp(s);
+    position_in_partition::equal_compare eq(s);
     auto del = current_deleter<rows_entry>();
 
-    // Compacts rows in [i, end) with the tombstone.
-    // Erases entries which are left empty by compaction.
-    // Does not affect continuity.
-    auto apply_tombstone_to_rows = [&] (apply_resume::stage stage, tombstone tomb, rows_type::iterator i, rows_type::iterator end) -> stop_iteration {
-        if (!preemptible) {
-            // Compaction is attempted only in preemptible contexts because it can be expensive to perform and is not
-            // necessary for correctness.
-            return stop_iteration::yes;
-        }
-
-        while (i != end) {
-            rows_entry& e = *i;
-            can_gc_fn never_gc = [](tombstone) { return false; };
-
-            ++app_stats.rows_compacted_with_tombstones;
-            bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
-                                                                     tomb,
-                                                                     gc_clock::time_point::min(),  // no TTL expiration
-                                                                     never_gc,                     // no GC
-                                                                     gc_clock::time_point::min()); // no GC
-
-            auto next_i = std::next(i);
-            bool inside_continuous_range = !tracker ||
-                    (e.continuous() && (next_i != _rows.end() && next_i->continuous()));
-
-            if (all_dead && e.row().empty() && inside_continuous_range) {
-                ++app_stats.rows_dropped_by_tombstones;
-                i = _rows.erase(i);
-                if (tracker) {
-                    tracker->remove(e);
-                }
-                del(&e);
-            } else {
-                i = next_i;
-            }
-
-            if (need_preempt() && i != end) {
-                res = apply_resume(stage, i->position());
-                return stop_iteration::no;
-            }
-        }
-        return stop_iteration::yes;
+    auto compact = [&] (rows_entry& e) {
+        ++app_stats.rows_compacted_with_tombstones;
+        e.compact(s, _tombstone);
     };
 
-    if (res._stage <= apply_resume::stage::range_tombstone_compaction) {
-        bool filtering_tombstones = res._stage == apply_resume::stage::range_tombstone_compaction;
-        for (const range_tombstone_entry& rt : p._row_tombstones) {
-            position_in_partition_view pos = rt.position();
-            if (filtering_tombstones) {
-                if (cmp(res._pos, rt.end_position()) >= 0) {
-                    continue;
-                }
-                filtering_tombstones = false;
-                if (cmp(res._pos, rt.position()) > 0) {
-                    pos = res._pos;
-                }
-            }
-            auto i = _rows.lower_bound(pos, cmp);
-            if (i == _rows.end()) {
-                break;
-            }
-            auto end = _rows.lower_bound(rt.end_position(), cmp);
-
-            auto tomb = _tombstone;
-            tomb.apply(rt.tombstone().tomb);
-
-            if (apply_tombstone_to_rows(apply_resume::stage::range_tombstone_compaction, tomb, i, end) == stop_iteration::no) {
-                return stop_iteration::no;
-            }
-        }
-    }
-
-    if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
-        res = apply_resume::merging_range_tombstones();
-        return stop_iteration::no;
-    }
-
     if (p._tombstone) {
-        // p._tombstone is already applied to _tombstone
         rows_type::iterator i;
         if (res._stage == apply_resume::stage::partition_tombstone_compaction) {
-            i = _rows.lower_bound(res._pos, cmp);
+            i = _rows.upper_bound(res._pos, cmp);
         } else {
             i = _rows.begin();
         }
-        if (apply_tombstone_to_rows(apply_resume::stage::partition_tombstone_compaction,
-                                               _tombstone, i, _rows.end()) == stop_iteration::no) {
-            return stop_iteration::no;
+        auto prev_i = (i == _rows.begin()) ? rows_type::iterator() : std::prev(i);
+        while (i != _rows.end()) {
+            compact(*i);
+            if (prev_i) {
+                maybe_drop(s, tracker, prev_i, app_stats);
+            }
+            if (preemptible && need_preempt() && i != _rows.end()) {
+                res = apply_resume(apply_resume::stage::partition_tombstone_compaction, i->position());
+                return stop_iteration::no;
+            }
+            prev_i = i;
+            ++i;
+        }
+        if (prev_i != _rows.end()) {
+            maybe_drop(s, tracker, prev_i, app_stats);
         }
         // TODO: Drop redundant range tombstones
         p._tombstone = {};
     }
 
-    res = apply_resume::merging_rows();
+    // Inserting new entries into LRU here is generally unsafe because
+    // it may violate the "older versions are evicted first" rule (see row_cache.md).
+    // It could happen, that there are newer versions in the MVCC chain with the same
+    // key, not involved in this merge. Inserting an entry here would put this
+    // entry ahead in the LRU, and the newer entry could get evicted earlier leading
+    // to apparent loss of writes.
+    // To avoid this, when inserting sentinels we must use lru::add_before() so that
+    // they are put right before in the same place in the LRU.
+
+    // Note: This procedure is not violating the "older versions are evicted first" rule.
+    // It may move some entries from the newer version into the old version,
+    // so the older version may have entries while the new version is already experiencing
+    // eviction. However, the original information which was there in the old version
+    // is guaranteed to be evicted prior to that, so there is no way for old information
+    // to be exposed by such eviction.
 
     auto p_i = p._rows.begin();
     auto i = _rows.begin();
+    rows_type::iterator lb_i; // iterator into _rows for previously inserted entry.
+
+    // When resuming, the predecessor of the sentinel may have been compacted.
+    bool prev_compacted = true;
+
+    if (res._stage < apply_resume::stage::merging_rows) {
+        prev_compacted = false;
+        res = apply_resume::merging_rows();
+    }
+
+    bool made_progress = false;
+
+    // Engaged p_sentinel indicates that information in p up to sentinel->position() was
+    // merged into this instance and that flags on the entry pointed to by p_i are
+    // only valid for the key range up to sentinel->position().
+    // We should insert the sentinel back before returning so that the sum of p and this instance
+    // remains consistent, and attributes like continuity and range_tombstone do not
+    // extend to before_all_clustering_keys() in p.
+    // If this_sentinel is engaged then it will be inserted into this instance at
+    // the same position as p_sentinel, and reflects information about the interval
+    // preceding the sentinel.
+    // We need two sentinels so that there is no gap in continuity in case there is no entry
+    // in this instance at the position of p_sentinel.
+    // The sentinel never has a clustering key position, so it carries no row information.
+    alloc_strategy_unique_ptr<rows_entry> p_sentinel;
+    alloc_strategy_unique_ptr<rows_entry> this_sentinel;
+    auto insert_sentinel_back = defer([&] {
+        // Insert this_sentinel before sentinel so that the former lands before the latter in LRU.
+        if (this_sentinel) {
+            assert(p_i != p._rows.end());
+            auto rt = this_sentinel->range_tombstone();
+            auto insert_result = _rows.insert_before_hint(i, std::move(this_sentinel), cmp);
+            auto i2 = insert_result.first;
+            if (insert_result.second) {
+                mplog.trace("{}: inserting sentinel at {}", fmt::ptr(this), i2->position());
+                if (tracker) {
+                    tracker->insert(*std::prev(i2), *i2);
+                }
+            } else {
+                mplog.trace("{}: merging sentinel at {}", fmt::ptr(this), i2->position());
+                i2->set_continuous(true);
+                i2->set_range_tombstone(rt);
+            }
+        }
+        if (p_sentinel) {
+            assert(p_i != p._rows.end());
+            if (cmp(p_i->position(), p_sentinel->position()) == 0) {
+                mplog.trace("{}: clearing attributes on {}", fmt::ptr(&p), p_i->position());
+                assert(p_i->dummy());
+                p_i->set_continuous(false);
+                p_i->set_range_tombstone({});
+            } else {
+                mplog.trace("{}: inserting sentinel at {}", fmt::ptr(&p), p_sentinel->position());
+                if (tracker) {
+                    tracker->insert(*p_i, *p_sentinel);
+                }
+                p._rows.insert_before_hint(p_i, std::move(p_sentinel), cmp);
+            }
+        }
+    });
+
     while (p_i != p._rows.end()) {
-      try {
         rows_entry& src_e = *p_i;
 
         bool miss = true;
@@ -280,66 +253,230 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
                 miss = x > 0;
             }
         }
-        if (miss) {
-            bool insert = true;
-            if (i != _rows.end() && i->continuous()) {
-                // When falling into a continuous range, preserve continuity.
-                src_e.set_continuous(true);
 
-                if (src_e.dummy()) {
-                    p_i = p._rows.erase(p_i);
-                    if (tracker) {
-                        tracker->remove(src_e);
+        // Invariants:
+        //   i->position() >= p_i->position()
+
+        // The block below reflects the information from interval (lb_i->position(), p_i->position()) to _rows,
+        // up to the last entry in _rows which has position() < p_i->position(). The remainder is reflected by the act of
+        // moving p_i itself.
+        bool prev_interval_loaded = bool(src_e.continuous());
+        // FIXME: This will be very inefficient for non-evictable snapshots, each merge is a full scan
+        // We cannot uncomment the more efficient version below before changing partition_entry::squashed() to propagate
+        // information about (non)evictability of the snapshot.
+        // bool prev_interval_loaded = (evictable && src_e.continuous()) || (!evictable && src_e.range_tombstone());
+        if (prev_interval_loaded) {
+            // lb_i is only valid if prev_interval_loaded.
+            rows_type::iterator prev_lb_i;
+
+            if (lb_i) {
+                // If there is lb_i, it means the interval starts exactly at lb_i->position() in p.
+                // Increment is needed, we don't want to set attributes on the lower bound of the interval.
+                prev_lb_i = lb_i;
+                ++lb_i;
+            } else {
+                lb_i = _rows.begin();
+            }
+
+            while (lb_i != i) {
+                bool compaction_worthwhile = src_e.range_tombstone() > lb_i->range_tombstone();
+
+                // This works for both evictable and non-evictable snapshots.
+                // For evictable snapshots we could replace the tombstone with newer, but due to
+                // the "information monotonicity" rule, adding tombstone works too.
+                lb_i->set_range_tombstone(lb_i->range_tombstone() + src_e.range_tombstone());
+                lb_i->set_continuous(true);
+
+                if (prev_compacted && prev_lb_i) {
+                    maybe_drop(s, tracker, prev_lb_i, app_stats);
+                }
+
+                prev_compacted = false;
+                if (lb_i->dummy()) {
+                    prev_compacted = true;
+                } else if (compaction_worthwhile) {
+                    compact(*lb_i);
+                    prev_compacted = true;
+                }
+
+                if (need_preempt()) {
+                    auto s1 = alloc_strategy_unique_ptr<rows_entry>(
+                            current_allocator().construct<rows_entry>(s,
+                                 position_in_partition::after_key(s, lb_i->position()), is_dummy::yes, is_continuous::no));
+                    alloc_strategy_unique_ptr<rows_entry> s2;
+                    if (lb_i->position().is_clustering_row()) {
+                        s2 = alloc_strategy_unique_ptr<rows_entry>(
+                                current_allocator().construct<rows_entry>(s, s1->position(), is_dummy::yes, is_continuous::yes));
+                        auto lb_i_next = std::next(lb_i);
+                        if (lb_i_next != _rows.end() && lb_i_next->continuous()) {
+                            s2->set_range_tombstone(lb_i_next->range_tombstone() + src_e.range_tombstone());
+                        } else {
+                            s2->set_range_tombstone(src_e.range_tombstone());
+                        }
                     }
-                    del(&src_e);
-                    insert = false;
+                    p_sentinel = std::move(s1);
+                    this_sentinel = std::move(s2);
+                    mplog.trace("preempted, res={}", res);
+                    return stop_iteration::no;
+                }
+
+                prev_lb_i = lb_i;
+                ++lb_i;
+            }
+        }
+
+        auto next_p_i = std::next(p_i);
+
+        // next_interval_loaded is true iff there are attributes on next_p_i which apply
+        // to the interval (p_i->position(), next_p_i->position), and we
+        // have to prepare a sentinel when removing p_i from p in case merging
+        // needs to stop before next_p_i is moved.
+        // FIXME: This will be very inefficient for non-evictable snapshots.
+        bool next_interval_loaded = next_p_i != p._rows.end()
+                && (next_p_i->continuous());
+//        bool next_interval_loaded = next_p_i != p._rows.end()
+//                && ((evictable && next_p_i->continuous()) || (!evictable && next_p_i->range_tombstone()));
+
+        bool do_compact = false;
+        if (miss) {
+            alloc_strategy_unique_ptr<rows_entry> s1;
+            alloc_strategy_unique_ptr<rows_entry> s2;
+            if (next_interval_loaded) {
+                // FIXME: Avoid reallocation
+                s1 = alloc_strategy_unique_ptr<rows_entry>(
+                    current_allocator().construct<rows_entry>(s,
+                        position_in_partition::after_key(s, src_e.position()), is_dummy::yes, is_continuous::no));
+                if (src_e.position().is_clustering_row()) {
+                    s2 = alloc_strategy_unique_ptr<rows_entry>(
+                            current_allocator().construct<rows_entry>(s,
+                                s1->position(), is_dummy::yes, is_continuous::yes));
+                    if (i != _rows.end() && i->continuous()) {
+                        s2->set_range_tombstone(i->range_tombstone() + src_e.range_tombstone());
+                    } else {
+                        s2->set_range_tombstone(src_e.range_tombstone());
+                    }
                 }
             }
-            if (insert) {
-                rows_type::key_grabber pi_kg(p_i);
-                _rows.insert_before(i, std::move(pi_kg));
+
+            rows_type::key_grabber pi_kg(p_i);
+            lb_i = _rows.insert_before(i, std::move(pi_kg));
+            p_sentinel = std::move(s1);
+            this_sentinel = std::move(s2);
+
+            // Check if src_e falls into a continuous range.
+            // The range past the last entry is also always implicitly continuous.
+            if (i == _rows.end() || i->continuous()) {
+                tombstone i_rt = i != _rows.end() ? i->range_tombstone() : tombstone();
+                // Cannot apply only-row range tombstone falling into a continuous range without inserting extra entry.
+                // Should not occur in practice due to the "older versions are evicted first" rule.
+                // Never occurs in non-evictable snapshots because they are continuous.
+                if (!src_e.continuous() && src_e.range_tombstone() > i_rt) {
+                    if (src_e.dummy()) {
+                        lb_i->set_range_tombstone(i_rt);
+                    } else {
+                        position_in_partition_view i_pos = i != _rows.end() ? i->position()
+                                : position_in_partition_view::after_all_clustered_rows();
+                        // See the "no singular tombstones" rule.
+                        mplog.error("Cannot merge entry {} with rt={}, cont=0 into continuous range before {} with rt={}",
+                                src_e.position(), src_e.range_tombstone(), i_pos, i_rt);
+                        abort();
+                    }
+                } else {
+                    lb_i->set_range_tombstone(src_e.range_tombstone() + i_rt);
+                }
+                lb_i->set_continuous(true);
             }
         } else {
-            auto continuous = i->continuous() || src_e.continuous();
-            auto dummy = i->dummy() && src_e.dummy();
-            i->set_continuous(continuous);
-            i->set_dummy(dummy);
-            // Clear continuity in the source first, so that in case of exception
-            // we don't end up with the range up to src_e being marked as continuous,
-            // violating exception guarantees.
-            src_e.set_continuous(false);
+            assert(i->dummy() == src_e.dummy());
+            alloc_strategy_unique_ptr<rows_entry> s1;
+            alloc_strategy_unique_ptr<rows_entry> s2;
+
+            if (next_interval_loaded) {
+                // FIXME: Avoid reallocation
+                s1 = alloc_strategy_unique_ptr<rows_entry>(
+                        current_allocator().construct<rows_entry>(s,
+                            position_in_partition::after_key(s, src_e.position()), is_dummy::yes, is_continuous::no));
+                if (src_e.position().is_clustering_row()) {
+                    s2 = alloc_strategy_unique_ptr<rows_entry>(
+                            current_allocator().construct<rows_entry>(s, s1->position(), is_dummy::yes, is_continuous::yes));
+                    auto next_i = std::next(i);
+                    if (next_i != _rows.end() && next_i->continuous()) {
+                        s2->set_range_tombstone(next_i->range_tombstone() + src_e.range_tombstone());
+                    } else {
+                        s2->set_range_tombstone(src_e.range_tombstone());
+                    }
+                }
+            }
+
+            {
+                // FIXME: This can be an evictable snapshot even if !tracker, see partition_entry::squashed()
+                // So we need to handle continuity as if it was an evictable snapshot.
+                if (i->continuous()) {
+                    if (src_e.range_tombstone() > i->range_tombstone()) {
+                        // Cannot apply range tombstone in such a case.
+                        // Should not occur in practice due to the "older versions are evicted first" rule.
+                        if (!src_e.continuous()) {
+                            // range tombstone on a discontinuous dummy does not matter
+                            if (!src_e.dummy()) {
+                                // See the "no singular tombstones" rule.
+                                mplog.error("Cannot merge entry {} with rt={}, cont=0 into an entry which has rt={}, cont=1",
+                                        src_e.position(), src_e.range_tombstone(), i->range_tombstone());
+                                abort();
+                            }
+                        } else {
+                            i->set_range_tombstone(i->range_tombstone() + src_e.range_tombstone());
+                        }
+                    }
+                } else {
+                    i->set_continuous(src_e.continuous());
+                    i->set_range_tombstone(i->range_tombstone() + src_e.range_tombstone());
+                }
+            }
             if (tracker) {
                 // Newer evictable versions store complete rows
-                i->replace_with(std::move(src_e));
+                deletable_row& r = i->row();
+                r = std::move(src_e.row());
                 tracker->remove(src_e);
             } else {
+                // Avoid row compaction if no newer range tombstone.
+                do_compact = (src_e.range_tombstone() + src_e.row().deleted_at().regular()) >
+                            (i->range_tombstone() + i->row().deleted_at().regular());
                 memory::on_alloc_point();
                 i->apply_monotonically(s, std::move(src_e));
             }
             ++app_stats.row_hits;
             p_i = p._rows.erase_and_dispose(p_i, del);
+            lb_i = i;
+            ++i;
+            p_sentinel = std::move(s1);
+            this_sentinel = std::move(s2);
+        }
+        // All operations above up to each insert_before() must be noexcept.
+        if (prev_compacted && lb_i != _rows.begin()) {
+            maybe_drop(s, tracker, std::prev(lb_i), app_stats);
+        }
+        if (lb_i->dummy()) {
+            prev_compacted = true;
+        } else if (do_compact) {
+            compact(*lb_i);
+            prev_compacted = true;
+        } else {
+            prev_compacted = false;
+        }
+        if (prev_compacted && !next_interval_loaded) {
+            // next_p_i will not see prev_interval_loaded so will not attempt to drop predecessors.
+            // We have to do it now.
+            maybe_drop(s, tracker, lb_i, app_stats);
+            lb_i = {};
         }
         ++app_stats.row_writes;
-        if (preemptible && need_preempt() && p_i != p._rows.end()) {
-            // We cannot leave p with the clustering range up to p_i->position()
-            // marked as continuous because some of its sub-ranges may have originally been discontinuous.
-            // This would result in the sum of this and p to have broader continuity after preemption,
-            // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
-            // if that's what we're merging here.
-            // It's always safe to mark the range as discontinuous.
-            p_i->set_continuous(false);
+        if (made_progress && need_preempt() && p_i != p._rows.end()) {
             return stop_iteration::no;
         }
-      } catch (...) {
-          // We cannot leave p with the clustering range up to p_i->position()
-          // marked as continuous because some of its sub-ranges may have originally been discontinuous.
-          // This would result in the sum of this and p to have broader continuity after preemption,
-          // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
-          // if that's what we're merging here.
-          // It's always safe to mark the range as discontinuous.
-          p_i->set_continuous(false);
-          throw;
-      }
+        made_progress = true;
+    }
+    if (prev_compacted && lb_i != _rows.end()) {
+        maybe_drop(s, tracker, lb_i, app_stats);
     }
     return stop_iteration::yes;
 }
@@ -396,50 +533,21 @@ void mutation_partition_v2::apply_weak(const schema& s, mutation_partition&& p, 
     apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats);
 }
 
-tombstone
-mutation_partition_v2::range_tombstone_for_row(const schema& schema, const clustering_key& key) const {
-    check_schema(schema);
-    tombstone t = _tombstone;
-    if (!_row_tombstones.empty()) {
-        auto found = _row_tombstones.search_tombstone_covering(schema, key);
-        t.apply(found);
-    }
-    return t;
-}
-
-row_tombstone
-mutation_partition_v2::tombstone_for_row(const schema& schema, const clustering_key& key) const {
-    check_schema(schema);
-    row_tombstone t = row_tombstone(range_tombstone_for_row(schema, key));
-
-    auto j = _rows.find(key, rows_entry::tri_compare(schema));
-    if (j != _rows.end()) {
-        t.apply(j->row().deleted_at(), j->row().marker());
-    }
-
-    return t;
-}
-
-row_tombstone
-mutation_partition_v2::tombstone_for_row(const schema& schema, const rows_entry& e) const {
-    check_schema(schema);
-    row_tombstone t = e.row().deleted_at();
-    t.apply(range_tombstone_for_row(schema, e.key()));
-    return t;
-}
-
 void
 mutation_partition_v2::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
     check_schema(schema);
     assert(!prefix.is_full(schema));
     auto start = prefix;
-    _row_tombstones.apply(schema, {std::move(start), std::move(prefix), std::move(t)});
+    apply_row_tombstone(schema, range_tombstone{std::move(start), std::move(prefix), std::move(t)});
 }
 
 void
 mutation_partition_v2::apply_row_tombstone(const schema& schema, range_tombstone rt) {
     check_schema(schema);
-    _row_tombstones.apply(schema, std::move(rt));
+    mutation_partition mp(schema.shared_from_this());
+    mp.apply_row_tombstone(schema, std::move(rt));
+    mutation_application_stats stats;
+    apply_weak(schema, std::move(mp), stats);
 }
 
 void
@@ -572,6 +680,23 @@ mutation_partition_v2::clustered_row(const schema& s, position_in_partition_view
     return clustered_rows_entry(s, pos, dummy, continuous).row();
 }
 
+rows_entry&
+mutation_partition_v2::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy) {
+    check_schema(s);
+    auto cmp = rows_entry::tri_compare(s);
+    auto i = _rows.lower_bound(pos, cmp);
+    if (i == _rows.end() || cmp(i->position(), pos) != 0) {
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(s, pos, dummy, is_continuous::no));
+        if (i != _rows.end()) {
+            e->set_continuous(i->continuous());
+            e->set_range_tombstone(i->range_tombstone());
+        }
+        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
+    }
+    return *i;
+}
+
 deletable_row&
 mutation_partition_v2::append_clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     check_schema(s);
@@ -662,9 +787,6 @@ operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
     if (mp._tombstone) {
         os << indent << "tombstone: " << mp._tombstone << ",\n";
     }
-    if (!mp._row_tombstones.empty()) {
-        os << indent << "range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},\n";
-    }
 
     if (!mp.static_row().empty()) {
         os << indent << "static_row: {\n";
@@ -690,6 +812,9 @@ operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
         }
         if (row.deleted_at()) {
             os << indent << indent << indent << "tombstone: " << row.deleted_at() << ",\n";
+        }
+        if (re.range_tombstone()) {
+            os << indent << indent << indent << "rt: " << re.range_tombstone() << ",\n";
         }
 
         position_in_partition pip(re.position());
@@ -747,13 +872,6 @@ bool mutation_partition_v2::equal(const schema& this_schema, const mutation_part
         return false;
     }
 
-    if (!std::equal(_row_tombstones.begin(), _row_tombstones.end(),
-        p._row_tombstones.begin(), p._row_tombstones.end(),
-        [&] (const auto& rt1, const auto& rt2) { return rt1.tombstone().equal(this_schema, rt2.tombstone()); }
-    )) {
-        return false;
-    }
-
     return _static_row.equal(column_kind::static_column, this_schema, p._static_row, p_schema);
 }
 
@@ -770,7 +888,6 @@ size_t mutation_partition_v2::external_memory_usage(const schema& s) const {
     for (auto& clr : clustered_rows()) {
         sum += clr.memory_usage(s);
     }
-    sum += row_tombstones().external_memory_usage(s);
 
     return sum;
 }
@@ -781,32 +898,13 @@ bool mutation_partition_v2::empty() const
     if (_tombstone.timestamp != api::missing_timestamp) {
         return false;
     }
-    return !_static_row.size() && _rows.empty() && _row_tombstones.empty();
+    return !_static_row.size() && _rows.empty();
 }
 
 bool
 mutation_partition_v2::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
     check_schema(s);
     return has_any_live_data(s, column_kind::static_column, static_row().get(), _tombstone, query_time);
-}
-
-uint64_t
-mutation_partition_v2::live_row_count(const schema& s, gc_clock::time_point query_time) const {
-    check_schema(s);
-    uint64_t count = 0;
-
-    for (const rows_entry& e : non_dummy_rows()) {
-        tombstone base_tombstone = range_tombstone_for_row(s, e.key());
-        if (e.row().is_live(s, column_kind::regular_column, base_tombstone, query_time)) {
-            ++count;
-        }
-    }
-
-    if (count == 0 && is_static_row_live(s, query_time)) {
-        return 1;
-    }
-
-    return count;
 }
 
 uint64_t
@@ -825,11 +923,21 @@ void mutation_partition_v2::accept(const schema& s, mutation_partition_visitor& 
             v.accept_static_cell(id, cell.as_collection_mutation());
         }
     });
-    for (const auto& rt : _row_tombstones) {
-        v.accept_row_tombstone(rt.tombstone());
-    }
+    std::optional<position_in_partition> prev_pos;
     for (const rows_entry& e : _rows) {
         const deletable_row& dr = e.row();
+        if (e.range_tombstone()) {
+            if (!e.continuous()) {
+                v.accept_row_tombstone(range_tombstone(position_in_partition::before_key(e.position()),
+                                                       position_in_partition::after_key(s, e.position()),
+                                                       e.range_tombstone()));
+            } else {
+                v.accept_row_tombstone(range_tombstone(prev_pos ? position_in_partition::after_key(s, *prev_pos)
+                                                                : position_in_partition::before_all_clustered_rows(),
+                                                       position_in_partition::after_key(s, e.position()),
+                                                       e.range_tombstone()));
+            }
+        }
         v.accept_row(e.position(), dr.deleted_at(), dr.marker(), e.dummy(), e.continuous());
         dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
             const column_definition& def = s.regular_column_at(id);
@@ -839,6 +947,7 @@ void mutation_partition_v2::accept(const schema& s, mutation_partition_visitor& 
                 v.accept_row_cell(id, cell.as_collection_mutation());
             }
         });
+        prev_pos = e.position();
     }
 }
 
@@ -856,7 +965,6 @@ mutation_partition_v2::mutation_partition_v2(mutation_partition_v2::incomplete_t
     : _tombstone(t)
     , _static_row_continuous(!s.has_static_columns())
     , _rows()
-    , _row_tombstones(s)
 #ifdef SEASTAR_DEBUG
     , _schema_version(s.version())
 #endif
@@ -882,12 +990,8 @@ void mutation_partition_v2::make_fully_continuous() {
     _static_row_continuous = true;
     auto i = _rows.begin();
     while (i != _rows.end()) {
-        if (i->dummy()) {
-            i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
-        } else {
-            i->set_continuous(true);
-            ++i;
-        }
+        i->set_continuous(true);
+        ++i;
     }
 }
 
@@ -921,11 +1025,7 @@ void mutation_partition_v2::set_continuity(const schema& s, const position_range
         if (i == end) {
             break;
         }
-        if (i->dummy()) {
-            i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
-        } else {
-            ++i;
-        }
+        ++i;
     }
 }
 
@@ -954,10 +1054,6 @@ clustering_interval_set mutation_partition_v2::get_continuity(const schema& s, i
 }
 
 stop_iteration mutation_partition_v2::clear_gently(cache_tracker* tracker) noexcept {
-    if (_row_tombstones.clear_gently() == stop_iteration::no) {
-        return stop_iteration::no;
-    }
-
     auto del = current_deleter<rows_entry>();
     auto i = _rows.begin();
     auto end = _rows.end();
@@ -1012,4 +1108,44 @@ mutation_partition_v2::fully_continuous(const schema& s, const position_range& r
 bool
 mutation_partition_v2::fully_discontinuous(const schema& s, const position_range& r) {
     return check_continuity(s, r, is_continuous::no);
+}
+
+mutation_partition_v2::rows_type::iterator
+mutation_partition_v2::maybe_drop(const schema& s,
+      cache_tracker* tracker,
+      mutation_partition_v2::rows_type::iterator i,
+      mutation_application_stats& app_stats)
+{
+    rows_entry& e = *i;
+    auto next_i = std::next(i);
+
+    if (!e.row().empty() || e.is_last_dummy()) {
+        return next_i;
+    }
+
+    // Pass only if continuity is the same on both sides and
+    // range tombstones for the intervals are the same on both sides (if intervals are continuous).
+    bool next_continuous = next_i == _rows.end() || next_i->continuous();
+    if (e.continuous() && next_continuous) {
+        tombstone next_range_tombstone = (next_i == _rows.end() ? tombstone{} : next_i->range_tombstone());
+        if (e.range_tombstone() != next_range_tombstone) {
+            return next_i;
+        }
+    } else if (!e.continuous() && !next_continuous) {
+        if (!e.dummy() && e.range_tombstone()) {
+            return next_i;
+        }
+    } else {
+        return next_i;
+    }
+
+    ++app_stats.rows_dropped_by_tombstones; // FIXME: it's more general than that now
+
+    auto del = current_deleter<rows_entry>();
+    i = _rows.erase(i);
+    if (tracker) {
+        tracker->remove(e);
+    }
+    del(&e);
+    return next_i;
 }

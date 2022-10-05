@@ -72,9 +72,6 @@ private:
     lazy_row _static_row;
     bool _static_row_continuous = true;
     rows_type _rows;
-    // Contains only strict prefixes so that we don't have to lookup full keys
-    // in both _row_tombstones and _rows.
-    range_tombstone_list _row_tombstones;
 #ifdef SEASTAR_DEBUG
     table_schema_version _schema_version;
 #endif
@@ -90,24 +87,22 @@ public:
     }
     mutation_partition_v2(schema_ptr s)
         : _rows()
-        , _row_tombstones(*s)
 #ifdef SEASTAR_DEBUG
         , _schema_version(s->version())
 #endif
     { }
     mutation_partition_v2(mutation_partition_v2& other, copy_comparators_only)
         : _rows()
-        , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
 #ifdef SEASTAR_DEBUG
         , _schema_version(other._schema_version)
 #endif
     { }
     mutation_partition_v2(mutation_partition_v2&&) = default;
-    mutation_partition_v2(const schema& s, mutation_partition&&);
+    // Assumes that p is fully continuous.
+    mutation_partition_v2(const schema& s, mutation_partition&& p);
     mutation_partition_v2(const schema& s, const mutation_partition_v2&);
-    mutation_partition_v2(const schema& s, const mutation_partition&);
-    mutation_partition_v2(const mutation_partition_v2&, const schema&, query::clustering_key_filter_ranges);
-    mutation_partition_v2(mutation_partition_v2&&, const schema&, query::clustering_key_filter_ranges);
+    // Assumes that p is fully continuous.
+    mutation_partition_v2(const schema& s, const mutation_partition& p);
     ~mutation_partition_v2();
     static mutation_partition_v2& container_of(rows_type&);
     mutation_partition_v2& operator=(mutation_partition_v2&& x) noexcept;
@@ -180,9 +175,6 @@ public:
     // Use in case this instance and p share the same schema.
     // Same guarantees as apply(const schema&, mutation_partition_v2&&, const schema&);
     void apply(const schema& s, mutation_partition_v2&& p, mutation_application_stats& app_stats);
-    // Same guarantees and constraints as for apply(const schema&, const mutation_partition_v2&, const schema&).
-    void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema,
-            mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -230,6 +222,8 @@ public:
     // Strong exception guarantees.
     void upgrade(const schema& old_schema, const schema& new_schema);
 private:
+    // Erases the entry if it's safe to do so without changing the logical state of the partition.
+    rows_type::iterator maybe_drop(const schema&, cache_tracker*, rows_type::iterator, mutation_application_stats&);
     void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
     void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);
 public:
@@ -241,6 +235,7 @@ public:
     deletable_row& clustered_row(const schema& s, clustering_key_view key);
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
     rows_entry& clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
+    rows_entry& clustered_row(const schema& s, position_in_partition_view pos, is_dummy);
     // Throws if the row already exists or if the row was not inserted to the
     // last position (one or more greater row already exists).
     // Weak exception guarantees.
@@ -255,15 +250,7 @@ public:
     utils::immutable_collection<rows_type> clustered_rows() noexcept { return _rows; }
     rows_type& mutable_clustered_rows() noexcept { return _rows; }
 
-    const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
-    utils::immutable_collection<range_tombstone_list> row_tombstones() noexcept { return _row_tombstones; }
-    range_tombstone_list& mutable_row_tombstones() noexcept { return _row_tombstones; }
-
     const row* find_row(const schema& s, const clustering_key& key) const;
-    tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
-    row_tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
-    // Can be called only for non-dummy entries
-    row_tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator lower_bound(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator upper_bound(const schema& schema, const query::clustering_range& r) const;
@@ -276,15 +263,6 @@ public:
             | boost::adaptors::filtered([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
     void accept(const schema&, mutation_partition_visitor&) const;
-
-    // Returns the number of live CQL rows in this partition.
-    //
-    // Note: If no regular rows are live, but there's something live in the
-    // static row, the static row counts as one row. If there is at least one
-    // regular row live, static row doesn't count.
-    //
-    uint64_t live_row_count(const schema&,
-        gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
