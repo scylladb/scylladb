@@ -3050,6 +3050,11 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
             BOOST_REQUIRE(compound_size == found);
         }
 
+        {
+            auto cloned_compound = *compound;
+            BOOST_REQUIRE(cloned_compound.all()->size() == 3);
+        }
+
         set2 = make_lw_shared(cs.make_sstable_set(s));
         compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
         {

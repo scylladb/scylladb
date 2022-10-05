@@ -165,7 +165,7 @@ future<compaction_result> compact_sstables(compaction_manager& cm, sstables::com
     };
     descriptor.replacer = std::move(replacer);
     if (can_purge) {
-        descriptor.enable_garbage_collection(cf.get_sstable_set());
+        descriptor.enable_garbage_collection(cf.as_table_state().main_sstable_set());
     }
     auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;

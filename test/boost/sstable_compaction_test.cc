@@ -5209,3 +5209,26 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
 
     });
 }
+
+SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(1);
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp] () {
+            return env.make_sstable(s, tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto mut1 = mutation(s, pks[0]);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(sst_gen, {std::move(mut1)});
+
+        column_family_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
+
+        cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
+
+        BOOST_REQUIRE(cf->get_sstable_set().all()->size() == 1);
+    });
+}
