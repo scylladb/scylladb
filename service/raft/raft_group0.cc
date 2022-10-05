@@ -90,8 +90,9 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         cql3::query_processor& qp,
         service::migration_manager& mm,
         gms::feature_service& feat,
+        db::system_keyspace& sys_ks,
         raft_group0_client& client)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _client(client)
+    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _sys_ks(sys_ks), _client(client)
     , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
 {
     init_rpc_verbs();
