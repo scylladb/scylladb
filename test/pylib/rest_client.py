@@ -49,7 +49,12 @@ class RESTSession:
     async def put_json(self, resource_uri: str, json: dict) \
             -> aiohttp.ClientResponse:
         """Put JSON"""
-        return await self.session.request(method="PUT", url=resource_uri, json=json)
+        resp = await self.session.request(method="PUT", url=resource_uri, json=json)
+        if resp.status != 200:
+            text = await resp.text()
+            raise RuntimeError(f"status code: {resp.status}, body text: {text}, "
+                               f"resource {resource_uri} json {json}")
+        return resp
 
 
 class UnixRESTClient:
