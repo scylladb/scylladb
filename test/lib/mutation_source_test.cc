@@ -1941,13 +1941,19 @@ class random_mutation_generator::impl {
     };
 
 private:
+    // Set to true in order to produce mutations which are easier to work with during debugging.
+    static const bool debuggable = false;
+
+    // The "333" prefix is so that it's easily distinguishable from other numbers in the printout.
+    static const api::timestamp_type min_timestamp = debuggable ? 3330000 : ::api::min_timestamp;
+
     friend class random_mutation_generator;
     generate_counters _generate_counters;
     local_shard_only _local_shard_only;
     generate_uncompactable _uncompactable;
-    const size_t _external_blob_size = 128; // Should be enough to force use of external bytes storage
-    const size_t n_blobs = 1024;
-    const column_id column_count = 64;
+    const size_t _external_blob_size = debuggable ? 4 : 128; // Should be enough to force use of external bytes storage
+    const size_t n_blobs = debuggable ? 32 : 1024;
+    const column_id column_count = debuggable ? 3 : 64;
     std::mt19937 _gen;
     schema_ptr _schema;
     std::vector<bytes> _blobs;
@@ -1955,7 +1961,13 @@ private:
     std::uniform_int_distribution<int> _bool_dist{0, 1};
     std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
     std::uniform_int_distribution<int> _range_tombstone_dist{0, 29};
-    std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{::api::min_timestamp, ::api::min_timestamp + 2};
+    std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{min_timestamp, min_timestamp + 2};
+
+    // Sequence number for mutation elements.
+    // Intended to be put as "deletion time".
+    // The "777" prefix is so that it's easily distinguishable from other numbers in the printout.
+    // Also makes it easy to grep for a particular element.
+    uint64_t _seq = 777000000;
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -1996,8 +2008,13 @@ private:
         return ts;
     }
 
+    gc_clock::time_point new_expiry() {
+        return debuggable ? gc_clock::time_point(gc_clock::time_point::duration(_seq++))
+                          : expiry_dist(_gen);
+    }
+
     tombstone random_tombstone(timestamp_level l) {
-        return tombstone(gen_timestamp(l), expiry_dist(_gen));
+        return tombstone(gen_timestamp(l), new_expiry());
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
@@ -2202,10 +2219,10 @@ public:
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {
-                        return atomic_cell::make_dead(gen_timestamp(timestamp_level::cell_tombstone), expiry_dist(_gen));
+                        return atomic_cell::make_dead(gen_timestamp(timestamp_level::cell_tombstone), new_expiry());
                     }
                     collection_mutation_description m;
-                    m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), expiry_dist(_gen));
+                    m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), new_expiry());
                     return m.serialize(*col.type);
 
                 };
@@ -2221,7 +2238,7 @@ public:
                 case 0: return row_marker();
                 case 1: return row_marker(random_tombstone(timestamp_level::row_marker_tombstone));
                 case 2: return row_marker(gen_timestamp(timestamp_level::data));
-                case 3: return row_marker(gen_timestamp(timestamp_level::data), std::chrono::seconds(1), expiry_dist(_gen));
+                case 3: return row_marker(gen_timestamp(timestamp_level::data), std::chrono::seconds(1), new_expiry());
                 default: assert(0);
             }
             abort();
