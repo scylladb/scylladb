@@ -129,7 +129,6 @@ def test_filtering_contains_null(cassandra_bug, cql, table1):
 
 # Similarly, CONTAINS KEY restriction with NULL should also match nothing.
 # Reproduces #10359.
-@pytest.mark.xfail(reason="Issue #10359")
 def test_filtering_contains_key_null(cassandra_bug, cql, table1):
     p = unique_key_string()
     cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '1', {{1: 2}})")

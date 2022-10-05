@@ -374,7 +374,8 @@ bool contains(const column_value& col, const raw_value_view& value, const evalua
 /// True iff a column is a map containing \p key.
 bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
     if (!key) {
-        return true; // Compatible with old code, which skips null terms in key comparisons.
+        // CONTAINS_KEY NULL should evaluate to NULL/false
+        return false;
     }
     auto type = col.col->type;
     const auto collection = get_value(col, inputs);
