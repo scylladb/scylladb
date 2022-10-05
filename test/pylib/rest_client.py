@@ -137,10 +137,11 @@ class ScyllaRESTAPIClient():
         host_uuid = host_uuid.lstrip('"').rstrip('"')
         return host_uuid
 
-    async def remove_node(self, initiator_ip: str, server_uuid: str) -> None:
+    async def remove_node(self, initiator_ip: str, server_uuid: str, ignore_dead: list[str]) -> None:
         """Initiate remove node of server_uuid in initiator initiator_ip"""
-        resp = await self.client.post("/storage_service/remove_node", params={"host_id": server_uuid},
-                                   host=initiator_ip)
+        resp = await self.client.post("/storage_service/remove_node",
+                               params={"host_id": server_uuid, "ignore_nodes": ",".join(ignore_dead)},
+                               host=initiator_ip)
         logger.info("remove_node status %s for %s", resp.status, server_uuid)
 
     async def decommission_node(self, node_ip: str) -> None:

@@ -776,8 +776,7 @@ class ScyllaClusterManager:
         self.app.router.add_get('/cluster/server/{id}/restart', self._cluster_server_restart)
         self.app.router.add_get('/cluster/addserver', self._cluster_server_add)
         # TODO: only pass UUID
-        self.app.router.add_get('/cluster/remove-node/{initiator}/{ip}/{uuid}',
-                                self._cluster_remove_node)
+        self.app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         self.app.router.add_get('/cluster/decommission-node/{ip}', self._cluster_decommission_node)
         self.app.router.add_get('/cluster/server/{id}/get_config', self._server_get_config)
         self.app.router.add_put('/cluster/server/{id}/update_config', self._server_update_config)
@@ -861,27 +860,29 @@ class ScyllaClusterManager:
         server_ip = await self.cluster.add_server()
         return aiohttp.web.Response(text=server_ip)
 
-    async def _cluster_remove_node(self, _request) -> aiohttp.web.Response:
+    async def _cluster_remove_node(self, _request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Run remove node on Scylla REST API for a specified server"""
         assert self.cluster
         # TODO: only pass UUID
+        data = await _request.json()
         initiator_ip = _request.match_info["initiator"]
-        to_remove_ip = _request.match_info["ip"]
-        host_id = _request.match_info["uuid"]
+        to_remove_ip = data["to_remove_ip"]
+        to_remove_host_id = data["to_remove_host_id"]
+        ignore_dead = data["ignore_dead"]
         if to_remove_ip in self.cluster.running:
             logging.warning("_cluster_remove_node %s is a running node", to_remove_ip)
-        logging.info("_cluster_remove_node initiator %s server %s %s", initiator_ip,
-                     to_remove_ip, host_id)
+        logging.info("_cluster_remove_node initiator %s server %s %s ignore_dead %s",
+                     initiator_ip, to_remove_ip, to_remove_host_id, ignore_dead)
 
         # initate remove
         try:
-            await self.api.remove_node(initiator_ip, host_id)
+            await self.api.remove_node(initiator_ip, to_remove_host_id, ignore_dead)
         except RuntimeError as exc:
-            logging.error("_cluster_remove_node initiator %s server %s %s, check log at %s",
-                          initiator_ip, to_remove_ip, host_id,
+            logging.error("_cluster_remove_node failed initiator %s server %s %s ignore_dead %s, check log at %s",
+                          initiator_ip, to_remove_ip, to_remove_host_id, ignore_dead,
                           self.cluster.running[initiator_ip].log_filename)
             return aiohttp.web.Response(status=500,
-                                        text=f"Error removing {to_remove_ip} {host_id} {exc}")
+                                        text=f"Error removing {to_remove_ip} {to_remove_host_id} {exc}")
         self.cluster.server_mark_removed(to_remove_ip)
         return aiohttp.web.Response(text="OK")
 
