@@ -16,6 +16,7 @@
 #include <seastar/testing/test_runner.hh>
 
 #include "bytes.hh"
+#include "utils/preempt.hh"
 
 namespace tests::random {
 
@@ -176,6 +177,13 @@ std::vector<T> random_subset(unsigned n, unsigned m, std::mt19937& engine) {
     std::vector<T> the_set(n);
     std::iota(the_set.begin(), the_set.end(), T{});
     return random_subset(std::move(the_set), m, engine);
+}
+
+inline
+preemption_check random_preempt() {
+    return [] () noexcept {
+        return get_bool();
+    };
 }
 
 }

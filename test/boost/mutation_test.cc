@@ -1963,6 +1963,270 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
     });
 }
 
+static void test_all_preemption_points(std::function<void(preemption_check)> func) {
+    uint64_t preempt_after = 0;
+    bool preempted;
+    do {
+        testlog.trace("preempt after {}", preempt_after);
+        preempted = false;
+        uint64_t check_count = 0;
+        func([&] () noexcept {
+            if (check_count++ == preempt_after) {
+                testlog.trace("preempted");
+                preempted = true;
+                return true;
+            } else {
+                return false;
+            }
+        });
+        preempt_after++;
+    } while (preempted);
+}
+
+SEASTAR_TEST_CASE(test_v2_merging_in_non_evictable_snapshot) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        const schema& s = *gen.schema();
+
+        mutation m1 = gen();
+        mutation m2 = gen();
+
+        m1.partition().make_fully_continuous();
+        m2.partition().make_fully_continuous();
+
+        testlog.trace("m1 = {}", m1);
+        testlog.trace("m2 = {}", m2);
+
+        mutation_partition_v2 m1_v2(s, m1.partition());
+        mutation_partition_v2 m2_v2(s, m2.partition());
+
+        m1_v2.compact(s, no_cache_tracker);
+        m2_v2.compact(s, no_cache_tracker);
+        BOOST_REQUIRE(!has_redundant_dummies(m1_v2));
+        BOOST_REQUIRE(!has_redundant_dummies(m2_v2));
+
+        testlog.trace("m1_v2 = {}", mutation_partition_v2::printer(s, m1_v2));
+        testlog.trace("m2_v2 = {}", mutation_partition_v2::printer(s, m2_v2));
+
+        mutation_application_stats app_stats;
+        auto result_v1 = mutation_partition(s, (m1 + m2).partition());
+
+        auto check = [&] (preemption_check preempt) {
+            auto result_v2 = mutation_partition_v2(s, m1_v2);
+            auto to_apply = mutation_partition_v2(s, m2_v2);
+
+            apply_resume res;
+            while (result_v2.apply_monotonically(s, std::move(to_apply), no_cache_tracker, app_stats,
+                    [&] () noexcept { return preempt(); }, res) == stop_iteration::no) {
+                seastar::thread::maybe_yield();
+            }
+
+            BOOST_REQUIRE(!has_redundant_dummies(result_v2));
+
+            testlog.trace("result_v1 = {}", mutation_partition::printer(s, result_v1));
+            testlog.trace("result_v2 = {}", mutation_partition_v2::printer(s, result_v2));
+            testlog.trace("result_v2_as_v1 = {}",
+                          value_of([&] { return mutation_partition::printer(s, result_v2.as_mutation_partition(s)); }));
+
+            assert_that(gen.schema(), result_v2).is_equal_to_compacted(result_v1);
+        };
+
+        testlog.info("always_preempt");
+        check(always_preempt());
+
+        testlog.info("random_preempt");
+        check(tests::random::random_preempt());
+
+        testlog.info("exhaustive check of all preemption points");
+        test_all_preemption_points([&] (preemption_check preempt) {
+            check(std::move(preempt));
+        });
+    });
+}
+
+static void clear(cache_tracker& tracker, const schema& s, mutation_partition_v2& p) {
+    while (p.clear_gently(&tracker) == stop_iteration::no) {}
+    p = mutation_partition_v2(s.shared_from_this());
+    tracker.insert(p);
+}
+
+SEASTAR_TEST_CASE(test_v2_merging_in_evictable_snapshot) {
+    return seastar::async([] {
+        mutation_application_stats app_stats;
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        const schema& s = *gen.schema();
+
+        mutation m1 = gen(); // older
+        mutation m2 = gen() + m1; // newer
+
+        mutation_partition_v2 m1_v2(s, m1.partition());
+        mutation_partition_v2 m2_v2(s, m2.partition());
+
+        // Newer version cannot have entries with range tombstones
+        // if the range to the left is discontinuous. apply_monotonically() asserts this.
+        for (rows_entry& e : m2_v2.mutable_clustered_rows()) {
+            if (e.range_tombstone() && !e.continuous()) {
+                e.set_continuous(true);
+            }
+        }
+
+        // Break some continuity in the oldest version as if during eviction.
+        // We want this to generate some non-dummy entries with continuity flag not set.
+        bool succeeded = false;
+        while (!succeeded) {
+            bool has_non_dummies = false;
+            for (rows_entry& e : m1_v2.mutable_clustered_rows()) {
+                if (!e.dummy()) {
+                    has_non_dummies = true;
+                }
+                if (tests::random::with_probability(0.17)) {
+                    e.set_continuous(false);
+                    if (!e.dummy()) {
+                        succeeded = true;
+                    }
+                }
+            }
+            if (!succeeded && !has_non_dummies) {
+                break; // no chance to succeed
+            }
+        }
+
+        testlog.trace("m1_v2 = {}", mutation_partition_v2::printer(s, m1_v2));
+        testlog.trace("m2_v2 = {}", mutation_partition_v2::printer(s, m2_v2));
+
+        auto expected_continuity = m1_v2.get_continuity(s, is_continuous::yes);
+        testlog.trace("m1 cont = {}", expected_continuity);
+        expected_continuity.add(s, m2_v2.get_continuity(s, is_continuous::yes));
+        testlog.trace("m2 cont = {}", m2_v2.get_continuity(s, is_continuous::yes));
+
+        tracker.insert(m1_v2);
+        tracker.insert(m2_v2);
+        auto drop_entries = defer([&] {
+            // Don't let the cleaner free them. He assumes entries are allocated using its region() and they're not.
+            clear(tracker, s, m1_v2);
+            clear(tracker, s, m2_v2);
+        });
+
+        auto result_v2 = mutation_partition_v2(s, m1_v2);
+        tracker.insert(result_v2);
+        auto clear_result_v2 = defer([&] {
+            clear(tracker, s, result_v2);
+        });
+        apply_resume res;
+        while (result_v2.apply_monotonically(s, std::move(m2_v2), &tracker, app_stats, is_preemptible::yes, res) == stop_iteration::no) {
+            seastar::thread::maybe_yield();
+        }
+
+        testlog.trace("result_v2 = {}", mutation_partition_v2::printer(s, result_v2));
+
+        auto v2_continuity = result_v2.get_continuity(s, is_continuous::yes);
+        if (!v2_continuity.equals(s, expected_continuity)) {
+            BOOST_FAIL(format("Continuity mismatch, expected: {}\nbut got: {}", expected_continuity, v2_continuity));
+        }
+
+        auto result_v1 = mutation_partition(s, m2.partition());
+
+        // Set result_v1 continuity to expected_continuity
+        result_v1.set_continuity(s, position_range::all_clustered_rows(), is_continuous::no);
+        for (auto&& r : expected_continuity) {
+            result_v1.set_continuity(s, r, is_continuous::yes);
+        }
+
+        testlog.trace("result_v1 = {}", mutation_partition::printer(s, result_v1));
+        if (testlog.is_enabled(seastar::log_level::trace)) {
+            testlog.trace("result_v2_as_v1 = {}", mutation_partition::printer(s, result_v2.as_mutation_partition(s)));
+        }
+
+        assert_that(gen.schema(), result_v2).is_equal_to_compacted(result_v1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_partition_conversion_between_v2_and_v1) {
+    return seastar::async([] {
+        simple_schema ss;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        const schema& s = *gen.schema();
+
+        mutation m = gen();
+        m.partition().make_fully_continuous();
+
+        mutation_partition_v2 v2(s, m.partition());
+        auto v1_from_v2 = v2.as_mutation_partition(s);
+
+        assert_that(m.schema(), v1_from_v2).is_equal_to_compacted(s, m.partition());
+    });
+}
+
+SEASTAR_TEST_CASE(test_conversion_of_range_tombstones_to_v2) {
+    return seastar::async([] {
+        simple_schema ss;
+        const schema& s = *ss.schema();
+
+        mutation m(ss.schema(), ss.make_pkey());
+        ss.delete_range(m, ss.make_ckey_range(1, 3));
+        ss.delete_range(m, ss.make_ckey_range(3, 7));
+        ss.delete_range(m, ss.make_ckey_range(0, 0));
+        ss.delete_range(m, ss.make_ckey_range(13, 13));
+        // range tombstone which is past all the row entries, falls into implicit continuous range.
+        ss.delete_range(m, ss.make_ckey_range(17, 19));
+
+        mutation_partition_v2 m_v2(*ss.schema(), m.partition());
+        BOOST_REQUIRE(m_v2.is_fully_continuous());
+        assert_that(m.schema(), m_v2).is_equal_to_compacted(s, m.partition());
+    });
+}
+
+SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
+    return seastar::async([] {
+        simple_schema ss;
+        const schema& s = *ss.schema();
+
+        mutation m1(ss.schema(), ss.make_pkey());
+        ss.delete_range(m1, ss.make_ckey_range(1, 3));
+        mutation_partition_v2 m1_v2(*ss.schema(), m1.partition());
+
+        {
+            mutation m2(ss.schema(), ss.make_pkey());
+            ss.delete_range(m2, ss.make_ckey_range(5, 7));
+            mutation_partition_v2 m2_v2(*ss.schema(), m2.partition());
+            // All ranges are marked discontinuous so all dummies in m2_v2 should have no effect
+            m2_v2.set_continuity(s, position_range::all_clustered_rows(), is_continuous::no);
+
+            // m2_v2:  --------------- 5 [rt] --- 7 [rt] ---
+            // m1_v2:  === 1 === 3 =========================
+
+            mutation_application_stats app_stats;
+            apply_resume resume;
+            m1_v2.apply_monotonically(s, std::move(m2_v2), nullptr, app_stats, is_preemptible::no, resume,
+                                      is_evictable::yes);
+
+            BOOST_REQUIRE(m1_v2.is_fully_continuous());
+            assert_that(ss.schema(), m1_v2).is_equal_to_compacted(s, (m1).partition());
+        }
+
+        {
+            mutation m2(ss.schema(), ss.make_pkey());
+            ss.delete_range(m2, ss.make_ckey_range(5, 7));
+            mutation_partition_v2 m2_v2(*ss.schema(), m2.partition());
+            // Leave only [5, 7] continuous
+            m2_v2.set_continuity(s, position_range::all_clustered_rows(), is_continuous::no);
+            m2_v2.set_continuity(s, position_range(ss.make_ckey_range(5, 7)), is_continuous::yes);
+
+            mutation_application_stats app_stats;
+            apply_resume resume;
+
+            // m2_v2:  --------------- 5 ==(rt)== 7 [rt] ---
+            // m1_v2:  === 1 === 3 =========================
+
+            m1_v2.apply_monotonically(s, std::move(m2_v2), nullptr, app_stats, is_preemptible::no, resume, is_evictable::yes);
+
+            BOOST_REQUIRE(m1_v2.is_fully_continuous());
+            assert_that(ss.schema(), m1_v2).is_equal_to_compacted(s, (m1 + m2).partition());
+        }
+    });
+}
+
 class measuring_allocator final : public allocation_strategy {
     size_t _allocated_bytes = 0;
 public:

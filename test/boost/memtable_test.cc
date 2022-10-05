@@ -638,6 +638,76 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
         .produces(m1 + m2 + m3);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+
+    auto pk = ss.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    // Produce large m0 so that merging range tombstone from m1 into m0 is likely to be preempted in the middle.
+    int n_tombstones = 10000;
+    int key_delta_per_tombstone = 3;
+    mutation m0(s, pk);
+    {
+        int key = 0;
+        for (int i = 0; i < n_tombstones; ++i) {
+            ss.add_row(m0, ss.make_ckey(key), "value");
+            key += key_delta_per_tombstone;
+        }
+    }
+    mt->apply(m0);
+
+    std::optional<flat_mutation_reader_v2> rd0 = mt->make_flat_reader(
+            s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+            nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd0 = defer([&] { rd0->close().get(); });
+    rd0->fill_buffer().get();
+    BOOST_REQUIRE(!rd0->is_end_of_stream());
+
+    auto k1 = n_tombstones * key_delta_per_tombstone / 3;
+    auto k2 = k1 + n_tombstones * key_delta_per_tombstone / 2;
+
+    mutation m1(s, pk);
+    ss.delete_range(m1, ss.make_ckey_range(k1, k2));
+    mt->apply(m1);
+
+    std::optional<flat_mutation_reader_v2> rd1 = mt->make_flat_reader(
+            s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+            nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd1 = defer([&] { rd1->close().get(); });
+    rd1->fill_buffer().get();
+    BOOST_REQUIRE(!rd1->is_end_of_stream());
+
+    // Trigger merging of m1 into m0.
+    close_rd0.cancel();
+    rd0->close().get();
+    rd0 = {};
+
+    mutation m2(s, pk);
+    ss.delete_range(m2, ss.make_ckey_range(0, 1));
+    // Shadow earlier range tombstone in m1 to test whether applying this range tombstone
+    // to m1 (from m2) while m1 is still merging its range tombstones to m0 doesn't
+    // lead to loss of information from m2 due to the way preemption is handled in m1 -> m0 merging.
+    ss.delete_range(m2, ss.make_ckey_range(k1, k2));
+    mt->apply(m2);
+
+    // Trigger merging of m2 into m1.
+    // Some of it will complete immediately.
+    // Let's see if updates of m1 from m2 are not lost while merging of m1 into m0 is still in progress.
+    close_rd1.cancel();
+    rd1->close().get();
+    rd1 = {};
+
+    // Wait for merging to complete so that we read the final result later.
+    mt->cleaner().drain().get();
+
+    assert_that(mt->make_flat_reader(s, semaphore.make_permit(), pr))
+            .produces(m0 + m1 + m2);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_range_tombstones_are_compacted_with_data) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     simple_schema ss;
