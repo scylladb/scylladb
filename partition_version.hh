@@ -21,6 +21,8 @@ class static_row;
 
 // This is MVCC implementation for mutation_partitions.
 //
+// See docs/dev/mvcc.md for important design information.
+//
 // It is assumed that mutation_partitions are stored in some sort of LSA-managed
 // container (memtable or row cache).
 //
