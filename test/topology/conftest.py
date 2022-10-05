@@ -12,7 +12,7 @@ import ssl
 from typing import List
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, IPAddress
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
@@ -90,7 +90,7 @@ Session.run_async = run_async
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[str], port: int, use_ssl: bool):
+def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"

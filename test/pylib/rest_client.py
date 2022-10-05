@@ -5,14 +5,16 @@
 #
 """Asynchronous helper for Scylla REST API operations.
 """
+from __future__ import annotations                           # Type hints as strings
 from abc import ABCMeta
 from collections.abc import Mapping
 import logging
 import os.path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 from contextlib import asynccontextmanager
 from aiohttp import request, BaseConnector, UnixConnector
 import pytest
+from test.pylib.internal_types import IPAddress, HostID
 
 
 logger = logging.getLogger(__name__)
@@ -130,13 +132,13 @@ class ScyllaRESTAPIClient():
     def __init__(self, port: int = 10000):
         self.client = TCPRESTClient(port)
 
-    async def get_host_id(self, server_id: str) -> str:
+    async def get_host_id(self, server_ip: IPAddress) -> HostID:
         """Get server id (UUID)"""
-        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_id)
+        host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_ip)
         assert isinstance(host_uuid, str) and len(host_uuid) > 10, \
                 f"get_host_id: invalid {host_uuid}"
         host_uuid = host_uuid.lstrip('"').rstrip('"')
-        return host_uuid
+        return HostID(host_uuid)
 
     async def get_host_id_map(self, dst_server_id: str) -> list:
         """Retrieve the mapping of endpoint to host ID"""
@@ -152,19 +154,21 @@ class ScyllaRESTAPIClient():
         assert(type(result) == list)
         return result
 
-    async def remove_node(self, initiator_ip: str, server_uuid: str, ignore_dead: list[str]) \
-            -> None:
-        """Initiate remove node of server_uuid in initiator initiator_ip"""
-        logger.info("remove_node for %s", server_uuid)
+    async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
+                          ignore_dead: list[IPAddress]) -> None:
+        """Initiate remove node of host_id in initiator initiator_ip"""
+        logger.info("remove_node for %s on %s", host_id, initiator_ip)
         await self.client.post("/storage_service/remove_node",
-                               params = {"host_id": server_uuid,
+                               params = {"host_id": host_id,
                                          "ignore_nodes": ",".join(ignore_dead)},
                                host = initiator_ip)
+        logger.debug("remove_node for %s finished", host_id)
 
-    async def decommission_node(self, node_ip: str) -> None:
-        """Initiate remove node of server_uuid in initiator initiator_ip"""
-        logger.debug("decommission_node %s", node_ip)
-        await self.client.post("/storage_service/decommission", host=node_ip)
+    async def decommission_node(self, host_ip: str) -> None:
+        """Initiate decommission node of host_ip"""
+        logger.debug("decommission_node %s", host_ip)
+        await self.client.post("/storage_service/decommission", host = host_ip)
+        logger.debug("decommission_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
         """Get the current generation number of `target_ip` observed by `node_ip`."""
@@ -192,7 +196,8 @@ class ScyllaRESTAPIClient():
 
 
 @asynccontextmanager
-async def inject_error(api: ScyllaRESTAPIClient, node_ip: str, injection: str, one_shot: bool):
+async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
+                       one_shot: bool):
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
     """
