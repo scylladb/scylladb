@@ -10,6 +10,8 @@
 #include "idl/token.idl.hh"
 #include "idl/uuid.idl.hh"
 
+#include "streaming/stream_fwd.hh"
+
 namespace streaming {
 
 class plan_id final {
