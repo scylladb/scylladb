@@ -348,8 +348,14 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
 future<> compaction_manager::task::update_history(compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
-    co_return co_await t.update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
-                                                                    res.stats.start_size, res.stats.end_size);
+    if (_cm._sys_ks) {
+        // FIXME: add support to merged_rows. merged_rows is a histogram that
+        // shows how many sstables each row is merged from. This information
+        // cannot be accessed until we make combined_reader more generic,
+        // for example, by adding a reducer method.
+        co_await db::system_keyspace::update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
+                ended_at.count(), res.stats.start_size, res.stats.end_size, std::unordered_map<int32_t, int64_t>{});
+    }
 }
 
 class compaction_manager::major_compaction_task : public compaction_manager::task {

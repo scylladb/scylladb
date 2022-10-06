@@ -108,9 +108,6 @@ public:
     api::timestamp_type min_memtable_timestamp() const override {
         return table().min_memtable_timestamp();
     }
-    future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) override {
-        return make_ready_future<>();
-    }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().as_table_state().on_compaction_completion(std::move(desc), offstrategy);
     }

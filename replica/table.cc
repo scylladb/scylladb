@@ -2536,17 +2536,6 @@ public:
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();
     }
-    future<> update_compaction_history(utils::UUID compaction_id, sstring ks_name, sstring cf_name, std::chrono::milliseconds ended_at, int64_t bytes_in, int64_t bytes_out) override {
-        // FIXME: add support to merged_rows. merged_rows is a histogram that
-        // shows how many sstables each row is merged from. This information
-        // cannot be accessed until we make combined_reader more generic,
-        // for example, by adding a reducer method.
-        if (!db::qctx) {
-            return make_ready_future<>();
-        }
-        return db::system_keyspace::update_compaction_history(compaction_id, ks_name, cf_name, ended_at.count(),
-                                                              bytes_in, bytes_out, std::unordered_map<int32_t, int64_t>{});
-    }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         if (offstrategy) {
             return _cg.update_sstable_lists_on_off_strategy_completion(std::move(desc));
