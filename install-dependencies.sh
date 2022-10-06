@@ -31,7 +31,7 @@ debian_base_packages=(
     clang
     gdb
     liblua5.3-dev
-    python3-aiohttp
+    python3-pip
     python3-pyparsing
     python3-colorama
     python3-tabulate
@@ -69,15 +69,10 @@ fedora_packages=(
     maven
     patchelf
     python3
-    python3-aiohttp
     python3-pip
     python3-magic
     python3-colorama
     python3-tabulate
-    python3-boto3
-    python3-pytest
-    python3-pytest-asyncio
-    python3-redis
     dnf-utils
     pigz
     net-tools
@@ -122,13 +117,26 @@ fedora_python3_packages=(
 )
 
 pip_packages=(
+    'geomet<0.3,>=0.1'
+    boto3
+    pytest
+    pytest-asyncio
+    redis
+    aiohttp
+    traceback-with-variables
+    scylla-api-client
+)
+
+# packages used by scylla-python3 for scylla's custom python environment
+_scylla_pip_packages=(
     scylla-driver
     geomet
     traceback-with-variables
     scylla-api-client
 )
 
-pip_symlinks=(
+# packages used by scylla-python3 for scylla's custom python environment
+_scylla_pip_symlinks=(
     scylla-api-client
 )
 
@@ -270,12 +278,12 @@ if $PRINT_PYTHON3; then
 fi
 
 if $PRINT_PIP; then
-    echo "${pip_packages[@]}"
+    echo "${_scylla_pip_packages[@]}"
     exit 0
 fi
 
 if $PRINT_PIP_SYMLINK; then
-    echo "${pip_symlinks[@]}"
+    echo "${_scylla_pip_symlinks[@]}"
     exit 0
 fi
 
@@ -290,6 +298,7 @@ fi
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
+    pip3 install ${pip_packages[@]}
     if [ "$VERSION_ID" = "8" ]; then
         apt-get -y install libsystemd-dev scylla-antlr35 libyaml-cpp-dev
     elif [ "$VERSION_ID" = "14.04" ]; then
@@ -308,11 +317,9 @@ elif [ "$ID" = "fedora" ]; then
         exit 1
     fi
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
-    pip3 install "geomet<0.3,>=0.1"
+    pip3 install ${pip_packages[@]}
     # Disable C extensions
     pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
-    pip3 install traceback-with-variables
-    pip3 install scylla-api-client
 
     cargo install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
