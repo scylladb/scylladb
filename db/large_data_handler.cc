@@ -63,6 +63,14 @@ future<> large_data_handler::stop() {
     return _sem.wait(max_concurrency);
 }
 
+void large_data_handler::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void large_data_handler::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
+}
+
 template <typename T> static std::string key_to_str(const T& key, const schema& s) {
     std::ostringstream oss;
     oss << key.with_schema(s);

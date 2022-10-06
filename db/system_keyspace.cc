@@ -3363,6 +3363,8 @@ future<> system_keyspace::start() {
         qctx = std::make_unique<query_context>(_qp);
     }
 
+    _db.local().plug_system_keyspace(*this);
+
     // FIXME
     // This should be coupled with setup_version()'s part committing these values into
     // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
@@ -3375,6 +3377,7 @@ future<> system_keyspace::start() {
 }
 
 future<> system_keyspace::shutdown() {
+    _db.local().unplug_system_keyspace();
     co_return;
 }
 

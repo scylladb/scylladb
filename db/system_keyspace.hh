@@ -86,7 +86,7 @@ public:
     virtual bool contains_keyspace(std::string_view) = 0;
 };
 
-class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
+class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
     std::unique_ptr<local_cache> _cache;

@@ -19,6 +19,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
+#include "db/system_keyspace.hh"
 #include <cmath>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -1679,6 +1680,14 @@ public:
 
 compaction::strategy_control& compaction_manager::get_strategy_control() const noexcept {
     return *_strategy_control;
+}
+
+void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void compaction_manager::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
 }
 
 double compaction_backlog_tracker::backlog() const {

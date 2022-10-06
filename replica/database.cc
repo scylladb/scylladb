@@ -2765,6 +2765,16 @@ database::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
+void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _compaction_manager.plug_system_keyspace(sys_ks);
+    _large_data_handler->plug_system_keyspace(sys_ks);
+}
+
+void database::unplug_system_keyspace() noexcept {
+    _compaction_manager.unplug_system_keyspace();
+    _large_data_handler->unplug_system_keyspace();
+}
+
 } // namespace replica
 
 template <typename T>
