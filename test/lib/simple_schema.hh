@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <map>
+
 #include "schema.hh"
 #include "schema_registry.hh"
 #include "keys.hh"
@@ -18,18 +20,26 @@
 #include "schema_builder.hh"
 #include "sstable_utils.hh"
 #include "reader_permit.hh"
+#include "types/map.hh"
+#include "atomic_cell_or_collection.hh"
 
 // Helper for working with the following table:
 //
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
 class simple_schema {
+public:
+    using with_static = bool_class<class static_tag>;
+    using with_collection = bool_class<class collection_tag>;
+private:
     friend class global_simple_schema;
 
-    schema_ptr _s;
+    schema_ptr _s = nullptr;
     api::timestamp_type _timestamp = api::min_timestamp;
     const column_definition* _v_def = nullptr;
     table_schema_version _v_def_version;
+    with_static _ws;
+    with_collection _wc;
 
     simple_schema(schema_ptr s, api::timestamp_type timestamp)
         : _s(s)
@@ -44,6 +54,9 @@ private:
         _v_def_version = s.version();
         return *_v_def;
     }
+    static auto get_collection_type() {
+        return map_type_impl::get_instance(utf8_type, utf8_type, true);
+    }
 public:
     api::timestamp_type current_timestamp() {
         return _timestamp;
@@ -55,18 +68,24 @@ public:
         return {new_timestamp(), gc_clock::now()};
     }
 public:
-    using with_static = bool_class<class static_tag>;
-    simple_schema(with_static ws = with_static::yes)
-        : _s(schema_builder("ks", "cf")
+    simple_schema(with_static ws = with_static::yes, with_collection wc = with_collection::no)
+        : _ws(ws)
+        , _wc(wc)
+    {
+        auto sb = schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", utf8_type, column_kind::clustering_key)
             .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
-            .with_column("v", utf8_type)
-            .build())
-    { }
+            .with_column("v", utf8_type);
+        if (wc) {
+            sb.with_column("c1", get_collection_type());
+        }
+        _s = sb.build();
+    }
 
     sstring cql() const {
-        return "CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck))";
+        return format("CREATE TABLE ks.cf (pk text, ck text, v text, s1 text{}{}, PRIMARY KEY (pk, ck))", _ws ? " static" : "",
+                _wc ? ", c1 map<text, text>" : "");
     }
 
     clustering_key make_ckey(sstring ck) {
@@ -99,6 +118,23 @@ public:
         }
         const column_definition& v_def = get_v_def(*_s);
         m.set_clustered_cell(key, v_def, atomic_cell::make_live(*v_def.type, t, serialized(v)));
+        return t;
+    }
+
+    api::timestamp_type add_row_with_collection(mutation& m, const clustering_key& ck, const std::map<bytes, bytes>& kv_map, api::timestamp_type t = api::missing_timestamp) {
+        if (t == api::missing_timestamp) {
+            t = new_timestamp();
+        }
+
+        collection_mutation_description cmd;
+        for (const auto& [k, v] : kv_map) {
+            cmd.cells.emplace_back(k, atomic_cell::make_live(*bytes_type, t, v, atomic_cell::collection_member::yes));
+        }
+
+        const auto map_type = get_collection_type();
+        auto serialized_map = cmd.serialize(*map_type);
+        const column_definition& c1_def = *_s->get_column_definition(to_bytes("c1"));
+        m.set_clustered_cell(ck, c1_def, atomic_cell_or_collection(std::move(serialized_map)));
         return t;
     }
 

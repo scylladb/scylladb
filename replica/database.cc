@@ -348,10 +348,12 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _version(empty_version)
     , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_large_cell_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_rows_count_warning_threshold()))
+    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat,
+              _cfg.compaction_large_partition_warning_threshold_mb,
+              _cfg.compaction_large_row_warning_threshold_mb,
+              _cfg.compaction_large_cell_warning_threshold_mb,
+              _cfg.compaction_rows_count_warning_threshold,
+              _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
     , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory))
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory))

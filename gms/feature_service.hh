@@ -111,6 +111,7 @@ public:
     gms::feature uda_native_parallelized_aggregation { *this, "UDA_NATIVE_PARALLELIZED_AGGREGATION"sv };
     gms::feature aggregate_storage_options { *this, "AGGREGATE_STORAGE_OPTIONS"sv };
     gms::feature collection_indexing { *this, "COLLECTION_INDEXING"sv };
+    gms::feature large_collection_detection { *this, "LARGE_COLLECTION_DETECTION"sv };
 
 public:
 

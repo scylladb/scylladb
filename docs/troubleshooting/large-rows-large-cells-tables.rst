@@ -31,17 +31,17 @@ For example:
 ================================================  =================================================================================
 Parameter                                         Description
 ================================================  =================================================================================
-keyspace_name                                     The keyspace name that holds the large partition
+keyspace_name                                     The keyspace name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-table_name                                        The table name that holds the large partition
+table_name                                        The table name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-sstable_name                                      The SSTable name that holds the large partition
+sstable_name                                      The SSTable name that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
 row_size                                          The size of the row in bytes
 ------------------------------------------------  ---------------------------------------------------------------------------------
-clustering_key                                     The clustering key that holds the large row
+clustering_key                                    The clustering key that holds the large row
 ------------------------------------------------  ---------------------------------------------------------------------------------
-compaction_time                                   Time when compaction occur
+compaction_time                                   Time when compaction occurred
 ================================================  =================================================================================
 
 * Search within all the large rows for a specific keyspace and or table.
@@ -65,27 +65,29 @@ For example:
     > SELECT * FROM system.large_cells;
 
 
-    keyspace_name | table_name | sstable_name     | cell_size | partition_key | clustering_key | column_name | compaction_time
-    --------------+------------+------------------+-----------+---------------+----------------+-------------+---------------------------------
-    mykeyspace    |         gr | md-1-big-Data.db |   1206115 |             1 |              1 |        link | 2019-06-14 13:03:24.034000+0000
+    keyspace_name | table_name | sstable_name     | cell_size | partition_key | clustering_key | column_name | collection_elements | compaction_time                
+    --------------+------------+------------------+-----------+---------------+----------------+-------------+---------------------+---------------------------------
+    mykeyspace    |         gr | md-1-big-Data.db |   1206115 |             1 |              1 |        link |               17042 | 2019-06-14 13:03:24.034000+0000
    
   
 ================================================  =================================================================================
 Parameter                                         Description
 ================================================  =================================================================================
-keyspace_name                                     The keyspace name that holds the large partition
+keyspace_name                                     The keyspace name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-table_name                                        The table name that holds the large partition
+table_name                                        The table name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-sstable_name                                      The SSTable name that holds the large partition
+sstable_name                                      The SSTable name that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
-cell_size                                         The size of the row, in bytes
+cell_size                                         The size of the cell, in bytes
 ------------------------------------------------  ---------------------------------------------------------------------------------
-clustering_key                                     The clustering key that holds the large row
+clustering_key                                    The clustering key of the row that holds the large cell
 ------------------------------------------------  ---------------------------------------------------------------------------------
 column_name                                       The column of the large cell 
 ------------------------------------------------  ---------------------------------------------------------------------------------
-compaction_time                                   Time when compaction occur
+collection_elements                               The number of elements in the large collection cell
+------------------------------------------------  ---------------------------------------------------------------------------------
+compaction_time                                   Time when compaction occurred
 ================================================  =================================================================================
 
 * Search within all the large cells for a specific keyspace and or table.
@@ -104,6 +106,7 @@ Configure the detection threshold of large rows and large cells with the corresp
 
 * ``compaction_large_row_warning_threshold_mb`` parameter (default: 10MB).
 * ``compaction_large_cell_warning_threshold_mb`` parameter (default: 1MB).
+* ``compaction_collection_elements_count_warning_threshold`` parameter (default: 10000).
 
 Once the threshold is reached, the relevant information is captured in the ``system.large_rows`` / ``system.large_cells`` tables.
 In addition,  a warning message is logged in the Scylla log (refer to :doc:`logging </getting-started/logging>`).
@@ -148,6 +151,7 @@ Large rows and large cells are stored in system tables with the following schema
       partition_key text,
       clustering_key text,
       column_name text,
+      collection_elements bigint,
       compaction_time timestamp,
       PRIMARY KEY ((keyspace_name, table_name), sstable_name, cell_size, partition_key, clustering_key, column_name)
   ) WITH CLUSTERING ORDER BY (sstable_name ASC, cell_size DESC, partition_key ASC, clustering_key ASC, column_name ASC)

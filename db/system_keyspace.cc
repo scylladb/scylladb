@@ -602,6 +602,7 @@ schema_ptr system_keyspace::large_rows() {
 }
 
 schema_ptr system_keyspace::large_cells() {
+    constexpr uint16_t schema_version_offset = 1; // collection_elements
     static thread_local auto large_cells = [] {
         auto id = generate_legacy_id(NAME, LARGE_CELLS);
         return schema_builder(NAME, LARGE_CELLS, id)
@@ -613,9 +614,11 @@ schema_ptr system_keyspace::large_cells() {
                 .with_column("partition_key", utf8_type, column_kind::clustering_key)
                 .with_column("clustering_key", utf8_type, column_kind::clustering_key)
                 .with_column("column_name", utf8_type, column_kind::clustering_key)
+                // regular rows
+                .with_column("collection_elements", long_type)
                 .with_column("compaction_time", timestamp_type)
                 .set_comment("cells larger than specified threshold")
-                .with_version(generate_schema_version(id))
+                .with_version(generate_schema_version(id, schema_version_offset))
                 .set_gc_grace_seconds(0)
                 .set_caching_options(caching_options::get_disabled_caching_options())
                 .build();

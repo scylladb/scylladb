@@ -11,6 +11,7 @@
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
+#include "gms/feature_service.hh"
 
 static logging::logger large_data_logger("large_data");
 
@@ -18,19 +19,20 @@ namespace db {
 
 nop_large_data_handler::nop_large_data_handler()
     : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
-          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {
+          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {
     // Don't require start() to be called on nop large_data_handler.
     start();
 }
 
-large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
+large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold)
         : _partition_threshold_bytes(partition_threshold_bytes)
         , _row_threshold_bytes(row_threshold_bytes)
         , _cell_threshold_bytes(cell_threshold_bytes)
         , _rows_count_threshold(rows_count_threshold)
+        , _collection_elements_count_threshold(collection_elements_count_threshold)
 {
-    large_data_logger.debug("partition_threshold_bytes={} row_threshold_bytes={} cell_threshold_bytes={} rows_count_threshold={}",
-        partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold);
+    large_data_logger.debug("partition_threshold_bytes={} row_threshold_bytes={} cell_threshold_bytes={} rows_count_threshold={} collection_elements_count_threshold={}",
+        partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, _collection_elements_count_threshold);
 }
 
 future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) {
@@ -94,13 +96,37 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
         });
     }
     future<> large_cells = make_ready_future<>();
-    if (above_threshold(ldt::cell_size)) {
+    if (above_threshold(ldt::cell_size) || above_threshold(ldt::elements_in_collection)) {
         large_cells = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_CELLS);
         });
     }
     return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
 }
+
+cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service& feat,
+        utils::updateable_value<uint32_t> partition_threshold_mb,
+        utils::updateable_value<uint32_t> row_threshold_mb,
+        utils::updateable_value<uint32_t> cell_threshold_mb,
+        utils::updateable_value<uint32_t> rows_count_threshold,
+        utils::updateable_value<uint32_t> collection_elements_count_threshold)
+    : large_data_handler(partition_threshold_mb() * MB, row_threshold_mb() * MB, cell_threshold_mb() * MB, rows_count_threshold(), collection_elements_count_threshold())
+    , _feat(feat)
+    , _record_large_cells([this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
+        return internal_record_large_cells(sst, pk, ck, cdef, cell_size, collection_elements);
+    })
+    , _feat_listener(_feat.large_collection_detection.when_enabled([this] {
+        large_data_logger.debug("Enabled large_collection detection");
+        _record_large_cells = [this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
+            return internal_record_large_cells_and_collections(sst, pk, ck, cdef, cell_size, collection_elements);
+        };
+    }))
+    , _partition_threshold_mb_updater(_partition_threshold_bytes, std::move(partition_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _row_threshold_mb_updater(_row_threshold_bytes, std::move(row_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _cell_threshold_mb_updater(_cell_threshold_bytes, std::move(cell_threshold_mb), [] (uint32_t threshold_mb) { return uint64_t(threshold_mb) * MB; })
+    , _rows_count_threshold_updater(_rows_count_threshold, std::move(rows_count_threshold))
+    , _collection_elements_count_threshold_updater(_collection_elements_count_threshold, std::move(collection_elements_count_threshold))
+{}
 
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
@@ -139,7 +165,12 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
 }
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
-        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) const {
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
+    return _record_large_cells(sst, partition_key, clustering_key, cdef, cell_size, collection_elements);
+}
+
+future<> cql_table_large_data_handler::internal_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
     auto column_name = cdef.name_as_text();
     std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
     static const std::vector<sstring> extra_fields{"clustering_key", "column_name"};
@@ -150,6 +181,21 @@ future<> cql_table_large_data_handler::record_large_cells(const sstables::sstabl
     } else {
         auto desc = format("static {}", cell_type);
         return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name);
+    }
+}
+
+future<> cql_table_large_data_handler::internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
+        const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
+    auto column_name = cdef.name_as_text();
+    std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
+    static const std::vector<sstring> extra_fields{"clustering_key", "column_name", "collection_elements"};
+    if (clustering_key) {
+        const schema &s = *sst.get_schema();
+        auto ck_str = key_to_str(*clustering_key, s);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, format("/{}/{}", ck_str, column_name), extra_fields, ck_str, column_name, data_value((int64_t)collection_elements));
+    } else {
+        auto desc = format("static {}", cell_type);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, format("//{}", column_name), extra_fields, data_value::make_null(utf8_type), column_name, data_value((int64_t)collection_elements));
     }
 }
 
@@ -169,6 +215,8 @@ future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s
     const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
                     large_table_name);
+    large_data_logger.debug("Dropping entries from {}: ks = {}, table = {}, sst = {}",
+            large_table_name, s.ks_name(), s.cf_name(), sstable_name);
     return db::qctx->execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
             .discard_result()
             .handle_exception([&s, sstable_name, large_table_name] (std::exception_ptr ep) {

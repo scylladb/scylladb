@@ -374,14 +374,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "Related information: Configuring compaction")
-    , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", value_status::Used, 1000,
+    , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1000,
         "Log a warning when writing partitions larger than this value")
-    , compaction_large_row_warning_threshold_mb(this, "compaction_large_row_warning_threshold_mb", value_status::Used, 10,
+    , compaction_large_row_warning_threshold_mb(this, "compaction_large_row_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 10,
         "Log a warning when writing rows larger than this value")
-    , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", value_status::Used, 1,
+    , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1,
         "Log a warning when writing cells larger than this value")
-    , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", value_status::Used, 100000,
+    , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 100000,
         "Log a warning when writing a number of rows larger than this value")
+    , compaction_collection_elements_count_warning_threshold(this, "compaction_collection_elements_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 10000,
+        "Log a warning when writing a collection containing more elements than this value")
     /* Common memtable settings */
     , memtable_total_space_in_mb(this, "memtable_total_space_in_mb", value_status::Invalid, 0,
         "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb.")
