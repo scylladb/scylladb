@@ -186,7 +186,7 @@ static system_keyspace::range_estimates estimate(const replica::column_family& c
 /**
  * Returns the primary ranges for the local node.
  */
-static future<std::vector<token_range>> get_local_ranges(replica::database& db) {
+static future<std::vector<token_range>> get_local_ranges(replica::database& db, db::system_keyspace& sys_ks) {
     return db::system_keyspace::get_local_tokens().then([&db] (auto&& tokens) {
         auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
@@ -218,8 +218,8 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db) 
     });
 }
 
-future<std::vector<token_range>> test_get_local_ranges(replica::database& db) {
-    return get_local_ranges(db);
+future<std::vector<token_range>> test_get_local_ranges(replica::database& db, db::system_keyspace& sys_ks) {
+    return get_local_ranges(db, sys_ks);
 }
 
 size_estimates_mutation_reader::size_estimates_mutation_reader(replica::database& db, db::system_keyspace& sys_ks, schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
@@ -230,7 +230,7 @@ size_estimates_mutation_reader::size_estimates_mutation_reader(replica::database
             , _prange(&prange)
             , _slice(slice)
             , _fwd(fwd)
-    { (void)_sys_ks; }
+    { }
 
 future<> size_estimates_mutation_reader::get_next_partition() {
     if (!_keyspaces) {
@@ -242,7 +242,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         return make_ready_future<>();
     }
     return do_with(reader_permit::blocked_guard(_permit), [this] (reader_permit::blocked_guard&) {
-        return get_local_ranges(_db);
+        return get_local_ranges(_db, _sys_ks);
     }).then([this] (auto&& ranges) {
         auto estimates = this->estimates_for_current_keyspace(std::move(ranges));
         auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));

@@ -71,7 +71,7 @@ struct virtual_reader {
     virtual_reader(replica::database& db_, db::system_keyspace& sys_ks_) noexcept : db(db_), sys_ks(sys_ks_) {}
 };
 
-future<std::vector<token_range>> test_get_local_ranges(replica::database& db);
+future<std::vector<token_range>> test_get_local_ranges(replica::database& db, db::system_keyspace& sys_ks);
 
 } // namespace size_estimates
 
