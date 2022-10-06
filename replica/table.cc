@@ -2455,13 +2455,12 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
 }
 
 future<row_locker::lock_holder>
-table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
-        std::vector<sstables::shared_sstable>& excluded_sstables) const {
+table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source ms) const {
     return do_push_view_replica_updates(
             s,
             std::move(m),
             timeout,
-            as_mutation_source_excluding(excluded_sstables),
+            std::move(ms),
             tracing::trace_state_ptr(),
             *_config.streaming_read_concurrency_semaphore,
             service::get_local_streaming_priority(),

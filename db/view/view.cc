@@ -2418,7 +2418,7 @@ view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit 
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
         auto s = m.schema();
-        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);
+        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, table->as_mutation_source_excluding(excluded_sstables));
     })
 { }
 
