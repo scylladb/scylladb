@@ -71,6 +71,7 @@ class raft_group0 {
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
     gms::feature_service& _feat;
+    db::system_keyspace& _sys_ks;
     raft_group0_client& _client;
 
     // Status of leader discovery. Initially there is no group 0,
@@ -102,6 +103,7 @@ public:
         cql3::query_processor& qp,
         migration_manager& mm,
         gms::feature_service& feat,
+        db::system_keyspace& sys_ks,
         raft_group0_client& client);
 
     // Call before destroying the object.
