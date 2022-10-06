@@ -478,6 +478,4 @@ private:
     }
 }; // class system_keyspace
 
-future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, table_selector&);
-
 } // namespace db
