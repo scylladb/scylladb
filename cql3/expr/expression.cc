@@ -335,7 +335,8 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
 /// True iff collection (list, set, or map) contains value.
 bool contains(const data_value& collection, const raw_value_view& value) {
     if (!value) {
-        return true; // Compatible with old code, which skips null terms in value comparisons.
+        // CONTAINS NULL should evaluate to NULL/false
+        return false;
     }
     auto col_type = static_pointer_cast<const collection_type_impl>(collection.type());
     auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
@@ -373,7 +374,8 @@ bool contains(const column_value& col, const raw_value_view& value, const evalua
 /// True iff a column is a map containing \p key.
 bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
     if (!key) {
-        return true; // Compatible with old code, which skips null terms in key comparisons.
+        // CONTAINS_KEY NULL should evaluate to NULL/false
+        return false;
     }
     auto type = col.col->type;
     const auto collection = get_value(col, inputs);

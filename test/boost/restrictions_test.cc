@@ -425,20 +425,17 @@ SEASTAR_THREAD_TEST_CASE(set_contains) {
         require_rows(e, "select * from t where p contains 999 allow filtering", {});
         require_rows(e, "select p from t where p contains 3 allow filtering", {{SI({1, 3})}});
         require_rows(e, "select p from t where p contains 1 allow filtering", {{SI({1, 3})}, {SI({1})}});
-        require_rows(e, "select p from t where p contains null allow filtering",
-                         {{SI({1, 3})}, {SI({1})}, {SI({2})}});
+        require_rows(e, "select p from t where p contains null allow filtering", {});
         require_rows(e, "select p from t where p contains 1 and s contains 'a1' allow filtering",
                      {{SI({1}), ST({"a1", "b1"})}});
         require_rows(e, "select c from t where c contains 31 allow filtering", {{SI({31, 32})}});
-        require_rows(e, "select c from t where c contains null allow filtering",
-                         {{SI({11, 12})}, {SI({21, 22})}, {SI({31, 32})}});
+        require_rows(e, "select c from t where c contains null allow filtering", {});
         require_rows(e, "select c from t where c contains 11 and p contains 1 allow filtering",
                      {{SI({11, 12}), SI({1})}});
         require_rows(e, "select s from t where s contains 'a1' allow filtering", {{ST({"a1", "b1"})}});
         require_rows(e, "select s from t where s contains 'b1' allow filtering",
                      {{ST({"a1", "b1"})}, {ST({"a2", "b1"})}});
-        require_rows(e, "select s from t where s contains null allow filtering",
-                     {{ST({"a1", "b1"})}, {ST({"a2", "b1"})}, {ST({"a3", "b3"})}});
+        require_rows(e, "select s from t where s contains null allow filtering", {});
         require_rows(e, "select s from t where s contains 'b1' and s contains '' allow filtering", {});
         require_rows(e, "select s from t where s contains 'b1' and p contains 4 allow filtering", {});
         cquery_nofail(e, "insert into t (p, c, st) values ({4}, {41}, {104})");
@@ -451,8 +448,7 @@ SEASTAR_THREAD_TEST_CASE(set_contains) {
         cquery_nofail(e, "insert into t (p, c, st) values ({5}, {52}, {104, 105})");
         require_rows(e, "select p from t where st contains 105 allow filtering",
                      {{SI({4}), SI({105})}, {SI({4}), SI({105})}, {SI({5}), SI({104, 105})}});
-        require_rows(e, "select p from t where st contains null allow filtering",
-                     {{SI({4}), SI({105})}, {SI({4}), SI({105})}, {SI({5}), SI({104, 105})}});
+        require_rows(e, "select p from t where st contains null allow filtering", {});
         cquery_nofail(e, "delete from t where p={4}");
         require_rows(e, "select p from t where st contains 105 allow filtering", {{SI({5}), SI({104, 105})}});
         const auto stmt = e.prepare("select p from t where p contains :p allow filtering").get0();
@@ -477,20 +473,17 @@ SEASTAR_THREAD_TEST_CASE(list_contains) {
         require_rows(e, "select p from t where st contains 'xyz' allow filtering", {});
         require_rows(e, "select p from t where p contains 1 allow filtering", {{LI({1})}});
         require_rows(e, "select p from t where p contains 4 allow filtering", {{LI({4})}, {LI({4})}});
-        require_rows(e, "select p from t where p contains null allow filtering",
-                         {{LI({1})}, {LI({2})}, {LI({3})}, {LI({4})}, {LI({4})}});
+        require_rows(e, "select p from t where p contains null allow filtering", {});
         require_rows(e, "select c from t where c contains 22 allow filtering", {{LI({21,22,23})}});
         require_rows(e, "select c from t where c contains 21 allow filtering", {{LI({21,22,23})}, {LI({21,32,33})}});
-        require_rows(e, "select c from t where c contains null allow filtering",
-                         {{LI({11,12,13})}, {LI({21,22,23})}, {LI({21,32,33})}, {LI({41,42,43})}, {LI({41,42})}});
+        require_rows(e, "select c from t where c contains null allow filtering", {});
         require_rows(e, "select c from t where c contains 21 and ls contains 102 allow filtering",
                      {{LI({21,22,23}), LI({102})}});
         require_rows(e, "select ls from t where ls contains 102 allow filtering", {{LI({102})}});
-        require_rows(e, "select ls from t where ls contains null allow filtering", {{LI({102})}, {LI({103})}});
+        require_rows(e, "select ls from t where ls contains null allow filtering", {});
         require_rows(e, "select st from t where st contains 'a' allow filtering",
                          {{LT({"a"})}, {LT({"a"})}, {LT({"a", "b"})}});
-        require_rows(e, "select st from t where st contains null allow filtering",
-                         {{LT({"a"})}, {LT({"a"})}, {LT({"a", "b"})}});
+        require_rows(e, "select st from t where st contains null allow filtering", {});
         require_rows(e, "select st from t where st contains 'b' allow filtering", {{LT({"a", "b"})}});
         cquery_nofail(e, "delete from t where p=[2]");
         require_rows(e, "select c from t where c contains 21 allow filtering", {{LI({21,32,33})}});
@@ -513,7 +506,7 @@ SEASTAR_THREAD_TEST_CASE(map_contains) {
         const auto p1 = my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{1, 1}})));
         const auto p2 = my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{2, 2}})));
         const auto p4 = my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{4, 4}})));
-        require_rows(e, "select p from t where p contains null allow filtering", {{p1}, {p2}, {p3}, {p3}, {p4}});
+        require_rows(e, "select p from t where p contains null allow filtering", {});
         const auto c4 = my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{40, 40}})));
         require_rows(e, "select c from t where c contains 40 allow filtering", {{c4}});
         const auto m2 = my_map_type->decompose(
@@ -523,7 +516,7 @@ SEASTAR_THREAD_TEST_CASE(map_contains) {
                 make_map_value(my_map_type, map_type_impl::native_type({{1, 11}, {2, 12}})));
         require_rows(e, "select m from t where m contains 11 allow filtering", {{m1}});
         require_rows(e, "select m from t where m contains 12 allow filtering", {{m1}, {m2}});
-        require_rows(e, "select m from t where m contains null allow filtering", {{m1}, {m2}});
+        require_rows(e, "select m from t where m contains null allow filtering", {});
         require_rows(e, "select m from t where m contains 11 and m contains 12 allow filtering", {{m1}});
         cquery_nofail(e, "delete from t where p={2:2}");
         require_rows(e, "select m from t where m contains 12 allow filtering", {{m1}});
@@ -552,7 +545,7 @@ SEASTAR_THREAD_TEST_CASE(contains_key) {
         const auto m3 = int_map_type->decompose(make_map_value(int_map_type, map_type_impl::native_type({{11, 33}})));
         require_rows(e, "select m from t where m contains key 12 allow filtering", {{m1}});
         require_rows(e, "select m from t where m contains key 11 allow filtering", {{m1}, {m3}});
-        require_rows(e, "select m from t where m contains key null allow filtering", {{m1}, {m3}});
+        require_rows(e, "select m from t where m contains key null allow filtering", {});
         const auto text_map_type = map_type_impl::get_instance(utf8_type, int32_type, true);
         const auto c1 = text_map_type->decompose(
                 make_map_value(text_map_type, map_type_impl::native_type({{"el", 11}, {"twel", 12}})));
@@ -560,13 +553,13 @@ SEASTAR_THREAD_TEST_CASE(contains_key) {
         require_rows(e, "select c from t where c contains key 'twel' allow filtering", {{c1}});
         const auto c3 = text_map_type->decompose(
                 make_map_value(text_map_type, map_type_impl::native_type({{"th", 33}})));
-        require_rows(e, "select c from t where c contains key null allow filtering", {{c1}, {c3}});
+        require_rows(e, "select c from t where c contains key null allow filtering", {});
         const auto p3 = int_map_type->decompose(make_map_value(int_map_type, map_type_impl::native_type({{3, 33}})));
         require_rows(e, "select p from t where p contains key 3 allow filtering", {{p3}});
-        require_rows(e, "select p from t where p contains key 3 and m contains key null allow filtering", {{p3, m3}});
+        require_rows(e, "select p from t where p contains key 3 and m contains key null allow filtering", {});
         const auto p1 = int_map_type->decompose(
                 make_map_value(int_map_type, map_type_impl::native_type({{1, 11}, {2, 12}})));
-        require_rows(e, "select p from t where p contains key null allow filtering", {{p1}, {p3}});
+        require_rows(e, "select p from t where p contains key null allow filtering", {});
         cquery_nofail(e, "insert into t (p,c) values ({4:44}, {'aaaa':44})");
         require_rows(e, "select m from t where m contains key 12 allow filtering", {{m1}});
         cquery_nofail(e, "delete from t where p={1:11, 2:12}");
@@ -578,8 +571,7 @@ SEASTAR_THREAD_TEST_CASE(contains_key) {
         const auto s5 = int_text_map_type->decompose(
                 make_map_value(int_text_map_type, map_type_impl::native_type({{55, "aaaa"}})));
         require_rows(e, "select s from t where s contains key 55 allow filtering", {{s5}, {s5}});
-        require_rows(e, "select s from t where s contains key 55 and s contains key null allow filtering",
-                         {{s5}, {s5}});
+        require_rows(e, "select s from t where s contains key 55 and s contains key null allow filtering", {});
         const auto c51 = text_map_type->decompose(
                 make_map_value(text_map_type, map_type_impl::native_type({{"aaaa", 55}})));
         const auto c52 = text_map_type->decompose(
