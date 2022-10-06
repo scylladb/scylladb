@@ -411,10 +411,6 @@ private:
     std::unique_ptr<compaction_group> _compaction_group;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
-    // sstables that have been compacted (so don't look up in query) but
-    // have not been deleted yet, so must not GC any tombstones in other sstables
-    // that may delete data in these sstables:
-    std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // This semaphore ensures that an operation like snapshot won't have its selected
@@ -889,7 +885,6 @@ public:
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
-    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;

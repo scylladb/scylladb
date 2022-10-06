@@ -374,10 +374,10 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) noexcept : _cm(cm) {}
 
-    future<> run(sstables::run_id output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
+    future<> run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job);
 
-    void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-        _cm.propagate_replacement(t->as_table_state(), removed, added);
+    void propagate_replacement(table_state& table_s, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
+        _cm.propagate_replacement(table_s, removed, added);
     }
 private:
     sstables::compaction_data& register_compaction(shared_ptr<compaction_manager::task> task);
@@ -386,7 +386,7 @@ private:
 };
 
 using can_purge_tombstones = compaction_manager::can_purge_tombstones;
-future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, replica::column_family& cf,
+future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, table_state& table_s,
         std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
         can_purge_tombstones can_purge = can_purge_tombstones::yes);
 

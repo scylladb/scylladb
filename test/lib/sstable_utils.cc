@@ -158,19 +158,19 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     return key_and_token_pair;
 }
 
-future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, replica::column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer,
+future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, table_state& table_s, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer,
                                            can_purge_tombstones can_purge) {
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
     descriptor.replacer = std::move(replacer);
     if (can_purge) {
-        descriptor.enable_garbage_collection(cf.as_table_state().main_sstable_set());
+        descriptor.enable_garbage_collection(table_s.main_sstable_set());
     }
     auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;
-    co_await cmt.run(descriptor.run_identifier, &cf, [&] (sstables::compaction_data& cdata) {
-        return sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).then([&] (sstables::compaction_result res) {
+    co_await cmt.run(descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
+        return sstables::compact_sstables(std::move(descriptor), cdata, table_s).then([&] (sstables::compaction_result res) {
             ret = std::move(res);
         });
     });
@@ -213,8 +213,8 @@ class compaction_manager::compaction_manager_test_task : public compaction_manag
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
 
 public:
-    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction_manager::task(cm, &cf->as_table_state(), sstables::compaction_type::Compaction, "Test compaction")
+    compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
+        : compaction_manager::task(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }
@@ -228,8 +228,8 @@ protected:
     }
 };
 
-future<> compaction_manager_test::run(sstables::run_id output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job) {
-    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id, std::move(job));
+future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
     auto& cdata = register_compaction(task);
     return task->run().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
