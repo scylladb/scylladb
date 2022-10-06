@@ -222,14 +222,15 @@ future<std::vector<token_range>> test_get_local_ranges(replica::database& db) {
     return get_local_ranges(db);
 }
 
-size_estimates_mutation_reader::size_estimates_mutation_reader(replica::database& db, schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
+size_estimates_mutation_reader::size_estimates_mutation_reader(replica::database& db, db::system_keyspace& sys_ks, schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
         const query::partition_slice& slice, streamed_mutation::forwarding fwd)
             : impl(std::move(schema), std::move(permit))
             , _db(db)
+            , _sys_ks(sys_ks)
             , _prange(&prange)
             , _slice(slice)
             , _fwd(fwd)
-    { }
+    { (void)_sys_ks; }
 
 future<> size_estimates_mutation_reader::get_next_partition() {
     if (!_keyspaces) {
