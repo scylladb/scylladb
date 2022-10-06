@@ -72,8 +72,8 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(one->occupancy().used_space()), ssize_t(one_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(one->occupancy().total_space()), ssize_t(one->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(one_and_two.unspooled_memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one->occupancy().total_space());
 
         constexpr size_t two_count = 8 * base_count;
         std::vector<managed_ref<int>> two_objs;
@@ -84,8 +84,8 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(two->occupancy().used_space()), ssize_t(two_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(two->occupancy().total_space()), ssize_t(two->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space() + two->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(one_and_two.unspooled_memory_used(), one->occupancy().total_space() + two->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one_and_two.unspooled_memory_used());
 
         constexpr size_t three_count = 32 * base_count;
         std::vector<managed_ref<int>> three_objs;
@@ -96,7 +96,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t(three_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one_and_two.unspooled_memory_used());
 
         constexpr size_t four_count = 4 * base_count;
         std::vector<managed_ref<int>> four_objs;
@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         });
         BOOST_REQUIRE_GE(ssize_t(four->occupancy().used_space()), ssize_t(four_count * sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(four->occupancy().total_space()), ssize_t(four->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(just_four.memory_used(), four->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(just_four.unspooled_memory_used(), four->occupancy().total_space());
 
         with_allocator(five->allocator(), [] {
             constexpr size_t five_count = base_count;
@@ -120,27 +120,27 @@ SEASTAR_TEST_CASE(test_region_groups) {
         three->merge(*four);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one_and_two.memory_used());
-        BOOST_REQUIRE_EQUAL(just_four.memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one_and_two.unspooled_memory_used());
+        BOOST_REQUIRE_EQUAL(just_four.unspooled_memory_used(), 0);
 
         three->merge(*five);
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
         BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one_and_two.unspooled_memory_used());
 
         with_allocator(two->allocator(), [&] {
             two_objs.clear();
         });
         two.reset();
-        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), one_and_two.memory_used());
+        BOOST_REQUIRE_EQUAL(one_and_two.unspooled_memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), one_and_two.unspooled_memory_used());
 
         with_allocator(one->allocator(), [&] {
             one_objs.clear();
         });
         one.reset();
-        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), 0);
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(one_and_two.unspooled_memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), 0);
 
         with_allocator(three->allocator(), [&] {
             three_objs.clear();
@@ -149,7 +149,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
         three.reset();
         four.reset();
         five.reset();
-        BOOST_REQUIRE_EQUAL(one_and_two.hard_memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(one_and_two.real_memory_used(), 0);
     });
 }
 
@@ -209,7 +209,7 @@ private:
 SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     return seastar::async([] {
         // singleton hierarchy, only one segment allowed
-        test_region_group simple({ .hard_limit = logalloc::segment_size });
+        test_region_group simple({ .unspooled_hard_limit = logalloc::segment_size });
         auto simple_region = std::make_unique<test_region>();
         simple_region->listen(&simple);
 
@@ -221,11 +221,11 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         // the group and we'll be okay to do that a second time.
         auto fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), true);
-        BOOST_REQUIRE_EQUAL(simple.memory_used(), logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(simple.unspooled_memory_used(), logalloc::segment_size);
 
         fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), true);
-        BOOST_REQUIRE_EQUAL(simple.memory_used(), logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(simple.unspooled_memory_used(), logalloc::segment_size);
 
         auto big_region = std::make_unique<test_region>();
         big_region->listen(&simple);
@@ -236,10 +236,10 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
         fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
-        BOOST_REQUIRE_GT(simple.memory_used(), logalloc::segment_size);
+        BOOST_REQUIRE_GT(simple.unspooled_memory_used(), logalloc::segment_size);
 
         testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
-        testlog.info("used = {}", simple.memory_used());
+        testlog.info("used = {}", simple.unspooled_memory_used());
 
         testlog.info("Resetting");
 
@@ -248,14 +248,14 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         // that's up to the internal policies. So to make sure we need to remove the whole region.
         big_region.reset();
 
-        testlog.info("used = {}", simple.memory_used());
+        testlog.info("used = {}", simple.unspooled_memory_used());
         testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
         try {
             quiesce(std::move(fut));
         } catch (...) {
             testlog.info("Aborting: {}", std::current_exception());
             testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
-            testlog.info("used = {}", simple.memory_used());
+            testlog.info("used = {}", simple.unspooled_memory_used());
             abort();
         }
         testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
@@ -265,14 +265,14 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
-        test_region_group rg({.hard_limit = logalloc::segment_size});
+        test_region_group rg({.unspooled_hard_limit = logalloc::segment_size});
 
         auto region = std::make_unique<test_region>();
         region->listen(&rg);
 
         // fill the parent. Try allocating at child level. Should not be allowed.
         region->alloc();
-        BOOST_REQUIRE_GE(rg.memory_used(), logalloc::segment_size);
+        BOOST_REQUIRE_GE(rg.unspooled_memory_used(), logalloc::segment_size);
 
         auto exec_cnt = make_lw_shared<int>(0);
         std::vector<future<>> executions;
@@ -346,7 +346,7 @@ public:
         (void)with_gate(_reclaimers_done, [this] {
             return _unleash_reclaimer.get_shared_future().then([this] {
                 _unleashed.set_value();
-                while (_rg.under_pressure()) {
+                while (_rg.under_unspooled_pressure()) {
                     size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
                     _result_accumulator->_reclaim_sizes.push_back(reclaimed);
                 }
@@ -370,7 +370,7 @@ public:
     test_reclaimer(size_t threshold)
         : _result_accumulator(this)
         , _rg("test_reclaimer RG", {
-            .hard_limit = threshold,
+            .unspooled_hard_limit = threshold,
             .start_reclaiming = std::bind_front(&test_reclaimer::start_reclaiming, this),
         }) {}
 
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
 
         auto free_space = memory::stats().free_memory();
         size_t threshold = size_t(0.75 * free_space);
-        region_group gr(test_name, {.hard_limit = threshold, .soft_limit = threshold});
+        region_group gr(test_name, {.unspooled_hard_limit = threshold, .unspooled_soft_limit = threshold});
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
         r.listen(&gr);
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
             });
 
             auto fill_to_pressure = [&] {
-                while (!gr.under_pressure()) {
+                while (!gr.under_unspooled_pressure()) {
                     objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
                 }
             };
@@ -470,14 +470,14 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
                 fill_to_pressure();
                 future<> f = gr.run_when_memory_available([&, op = request_barrier.start()] {
                     // Trigger group size change (Refs issue #2021)
-                    gr.update(-10);
-                    gr.update(+10);
+                    gr.update_unspooled(-10);
+                    gr.update_unspooled(+10);
                 }, db::no_timeout);
                 BOOST_REQUIRE(!f.available());
             }
 
             // Release
-            while (gr.under_pressure()) {
+            while (gr.under_unspooled_pressure()) {
                 objs.pop_back();
             }
         });
@@ -492,8 +492,8 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
 
         bool reclaiming = false;
         region_group gr(test_name, {
-                .hard_limit = hard_threshold,
-                .soft_limit = soft_threshold,
+                .unspooled_hard_limit = hard_threshold,
+                .unspooled_soft_limit = soft_threshold,
                 .start_reclaiming = [&] () noexcept { reclaiming = true; },
                 .stop_reclaiming = [&] () noexcept { reclaiming = false; },
         });
@@ -506,26 +506,26 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
 
             BOOST_REQUIRE(!reclaiming);
 
-            while (!gr.over_soft_limit()) {
+            while (!gr.over_unspooled_soft_limit()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
             BOOST_REQUIRE(reclaiming);
 
-            while (!gr.under_pressure()) {
+            while (!gr.under_unspooled_pressure()) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
             }
 
             BOOST_REQUIRE(reclaiming);
 
-            while (gr.under_pressure()) {
+            while (gr.under_unspooled_pressure()) {
                 objs.pop_back();
             }
 
-            BOOST_REQUIRE(gr.over_soft_limit());
+            BOOST_REQUIRE(gr.over_unspooled_soft_limit());
             BOOST_REQUIRE(reclaiming);
 
-            while (gr.over_soft_limit()) {
+            while (gr.over_unspooled_soft_limit()) {
                 objs.pop_back();
             }
 
