@@ -394,7 +394,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_all_cf_all_memtables_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         warn(unimplemented::cause::INDEXES);
         return ctx.db.map_reduce0([](const replica::database& db){
-            return db.dirty_memory_region_group().memory_used();
+            return db.dirty_memory_region_group().real_memory_used();
         }, int64_t(0), std::plus<int64_t>()).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });

@@ -1949,7 +1949,7 @@ int main(int argc, char** argv) {
         db_cfg.enable_cache(app.configuration().contains("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
-        db_cfg.virtual_dirty_soft_limit(1.0); // prevent background memtable flushes.
+        db_cfg.unspooled_dirty_soft_limit(1.0); // prevent background memtable flushes.
 
         db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 

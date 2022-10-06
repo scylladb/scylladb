@@ -1731,10 +1731,10 @@ class dirty_mem_mgr():
         self.ref = ref
 
     def real_dirty(self):
-        return int(self.ref['_virtual_region_group']['_hard_total_memory'])
+        return int(self.ref['_region_group']['_real_total_memory'])
 
-    def virt_dirty(self):
-        return int(self.ref['_virtual_region_group']['_total_memory'])
+    def unspooled(self):
+        return int(self.ref['_region_group']['_unspooled_total_memory'])
 
 
 def find_instances(type_name):
@@ -2064,15 +2064,15 @@ class scylla_memory(gdb.Command):
                   ' total:       {total:>13}\n'
                   ' Regular:\n'
                   '  real dirty: {reg_real_dirty:>13}\n'
-                  '  virt dirty: {reg_virt_dirty:>13}\n'
+                  '  unspooled:  {reg_unspooled:>13}\n'
                   ' System:\n'
                   '  real dirty: {sys_real_dirty:>13}\n'
-                  '  virt dirty: {sys_virt_dirty:>13}\n\n'
+                  '  unspooled:  {sys_unspooled:>13}\n\n'
                   .format(total=(lsa_allocated-cache_region.total()),
                           reg_real_dirty=dirty_mem_mgr(db['_dirty_memory_manager']).real_dirty(),
-                          reg_virt_dirty=dirty_mem_mgr(db['_dirty_memory_manager']).virt_dirty(),
+                          reg_unspooled=dirty_mem_mgr(db['_dirty_memory_manager']).unspooled(),
                           sys_real_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).real_dirty(),
-                          sys_virt_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).virt_dirty()))
+                          sys_unspooled=dirty_mem_mgr(db['_system_dirty_memory_manager']).unspooled()))
 
         scylla_memory.print_coordinator_stats()
         scylla_memory.print_replica_stats()

@@ -699,13 +699,13 @@ determining where the memory is. Lets look at a concrete example:
      total:          1067319296
      Regular:
       real dirty:    1064566784
-      virt dirty:     811568656
+      unspooled:      811568656
      System:
       real dirty:        393216
-      virt dirty:        393216
+      unspooled:         393216
      Streaming:
       real dirty:             0
-      virt dirty:             0
+      unspooled:              0
 
     Coordinator:
       bg write bytes:         42133 B
