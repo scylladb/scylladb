@@ -58,7 +58,9 @@
 #include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
+#include "readers/delegating_v2.hh"
 #include "readers/evictable.hh"
+#include "readers/slicing_forwarding.hh"
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
@@ -2413,13 +2415,55 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
     }
 }
 
+// lives in a seastar thread
+class view_update_pusher {
+    lw_shared_ptr<replica::table> _table;
+    std::vector<sstables::shared_sstable> _excluded_sstables;
+    std::unique_ptr<const dht::partition_range> _curr_pr;
+    flat_mutation_reader_v2_opt _reader;
+
+private:
+    mutation_source as_mutation_source() {
+        return mutation_source([this] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding,
+                mutation_reader::forwarding) -> flat_mutation_reader_v2 {
+            if (!_reader) {
+                _curr_pr = std::make_unique<dht::partition_range>(range);
+                _reader = _table->make_reader_v2_excluding_sstables(s, permit, _excluded_sstables, *_curr_pr, s->full_slice(), pc,
+                        std::move(trace_state), streamed_mutation::forwarding::yes, mutation_reader::forwarding::yes);
+            // Check if we are continuing from the last partition or not.
+            } else if (!range.start()->value().equal(*s, _curr_pr->start()->value())) { // pr is always singular
+                auto prev_pr = std::exchange(_curr_pr, std::make_unique<dht::partition_range>(range));
+                _reader->fast_forward_to(*_curr_pr).get();
+            }
+            return make_slicing_forwarding_reader(make_delegating_reader(*_reader), slice);
+        });
+    }
+public:
+    view_update_pusher(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> excluded_sstables)
+        : _table(std::move(table)), _excluded_sstables(std::move(excluded_sstables))
+    { }
+    view_update_pusher(view_update_pusher&&) = default;
+    ~view_update_pusher() {
+        if (_reader) {
+            _reader->close().get();
+        }
+    }
+    future<row_locker::lock_holder> operator()(mutation m) {
+        auto s = m.schema();
+        return _table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, as_mutation_source());
+    }
+};
+
 view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
         evictable_reader_handle_v2& staging_reader_handle)
-    : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
-            [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
-        auto s = m.schema();
-        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, table->as_mutation_source_excluding(excluded_sstables));
-    })
+    : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle, view_update_pusher(table.shared_from_this(), std::move(excluded_sstables)))
 { }
 
 std::vector<db::view::view_and_base> with_base_info_snapshot(std::vector<view_ptr> vs) {
