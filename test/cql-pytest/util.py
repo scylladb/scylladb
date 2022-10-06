@@ -196,7 +196,7 @@ def new_user(cql, username=''):
 @contextmanager
 def new_session(cql, username):
     endpoint = cql.hosts[0].endpoint
-    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=False, username=username, password=username) as session:
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=(cql.cluster.ssl_context is not None), username=username, password=username) as session:
         yield session
         session.shutdown()
 
