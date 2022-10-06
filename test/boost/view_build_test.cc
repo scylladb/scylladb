@@ -454,17 +454,21 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
-        parallel_for_each(ssts.begin(), ssts.begin() + 10, [&] (shared_sstable& sst) {
-            return view_update_generator.register_staging_sstable(sst, t);
-        }).get();
+        auto register_and_check_semaphore = [&view_update_generator, t] (std::vector<shared_sstable>::iterator b, std::vector<shared_sstable>::iterator e) {
+            std::vector<future<>> register_futures;
+            for (auto it = b; it != e; ++it) {
+                register_futures.emplace_back(view_update_generator.register_staging_sstable(*it, t));
+            }
+            const auto qsz = db::view::view_update_generator::registration_queue_size;
+            BOOST_REQUIRE(std::all_of(register_futures.begin(), register_futures.begin() + qsz, [] (future<>& f) { return f.available(); }));
+            BOOST_REQUIRE(std::all_of(register_futures.begin() + qsz, register_futures.end(), [] (future<>& f) { return !f.available(); }));
 
-        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
+            when_all(register_futures.begin(), register_futures.end()).get();
+            REQUIRE_EVENTUALLY_EQUAL(view_update_generator.available_register_units(), qsz);
+        };
 
-        parallel_for_each(ssts.begin() + 10, ssts.end(), [&] (shared_sstable& sst) {
-            return view_update_generator.register_staging_sstable(sst, t);
-        }).get();
-
-        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
+        register_and_check_semaphore(ssts.begin(), ssts.begin() + 10);
+        register_and_check_semaphore(ssts.begin() + 10, ssts.end());
 
         eventually([&, key1, key2] {
             auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key1)).get0();

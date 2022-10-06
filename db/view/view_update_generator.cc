@@ -40,14 +40,21 @@ future<> view_update_generator::start() {
                 _pending_sstables.wait().get();
             }
 
-            // To ensure we don't race with updates, move the entire content
-            // into a local variable.
-            auto sstables_with_tables = std::exchange(_sstables_with_tables, {});
-
-            // If we got here, we will process all tables we know about so far eventually so there
-            // is no starvation
-            for (auto table_it = sstables_with_tables.begin(); table_it != sstables_with_tables.end(); table_it = sstables_with_tables.erase(table_it)) {
-                auto& [t, sstables] = *table_it;
+            // We process a small batch from each table in turn to ensure fair incremental progress.
+            for (auto table_it = _sstables_with_tables.begin(); table_it != _sstables_with_tables.end();) {
+                auto& [t, all_sstables] = *table_it;
+                // Normally, we expect sstables to be added in order, so this
+                // should be a noop. It can help however when scylla is restarted
+                // with staging sstables, as they are not loaded from disk in order.
+                std::sort(all_sstables.begin(), all_sstables.end(), [] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
+                    return a->get_first_decorated_key().token() < b->get_first_decorated_key().token();
+                });
+                std::vector<sstables::shared_sstable> excluded_sstables(all_sstables.begin(), all_sstables.end());
+                std::vector<sstables::shared_sstable> sstables;
+                while (!all_sstables.empty() && sstables.size() < sstable_batch_size) {
+                    sstables.push_back(std::move(all_sstables.front()));
+                    all_sstables.pop_front();
+                }
                 schema_ptr s = t->schema();
 
                 vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), sstables.size());
@@ -86,7 +93,7 @@ future<> view_update_generator::start() {
                             ::mutation_reader::forwarding::no);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle));
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, std::move(permit), *t, std::move(excluded_sstables), _as, staging_sstable_reader_handle));
                     staging_sstable_reader.close().get();
                     if (result == stop_iteration::yes) {
                         break;
@@ -107,6 +114,14 @@ future<> view_update_generator::start() {
                     vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
                 _registration_sem.signal(num_sstables);
+                // Check this as late as possible, if the producer keeps adding
+                // new sstables, no need to erase the table entry eagerly, just
+                // for it to be re-added soon.
+                if (table_it->second.empty()) {
+                    table_it = _sstables_with_tables.erase(table_it);
+                } else {
+                    ++table_it;
+                }
             }
             // For each table, move the processed staging sstables into the table's base dir.
             for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {

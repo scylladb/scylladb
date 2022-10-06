@@ -20,6 +20,7 @@ namespace db::view {
 class view_update_generator {
 public:
     static constexpr size_t registration_queue_size = 5;
+    static constexpr size_t sstable_batch_size = 4;
 
 private:
     replica::database& _db;
@@ -27,7 +28,8 @@ private:
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
     named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
-    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
+    // We need a node-based container which provides stable iterators and references.
+    std::map<lw_shared_ptr<replica::table>, circular_buffer<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
     metrics::metric_groups _metrics;
 public:
