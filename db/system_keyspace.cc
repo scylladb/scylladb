@@ -3374,6 +3374,10 @@ future<> system_keyspace::start() {
     co_return;
 }
 
+future<> system_keyspace::shutdown() {
+    co_return;
+}
+
 future<> system_keyspace::stop() {
     co_return;
 }
