@@ -581,10 +581,10 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     });
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector& tables) {
+future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector& tables) {
     population_started = true;
 
-    return seastar::async([&db, &ss, &cfg, &g, &tables] {
+    return seastar::async([&sys_ks, &db, &ss, &cfg, &g, &tables] {
         db.invoke_on_all([&db, &ss, &cfg, &g, &tables] (replica::database&) {
             return db::system_keyspace::make(db, ss, g, cfg, tables);
         }).get();
