@@ -286,3 +286,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
 * Alternator does not support the new DynamoDB feature "export to S3",
   and its operations DescribeExport, ExportTableToPointInTime, ListExports.
   <https://github.com/scylladb/scylla/issues/8789>
+
+* Alternator does not support the new DynamoDB feature "import from S3",
+  and its operations ImportTable, DescribeImport, ListImports.
+  <https://github.com/scylladb/scylla/issues/11739>
