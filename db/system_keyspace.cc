@@ -2720,7 +2720,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     return r;
 }
 
-static void install_virtual_readers(replica::database& db) {
+static void install_virtual_readers(db::system_keyspace& sys_ks, replica::database& db) {
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db)));
     db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
     db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
@@ -2738,7 +2738,7 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg, table_selector& tables) {
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg, table_selector& tables) {
     if (tables.contains_keyspace(system_keyspace::NAME)) {
         register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
     }
@@ -2772,12 +2772,12 @@ future<> system_keyspace_make(distributed<replica::database>& dist_db, distribut
     }
 
     if (tables.contains_keyspace(system_keyspace::NAME)) {
-        install_virtual_readers(db);
+        install_virtual_readers(sys_ks, db);
     }
 }
 
 future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, table_selector& tables) {
-    return system_keyspace_make(db, ss, g, cfg, tables);
+    return system_keyspace_make(*this, db, ss, g, cfg, tables);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {
