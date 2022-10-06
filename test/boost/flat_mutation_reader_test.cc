@@ -19,6 +19,7 @@
 #include "readers/reversing_v2.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
+#include "readers/slicing_forwarding.hh"
 #include "schema_builder.hh"
 #include "replica/memtable.hh"
 #include "row_cache.hh"
@@ -26,6 +27,7 @@
 #include "repair/repair.hh"
 #include "mutation_partition_view.hh"
 #include "mutation_rebuilder.hh"
+#include "partition_slice_builder.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -989,4 +991,32 @@ SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     // This reader is not closed, but didn't start any operations, so it's safe for it to be destroyed.
     auto reader_v2 = make_flat_mutation_reader_v2<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_slicing_forwarding_reader_is_mutation_source) {
+    std::list<query::partition_slice> base_slices;
+    auto populate = [&base_slices] (schema_ptr s, const std::vector<mutation> &muts) {
+        return mutation_source([=, &base_slices] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_ptr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            auto base_slice_builder = partition_slice_builder(*s, s->full_slice());
+            if (slice.options.contains(query::partition_slice::option::reversed)) {
+                base_slice_builder.with_option<query::partition_slice::option::reversed>();
+            }
+            base_slices.emplace_back(base_slice_builder.build());
+            auto rd = make_forwardable(make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), squash_mutations(muts), range, base_slices.back()));
+            rd = make_slicing_forwarding_reader(std::move(rd), slice);
+            if (fwd_sm) {
+                rd = make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populate);
 }

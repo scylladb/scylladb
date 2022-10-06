@@ -1548,3 +1548,104 @@ flat_mutation_reader_v2 make_compacting_reader(flat_mutation_reader_v2 source, g
         const tombstone_gc_state& gc_state, streamed_mutation::forwarding fwd) {
     return make_flat_mutation_reader_v2<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, gc_state, fwd);
 }
+
+namespace {
+
+class slicing_forwarding_reader : public flat_mutation_reader_v2::impl {
+    flat_mutation_reader_v2 _underlying;
+    std::unique_ptr<const query::partition_slice> _stored_ps;
+    const query::partition_slice* _ps;
+    partition_region _prev_region = partition_region::partition_end;
+    query::clustering_row_ranges::const_iterator _it;
+    query::clustering_row_ranges::const_iterator _end;
+
+private:
+    void set_ranges(const dht::decorated_key& key) {
+        const auto& row_ranges = _ps->row_ranges(*_schema, key.key());
+        _it = row_ranges.begin();
+        _end = row_ranges.end();
+    }
+    future<bool> next_range() {
+        if (_it == _end) {
+            return make_ready_future<bool>(false);
+        }
+        return _underlying.fast_forward_to(position_range::from_range(*_it)).then([this] () mutable {
+            ++_it;
+            return true;
+        });
+    }
+
+public:
+    explicit slicing_forwarding_reader(flat_mutation_reader_v2 rd, const query::partition_slice& ps)
+        : impl(rd.schema(), rd.permit()), _underlying(std::move(rd)), _ps(&ps)
+    {
+        if (_ps->options.contains(query::partition_slice::option::reversed)) {
+            _stored_ps = std::make_unique<const query::partition_slice>(query::legacy_reverse_slice_to_native_reverse_slice(*_schema, *_ps));
+            _ps = _stored_ps.get();
+        }
+    }
+    virtual future<> fill_buffer() override {
+        while (!is_buffer_full() && !_end_of_stream) {
+            auto mfopt = co_await _underlying();
+            switch (_prev_region) {
+                case partition_region::partition_start:
+                    if (mfopt) { // if engaged, it is a static row
+                        push_mutation_fragment(std::move(*mfopt));
+                    }
+                    _prev_region = partition_region::static_row;
+                    break;
+                case partition_region::static_row:
+                    _prev_region = partition_region::clustered;
+                    [[fallthrough]];
+                case partition_region::clustered:
+                    if (mfopt) {
+                        push_mutation_fragment(std::move(*mfopt));
+                    } else if (!co_await next_range()) {
+                        push_mutation_fragment(*_schema, _permit, partition_end{});
+                        _prev_region = partition_region::partition_end;
+                        co_await _underlying.next_partition();
+                    }
+                    break;
+                case partition_region::partition_end:
+                    if (mfopt) {
+                        set_ranges(mfopt->as_partition_start().key());
+                        push_mutation_fragment(std::move(*mfopt));
+                        _prev_region = partition_region::partition_start;
+                    } else {
+                        _end_of_stream = true;
+                    }
+                    break;
+            }
+        }
+        co_return;
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        return make_exception_future<>(std::bad_function_call());
+    }
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        _end_of_stream = false;
+        if (is_buffer_empty()) {
+            _prev_region = partition_region::partition_end;
+            return _underlying.next_partition();
+        }
+        return make_ready_future<>();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        _prev_region = partition_region::partition_end;
+        return _underlying.fast_forward_to(pr);
+    }
+    virtual future<> close() noexcept override {
+        return _underlying.close();
+    }
+};
+
+} // anonymous namespace
+
+flat_mutation_reader_v2 make_slicing_forwarding_reader(
+        flat_mutation_reader_v2 rd,
+        const query::partition_slice& ps) {
+    return make_flat_mutation_reader_v2<slicing_forwarding_reader>(std::move(rd), ps);
+}
