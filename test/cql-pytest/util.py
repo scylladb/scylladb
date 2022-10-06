@@ -194,6 +194,19 @@ def new_session(cql, username):
         yield session
         session.shutdown()
 
+# new_cql() returns a new object similar to the given cql fixture,
+# connected to the same endpoint but with a separate connection.
+# This can be useful for tests which require a separate connection -
+# for example for testing the "USE" statement (which, after used once
+# on a connection, cannot be undone).
+@contextmanager
+def new_cql(cql):
+    session = cql.cluster.connect()
+    try:
+        yield session
+    finally:
+        session.shutdown()
+
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""
     return [getattr(r, column_name_string) for r in rows]
