@@ -1723,7 +1723,7 @@ future<> system_keyspace::check_health() {
 
 future<std::unordered_set<dht::token>> system_keyspace::get_saved_tokens() {
     sstring req = format("SELECT tokens FROM system.{} WHERE key = ?", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
+    return execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
         if (msg->empty() || !msg->one().has("tokens")) {
             return make_ready_future<std::unordered_set<dht::token>>();
         }

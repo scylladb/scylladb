@@ -352,13 +352,13 @@ public:
      * Read this node's tokens stored in the LOCAL table.
      * Used to initialize a restarting node.
      */
-    static future<std::unordered_set<dht::token>> get_saved_tokens();
+    future<std::unordered_set<dht::token>> get_saved_tokens();
 
     /*
      * Gets this node's non-empty set of tokens.
      * TODO: maybe get this data from token_metadata instance?
      */
-    static future<std::unordered_set<dht::token>> get_local_tokens();
+    future<std::unordered_set<dht::token>> get_local_tokens();
 
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 

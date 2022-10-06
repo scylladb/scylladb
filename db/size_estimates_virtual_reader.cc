@@ -187,7 +187,7 @@ static system_keyspace::range_estimates estimate(const replica::column_family& c
  * Returns the primary ranges for the local node.
  */
 static future<std::vector<token_range>> get_local_ranges(replica::database& db, db::system_keyspace& sys_ks) {
-    return db::system_keyspace::get_local_tokens().then([&db] (auto&& tokens) {
+    return sys_ks.get_local_tokens().then([&db] (auto&& tokens) {
         auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
