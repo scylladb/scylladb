@@ -252,7 +252,7 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    static future<> make(distributed<replica::database>& db,
+    future<> make(distributed<replica::database>& db,
                          distributed<service::storage_service>& ss,
                          sharded<gms::gossiper>& g,
                          db::config& cfg,
