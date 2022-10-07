@@ -90,8 +90,7 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return !(this->under_unspooled_pressure()
-                || (_under_real_pressure));
+    return !under_unspooled_pressure() && !_under_real_pressure;
 }
 
 void
