@@ -156,7 +156,7 @@ void raft_rpc::add_server(raft::server_address addr) {
 }
 
 void raft_rpc::remove_server(raft::server_id id) {
-    if (auto inet_addr = _address_map.erase(id)) {
+    if (auto inet_addr = _address_map.set_expiring_flag(id)) {
         _on_server_update(*inet_addr, id, false);
     }
 }
