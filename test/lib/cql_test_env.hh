@@ -169,6 +169,8 @@ public:
 
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
 
+    virtual db::system_keyspace& get_system_keyspace() = 0;
+
     data_dictionary::database data_dictionary();
 };
 

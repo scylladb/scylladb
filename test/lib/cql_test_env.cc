@@ -136,6 +136,7 @@ private:
     sharded<gms::gossiper>& _gossiper;
     service::raft_group0_client& _group0_client;
     sharded<service::raft_group_registry>& _group0_registry;
+    sharded<db::system_keyspace>& _sys_ks;
 
 private:
     struct core_local_state {
@@ -188,7 +189,8 @@ public:
             sharded<db::batchlog_manager>& batchlog_manager,
             sharded<gms::gossiper>& gossiper,
             service::raft_group0_client& client,
-            sharded<service::raft_group_registry>& group0_registry)
+            sharded<service::raft_group_registry>& group0_registry,
+            sharded<db::system_keyspace>& sys_ks)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -201,6 +203,7 @@ public:
             , _gossiper(gossiper)
             , _group0_client(client)
             , _group0_registry(group0_registry)
+            , _sys_ks(sys_ks)
     {
         adjust_rlimit();
     }
@@ -422,6 +425,10 @@ public:
 
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
         return _group0_registry;
+    }
+
+    virtual db::system_keyspace& get_system_keyspace() override {
+        return _sys_ks.local();
     }
 
     virtual future<> refresh_client_state() override {
@@ -747,7 +754,7 @@ public:
                 std::ref(bm)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg, db::table_selector::all()).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, *cfg, db::table_selector::all()).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
@@ -877,7 +884,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr);
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

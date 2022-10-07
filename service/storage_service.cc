@@ -356,7 +356,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await db::system_keyspace::save_local_supported_features(features);
 
     // If this is a restarting node, we should update tokens before gossip starts
-    auto my_tokens = co_await db::system_keyspace::get_saved_tokens();
+    auto my_tokens = co_await _sys_ks.local().get_saved_tokens();
     bool restarting_normal_node = _sys_ks.local().bootstrap_complete() && !is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
@@ -476,7 +476,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             }
             slogger.info("getting bootstrap token");
             if (resume_bootstrap) {
-                bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
+                bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
                 if (!bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", bootstrap_tokens);
                 } else {
@@ -521,7 +521,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        bootstrap_tokens = co_await db::system_keyspace::get_saved_tokens();
+        bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
             co_await _sys_ks.local().update_tokens(bootstrap_tokens);
@@ -1847,7 +1847,7 @@ future<> storage_service::start_gossiping() {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
                 }
                 co_await set_gossip_tokens(ss._gossiper,
-                        co_await db::system_keyspace::get_local_tokens(),
+                        co_await ss._sys_ks.local().get_local_tokens(),
                         cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
                 co_await ss._gossiper.start_gossiping(utils::get_generation_number());
@@ -3013,7 +3013,7 @@ future<> storage_service::leave_ring() {
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
     co_await _gossiper.add_local_application_state(gms::application_state::STATUS,
-            versioned_value::left(co_await db::system_keyspace::get_local_tokens(), expire_time));
+            versioned_value::left(co_await _sys_ks.local().get_local_tokens(), expire_time));
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     slogger.info("Announcing that I have left the ring for {}ms", delay.count());
     co_await sleep_abortable(delay, _abort_source);
@@ -3047,7 +3047,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 }
 
 future<> storage_service::start_leaving() {
-    co_await _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(co_await db::system_keyspace::get_local_tokens()));
+    co_await _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(co_await _sys_ks.local().get_local_tokens()));
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
         tmptr->add_leaving_endpoint(endpoint);

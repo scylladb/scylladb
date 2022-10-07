@@ -29,6 +29,7 @@ struct token_range {
 
 class size_estimates_mutation_reader final : public flat_mutation_reader_v2::impl {
     replica::database& _db;
+    db::system_keyspace& _sys_ks;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
@@ -37,7 +38,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader_v2::imp
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_v2_opt _partition_reader;
 public:
-    size_estimates_mutation_reader(replica::database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
+    size_estimates_mutation_reader(replica::database& db, db::system_keyspace& sys_ks, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
     virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
@@ -54,6 +55,7 @@ private:
 
 struct virtual_reader {
     replica::database& db;
+    db::system_keyspace& sys_ks;
 
     flat_mutation_reader_v2 operator()(schema_ptr schema,
             reader_permit permit,
@@ -63,13 +65,13 @@ struct virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader_v2<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
+        return make_flat_mutation_reader_v2<size_estimates_mutation_reader>(db, sys_ks, std::move(schema), std::move(permit), range, slice, fwd);
     }
 
-    virtual_reader(replica::database& db_) noexcept : db(db_) {}
+    virtual_reader(replica::database& db_, db::system_keyspace& sys_ks_) noexcept : db(db_), sys_ks(sys_ks_) {}
 };
 
-future<std::vector<token_range>> test_get_local_ranges(replica::database& db);
+future<std::vector<token_range>> test_get_local_ranges(replica::database& db, db::system_keyspace& sys_ks);
 
 } // namespace size_estimates
 

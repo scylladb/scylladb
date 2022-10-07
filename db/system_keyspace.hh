@@ -252,7 +252,7 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    static future<> make(distributed<replica::database>& db,
+    future<> make(distributed<replica::database>& db,
                          distributed<service::storage_service>& ss,
                          sharded<gms::gossiper>& g,
                          db::config& cfg,
@@ -352,13 +352,13 @@ public:
      * Read this node's tokens stored in the LOCAL table.
      * Used to initialize a restarting node.
      */
-    static future<std::unordered_set<dht::token>> get_saved_tokens();
+    future<std::unordered_set<dht::token>> get_saved_tokens();
 
     /*
      * Gets this node's non-empty set of tokens.
      * TODO: maybe get this data from token_metadata instance?
      */
-    static future<std::unordered_set<dht::token>> get_local_tokens();
+    future<std::unordered_set<dht::token>> get_local_tokens();
 
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
@@ -477,7 +477,5 @@ private:
         return execute_cql(req, { data_value(std::forward<Args>(args))... });
     }
 }; // class system_keyspace
-
-future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, table_selector&);
 
 } // namespace db
