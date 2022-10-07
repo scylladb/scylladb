@@ -561,9 +561,8 @@ template <typename Func>
 requires (!is_future<std::invoke_result_t<Func>>::value)
 futurize_t<std::result_of_t<Func()>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-    auto rg = this;
     bool blocked = 
-        !(rg->_blocked_requests.empty() && !rg->under_unspooled_pressure());
+        !(_blocked_requests.empty() && !under_unspooled_pressure());
     if (!blocked) {
         blocked = _under_real_pressure;
     }
