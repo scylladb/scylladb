@@ -35,21 +35,33 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     using seastar::manual_clock;
 
     {
-        // Set + erase regular entry works as expected
+        // Set regular entry + set_expiring_flag works as expected
         raft_address_map<manual_clock> m;
         m.set(id1, addr1, false);
-        auto found = m.find(id1);
-        BOOST_CHECK(!!found && *found == addr1);
-        m.erase(id1);
+        {
+            const auto found = m.find(id1);
+            BOOST_CHECK(!!found && *found == addr1);
+        }
+        {
+            const auto found = m.set_expiring_flag(id1);
+            BOOST_CHECK(!!found && *found == addr1);
+        }
+        manual_clock::advance(expiration_time);
         BOOST_CHECK(!m.find(id1));
     }
     {
-        // Set expiring + erase works as expected
+        // Set expiring entry + set_expiring_flag works as expected
         raft_address_map<manual_clock> m;
         m.set(id1, addr1, true);
-        auto found = m.find(id1);
-        BOOST_CHECK(!!found && *found == addr1);
-        m.erase(id1);
+        {
+            const auto found = m.find(id1);
+            BOOST_CHECK(!!found && *found == addr1);
+        }
+        {
+            const auto found = m.set_expiring_flag(id1);
+            BOOST_CHECK(!!found && *found == addr1);
+        }
+        manual_clock::advance(expiration_time);
         BOOST_CHECK(!m.find(id1));
     }
     {

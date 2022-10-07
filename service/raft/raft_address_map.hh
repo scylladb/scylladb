@@ -241,6 +241,14 @@ class raft_address_map {
         _expiring_list.erase_and_dispose(it, [] (expiring_entry_ptr* ptr) { delete ptr; });
     }
 
+    void add_expiring_entry(timestamped_entry* entry) {
+        auto exp_entry_ptr = new expiring_entry_ptr(_expiring_list, entry);
+        _expiring_list.push_front(*exp_entry_ptr);
+        if (!_timer.armed()) {
+            _timer.arm(_expiry_period);
+        }
+    }
+
 public:
     raft_address_map()
         : _buckets(initial_buckets_count),
@@ -292,11 +300,7 @@ public:
             auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), expiring);
             _set.insert(*entry);
             if (expiring) {
-                auto ts_ptr = new expiring_entry_ptr(_expiring_list, entry);
-                _expiring_list.push_front(*ts_ptr);
-                if (!_timer.armed()) {
-                    _timer.arm(_expiry_period);
-                }
+                add_expiring_entry(entry);
             }
             return;
         }
@@ -319,24 +323,26 @@ public:
         // No action needed when a regular entry is updated
     }
 
+    // Convert a non-expiring entry to an expiring one
+    std::optional<gms::inet_address> set_expiring_flag(raft::server_id id) {
+        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
+        if (set_it == _set.end()) {
+            return std::nullopt;
+        }
+        if (set_it->expiring()) {
+            // Update timestamp of expiring entry
+            to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
+        } else {
+            add_expiring_entry(&*set_it);
+        }
+        return set_it->_addr;
+    }
+
     // A shortcut to setting a new permanent address
     void set(raft::server_address addr) {
         return set(addr.id,
             ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{}),
             false);
-    }
-
-    // Erase an entry from the server address map and return its address.
-    // Does nothing if an element with a given id does not exist (and returns nullopt).
-    std::optional<gms::inet_address> erase(raft::server_id id) {
-        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
-        if (set_it == _set.end()) {
-            return std::nullopt;
-        }
-        auto addr = set_it->_addr;
-        // Erase both from LRU list and base storage
-        unlink_and_dispose(set_it);
-        return addr;
     }
 
     // Map raft server_id to inet_address to be consumed by `messaging_service`
