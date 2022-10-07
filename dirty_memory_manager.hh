@@ -210,7 +210,6 @@ private:
     }
 
     void execute_one();
-    void push_back(std::unique_ptr<allocating_function> f, db::timeout_clock::time_point timeout);
 public:
     size_t unspooled_throttle_threshold() const noexcept {
         return _cfg.unspooled_hard_limit;
@@ -572,16 +571,10 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
 
     auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
     auto fut = fn->get_future();
-    push_back(std::move(fn), timeout);
+    _blocked_requests.push_back(std::move(fn), timeout);
+    ++_blocked_requests_counter;
 
     return fut;
-}
-
-inline
-void
-region_group::push_back(std::unique_ptr<allocating_function> f, db::timeout_clock::time_point timeout) {
-    _blocked_requests.push_back(std::move(f), timeout);
-    ++_blocked_requests_counter;
 }
 
 inline
