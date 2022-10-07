@@ -605,7 +605,7 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
 inline
 void
 allocation_queue::push_back(std::unique_ptr<allocation_queue::allocating_function> f, db::timeout_clock::time_point timeout) {
-    _blocked_requests.push_back(std::move(f));
+    _blocked_requests.push_back(std::move(f), timeout);
     ++_blocked_requests_counter;
 }
 
