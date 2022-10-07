@@ -332,7 +332,6 @@ private:
     virtual void del(region* child) override; // from region_listener
 
     friend class test_region_group;
-    friend class memory_hard_limit;
 };
 
 }
