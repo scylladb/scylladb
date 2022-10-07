@@ -562,10 +562,9 @@ requires (!is_future<std::invoke_result_t<Func>>::value)
 futurize_t<std::result_of_t<Func()>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
     bool blocked = 
-        !(_blocked_requests.empty() && !under_unspooled_pressure());
-    if (!blocked) {
-        blocked = _under_real_pressure;
-    }
+        !_blocked_requests.empty()
+        || under_unspooled_pressure()
+        || _under_real_pressure;
 
     if (!blocked) {
         return futurize_invoke(func);
