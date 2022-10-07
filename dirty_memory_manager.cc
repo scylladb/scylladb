@@ -5,6 +5,7 @@
 #include "dirty_memory_manager.hh"
 #include <seastar/util/later.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "seastarx.hh"
 
 // Code previously under logalloc namespace
@@ -107,25 +108,23 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
 
 future<> region_group::release_queued_allocations() {
     {
-        return yield().then([this] {
-            return repeat([this] () noexcept {
-                if (_shutdown_requested) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-
+        {
+            while (!_shutdown_requested) {
                 if (!_blocked_requests.empty() && execution_permitted()) {
                     execute_one();
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                    co_await coroutine::maybe_yield();
                 } else {
+                  // We want `rl` to hold for the call to _relief.wait(), but not to wait
+                  // for the future to resolve, hence the inner lambda.
+                  co_await std::invoke([&] {
                     // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
                     // FIXME: handle allocation failures (not very likely) like allocating_section does
                     tracker_reclaimer_lock rl(logalloc::shard_tracker());
-                    return _relief.wait().then([] {
-                        return stop_iteration::no;
-                    });
+                    return _relief.wait();
+                  });
                 }
-            });
-        });
+            }
+        }
     }
 }
 
