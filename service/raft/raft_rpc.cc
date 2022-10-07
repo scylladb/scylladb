@@ -129,21 +129,32 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
     return ser::raft_rpc_verbs::send_raft_add_entry(&_messaging,
-        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd);
+        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            const auto message = format("Failed to execute add entry on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::add_entry_reply>(raft::transport_error(message));
+        });
 }
 
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
     const std::vector<raft::config_member>& add,
     const std::vector<raft::server_id>& del) {
-   return ser::raft_rpc_verbs::send_raft_modify_config(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)),
-       db::no_timeout, _group_id, _server_id, id, add, del);
+    return ser::raft_rpc_verbs::send_raft_modify_config(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)),
+        db::no_timeout, _group_id, _server_id, id, add, del)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            const auto message = format("Failed to execute modify config on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::add_entry_reply>(raft::transport_error(message));
+        });
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
     return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id)
         .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
-            rlogger.trace("Failed to execute read barrier on leader {}: {}", id, e);
-            return make_exception_future<raft::read_barrier_reply>(raft::intermittent_connection_error());
+            const auto message = format("Failed to execute read barrier on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::read_barrier_reply>(raft::transport_error(message));
         });
 }
 
