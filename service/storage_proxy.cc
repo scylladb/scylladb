@@ -75,6 +75,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/all.hh>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -433,8 +434,8 @@ private:
         errors_info errors;
         ++p->get_stats().received_mutations;
         p->get_stats().forwarded_mutations += forward.size();
-        std::tuple<future<>, future<>> _ = co_await when_all(
-            coroutine::lambda([&] () -> future<> {
+        co_await coroutine::all(
+            [&] () -> future<> {
                 try {
                     // FIXME: get_schema_for_write() doesn't timeout
                     schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
@@ -460,7 +461,7 @@ private:
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                 }
-            }),
+            },
             [&] {
                 // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
                 return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
