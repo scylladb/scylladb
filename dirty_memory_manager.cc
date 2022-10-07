@@ -102,7 +102,11 @@ region_group::execute_one() {
 
 future<>
 region_group::start_releaser(scheduling_group deferred_work_sg) {
-    return with_scheduling_group(deferred_work_sg, [this] {
+    return with_scheduling_group(deferred_work_sg, std::bind(&region_group::release_queued_allocations, this));
+}
+
+future<> region_group::release_queued_allocations() {
+    {
         return yield().then([this] {
             return repeat([this] () noexcept {
                 if (_shutdown_requested) {
@@ -122,7 +126,7 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
                 }
             });
         });
-    });
+    }
 }
 
 region_group::region_group(sstring name,
