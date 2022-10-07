@@ -74,6 +74,7 @@
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -379,25 +380,28 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
 
-        return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
-                // FIXME: optimise for cases when all fms are in the same schema
-                auto schema_version = fm.schema_version();
-                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
-                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
-                });
-            }).then([&sp = _sp, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
-                return sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+        std::vector<frozen_mutation_and_schema> mutations;
+        auto timeout = *t;
+        co_await coroutine::parallel_for_each(std::move(fms), [&] (frozen_mutation& fm) {
+            // Note: not a coroutine, since get_schema_for_write() rarely blocks.
+            // FIXME: optimise for cases when all fms are in the same schema
+            auto schema_version = fm.schema_version();
+            return get_schema_for_write(schema_version, std::move(src_addr)).then([&] (schema_ptr s) mutable {
+                mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
             });
         });
+        auto& sp = _sp;
+        co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
     }
 
     future<rpc::no_wait_type> handle_write(
             netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
             auto schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-            auto&& apply_fn, auto&& forward_fn) {
+            auto&& apply_fn1, auto&& forward_fn1) {
+        auto apply_fn = std::move(apply_fn1);
+        auto forward_fn = std::move(forward_fn1);
+
         tracing::trace_state_ptr trace_state_ptr;
 
         if (trace_info) {
@@ -406,6 +410,10 @@ private:
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
+
+        auto trace_done = defer([&] {
+            tracing::trace(trace_state_ptr, "Mutation handling is done");
+        });
 
         storage_proxy::clock_type::time_point timeout;
         if (!t) {
@@ -420,32 +428,28 @@ private:
             replica::exception_variant local;
         };
 
-        return do_with(std::move(in), _sp.shared_from_this(), errors_info{}, [this, src_addr = std::move(src_addr),
-                       forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
-                       schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
-                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
-            ++p->get_stats().received_mutations;
-            p->get_stats().forwarded_mutations += forward.size();
-            return when_all(
-                // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize_invoke([this, timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
-                                      apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
+        const auto& m = in;
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        errors_info errors;
+        ++p->get_stats().received_mutations;
+        p->get_stats().forwarded_mutations += forward.size();
+        std::tuple<future<>, future<>> _ = co_await when_all(
+            coroutine::lambda([&] () -> future<> {
+                try {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})
-                                         .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
-                        return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
-                    });
-                }).then([this, &p, reply_to, shard, response_id, trace_state_ptr] () {
+                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
+                    // Note: blocks due to execution_stage in replica::database::apply()
+                    co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                     // lots of unsent responses, which can OOM our shard.
                     //
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
-                    return send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                            shard, response_id, p->get_view_update_backlog()).then_wrapped([] (future<> f) {
-                        f.ignore_ready_future();
-                    });
-                }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
+                    auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
+                            shard, response_id, p->get_view_update_backlog()));
+                    f.ignore_ready_future();
+                } catch (...) {
+                    std::exception_ptr eptr = std::current_exception();
                     errors.count++;
                     errors.local = replica::try_encode_replica_exception(eptr);
                     seastar::log_level l = seastar::log_level::warn;
@@ -455,41 +459,38 @@ private:
                         l = seastar::log_level::debug;
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
-                                  timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
+                }
+            }),
+            [&] {
+                // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
+                return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
+                    // Note: not a coroutine, since forward_fn() typically returns a ready future
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
                     return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
-                                      tracing::make_trace_info(trace_state_ptr))
-                            .then_wrapped([&p, &errors] (future<> f) {
+                                        tracing::make_trace_info(trace_state_ptr))
+                            .then_wrapped([&] (future<> f) {
                         if (f.failed()) {
                             ++p->get_stats().forwarding_errors;
                             errors.count++;
                         };
                         f.ignore_ready_future();
                     });
-                })
-            ).then_wrapped([this, trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
-                // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
-                auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-                if (errors.count) {
-                    fut = send_mutation_failed(
-                            netw::messaging_service::msg_addr{reply_to, shard},
-                            trace_state_ptr,
-                            shard,
-                            response_id,
-                            errors.count,
-                            p->get_view_update_backlog(),
-                            std::move(errors.local)).then_wrapped([] (future<> f) {
-                        f.ignore_ready_future();
-                        return netw::messaging_service::no_wait();
-                    });
-                }
-                return fut.finally([trace_state_ptr] {
-                    tracing::trace(trace_state_ptr, "Mutation handling is done");
                 });
-            });
-        });
+            }
+        );
+        // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
+        if (errors.count) {
+            auto f = co_await coroutine::as_future(send_mutation_failed(
+                    netw::messaging_service::msg_addr{reply_to, shard},
+                    trace_state_ptr,
+                    shard,
+                    response_id,
+                    errors.count,
+                    p->get_view_update_backlog(),
+                    std::move(errors.local)));
+            f.ignore_ready_future();
+        }
+        co_return netw::messaging_service::no_wait();
     }
 
     future<rpc::no_wait_type> receive_mutation_handler(
@@ -574,132 +575,115 @@ private:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>>
     handle_read_data(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd, ::compat::wrapping_partition_range pr,
+            query::read_command cmd1, ::compat::wrapping_partition_range pr,
             rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+        if (cmd1.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-        if (!cmd.max_result_size) {
+        if (!cmd1.max_result_size) {
             auto& cfg = _sp.local_db().get_config();
-            cmd.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
+            cmd1.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
         }
 
-        return do_with(std::move(pr), _sp.shared_from_this(), std::move(trace_state_ptr),
-                [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info]
-                    (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
-            p->get_stats().replica_data_reads++;
-            auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, t, rate_limit_info] (schema_ptr s) {
-                auto pr2 = ::compat::unwrap(std::move(pr), *s);
-                if (pr2.second) {
-                    // this function assumes singular queries but doesn't validate
-                    throw std::runtime_error("READ_DATA called with wrapping range");
-                }
-                query::result_options opts;
-                opts.digest_algo = da;
-                opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info);
-            }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
-            });
-        });
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
+        p->get_stats().replica_data_reads++;
+        auto src_ip = src_addr.addr;
+        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+        auto pr2 = ::compat::unwrap(std::move(pr), *s);
+        if (pr2.second) {
+            // this function assumes singular queries but doesn't validate
+            throw std::runtime_error("READ_DATA called with wrapping range");
+        }
+        query::result_options opts;
+        opts.digest_algo = da;
+        opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
+        auto timeout = t ? *t : db::no_timeout;
+        future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info));
+        tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
+        co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
     }
 
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
     handle_read_mutation_data(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd, ::compat::wrapping_partition_range pr) {
+            query::read_command cmd1, ::compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+        if (cmd1.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        if (!cmd1.max_result_size) {
+            cmd1.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
-        return do_with(std::move(pr),
-                       _sp.shared_from_this(),
-                       std::move(trace_state_ptr),
-                       ::compat::one_or_two_partition_ranges({}),
-                       [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
-                               ::compat::wrapping_partition_range& pr,
-                               shared_ptr<storage_proxy>& p,
-                               tracing::trace_state_ptr& trace_state_ptr,
-                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
-            p->get_stats().replica_mutation_data_reads++;
-            auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
-                unwrapped = ::compat::unwrap(std::move(pr), *s);
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
-            }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
-            });
-        });
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        ::compat::one_or_two_partition_ranges unwrapped({});
+        auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
+        p->get_stats().replica_mutation_data_reads++;
+        auto src_ip = src_addr.addr;
+        auto s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+        unwrapped = ::compat::unwrap(std::move(pr), *s);
+        auto timeout = t ? *t : db::no_timeout;
+        future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr));
+        tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
+        co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
     }
 
     future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>>
     handle_read_digest(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd, ::compat::wrapping_partition_range pr,
+            query::read_command cmd1, ::compat::wrapping_partition_range pr,
             rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+        if (cmd1.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        if (!cmd1.max_result_size) {
+            cmd1.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
-        return do_with(std::move(pr), _sp.shared_from_this(), std::move(trace_state_ptr),
-                [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info]
-                    (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
-            p->get_stats().replica_digest_reads++;
-            auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, t, da, rate_limit_info] (schema_ptr s) {
-                auto pr2 = ::compat::unwrap(std::move(pr), *s);
-                if (pr2.second) {
-                    // this function assumes singular queries but doesn't validate
-                    throw std::runtime_error("READ_DIGEST called with wrapping range");
-                }
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
-            }).then_wrapped([this, p, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
+        shared_ptr<storage_proxy> p = _sp.shared_from_this();
+        auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
+        p->get_stats().replica_digest_reads++;
+        auto src_ip = src_addr.addr;
+        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+        auto pr2 = ::compat::unwrap(std::move(pr), *s);
+        if (pr2.second) {
+            // this function assumes singular queries but doesn't validate
+            throw std::runtime_error("READ_DIGEST called with wrapping range");
+        }
+        auto timeout = t ? *t : db::no_timeout;
+        future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f = co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
+        tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
 
-                using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
+        using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
 
-                if (!f.failed()) {
-                    auto&& [d, t, c, p] = f.get();
-                    return make_ready_future<final_tuple_type>(d, t, std::move(c), replica::exception_variant(), std::move(p));
-                }
+        if (!f.failed()) {
+            auto&& [d, t, c, p] = f.get();
+            co_return final_tuple_type(d, t, std::move(c), replica::exception_variant(), std::move(p));
+        }
 
-                std::exception_ptr eptr = f.get_exception();
-                if (p->features().typed_errors_in_read_rpc) {
-                    replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
-                    if (ex) {
-                        return make_ready_future<final_tuple_type>(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
-                    }
-                }
+        std::exception_ptr eptr = f.get_exception();
+        if (p->features().typed_errors_in_read_rpc) {
+            replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
+            if (ex) {
+                co_return final_tuple_type(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
+            }
+        }
 
-                return make_exception_future<final_tuple_type>(std::move(eptr));
-            });
-        });
+        co_return coroutine::exception(std::move(eptr));
     }
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
@@ -5944,15 +5928,12 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    lw_shared_ptr<query::read_command> cmd,
-                                                   const dht::partition_range_vector&& prs,
+                                                   const dht::partition_range_vector&& prs_in,
                                                    tracing::trace_state_ptr trace_state,
                                                    storage_proxy::clock_type::time_point timeout) {
-    return do_with(cmd, std::move(prs), [this, timeout, s = std::move(s), trace_state = std::move(trace_state)] (lw_shared_ptr<query::read_command>& cmd,
-                const dht::partition_range_vector& prs) mutable {
-        return query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), timeout).then([] (std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> t) {
-            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(std::move(t));
-        });
-    });
+    // This is a coroutine so that `cmd` and `prs` survive the call to query_muatations_on_all_shards().
+    auto prs = std::move(prs_in);
+    co_return co_await query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), timeout);
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
