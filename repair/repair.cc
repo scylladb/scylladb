@@ -931,7 +931,7 @@ static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manag
     co_return task;
 }
 
-static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
+future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // Repair tables in the keyspace one after another
     assert(ri->table_names().size() == ri->table_ids.size());
     for (int idx = 0; idx < ri->table_ids.size(); idx++) {
@@ -987,7 +987,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
-static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
+future<> repair_task_impl::repair_ranges(lw_shared_ptr<repair_info> ri) {
     ri->rs.repair_tracker().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
@@ -1209,7 +1209,7 @@ future<> user_requested_repair_task_impl::run() {
         }
 
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
+            auto f = rs.container().invoke_on(shard, [this, keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers, hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(local_repair,
@@ -1311,7 +1311,7 @@ future<> data_sync_repair_task_impl::run() {
             throw std::runtime_error("aborted by user request");
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [this, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();

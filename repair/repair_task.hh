@@ -25,6 +25,9 @@ protected:
         };
     }
 
+    future<> do_repair_ranges(lw_shared_ptr<repair_info> ri);
+    future<> repair_ranges(lw_shared_ptr<repair_info> ri);
+
     virtual future<> run() override = 0;
 };
 
