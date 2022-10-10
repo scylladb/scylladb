@@ -1681,9 +1681,9 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     })).then([this, p]() mutable {
         rebuild_statistics();
 
-        return parallel_for_each(p->remove, [this](pruner::removed_sstable& r) {
+        return parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
             if (r.enable_backlog_tracker) {
-                remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), r.sst);
+                remove_sstable_from_backlog_tracker(p->cg.get_backlog_tracker(), r.sst);
             }
             return sstables::delete_atomically({r.sst});
         }).then([p] {
