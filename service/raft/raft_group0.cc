@@ -161,15 +161,13 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     _raft_gr.address_map().set(my_addr);
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_id,
-            [this] (gms::inet_address addr, raft::server_id raft_id, bool added) {
-                // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.
-                // See #6403.
-                auto fd_id = _raft_gr.get_fd_pinger().allocate_id(addr);
+            [this] (raft::server_id raft_id, bool added) {
+                auto fd_id = _raft_gr.get_fd_pinger().allocate_id(raft_id);
                 if (added) {
-                    group0_log.info("Added {} (address: {}) to group 0 RPC map", raft_id, addr);
+                    group0_log.info("Added Raft server {} to failure detector (endpoint id: {})", raft_id, fd_id);
                     _raft_gr.direct_fd().add_endpoint(fd_id);
                 } else {
-                    group0_log.info("Removed {} (address: {}) from group 0 RPC map", raft_id, addr);
+                    group0_log.info("Removed Raft server {} from failure detector (endpoint id: {})", raft_id, fd_id);
                     _raft_gr.direct_fd().remove_endpoint(fd_id);
                 }
             });
