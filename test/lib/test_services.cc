@@ -117,6 +117,9 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
+    compaction_backlog_tracker& get_backlog_tracker() override {
+        return get_compaction_strategy().get_backlog_tracker();
+    }
 };
 
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)

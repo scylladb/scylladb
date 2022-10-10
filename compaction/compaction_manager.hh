@@ -525,6 +525,8 @@ public:
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
 
+    compaction_backlog_tracker& get_backlog_tracker(compaction::table_state& t);
+
     static sstables::compaction_data create_compaction_data();
 
     compaction::strategy_control& get_strategy_control() const noexcept;

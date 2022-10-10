@@ -15,6 +15,7 @@
 #include "compaction_descriptor.hh"
 
 class reader_permit;
+class compaction_backlog_tracker;
 
 namespace sstables {
 class compaction_strategy;
@@ -43,6 +44,7 @@ public:
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
+    virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
 };
 
 }

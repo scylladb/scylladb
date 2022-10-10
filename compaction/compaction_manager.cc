@@ -1817,3 +1817,8 @@ compaction_backlog_manager::~compaction_backlog_manager() {
         tracker->_manager = nullptr;
     }
 }
+
+compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction::table_state& t) {
+    // FIXME: once tracker is decoupled from strategy, it will live in compaction_manager's per group state.
+    return t.get_compaction_strategy().get_backlog_tracker();
+}

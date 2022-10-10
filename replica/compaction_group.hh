@@ -12,6 +12,7 @@
 
 #pragma once
 
+class compaction_backlog_tracker;
 namespace compaction {
 class table_state;
 }
@@ -83,6 +84,8 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
+
+    compaction_backlog_tracker& get_backlog_tracker();
 
     compaction::table_state& as_table_state() const noexcept;
 };
