@@ -2372,7 +2372,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
             // Otherwise, we can count on off-strategy completion to add it when updating lists.
             if (sst->get_origin() != sstables::repair_origin) {
-                add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                add_sstable_to_backlog_tracker(compaction_group_for_sstable(sst).get_backlog_tracker(), sst);
             }
         } catch (...) {
             tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
