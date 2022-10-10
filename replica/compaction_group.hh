@@ -19,6 +19,8 @@ class table_state;
 
 namespace replica {
 
+using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
+
 // Compaction group is a set of SSTables which are eligible to be compacted together.
 // By this definition, we can say:
 //      - A group contains SSTables that are owned by the same shard.
@@ -41,6 +43,16 @@ class compaction_group {
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+private:
+    // Adds new sstable to the set of sstables
+    // Doesn't update the cache. The cache must be synchronized in order for reads to see
+    // the writes contained in this sstable.
+    // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
+    // Doesn't trigger compaction.
+    // Strong exception guarantees.
+    lw_shared_ptr<sstables::sstable_set>
+    do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+                   enable_backlog_tracker backlog_tracker);
 public:
     compaction_group(table& t);
 
@@ -58,7 +70,6 @@ public:
     lw_shared_ptr<memtable_list>& memtables() noexcept;
     // Returns minimum timestamp from memtable list
     api::timestamp_type min_memtable_timestamp() const;
-
     // Add sstable to main set
     void add_sstable(sstables::shared_sstable sstable);
     // Add sstable to maintenance set

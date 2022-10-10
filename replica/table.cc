@@ -401,7 +401,7 @@ void table::backlog_tracker_adjust_charges(const std::vector<sstables::shared_ss
 }
 
 lw_shared_ptr<sstables::sstable_set>
-table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
@@ -410,16 +410,16 @@ table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::s
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
     if (backlog_tracker) {
-        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
+        table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
     // update sstable set last in case either updating
     // staging sstables or backlog tracker throws
-    update_stats_for_new_sstable(sstable->bytes_on_disk());
+    _t.update_stats_for_new_sstable(sstable->bytes_on_disk());
     return new_sstables;
 }
 
 void compaction_group::add_sstable(sstables::shared_sstable sstable) {
-    _main_sstables = _t.do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
+    _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
@@ -431,7 +431,7 @@ void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> ne
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
-    _maintenance_sstables = _t.do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
