@@ -86,7 +86,7 @@ Then we can finally create and sign our certificate:
 
 .. code-block:: shell
 
-   openssl x509 -req -in db.csr -CA cadb.pem -CAkey cadb.key -CAcreateserial  -out db.crt -days 365
+   openssl x509 -req -in db.csr -CA cadb.pem -CAkey cadb.key -CAcreateserial  -out db.crt -days 365 -sha256
 
 As a result, we should now have:
 
