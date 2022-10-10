@@ -147,7 +147,6 @@ public:
     }
     const std::set<inet_address>& get_seeds() const noexcept;
 
-    sharded<db::system_keyspace>& get_system_keyspace() const noexcept { return _sys_ks; }
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
