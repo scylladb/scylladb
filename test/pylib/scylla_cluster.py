@@ -119,6 +119,7 @@ class ScyllaServer:
     config_filename: pathlib.Path
     log_file: BufferedWriter
     host_id: str                      # Host id (UUID)
+    ip_addr: str
 
     def __init__(self, exe: str, vardir: str,
                  host_registry,
@@ -131,7 +132,6 @@ class ScyllaServer:
         self.host_registry = host_registry
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
-        self.hostname = ""
         self.seeds = seeds
         self.cmd: Optional[Process] = None
         self.log_savepoint = 0
@@ -156,24 +156,18 @@ class ScyllaServer:
         """Setup and start this server"""
         await self.install()
 
-        logging.info("starting server at host %s in %s...", self.hostname,
-                     self.workdir.name)
+        logging.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
 
         await self.start(api)
 
         if self.cmd:
-            logging.info("started server at host %s in %s, pid %d", self.hostname,
+            logging.info("started server at host %s in %s, pid %d", self.ip_addr,
                          self.workdir.name, self.cmd.pid)
 
     @property
     def is_running(self) -> bool:
         """Check the server subprocess is up"""
         return self.cmd is not None
-
-    @property
-    def host(self) -> str:
-        """Server host name"""
-        return str(self.hostname)
 
     def check_scylla_executable(self) -> None:
         """Check if executable exists and can be run"""
@@ -188,14 +182,14 @@ class ScyllaServer:
 
         # Scylla assumes all instances of a cluster use the same port,
         # so each instance needs an own IP address.
-        self.hostname = await self.host_registry.lease_host()
+        self.ip_addr = await self.host_registry.lease_host()
         if not self.seeds:
-            self.seeds = [self.hostname]
+            self.seeds = [self.ip_addr]
         # Use the last part in host IP 127.151.3.27 -> 27
         # There can be no duplicates within the same test run
         # thanks to how host registry registers subnets, and
         # different runs use different vardirs.
-        shortname = pathlib.Path(f"scylla-{self.host.rsplit('.', maxsplit=1)[-1]}")
+        shortname = pathlib.Path(f"scylla-{self.ip_addr.rsplit('.', maxsplit=1)[-1]}")
         self.workdir = self.vardir / shortname
 
         logging.info("installing Scylla server in %s...", self.workdir)
@@ -214,7 +208,7 @@ class ScyllaServer:
         # Create a configuration file.
         self.config = make_scylla_conf(
                 workdir = self.workdir,
-                host_addr = self.hostname,
+                host_addr = self.ip_addr,
                 seed_addrs = self.seeds,
                 cluster_name = self.cluster_name) \
             | self.config_options
@@ -269,7 +263,7 @@ class ScyllaServer:
         # words, even after CQL port is up, Scylla may still be
         # initializing. When the role is ready, queries begin to
         # work, so rely on this "side effect".
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.hostname]),
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.ip_addr]),
                                    request_timeout=self.START_TIMEOUT)
         try:
             # In a cluster setup, it's possible that the CQL
@@ -277,7 +271,7 @@ class ScyllaServer:
             # point, so make sure we execute the checks strictly via
             # this connection
             with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=[self.hostname],
+                         contact_points=[self.ip_addr],
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          auth_provider=auth) as cluster:
@@ -285,7 +279,7 @@ class ScyllaServer:
                     session.execute("SELECT * FROM system.local")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=[self.hostname],
+                                                   contact_points=[self.ip_addr],
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
                     return True
@@ -299,7 +293,7 @@ class ScyllaServer:
     async def get_host_id(self, api: ScyllaRESTAPIClient) -> bool:
         """Try to get the host id (also tests Scylla REST API is serving)"""
         try:
-            self.host_id = await api.get_host_id(self.hostname)
+            self.host_id = await api.get_host_id(self.ip_addr)
             return True
         except (aiohttp.ClientConnectionError, HTTPError) as exc:
             if isinstance(exc, HTTPError) and exc.code >= 500:
@@ -331,7 +325,7 @@ class ScyllaServer:
             if self.cmd.returncode:
                 with self.log_filename.open('r') as log_file:
                     logging.error("failed to start server at host %s in %s",
-                                  self.hostname, self.workdir.name)
+                                  self.ip_addr, self.workdir.name)
                     logging.error("last line of %s:", self.log_filename)
                     log_file.seek(0, 0)
                     logging.error(log_file.readlines()[-1].rstrip())
@@ -340,7 +334,7 @@ class ScyllaServer:
                         logpath = log_handler.baseFilename   # type: ignore
                     else:
                         logpath = "?"
-                    raise RuntimeError(f"Failed to start server at host {self.hostname}.\n"
+                    raise RuntimeError(f"Failed to start server at host {self.ip_addr}.\n"
                                        "Check the log files:\n"
                                        f"{logpath}\n"
                                        f"{self.log_filename}")
@@ -352,7 +346,7 @@ class ScyllaServer:
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        raise RuntimeError(f"failed to start server {self.host}, "
+        raise RuntimeError(f"failed to start server {self.ip_addr}, "
                            f"check server log at {self.log_filename}")
 
     async def force_schema_migration(self) -> None:
@@ -387,9 +381,8 @@ class ScyllaServer:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
         # Preserve for logging
-        hostname = self.hostname
-        logging.info("stopping server at host %s in %s", hostname,
-                     self.workdir.name)
+        ip_addr = self.ip_addr
+        logging.info("stopping server at host %s in %s", ip_addr, self.workdir.name)
         if not self.cmd:
             return
 
@@ -402,16 +395,15 @@ class ScyllaServer:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("stopped server at host %s in %s", hostname,
-                             self.workdir.name)
+                logging.info("stopped server at host %s in %s", ip_addr, self.workdir.name)
             self.cmd = None
 
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
         stop, so it is graceful. Waits for the process to exit before return."""
         # Preserve for logging
-        hostname = self.hostname
-        logging.info("gracefully stopping server at host %s", hostname)
+        ip_addr = self.ip_addr
+        logging.info("gracefully stopping server at host %s", ip_addr)
         if not self.cmd:
             return
 
@@ -426,22 +418,22 @@ class ScyllaServer:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("gracefully stopped server at host %s", hostname)
+                logging.info("gracefully stopped server at host %s", ip_addr)
             self.cmd = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
         data files and log files."""
 
-        if not self.hostname:
+        if not hasattr(self, "ip_addr"):
             return
         logging.info("Uninstalling server at %s", self.workdir)
 
         shutil.rmtree(self.workdir)
         self.log_filename.unlink(missing_ok=True)
 
-        await self.host_registry.release_host(self.hostname)
-        self.hostname = ""
+        await self.host_registry.release_host(self.ip_addr)
+        del self.ip_addr
 
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""
@@ -450,7 +442,7 @@ class ScyllaServer:
         self.log_file.flush()
 
     def __str__(self):
-        return self.hostname
+        return self.ip_addr
 
     def _write_config_file(self) -> None:
         with self.config_filename.open('w') as config_file:
@@ -543,11 +535,11 @@ class ScyllaCluster:
             await server.install_and_start(self.api)
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
-                          server.hostname, server.workdir.name, str(exc))
+                          server.ip_addr, server.workdir.name, str(exc))
             raise
-        self.running[server.host] = server
+        self.running[server.ip_addr] = server
         logging.info("Cluster %s added server %s", self, server)
-        return server.host
+        return server.ip_addr
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""
