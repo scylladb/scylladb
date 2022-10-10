@@ -92,7 +92,7 @@ Session.run_async = run_async
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[str], port: int, ssl: bool):
+def cluster_con(hosts: List[str], port: int, use_ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
@@ -107,7 +107,7 @@ def cluster_con(hosts: List[str], port: int, ssl: bool):
         # See issue #11289.
         # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
         request_timeout=200)
-    if ssl:
+    if use_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -148,8 +148,8 @@ async def manager_internal(event_loop, request):
        Test cases (functions) should not use this fixture.
     """
     port = int(request.config.getoption('port'))
-    ssl = bool(request.config.getoption('ssl'))
-    manager_int = ManagerClient(request.config.getoption('manager_api'), port, ssl, cluster_con)
+    use_ssl = bool(request.config.getoption('ssl'))
+    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, cluster_con)
     yield manager_int
     await manager_int.stop()  # Stop client session and close driver after last test
 
