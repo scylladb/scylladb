@@ -577,16 +577,16 @@ public:
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
 class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
     sstables::shared_sstable _sst;
-    sstables::compaction_strategy& _compaction_strategy;
+    compaction::table_state& _ts;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
 public:
     database_sstable_write_monitor(lw_shared_ptr<sstable_write_permit> permit, sstables::shared_sstable sst,
-        sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
+        compaction_group& cg, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
-            , _compaction_strategy(strategy)
+            , _ts(cg.as_table_state())
             , _maximum_timestamp(max_timestamp)
     {}
 
@@ -597,13 +597,13 @@ public:
         // We failed to finish handling this SSTable, so we have to update the backlog_tracker
         // about it.
         if (_sst) {
-            _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
+            _ts.get_backlog_tracker().revert_charges(_sst);
         }
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override {
         _tracker = &t;
-        _compaction_strategy.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+        _ts.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
     }
 
     virtual void on_data_write_completed() override {
@@ -785,7 +785,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions, &cg] (flat_mutation_reader_v2 reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
             auto&& priority = service::get_local_memtable_flush_priority();
@@ -796,7 +796,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             newtabs.push_back(newtab);
             tlogger.debug("Flushing to {}", newtab->get_filename());
 
-            auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_strategy,
+            auto monitor = database_sstable_write_monitor(permit, newtab, cg,
                 old->get_max_timestamp());
 
             co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg, priority);
