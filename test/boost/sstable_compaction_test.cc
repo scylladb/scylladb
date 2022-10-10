@@ -3100,7 +3100,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             };
 
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
+                cf.as_table_state().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             // Start compaction, then stop tracking compaction, switch to TWCS, wait for compaction to finish and check for backlog.
@@ -3111,7 +3111,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             // set_compaction_strategy() itself is responsible for transferring charges from old to new backlog tracker.
             cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
             for (auto& sst : ssts) {
-                cf->get_compaction_strategy().get_backlog_tracker().replace_sstables({}, {sst});
+                cf.as_table_state().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             auto ret = fut.get0();
@@ -3119,7 +3119,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
         }
         // triggers code that iterates through registered compactions.
         cf._data->cm.backlog();
-        cf->get_compaction_strategy().get_backlog_tracker().backlog();
+        cf.as_table_state().get_backlog_tracker().backlog();
     });
 }
 
@@ -4652,16 +4652,16 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         };
         auto manager = compaction_manager(std::move(cfg), as);
 
-        auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (replica::table& t, uint64_t data_size, int level) {
+        auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
             auto key = make_local_key(t.schema());
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             assert(sst->data_size() == data_size);
-            auto backlog_before = t.get_compaction_strategy().get_backlog_tracker().backlog();
-            t.add_sstable_and_update_cache(sst).get();
+            auto backlog_before = t.as_table_state().get_backlog_tracker().backlog();
+            t->add_sstable_and_update_cache(sst).get();
             testlog.debug("\tNew sstable of size={} level={}; Backlog diff={};",
                           sstables::pretty_printed_data_size(data_size), level,
-                          t.get_compaction_strategy().get_backlog_tracker().backlog() - backlog_before);
+                          t.as_table_state().get_backlog_tracker().backlog() - backlog_before);
         };
 
         auto create_table = [&] () {
@@ -4714,7 +4714,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
                         break;
                     }
                     int level = compaction_strategy_type == sstables::compaction_strategy_type::leveled ? tier_idx : 0;
-                    add_sstable(*t, tier_size, level);
+                    add_sstable(t, tier_size, level);
                     available_space -= std::min(available_space, uint64_t(tier_size));
                 }
 
