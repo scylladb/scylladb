@@ -865,7 +865,6 @@ table::stop() {
         _compaction_group->clear_sstables();
         _sstables = make_compound_sstable_set();
     }));
-    _compaction_strategy.get_backlog_tracker().disable();
     _cache.refresh_snapshot();
 }
 
@@ -1287,6 +1286,9 @@ future<> compaction_group::stop() noexcept {
         // FIXME: make memtable_list::flush() noexcept too.
         return _memtables->flush().finally([this] {
             return _t._compaction_manager.remove(as_table_state());
+        }).finally([this] {
+            // FIXME: will be moved to compaction_manager once managed by it.
+            get_backlog_tracker().disable();
         });
     } catch (...) {
         return current_exception_as_future<>();
