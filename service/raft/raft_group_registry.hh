@@ -18,7 +18,10 @@
 #include "gms/feature.hh"
 #include "direct_failure_detector/failure_detector.hh"
 
-namespace gms { class gossiper; }
+namespace gms {
+class gossiper;
+class echo_pinger;
+}
 
 namespace service {
 
@@ -41,6 +44,8 @@ struct raft_server_for_group {
     raft_sys_table_storage& persistence;
     std::optional<seastar::future<>> aborted;
 };
+
+class direct_fd_pinger;
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -79,7 +84,7 @@ private:
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
     raft_group_registry(bool is_enabled, raft_address_map<>&,
-            netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
+            netw::messaging_service& ms, gms::gossiper& gs, direct_fd_pinger&, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start
@@ -109,10 +114,52 @@ public:
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
+    direct_fd_pinger& get_fd_pinger();
 
     // Is the RAFT local feature enabled?
     // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
     bool is_enabled() const { return _is_enabled; }
+};
+
+// Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
+// Stores a mapping between `direct_failure_detector::pinger::endpoint_id`s and `inet_address`es.
+// The actual pinging is performed by `echo_pinger`.
+class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
+    gms::echo_pinger& _echo_pinger;
+
+    // Only used on shard 0 by `allocate_id`.
+    direct_failure_detector::pinger::endpoint_id _next_allocated_id{0};
+
+    // The mappings are created on shard 0 and lazily replicated to other shards:
+    // when `ping` or `get_address` is called with an unknown ID on a different shard, it will fetch the ID from shard 0.
+    std::unordered_map<direct_failure_detector::pinger::endpoint_id, gms::inet_address> _id_to_addr;
+
+    // Used to quickly check if given address already has an assigned ID.
+    // Used only on shard 0, not replicated.
+    std::unordered_map<gms::inet_address, direct_failure_detector::pinger::endpoint_id> _addr_to_id;
+
+public:
+    direct_fd_pinger(gms::echo_pinger& pinger) : _echo_pinger(pinger) {}
+
+    direct_fd_pinger(const direct_fd_pinger&) = delete;
+    direct_fd_pinger(direct_fd_pinger&&) = delete;
+
+    // Allocate a new endpoint_id for `addr`, or if one already exists, return it.
+    // Call only on shard 0.
+    direct_failure_detector::pinger::endpoint_id allocate_id(gms::inet_address addr);
+
+    // Precondition: `id` was returned from `allocate_id` on shard 0 earlier.
+    future<gms::inet_address> get_address(direct_failure_detector::pinger::endpoint_id id);
+
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
+};
+
+// XXX: find a better place to put this?
+struct direct_fd_clock : public direct_failure_detector::clock {
+    using base = std::chrono::steady_clock;
+
+    direct_failure_detector::clock::timepoint_t now() noexcept override;
+    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
 };
 
 } // end of namespace service

@@ -164,7 +164,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
             [this] (gms::inet_address addr, raft::server_id raft_id, bool added) {
                 // FIXME: we should eventually switch to UUID-based (not IP-based) node identification/communication scheme.
                 // See #6403.
-                auto fd_id = _gossiper.get_direct_fd_pinger().allocate_id(addr);
+                auto fd_id = _raft_gr.get_fd_pinger().allocate_id(addr);
                 if (added) {
                     group0_log.info("Added {} (address: {}) to group 0 RPC map", raft_id, addr);
                     _raft_gr.direct_fd().add_endpoint(fd_id);

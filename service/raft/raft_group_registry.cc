@@ -11,23 +11,23 @@
 #include "gms/gossiper.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
-#include "gms/gossiper.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/sleep.hh>
 
 namespace service {
 
 logging::logger rslog("raft_group_registry");
 
 class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
-    gms::gossiper::direct_fd_pinger& _fd_pinger;
+    direct_fd_pinger& _fd_pinger;
     raft_address_map<>& _address_map;
 
     std::unordered_set<gms::inet_address> _alive_set;
 
 public:
-    direct_fd_proxy(gms::gossiper::direct_fd_pinger& fd_pinger, raft_address_map<>& address_map)
+    direct_fd_proxy(direct_fd_pinger& fd_pinger, raft_address_map<>& address_map)
             : _fd_pinger(fd_pinger), _address_map(address_map) {
     }
 
@@ -68,15 +68,17 @@ public:
         const auto address = _address_map.find(srv);
         return address && _alive_set.contains(*address);
     }
+
+    direct_fd_pinger& get_fd_pinger() { return _fd_pinger; }
 };
 
 raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map<>& address_map,
-        netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
+        netw::messaging_service& ms, gms::gossiper& gossiper, direct_fd_pinger& pinger, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _srv_address_mappings{address_map}
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>(pinger, _srv_address_mappings))
 {
 }
 
@@ -328,5 +330,64 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 }
 
 raft_group_registry::~raft_group_registry() = default;
+
+direct_fd_pinger& raft_group_registry::get_fd_pinger() {
+    assert(_direct_fd_proxy);
+    return _direct_fd_proxy->get_fd_pinger();
+}
+
+direct_failure_detector::pinger::endpoint_id direct_fd_pinger::allocate_id(gms::inet_address addr) {
+    assert(this_shard_id() == 0);
+
+    auto it = _addr_to_id.find(addr);
+    if (it == _addr_to_id.end()) {
+        auto id = _next_allocated_id++;
+        _id_to_addr.emplace(id, addr);
+        it = _addr_to_id.emplace(addr, id).first;
+        rslog.debug("direct_fd_pinger: assigned endpoint ID {} to address {}", id, addr);
+    }
+
+    return it->second;
+}
+
+future<gms::inet_address> direct_fd_pinger::get_address(direct_failure_detector::pinger::endpoint_id id) {
+    auto it = _id_to_addr.find(id);
+    if (it == _id_to_addr.end()) {
+        // Fetch the address from shard 0. By precondition it must be there.
+        auto addr = co_await container().invoke_on(0, [id] (direct_fd_pinger& pinger) {
+            auto it = pinger._id_to_addr.find(id);
+            if (it == pinger._id_to_addr.end()) {
+                on_internal_error(rslog, format("direct_fd_pinger: endpoint id {} has no corresponding address", id));
+            }
+            return it->second;
+        });
+        it = _id_to_addr.emplace(id, addr).first;
+    }
+
+    co_return it->second;
+}
+
+future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
+    try {
+        co_await _echo_pinger.ping(co_await get_address(id), as);
+    } catch (seastar::rpc::closed_error&) {
+        co_return false;
+    }
+    co_return true;
+}
+
+direct_failure_detector::clock::timepoint_t direct_fd_clock::now() noexcept {
+    return base::now().time_since_epoch().count();
+}
+
+future<> direct_fd_clock::sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) {
+    auto t = base::time_point{base::duration{tp}};
+    auto n = base::now();
+    if (t <= n) {
+        return make_ready_future<>();
+    }
+
+    return sleep_abortable(t - n, as);
+}
 
 } // end of namespace service

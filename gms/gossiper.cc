@@ -100,7 +100,7 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
         , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
         , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg))
-        , _echo_pinger(*this), _direct_fd_pinger(_echo_pinger, *this) {
+        , _echo_pinger(*this) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {
         return;
@@ -2548,62 +2548,8 @@ future<> echo_pinger::update_generation_number(int64_t n) {
     });
 }
 
-direct_failure_detector::pinger::endpoint_id gossiper::direct_fd_pinger::allocate_id(gms::inet_address addr) {
-    assert(this_shard_id() == 0);
-
-    auto it = _addr_to_id.find(addr);
-    if (it == _addr_to_id.end()) {
-        auto id = _next_allocated_id++;
-        _id_to_addr.emplace(id, addr);
-        it = _addr_to_id.emplace(addr, id).first;
-        logger.debug("gossiper::direct_fd_pinger: assigned endpoint ID {} to address {}", id, addr);
-    }
-
-    return it->second;
-}
-
-future<gms::inet_address> gossiper::direct_fd_pinger::get_address(direct_failure_detector::pinger::endpoint_id id) {
-    auto it = _id_to_addr.find(id);
-    if (it == _id_to_addr.end()) {
-        // Fetch the address from shard 0. By precondition it must be there.
-        auto addr = co_await _gossiper.container().invoke_on(0, [id] (gossiper& g) {
-            auto it = g._direct_fd_pinger._id_to_addr.find(id);
-            if (it == g._direct_fd_pinger._id_to_addr.end()) {
-                on_internal_error(logger, format("gossiper::direct_fd_pinger: endpoint id {} has no corresponding address", id));
-            }
-            return it->second;
-        });
-        it = _id_to_addr.emplace(id, addr).first;
-    }
-
-    co_return it->second;
-}
-
-future<bool> gossiper::direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
-    try {
-        co_await _echo_pinger.ping(co_await get_address(id), as);
-    } catch (seastar::rpc::closed_error&) {
-        co_return false;
-    }
-    co_return true;
-}
-
 future<> echo_pinger::ping(const gms::inet_address& addr, abort_source& as) {
     return _gossiper._messaging.send_gossip_echo(netw::msg_addr(addr), _generation_number, as);
 }
 
 } // namespace gms
-
-direct_failure_detector::clock::timepoint_t direct_fd_clock::now() noexcept {
-    return base::now().time_since_epoch().count();
-}
-
-future<> direct_fd_clock::sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) {
-    auto t = base::time_point{base::duration{tp}};
-    auto n = base::now();
-    if (t <= n) {
-        return make_ready_future<>();
-    }
-
-    return sleep_abortable(t - n, as);
-}

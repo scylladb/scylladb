@@ -631,18 +631,22 @@ public:
                 raft_address_map.stop().get();
             });
 
-            direct_fd_clock fd_clock;
+
+            static sharded<service::direct_fd_pinger> fd_pinger;
+            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper))).get();
+            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
+
+            service::direct_fd_clock fd_clock;
             fd.start(
-                sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_direct_fd_pinger()); }, std::ref(gossiper)),
-                std::ref(fd_clock),
-                direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+                std::ref(fd_pinger), std::ref(fd_clock),
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
 
             auto stop_fd = defer([&fd] {
                 fd.stop().get();
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
+                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd_pinger), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 

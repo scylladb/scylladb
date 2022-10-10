@@ -623,49 +623,12 @@ private:
     future<> update_live_endpoints_version();
 
 public:
-    // Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
-    // The gossip echo message must be provided this node's gossip generation number.
-    // It's an integer incremented when the node restarts or when the gossip subsystem restarts.
-    // We cache the generation number inside `echo_pinger` on every shard and update it in the `gossiper` main loop.
-    //
-    // We also store a mapping between `direct_failure_detector::pinger::endpoint_id`s and `inet_address`es.
-    class direct_fd_pinger : public direct_failure_detector::pinger {
-        friend class gossiper;
-        echo_pinger& _echo_pinger;
-        gossiper& _gossiper;
-
-        // Only used on shard 0 by `allocate_id`.
-        direct_failure_detector::pinger::endpoint_id _next_allocated_id{0};
-
-        // The mappings are created on shard 0 and lazily replicated to other shards:
-        // when `ping` or `get_address` is called with an unknown ID on a different shard, it will fetch the ID from shard 0.
-        std::unordered_map<direct_failure_detector::pinger::endpoint_id, inet_address> _id_to_addr;
-
-        // Used to quickly check if given address already has an assigned ID.
-        // Used only on shard 0, not replicated.
-        std::unordered_map<inet_address, direct_failure_detector::pinger::endpoint_id> _addr_to_id;
-
-        direct_fd_pinger(echo_pinger& pinger, gossiper& g) : _echo_pinger(pinger), _gossiper(g) {}
-
-    public:
-        direct_fd_pinger(const direct_fd_pinger&) = delete;
-
-        // Allocate a new endpoint_id for `addr`, or if one already exists, return it.
-        // Call only on shard 0.
-        direct_failure_detector::pinger::endpoint_id allocate_id(gms::inet_address addr);
-
-        // Precondition: `id` was returned from `allocate_id` on shard 0 earlier.
-        future<gms::inet_address> get_address(direct_failure_detector::pinger::endpoint_id id);
-
-        future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
-    };
-    direct_fd_pinger& get_direct_fd_pinger() { return _direct_fd_pinger; }
     echo_pinger& get_echo_pinger() { return _echo_pinger; }
 
 private:
     echo_pinger _echo_pinger;
-    direct_fd_pinger _direct_fd_pinger;
 };
+
 
 struct gossip_get_endpoint_states_request {
     // Application states the sender requested
@@ -677,11 +640,3 @@ struct gossip_get_endpoint_states_response {
 };
 
 } // namespace gms
-
-// XXX: find a better place to put this?
-struct direct_fd_clock : public direct_failure_detector::clock {
-    using base = std::chrono::steady_clock;
-
-    direct_failure_detector::clock::timepoint_t now() noexcept override;
-    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
-};
