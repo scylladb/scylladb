@@ -126,6 +126,7 @@ public:
 // The actual pinging is performed by `echo_pinger`.
 class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
     gms::echo_pinger& _echo_pinger;
+    raft_address_map<>& _address_map;
 
     // Only used on shard 0 by `allocate_id`.
     direct_failure_detector::pinger::endpoint_id _next_allocated_id{0};
@@ -139,7 +140,8 @@ class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinge
     std::unordered_map<gms::inet_address, direct_failure_detector::pinger::endpoint_id> _addr_to_id;
 
 public:
-    direct_fd_pinger(gms::echo_pinger& pinger) : _echo_pinger(pinger) {}
+    direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map<>& address_map)
+            : _echo_pinger(pinger), _address_map(address_map) {}
 
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;

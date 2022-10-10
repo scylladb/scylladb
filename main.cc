@@ -926,7 +926,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");
-            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper))).get();
+            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper)), std::ref(raft_address_map)).get();
 
             auto stop_fd_pinger = defer_verbose_shutdown("fd_pinger", [] {
                 fd_pinger.stop().get();
@@ -1104,6 +1104,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
+
             if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
                 supervisor::notify("starting Raft Group Registry service");
             } else {
