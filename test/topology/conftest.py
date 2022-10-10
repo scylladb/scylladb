@@ -8,17 +8,15 @@
 
 import asyncio
 import logging
-import pathlib
 import ssl
-import sys
 from typing import List
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 import pytest
-from cassandra.cluster import Session, ResponseFuture                    # type: ignore
-from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore
-from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore
+from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
@@ -190,7 +188,8 @@ def check_pre_raft(manager):
 @pytest.fixture(scope="function")
 def fails_without_raft(request, check_pre_raft):
     if check_pre_raft:
-        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+        request.node.add_marker(pytest.mark.xfail(reason="Test expected to fail without Raft "
+                                                         "experimental feature on"))
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
