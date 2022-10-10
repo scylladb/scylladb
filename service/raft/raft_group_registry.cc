@@ -21,18 +21,16 @@ namespace service {
 logging::logger rslog("raft_group_registry");
 
 class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
-    direct_fd_pinger& _fd_pinger;
-
     std::unordered_set<raft::server_id> _alive_set;
 
 public:
-    direct_fd_proxy(direct_fd_pinger& fd_pinger) : _fd_pinger(fd_pinger) {
+    direct_fd_proxy() {
     }
 
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
         static const auto msg = "marking Raft server {} as alive for raft groups";
 
-        auto raft_id = co_await _fd_pinger.get_raft_id(id);
+        auto raft_id = raft::server_id{id};
         _alive_set.insert(raft_id);
 
         // The listener should be registered on every shard.
@@ -42,11 +40,14 @@ public:
         } else {
             rslog.debug(msg, raft_id);
         }
+
+        co_return;
     }
+
     future<> mark_dead(direct_failure_detector::pinger::endpoint_id id) override {
         static const auto msg = "marking Raft server {} as dead for raft groups";
 
-        auto raft_id = co_await _fd_pinger.get_raft_id(id);
+        auto raft_id = raft::server_id{id};
         _alive_set.erase(raft_id);
 
         // As above.
@@ -55,22 +56,22 @@ public:
         } else {
             rslog.debug(msg, raft_id);
         }
+
+        co_return;
     }
 
     bool is_alive(raft::server_id srv) override {
         return _alive_set.contains(srv);
     }
-
-    direct_fd_pinger& get_fd_pinger() { return _fd_pinger; }
 };
 
 raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map<>& address_map,
-        netw::messaging_service& ms, gms::gossiper& gossiper, direct_fd_pinger& pinger, direct_failure_detector::failure_detector& fd)
+        netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
     , _srv_address_mappings{address_map}
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>(pinger))
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>())
 {
 }
 
@@ -323,45 +324,8 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 
 raft_group_registry::~raft_group_registry() = default;
 
-direct_fd_pinger& raft_group_registry::get_fd_pinger() {
-    assert(_direct_fd_proxy);
-    return _direct_fd_proxy->get_fd_pinger();
-}
-
-direct_failure_detector::pinger::endpoint_id direct_fd_pinger::allocate_id(raft::server_id srv) {
-    assert(this_shard_id() == 0);
-
-    auto it = _raft_id_to_ep_id.find(srv);
-    if (it == _raft_id_to_ep_id.end()) {
-        auto id = _next_allocated_id++;
-        _ep_id_to_raft_id.emplace(id, srv);
-        it = _raft_id_to_ep_id.emplace(srv, id).first;
-        rslog.debug("direct_fd_pinger: assigned endpoint ID {} to Raft server {}", id, srv);
-    }
-
-    return it->second;
-}
-
-future<raft::server_id> direct_fd_pinger::get_raft_id(direct_failure_detector::pinger::endpoint_id id) {
-    auto it = _ep_id_to_raft_id.find(id);
-    if (it == _ep_id_to_raft_id.end()) {
-        // Fetch the address from shard 0. By precondition it must be there.
-        auto srv = co_await container().invoke_on(0, [id] (direct_fd_pinger& pinger) {
-            auto it = pinger._ep_id_to_raft_id.find(id);
-            if (it == pinger._ep_id_to_raft_id.end()) {
-                on_internal_error(rslog, format("direct_fd_pinger: endpoint id {} has no corresponding Raft server", id));
-            }
-            return it->second;
-        });
-        it = _ep_id_to_raft_id.emplace(id, srv).first;
-    }
-
-    co_return it->second;
-}
-
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
-    auto raft_id = co_await get_raft_id(id);
-    auto addr = _address_map.find(raft_id);
+    auto addr = _address_map.find(raft::server_id{id});
     if (!addr) {
         co_return false;
     }

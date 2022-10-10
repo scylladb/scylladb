@@ -646,7 +646,7 @@ public:
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd_pinger), std::ref(fd)).get();
+                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 

@@ -84,7 +84,7 @@ private:
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
     raft_group_registry(bool is_enabled, raft_address_map<>&,
-            netw::messaging_service& ms, gms::gossiper& gs, direct_fd_pinger&, direct_failure_detector::failure_detector& fd);
+            netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start
@@ -114,7 +114,6 @@ public:
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
-    direct_fd_pinger& get_fd_pinger();
 
     // Is the RAFT local feature enabled?
     // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
@@ -122,22 +121,11 @@ public:
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
-// Stores a mapping between `direct_failure_detector::pinger::endpoint_id`s and `raft::server_id`s.
+// Translates `raft::server_id`s to `gms::inet_address`es before pinging.
 // The actual pinging is performed by `echo_pinger`.
 class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
     gms::echo_pinger& _echo_pinger;
     raft_address_map<>& _address_map;
-
-    // Only used on shard 0 by `allocate_id`.
-    direct_failure_detector::pinger::endpoint_id _next_allocated_id{0};
-
-    // The mappings are created on shard 0 and lazily replicated to other shards:
-    // when `ping` or `get_raft_id` is called with an unknown ID on a different shard, it will fetch the ID from shard 0.
-    std::unordered_map<direct_failure_detector::pinger::endpoint_id, raft::server_id> _ep_id_to_raft_id;
-
-    // Used to quickly check if given Raft ID already has an assigned endpoint ID.
-    // Used only on shard 0, not replicated.
-    std::unordered_map<raft::server_id, direct_failure_detector::pinger::endpoint_id> _raft_id_to_ep_id;
 
 public:
     direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map<>& address_map)
@@ -145,13 +133,6 @@ public:
 
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;
-
-    // Allocate a new endpoint_id for `srv`, or if one already exists, return it.
-    // Call only on shard 0.
-    direct_failure_detector::pinger::endpoint_id allocate_id(raft::server_id srv);
-
-    // Precondition: `id` was returned from `allocate_id` on shard 0 earlier.
-    future<raft::server_id> get_raft_id(direct_failure_detector::pinger::endpoint_id id);
 
     future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
 };

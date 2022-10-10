@@ -134,8 +134,8 @@ SEASTAR_TEST_CASE(failure_detector_test) {
     auto sub1 = co_await fd.local().register_listener(l1, 95);
     auto sub2 = co_await fd.local().register_listener(l2, 45);
 
-    direct_failure_detector::pinger::endpoint_id ep1{1};
-    direct_failure_detector::pinger::endpoint_id ep2{2};
+    direct_failure_detector::pinger::endpoint_id ep1{0, 1};
+    direct_failure_detector::pinger::endpoint_id ep2{0, 2};
 
     BOOST_REQUIRE(!l1.is_alive(ep1));
     BOOST_REQUIRE(!l2.is_alive(ep1));

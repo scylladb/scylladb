@@ -162,12 +162,12 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
     auto rpc = std::make_unique<raft_rpc>(*state_machine, _ms, _raft_gr.address_map(), gid, my_id,
             [this] (raft::server_id raft_id, bool added) {
-                auto fd_id = _raft_gr.get_fd_pinger().allocate_id(raft_id);
+                auto fd_id = raft_id.uuid();
                 if (added) {
-                    group0_log.info("Added Raft server {} to failure detector (endpoint id: {})", raft_id, fd_id);
+                    group0_log.info("Added Raft server {} to failure detector", raft_id);
                     _raft_gr.direct_fd().add_endpoint(fd_id);
                 } else {
-                    group0_log.info("Removed Raft server {} from failure detector (endpoint id: {})", raft_id, fd_id);
+                    group0_log.info("Removed Raft server {} from failure detector", raft_id);
                     _raft_gr.direct_fd().remove_endpoint(fd_id);
                 }
             });

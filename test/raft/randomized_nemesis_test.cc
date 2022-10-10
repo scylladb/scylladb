@@ -1030,51 +1030,21 @@ public:
     }
 };
 
-// Maps `direct_failure_detector::pinger::endpoint_id`s to `raft::server_id`s.
-// We only need to store the map on shard 0, since all `failure_detector` RPCs will be routed through shard 0 (for simplicity of implementation).
-class direct_fd_endpoint_map {
-    direct_failure_detector::pinger::endpoint_id _next_id{0};
-    std::unordered_map<direct_failure_detector::pinger::endpoint_id, raft::server_id> _ep_to_srv;
-
-public:
-    direct_failure_detector::pinger::endpoint_id allocate(raft::server_id srv) {
-        {
-            auto it = std::find_if(_ep_to_srv.begin(), _ep_to_srv.end(), [srv] (auto& p) { return p.second == srv; });
-            if (it != _ep_to_srv.end()) {
-                return it->first;
-            }
-        }
-
-        auto id = _next_id++;
-        _ep_to_srv.emplace(id, srv);
-        tlogger.debug("direct_fd_endpoint_map: allocated endpoint ID {} to Raft server {}", id, srv);
-        return id;
-    }
-
-    raft::server_id get_raft_id(direct_failure_detector::pinger::endpoint_id ep) const {
-        auto it = _ep_to_srv.find(ep);
-        assert(it != _ep_to_srv.end());
-        return it->second;
-    }
-};
-
 template <typename State>
 class direct_fd_pinger : public direct_failure_detector::pinger {
     ::rpc<State>& _rpc;
-    direct_fd_endpoint_map& _ep_map;
 
 public:
-    direct_fd_pinger(::rpc<State>& rpc, direct_fd_endpoint_map& ep_map)
-            : _rpc(rpc), _ep_map(ep_map) {
+    direct_fd_pinger(::rpc<State>& rpc)
+            : _rpc(rpc) {
         assert(this_shard_id() == 0);
     }
 
     // Can be called on any shard.
-    // The given `id` must've been previosuly returned by `_ep_map.allocate` on shard 0.
     future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override {
         try {
             co_await invoke_abortable_on(0, [this, id] (abort_source& as) {
-                return _rpc.ping(_ep_map.get_raft_id(id), as);
+                return _rpc.ping(raft::server_id{id}, as);
             }, as);
         } catch (raft::stopped_error&) {
             co_return false;
@@ -1137,24 +1107,23 @@ public:
 
 class direct_fd_listener : public raft::failure_detector, public direct_failure_detector::listener {
     raft::server_id _id;
-    direct_fd_endpoint_map& _ep_map;
 
     std::unordered_set<raft::server_id> _alive_set;
 
 public:
-    direct_fd_listener(raft::server_id id, direct_fd_endpoint_map& ep_map)
-            : _id(id), _ep_map(ep_map) {
+    direct_fd_listener(raft::server_id id)
+            : _id(id) {
     }
 
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id ep) override {
-        auto id = _ep_map.get_raft_id(ep);
+        auto id = raft::server_id{ep};
         tlogger.trace("failure detector ({}): mark {} alive", _id, id);
         _alive_set.insert(id);
         return make_ready_future<>();
     }
 
     future<> mark_dead(direct_failure_detector::pinger::endpoint_id ep) override {
-        auto id = _ep_map.get_raft_id(ep);
+        auto id = raft::server_id{ep};
         tlogger.trace("failure detector ({}): mark {} dead", _id, id);
         _alive_set.erase(id);
         return make_ready_future<>();
@@ -1341,7 +1310,6 @@ class raft_server {
     impure_state_machine<M>& _sm;
     rpc<typename M::state_t>& _rpc;
 
-    std::unique_ptr<direct_fd_endpoint_map> _fd_ep_map;
     std::unique_ptr<sharded<direct_failure_detector::failure_detector>> _fd_service;
     std::unique_ptr<direct_fd_pinger<typename M::state_t>> _fd_pinger;
     std::unique_ptr<direct_fd_clock> _fd_clock;
@@ -1378,15 +1346,14 @@ public:
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
 
-        auto fd_ep_map = std::make_unique<direct_fd_endpoint_map>();
         auto fd_service = std::make_unique<sharded<direct_failure_detector::failure_detector>>();
-        auto update_fd_server = [&fd = *fd_service, &ep_map = *fd_ep_map] (raft::server_id id, bool added) {
+        auto update_fd_server = [&fd = *fd_service] (raft::server_id id, bool added) {
             if (!fd.local_is_initialized()) {
                 // We're stopping.
                 return;
             }
 
-            auto ep = ep_map.allocate(id);
+            auto ep = id.uuid();
             if (added) {
                 fd.local().add_endpoint(ep);
             } else {
@@ -1399,9 +1366,9 @@ public:
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc), std::move(update_fd_server));
         auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
 
-        auto fd_pinger = std::make_unique<direct_fd_pinger<state_t>>(*rpc_, *fd_ep_map);
+        auto fd_pinger = std::make_unique<direct_fd_pinger<state_t>>(*rpc_);
         auto fd_clock = std::make_unique<direct_fd_clock>();
-        auto fd_listener = make_shared<direct_fd_listener>(id, *fd_ep_map);
+        auto fd_listener = make_shared<direct_fd_listener>(id);
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
@@ -1416,7 +1383,6 @@ public:
             ._server = std::move(server),
             ._sm = sm_ref,
             ._rpc = rpc_ref,
-            ._fd_ep_map = std::move(fd_ep_map),
             ._fd_service = std::move(fd_service),
             ._fd_pinger = std::move(fd_pinger),
             ._fd_clock = std::move(fd_clock),
@@ -1575,7 +1541,6 @@ private:
         impure_state_machine<M>& _sm;
         rpc<typename M::state_t>& _rpc;
 
-        std::unique_ptr<direct_fd_endpoint_map> _fd_ep_map;
         std::unique_ptr<sharded<direct_failure_detector::failure_detector>> _fd_service;
         std::unique_ptr<direct_fd_pinger<typename M::state_t>> _fd_pinger;
         std::unique_ptr<direct_fd_clock> _fd_clock;
@@ -1589,7 +1554,6 @@ private:
         , _server(std::move(i._server))
         , _sm(i._sm)
         , _rpc(i._rpc)
-        , _fd_ep_map(std::move(i._fd_ep_map))
         , _fd_service(std::move(i._fd_service))
         , _fd_pinger(std::move(i._fd_pinger))
         , _fd_clock(std::move(i._fd_clock))
