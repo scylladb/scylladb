@@ -192,7 +192,7 @@ static big_decimal* get_decimal(lua_State* l, int arg) {
 }
 
 template <typename T>
-static T* aligned_used_data(lua_State* l) {
+static T* aligned_user_data(lua_State* l) {
     constexpr size_t alignment = alignof(T);
     // We know lua_newuserdata aligns allocations to 8, so we need a
     // padding of at most alignment - 8 to find a sufficiently aligned
@@ -204,7 +204,7 @@ static T* aligned_used_data(lua_State* l) {
 }
 
 static void push_big_decimal(lua_State* l, const big_decimal& v) {
-    auto* p = aligned_used_data<big_decimal>(l);
+    auto* p = aligned_user_data<big_decimal>(l);
     new (p) big_decimal(v);
     luaL_setmetatable(l, scylla_decimal_metatable_name);
 }
