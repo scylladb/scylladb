@@ -16,7 +16,6 @@
 #include <seastar/util/log.hh>
 
 #include <boost/intrusive/list.hpp>
-#include <boost/intrusive/unordered_set.hpp>
 
 #include <chrono>
 
@@ -43,25 +42,18 @@ class raft_address_map {
 
     class expiring_entry_ptr;
 
-    using set_base_hook = bi::unordered_set_base_hook<>;
-
     // Basically `inet_address` optionally equipped with a timestamp of the last
     // access time.
     // If timestamp is set an entry is considered to be expiring and
     // in such case it also contains a corresponding entry in LRU list
     // of expiring entries.
-    struct timestamped_entry : public set_base_hook {
-        // Base storage type to hold entries
-        using set_type = bi::unordered_set<timestamped_entry>;
-
-        set_type& _set;
-        raft::server_id _id;
+    struct timestamped_entry {
         gms::inet_address _addr;
         std::optional<clock_time_point> _last_accessed;
         expiring_entry_ptr* _lru_entry;
 
-        explicit timestamped_entry(set_type& set, raft::server_id id, gms::inet_address addr, bool expiring)
-            : _set(set), _id(id), _addr(std::move(addr)), _lru_entry(nullptr)
+        explicit timestamped_entry(gms::inet_address addr, bool expiring)
+            : _addr(std::move(addr)), _lru_entry(nullptr)
         {
             if (expiring) {
                 _last_accessed = Clock::now();
@@ -71,9 +63,6 @@ class raft_address_map {
         ~timestamped_entry() {
             if (_lru_entry) {
                 delete _lru_entry; // Deletes itself from LRU list
-            }
-            if (set_base_hook::is_linked()) {
-                _set.erase(_set.iterator_to(*this));
             }
         }
 
@@ -86,14 +75,6 @@ class raft_address_map {
 
         bool expiring() const {
             return static_cast<bool>(_last_accessed);
-        }
-
-        friend bool operator==(const timestamped_entry& a, const timestamped_entry& b){
-            return a._id == b._id;
-        }
-
-        friend std::size_t hash_value(const timestamped_entry& v) {
-            return std::hash<raft::server_id>()(v._id);
         }
     };
 
@@ -112,8 +93,8 @@ class raft_address_map {
         // end.
         using list_type = bi::list<expiring_entry_ptr>;
 
-        explicit expiring_entry_ptr(list_type& l, timestamped_entry& e)
-            : _expiring_list(l), _ptr(e)
+        explicit expiring_entry_ptr(list_type& l, const raft::server_id& entry_id, timestamped_entry& entry)
+            : _expiring_list(l), _entry_id(entry_id), _ptr(entry)
         {
             _ptr._last_accessed = Clock::now();
             _ptr.set_lru_back_pointer(this);
@@ -143,52 +124,35 @@ class raft_address_map {
             return expiry_period < last_access_delta;
         }
 
-        struct timestamped_entry& timestamped_entry() {
-            return _ptr;
+        const raft::server_id& entry_id() {
+            return _entry_id;
         }
 
     private:
         list_type& _expiring_list;
+        const raft::server_id& _entry_id;
         struct timestamped_entry& _ptr;
     };
 
-    struct id_compare {
-        bool operator()(const raft::server_id& id, const timestamped_entry& e) const {
-            return id == e._id;
-        }
-    };
-
-    using set_type = typename timestamped_entry::set_type;
-    using set_bucket_traits = typename set_type::bucket_traits;
-    using set_iterator = typename set_type::iterator;
+    using map_type = std::unordered_map<raft::server_id, timestamped_entry>;
+    using map_iterator = typename map_type::iterator;
 
     using expiring_list_type = typename expiring_entry_ptr::list_type;
     using expiring_list_iterator = typename expiring_list_type::iterator;
 
-    std::vector<typename set_type::bucket_type> _buckets;
     // Container to hold address mappings (both permanent and expiring).
     //
     // Marked as `mutable` since the `find` function, which should naturally
     // be `const`, updates the entry's timestamp and thus requires
     // non-const access.
-    mutable set_type _set;
+    mutable map_type _map;
 
-    expiring_list_iterator to_list_iterator(set_iterator it) const {
-        if (it != _set.end()) {
-            return _expiring_list.iterator_to(*it->lru_entry_ptr());
-        }
-        return _expiring_list.end();
-    }
-
-    set_iterator to_set_iterator(expiring_list_iterator it) const {
-        if (it != _expiring_list.end()) {
-            return _set.iterator_to(it->timestamped_entry());
-        }
-        return _set.end();
+    expiring_list_iterator to_list_iterator(timestamped_entry& e) const {
+        return _expiring_list.iterator_to(*e.lru_entry_ptr());
     }
 
     // LRU list to hold expiring entries. Also declared as `mutable` for the
-    // same reasons as `_set`.
+    // same reasons as `_map`.
     mutable expiring_list_type _expiring_list;
 
     // Timer that executes the cleanup procedure to erase expired
@@ -203,22 +167,14 @@ class raft_address_map {
 
     void drop_expired_entries() {
         auto list_it = _expiring_list.rbegin();
-        if (list_it == _expiring_list.rend()) {
-            return;
-        }
-        while (list_it->expired(_expiry_period)) {
-            auto base_list_it = list_it.base();
-            // When converting from rbegin() reverse_iterator to base iterator,
-            // we need to decrement it explicitly, because otherwise it will point
-            // to end().
-            --base_list_it;
+        while (list_it != _expiring_list.rend() && list_it->expired(_expiry_period)) {
             // Remove from both LRU list and base storage
-            unlink_and_dispose(to_set_iterator(base_list_it));
+            auto map_it = _map.find(list_it->entry_id());
+            if (map_it != _map.end()) {
+                _map.erase(map_it);
+            }
             // Point at the oldest entry again
             list_it = _expiring_list.rbegin();
-            if (list_it == _expiring_list.rend()) {
-                break;
-            }
         }
         if (!_expiring_list.empty()) {
             // Rearm the timer in case there are still some expiring entries
@@ -226,13 +182,6 @@ class raft_address_map {
         }
     }
 
-    // Remove an entry from both the base storage and LRU list
-    void unlink_and_dispose(set_iterator it) {
-        if (it == _set.end()) {
-            return;
-        }
-        _set.erase_and_dispose(it, [] (timestamped_entry* ptr) { delete ptr; });
-    }
     // Remove an entry pointer from LRU list, thus converting entry to regular state
     void unlink_and_dispose(expiring_list_iterator it) {
         if (it == _expiring_list.end()) {
@@ -241,8 +190,8 @@ class raft_address_map {
         _expiring_list.erase_and_dispose(it, [] (expiring_entry_ptr* ptr) { delete ptr; });
     }
 
-    void add_expiring_entry(timestamped_entry& entry) {
-        auto exp_entry_ptr = new expiring_entry_ptr(_expiring_list, entry);
+    void add_expiring_entry(const raft::server_id& entry_id, timestamped_entry& entry) {
+        auto exp_entry_ptr = new expiring_entry_ptr(_expiring_list, entry_id, entry);
         _expiring_list.push_front(*exp_entry_ptr);
         if (!_timer.armed()) {
             _timer.arm(_expiry_period);
@@ -251,37 +200,33 @@ class raft_address_map {
 
 public:
     raft_address_map()
-        : _buckets(initial_buckets_count),
-        _set(set_bucket_traits(_buckets.data(), _buckets.size())),
+        : _map(initial_buckets_count),
         _timer([this] { drop_expired_entries(); }),
         _expiry_period(default_expiry_period)
     {}
-
-    ~raft_address_map() {
-        _set.clear_and_dispose([] (timestamped_entry* ptr) { delete ptr; });
-    }
 
     // Find a mapping with a given id.
     //
     // If a mapping is expiring, the last access timestamp is updated automatically.
     std::optional<gms::inet_address> find(raft::server_id id) const {
-        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
-        if (set_it == _set.end()) {
+        auto it = _map.find(id);
+        if (it == _map.end()) {
             return std::nullopt;
         }
-        if (set_it->expiring()) {
+        auto& entry = it->second;
+        if (entry.expiring()) {
             // Touch the entry to update it's access timestamp and move it to the front of LRU list
-            to_list_iterator(set_it)->touch();
+            to_list_iterator(entry)->touch();
         }
-        return set_it->_addr;
+        return entry._addr;
     }
     // Linear search for id based on inet address. Used when
     // removing a node which id is unknown. Do not return self
     // - we need to remove id of the node self is replacing.
     std::optional<raft::server_id> find_replace_id(gms::inet_address addr, raft::server_id self) const {
-        for (auto it : _set) {
-            if (it._addr == addr && it._id != self) {
-                return it._id;
+        for (auto& [id, entry] : _map) {
+            if (entry._addr == addr && id != self) {
+                return id;
             }
         }
         return {};
@@ -295,29 +240,28 @@ public:
     // nonetheless the function can be used to promote the entry from
     // expiring to permanent or vice versa.
     void set(raft::server_id id, gms::inet_address addr, bool expiring) {
-        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
-        if (set_it == _set.end()) {
-            auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), expiring);
-            _set.insert(*entry);
+        auto [it, emplaced] = _map.try_emplace(std::move(id), std::move(addr), expiring);
+        auto& entry = it->second;
+        if (emplaced) {
             if (expiring) {
-                add_expiring_entry(*entry);
+                add_expiring_entry(it->first, entry);
             }
             return;
         }
 
         // Don't allow to remap to a different address
-        if (set_it->_addr != addr) {
+        if (entry._addr != addr) {
             on_internal_error(rslog, format("raft_address_map: expected to get inet_address {} for raft server id {} (got {})",
-                set_it->_addr, id, addr));
+                entry._addr, id, addr));
         }
 
-        if (set_it->expiring()) {
+        if (entry.expiring()) {
             if (!expiring) {
                 // Change the mapping from expiring to regular
-                unlink_and_dispose(to_list_iterator(set_it));
+                unlink_and_dispose(to_list_iterator(entry));
             } else {
                 // Update timestamp of expiring entry
-                to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
+                to_list_iterator(entry)->touch(); // Re-insert in the front of _expiring_list
             }
         }
         // No action needed when a regular entry is updated
@@ -325,17 +269,18 @@ public:
 
     // Convert a non-expiring entry to an expiring one
     std::optional<gms::inet_address> set_expiring_flag(raft::server_id id) {
-        auto set_it = _set.find(id, std::hash<raft::server_id>(), id_compare());
-        if (set_it == _set.end()) {
+        auto it = _map.find(id);
+        if (it == _map.end()) {
             return std::nullopt;
         }
-        if (set_it->expiring()) {
+        auto& entry = it->second;
+        if (entry.expiring()) {
             // Update timestamp of expiring entry
-            to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
+            to_list_iterator(entry)->touch(); // Re-insert in the front of _expiring_list
         } else {
-            add_expiring_entry(*set_it);
+            add_expiring_entry(it->first, entry);
         }
-        return set_it->_addr;
+        return entry._addr;
     }
 
     // A shortcut to setting a new permanent address
