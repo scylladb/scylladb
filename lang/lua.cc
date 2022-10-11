@@ -100,7 +100,7 @@ static void* lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 
 static const luaL_Reg loadedlibs[] = {
     {"_G", luaopen_base},
-    {LUA_COLIBNAME, luaopen_string},
+    {LUA_STRLIBNAME, luaopen_string},
     {LUA_COLIBNAME, luaopen_coroutine},
     {LUA_TABLIBNAME, luaopen_table},
     {NULL, NULL},
