@@ -1762,7 +1762,7 @@ if any(filter(thrift_version.startswith, thrift_boost_versions)):
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-args.user_cflags += ' -Iabseil'
+args.user_cflags += ' -isystem abseil'
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
 user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
 if args.staticcxx:
