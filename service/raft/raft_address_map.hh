@@ -49,24 +49,11 @@ class raft_address_map {
     // when they become too old.
     struct timestamped_entry {
         gms::inet_address _addr;
-        expiring_entry_ptr* _lru_entry;
+        std::unique_ptr<expiring_entry_ptr> _lru_entry;
 
         explicit timestamped_entry(gms::inet_address addr)
             : _addr(std::move(addr)), _lru_entry(nullptr)
         {
-        }
-
-        ~timestamped_entry() {
-            if (_lru_entry) {
-                delete _lru_entry; // Deletes itself from LRU list
-            }
-        }
-
-        void set_lru_back_pointer(expiring_entry_ptr* ptr) {
-            _lru_entry = ptr;
-        }
-        expiring_entry_ptr* lru_entry_ptr() {
-            return _lru_entry;
         }
 
         bool expiring() const {
@@ -89,17 +76,15 @@ class raft_address_map {
         // end.
         using list_type = bi::list<expiring_entry_ptr>;
 
-        explicit expiring_entry_ptr(list_type& l, const raft::server_id& entry_id, timestamped_entry& entry)
-            : _expiring_list(l), _last_accessed(Clock::now()), _entry_id(entry_id), _ptr(entry)
+        explicit expiring_entry_ptr(list_type& l, const raft::server_id& entry_id)
+            : _expiring_list(l), _last_accessed(Clock::now()), _entry_id(entry_id)
         {
-            _ptr.set_lru_back_pointer(this);
         }
 
         ~expiring_entry_ptr() {
             if (lru_list_hook::is_linked()) {
                 _expiring_list.erase(_expiring_list.iterator_to(*this));
             }
-            _ptr.set_lru_back_pointer(nullptr);
         }
 
         // Update last access timestamp and move ourselves to the front of LRU list.
@@ -126,7 +111,6 @@ class raft_address_map {
         list_type& _expiring_list;
         clock_time_point _last_accessed;
         const raft::server_id& _entry_id;
-        struct timestamped_entry& _ptr;
     };
 
     using map_type = std::unordered_map<raft::server_id, timestamped_entry>;
@@ -135,20 +119,25 @@ class raft_address_map {
     using expiring_list_type = typename expiring_entry_ptr::list_type;
     using expiring_list_iterator = typename expiring_list_type::iterator;
 
-    // Container to hold address mappings (both permanent and expiring).
+    // LRU list to hold expiring entries.
     //
     // Marked as `mutable` since the `find` function, which should naturally
     // be `const`, updates the entry's timestamp and thus requires
     // non-const access.
+    mutable expiring_list_type _expiring_list;
+
+    // Container to hold address mappings (both permanent and expiring).
+    // Declared as `mutable` for the same reasons as `_expiring_list`.
+    //
+    // It's important that _map is declared after _expiring_list, so it's
+    // destroyed first: when we destroy _map, the LRU entries corresponding
+    // to expiring entries are also destroyed, which unlinks them from the list,
+    // so the list must still exist.
     mutable map_type _map;
 
     expiring_list_iterator to_list_iterator(timestamped_entry& e) const {
-        return _expiring_list.iterator_to(*e.lru_entry_ptr());
+        return _expiring_list.iterator_to(*e._lru_entry);
     }
-
-    // LRU list to hold expiring entries. Also declared as `mutable` for the
-    // same reasons as `_map`.
-    mutable expiring_list_type _expiring_list;
 
     // Timer that executes the cleanup procedure to erase expired
     // entries from the mappings container.
@@ -177,17 +166,9 @@ class raft_address_map {
         }
     }
 
-    // Remove an entry pointer from LRU list, thus converting entry to regular state
-    void unlink_and_dispose(expiring_list_iterator it) {
-        if (it == _expiring_list.end()) {
-            return;
-        }
-        _expiring_list.erase_and_dispose(it, [] (expiring_entry_ptr* ptr) { delete ptr; });
-    }
-
     void add_expiring_entry(const raft::server_id& entry_id, timestamped_entry& entry) {
-        auto exp_entry_ptr = new expiring_entry_ptr(_expiring_list, entry_id, entry);
-        _expiring_list.push_front(*exp_entry_ptr);
+        entry._lru_entry = std::make_unique<expiring_entry_ptr>(_expiring_list, entry_id);
+        _expiring_list.push_front(*entry._lru_entry);
         if (!_timer.armed()) {
             _timer.arm(_expiry_period);
         }
@@ -252,8 +233,7 @@ public:
 
         if (entry.expiring()) {
             if (!expiring) {
-                // Change the mapping from expiring to regular
-                unlink_and_dispose(to_list_iterator(entry));
+                entry._lru_entry = nullptr;
             } else {
                 // Update timestamp of expiring entry
                 to_list_iterator(entry)->touch(); // Re-insert in the front of _expiring_list
