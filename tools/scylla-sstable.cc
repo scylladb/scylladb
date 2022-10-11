@@ -454,11 +454,11 @@ class dumping_consumer : public sstable_consumer {
         const schema& _schema;
     public:
         explicit text_dumper(const schema& s) : _schema(s) { }
-        virtual future<> on_start_of_stream() override {
+        virtual future<> consume_stream_start() override {
             fmt::print("{{stream_start}}\n");
             return make_ready_future<>();
         }
-        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+        virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
             fmt::print("{{sstable_start{}}}\n", sst ? fmt::format(": filename {}", sst->get_filename()) : "");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
@@ -482,11 +482,11 @@ class dumping_consumer : public sstable_consumer {
             fmt::print("{{partition_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<stop_iteration> on_end_of_sstable() override {
+        virtual future<stop_iteration> consume_sstable_end() override {
             fmt::print("{{sstable_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<> on_end_of_stream() override {
+        virtual future<> consume_stream_end() override {
             fmt::print("{{stream_end}}\n");
             return make_ready_future<>();
         }
@@ -495,11 +495,11 @@ class dumping_consumer : public sstable_consumer {
         tools::mutation_fragment_json_writer _writer;
     public:
         explicit json_dumper(const schema& s) : _writer(s) {}
-        virtual future<> on_start_of_stream() override {
+        virtual future<> consume_stream_start() override {
             _writer.start_stream();
             return make_ready_future<>();
         }
-        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+        virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
             _writer.start_sstable(sst);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
@@ -523,11 +523,11 @@ class dumping_consumer : public sstable_consumer {
             _writer.end_partition();
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<stop_iteration> on_end_of_sstable() override {
+        virtual future<stop_iteration> consume_sstable_end() override {
             _writer.end_sstable();
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<> on_end_of_stream() override {
+        virtual future<> consume_stream_end() override {
             _writer.end_stream();
             return make_ready_future<>();
         }
@@ -549,15 +549,15 @@ public:
                 break;
         }
     }
-    virtual future<> on_start_of_stream() override { return _consumer->on_start_of_stream(); }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override { return _consumer->on_new_sstable(sst); }
+    virtual future<> consume_stream_start() override { return _consumer->consume_stream_start(); }
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override { return _consumer->consume_sstable_start(sst); }
     virtual future<stop_iteration> consume(partition_start&& ps) override { return _consumer->consume(std::move(ps)); }
     virtual future<stop_iteration> consume(static_row&& sr) override { return _consumer->consume(std::move(sr)); }
     virtual future<stop_iteration> consume(clustering_row&& cr) override { return _consumer->consume(std::move(cr)); }
     virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override { return _consumer->consume(std::move(rtc)); }
     virtual future<stop_iteration> consume(partition_end&& pe) override { return _consumer->consume(std::move(pe)); }
-    virtual future<stop_iteration> on_end_of_sstable() override { return _consumer->on_end_of_sstable(); }
-    virtual future<> on_end_of_stream() override { return _consumer->on_end_of_stream(); }
+    virtual future<stop_iteration> consume_sstable_end() override { return _consumer->consume_sstable_end(); }
+    virtual future<> consume_stream_end() override { return _consumer->consume_stream_end(); }
 };
 
 class writetime_histogram_collecting_consumer : public sstable_consumer {
@@ -667,10 +667,10 @@ public:
             }
         }
     }
-    virtual future<> on_start_of_stream() override {
+    virtual future<> consume_stream_start() override {
         return make_ready_future<>();
     }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_start&& ps) override {
@@ -695,10 +695,10 @@ public:
     virtual future<stop_iteration> consume(partition_end&& pe) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> on_end_of_sstable() override {
+    virtual future<stop_iteration> consume_sstable_end() override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<> on_end_of_stream() override {
+    virtual future<> consume_stream_end() override {
         if (_histogram.empty()) {
             sst_log.info("Histogram empty, no data to write");
             co_return;
@@ -745,10 +745,10 @@ public:
     explicit custom_consumer(schema_ptr s, reader_permit p, const bpo::variables_map&)
         : _schema(std::move(s)), _permit(std::move(p))
     { }
-    virtual future<> on_start_of_stream() override {
+    virtual future<> consume_stream_start() override {
         return make_ready_future<>();
     }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_start&& ps) override {
@@ -766,18 +766,18 @@ public:
     virtual future<stop_iteration> consume(partition_end&& pe) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> on_end_of_sstable() override {
+    virtual future<stop_iteration> consume_sstable_end() override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<> on_end_of_stream() override {
+    virtual future<> consume_stream_end() override {
         return make_ready_future<>();
     }
 };
 
 stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
     auto close_rd = deferred_close(rd);
-    if (consumer.on_new_sstable(sst).get() == stop_iteration::yes) {
-        return consumer.on_end_of_sstable().get();
+    if (consumer.consume_sstable_start(sst).get() == stop_iteration::yes) {
+        return consumer.consume_sstable_end().get();
     }
     bool skip_partition = false;
     consumer_wrapper::filter_type filter;
@@ -813,7 +813,7 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
             }
         }
     }
-    return consumer.on_end_of_sstable().get();
+    return consumer.consume_sstable_end().get();
 }
 
 void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool use_crawling_reader,
@@ -2411,11 +2411,11 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     const auto partitions = get_partitions(schema, vm);
     const auto use_crawling_reader = no_skips || partitions.empty();
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
-    consumer->on_start_of_stream().get();
+    consumer->consume_stream_start().get();
     consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
-    consumer->on_end_of_stream().get();
+    consumer->consume_stream_end().get();
 }
 
 class basic_option {

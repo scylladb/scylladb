@@ -27,10 +27,10 @@ class sstable_consumer {
 public:
     virtual ~sstable_consumer() = default;
     // called at the very start
-    virtual future<> on_start_of_stream() = 0;
-    // stop_iteration::yes -> on_end_of_sstable() - skip sstable content
+    virtual future<> consume_stream_start() = 0;
+    // stop_iteration::yes -> consume_end_of_sstable() - skip sstable content
     // sstable parameter is nullptr when merging multiple sstables
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const) = 0;
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const) = 0;
     // stop_iteration::yes -> consume(partition_end) - skip partition content
     virtual future<stop_iteration> consume(partition_start&&) = 0;
     // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
@@ -39,10 +39,10 @@ public:
     virtual future<stop_iteration> consume(clustering_row&&) = 0;
     // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
     virtual future<stop_iteration> consume(range_tombstone_change&&) = 0;
-    // stop_iteration::yes -> on_end_of_sstable() - skip remaining partitions in sstable
+    // stop_iteration::yes -> consume_end_of_sstable() - skip remaining partitions in sstable
     virtual future<stop_iteration> consume(partition_end&&) = 0;
     // stop_iteration::yes -> full stop - skip remaining sstables
-    virtual future<stop_iteration> on_end_of_sstable() = 0;
+    virtual future<stop_iteration> consume_sstable_end() = 0;
     // called at the very end
-    virtual future<> on_end_of_stream() = 0;
+    virtual future<> consume_stream_end() = 0;
 };
