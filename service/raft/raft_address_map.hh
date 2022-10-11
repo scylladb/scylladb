@@ -135,10 +135,6 @@ class raft_address_map {
     // so the list must still exist.
     mutable map_type _map;
 
-    expiring_list_iterator to_list_iterator(timestamped_entry& e) const {
-        return _expiring_list.iterator_to(*e._lru_entry);
-    }
-
     // Timer that executes the cleanup procedure to erase expired
     // entries from the mappings container.
     //
@@ -192,7 +188,7 @@ public:
         auto& entry = it->second;
         if (entry.expiring()) {
             // Touch the entry to update it's access timestamp and move it to the front of LRU list
-            to_list_iterator(entry)->touch();
+            entry._lru_entry->touch();
         }
         return entry._addr;
     }
@@ -236,7 +232,7 @@ public:
                 entry._lru_entry = nullptr;
             } else {
                 // Update timestamp of expiring entry
-                to_list_iterator(entry)->touch(); // Re-insert in the front of _expiring_list
+                entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
             }
         }
         // No action needed when a regular entry is updated
@@ -251,7 +247,7 @@ public:
         auto& entry = it->second;
         if (entry.expiring()) {
             // Update timestamp of expiring entry
-            to_list_iterator(entry)->touch(); // Re-insert in the front of _expiring_list
+            entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
         } else {
             add_expiring_entry(it->first, entry);
         }
