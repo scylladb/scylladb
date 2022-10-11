@@ -21,6 +21,7 @@
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/sleep.hh>
@@ -1460,6 +1461,9 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
                     auto current_config = get_raft_members_inet_addrs(group0_server.get_configuration().current);
                     return make_ready_future<std::vector<gms::inet_address>>(std::move(current_config));
                 }, _ms, _abort_source);
+
+        utils::get_local_injector().inject("group0_upgrade_before_synchronize",
+            [] { throw std::runtime_error("error injection before group 0 upgrade enters synchronize"); });
 
         upgrade_log.info("Entering synchronize state.");
         upgrade_log.warn("Schema changes are disabled in synchronize state."
