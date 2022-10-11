@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/print.hh>
-#include "db/query_context.hh"
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
@@ -61,6 +60,14 @@ future<> large_data_handler::stop() {
     }
     _running = false;
     return _sem.wait(max_concurrency);
+}
+
+void large_data_handler::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void large_data_handler::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
 }
 
 template <typename T> static std::string key_to_str(const T& key, const schema& s) {
@@ -129,11 +136,9 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
 {}
 
 template <typename... Args>
-static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
-        std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) {
-    // FIXME  This check is for test/cql-test-env that stop qctx (it does so because
-    // it stops query processor and doesn't want us to access its freed instantes)
-    if (!db::qctx) {
+future<> cql_table_large_data_handler::try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
+        std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const {
+    if (!_sys_ks) {
         return make_ready_future<>();
     }
 
@@ -152,12 +157,13 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
     large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes) to {}", desc, ks_name, cf_name, pk_str, extra_path, size, sstable_name);
-    return db::qctx->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
+    return _sys_ks->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
             .discard_result()
             .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
                 large_data_logger.warn("Failed to add a record to system.large_{}s: ks = {}, table = {}, sst = {} exception = {}",
                         large_table, ks_name, cf_name, sstable_name, ep);
-            });
+            })
+            .finally([ p = _sys_ks ] {});
 }
 
 future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) const {
@@ -212,16 +218,18 @@ future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable
 }
 
 future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s, sstring sstable_name, std::string_view large_table_name) const {
+    assert(_sys_ks);
     const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
                     large_table_name);
     large_data_logger.debug("Dropping entries from {}: ks = {}, table = {}, sst = {}",
             large_table_name, s.ks_name(), s.cf_name(), sstable_name);
-    return db::qctx->execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
+    return _sys_ks->execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
             .discard_result()
             .handle_exception([&s, sstable_name, large_table_name] (std::exception_ptr ep) {
                 large_data_logger.warn("Failed to drop entries from {}: ks = {}, table = {}, sst = {} exception = {}",
                         large_table_name, s.ks_name(), s.cf_name(), sstable_name, ep);
-            });
+            })
+            .finally([ p = _sys_ks ] {});
 }
 }

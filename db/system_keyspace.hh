@@ -86,7 +86,7 @@ public:
     virtual bool contains_keyspace(std::string_view) = 0;
 };
 
-class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
+class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
     std::unique_ptr<local_cache> _cache;
@@ -306,7 +306,7 @@ public:
         std::unordered_map<int32_t, int64_t> rows_merged;
     };
 
-    static future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
+    future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                        std::unordered_map<int32_t, int64_t> rows_merged);
     using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
     static future<> get_compaction_history(compaction_history_consumer&& f);
@@ -468,10 +468,12 @@ public:
     ~system_keyspace();
     future<> start();
     future<> stop();
+    future<> shutdown();
 
 private:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
 
+public:
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
         return execute_cql(req, { data_value(std::forward<Args>(args))... });

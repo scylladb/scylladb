@@ -21,6 +21,8 @@ class key;
 
 namespace db {
 
+class system_keyspace;
+
 class large_data_handler {
 public:
     struct stats {
@@ -61,6 +63,9 @@ protected:
 
 private:
     mutable large_data_handler::stats _stats;
+
+protected:
+    seastar::shared_ptr<db::system_keyspace> _sys_ks;
 
 public:
     explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold, uint64_t collection_elements_count_threshold);
@@ -125,6 +130,9 @@ public:
 
     static sstring sst_filename(const sstables::sstable& sst);
 
+    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    void unplug_system_keyspace() noexcept;
+
 protected:
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const = 0;
@@ -167,6 +175,11 @@ private:
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
     future<> internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
+
+private:
+    template <typename... Args>
+    future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
+            std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const;
 };
 
 class nop_large_data_handler : public large_data_handler {

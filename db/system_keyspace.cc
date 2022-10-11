@@ -2876,7 +2876,7 @@ future<> system_keyspace::update_compaction_history(utils::UUID uuid, sstring ks
                     , COMPACTION_HISTORY);
 
     db_clock::time_point tp{db_clock::duration{compacted_at}};
-    return qctx->execute_cql(req, uuid, ksname, cfname, tp, bytes_in, bytes_out,
+    return execute_cql(req, uuid, ksname, cfname, tp, bytes_in, bytes_out,
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result().handle_exception([] (auto ep) {
         slogger.error("update compaction history failed: {}: ignored", ep);
     });
@@ -3363,6 +3363,8 @@ future<> system_keyspace::start() {
         qctx = std::make_unique<query_context>(_qp);
     }
 
+    _db.local().plug_system_keyspace(*this);
+
     // FIXME
     // This should be coupled with setup_version()'s part committing these values into
     // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
@@ -3371,6 +3373,11 @@ future<> system_keyspace::start() {
     _cache->_local_dc_rack_info.dc = snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
     _cache->_local_dc_rack_info.rack = snitch->get_rack(utils::fb_utilities::get_broadcast_address());
 
+    co_return;
+}
+
+future<> system_keyspace::shutdown() {
+    _db.local().unplug_system_keyspace();
     co_return;
 }
 

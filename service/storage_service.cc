@@ -2689,6 +2689,7 @@ future<> storage_service::do_drain() {
     });
 
     co_await _db.invoke_on_all(&replica::database::drain);
+    co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
 }
 
 future<> storage_service::rebuild(sstring source_dc) {

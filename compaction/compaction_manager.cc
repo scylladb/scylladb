@@ -19,6 +19,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
+#include "db/system_keyspace.hh"
 #include <cmath>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -347,8 +348,15 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
 future<> compaction_manager::task::update_history(compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
-    co_return co_await t.update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(), ended_at,
-                                                                    res.stats.start_size, res.stats.end_size);
+    if (_cm._sys_ks) {
+        // FIXME: add support to merged_rows. merged_rows is a histogram that
+        // shows how many sstables each row is merged from. This information
+        // cannot be accessed until we make combined_reader more generic,
+        // for example, by adding a reducer method.
+        auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
+        co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
+                ended_at.count(), res.stats.start_size, res.stats.end_size, std::unordered_map<int32_t, int64_t>{});
+    }
 }
 
 class compaction_manager::major_compaction_task : public compaction_manager::task {
@@ -1679,6 +1687,14 @@ public:
 
 compaction::strategy_control& compaction_manager::get_strategy_control() const noexcept {
     return *_strategy_control;
+}
+
+void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void compaction_manager::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
 }
 
 double compaction_backlog_tracker::backlog() const {

@@ -1376,6 +1376,9 @@ public:
 
     future<> drain();
 
+    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    void unplug_system_keyspace() noexcept;
+
 private:
     future<> flush_non_system_column_families();
     future<> flush_system_column_families();

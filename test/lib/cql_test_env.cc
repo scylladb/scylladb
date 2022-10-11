@@ -771,7 +771,10 @@ public:
             }).get();
 
             group0_client.init().get();
-            auto stop_system_keyspace = defer([] { db::qctx = {}; });
+            auto stop_system_keyspace = defer([&sys_ks] {
+                db::qctx = {};
+                sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
+            });
 
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&replica::database::shutdown).get();
