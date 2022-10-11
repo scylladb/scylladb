@@ -9,6 +9,7 @@
 #include <boost/date_time/gregorian/greg_date.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include "lua.hh"
+#include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
 #include "concrete_types.hh"
 #include "utils/utf8.hh"
@@ -27,6 +28,7 @@
 #endif
 
 using namespace seastar;
+using namespace lua;
 
 static logging::logger lua_logger("lua");
 
@@ -189,18 +191,6 @@ static big_decimal* get_decimal(lua_State* l, int arg) {
         return reinterpret_cast<big_decimal*>(align_up(p, alignment));
     }
     return nullptr;
-}
-
-template <typename T>
-static T* aligned_user_data(lua_State* l) {
-    constexpr size_t alignment = alignof(T);
-    // We know lua_newuserdata aligns allocations to 8, so we need a
-    // padding of at most alignment - 8 to find a sufficiently aligned
-    // address.
-    static_assert(alignment>= 8);
-    constexpr size_t pad = alignment - 8;
-    char* p = reinterpret_cast<char*>(lua_newuserdata(l, sizeof(T) + pad));
-    return reinterpret_cast<T*>(align_up(p, alignment));
 }
 
 static void push_big_decimal(lua_State* l, const big_decimal& v) {
@@ -421,10 +411,7 @@ static int load_script_l(lua_State* l) {
         lua_pop(l, 1);
     }
 
-    luaL_newmetatable(l, scylla_decimal_metatable_name);
-    lua_pushvalue(l, -1);
-    lua_setfield(l, -2, "__index");
-    luaL_setfuncs(l, decimal_methods, 0);
+    lua::register_metatables(l);
 
     if (luaL_loadbufferx(l, binary.data(), binary.size(), "<internal>", "b")) {
         lua_error(l);
@@ -910,7 +897,7 @@ static bytes_opt convert_return(lua_slice_state &l, const data_type& return_type
     return convert_from_lua(l, return_type).serialize();
 }
 
-static void push_sstring(lua_State* l, const sstring& v) {
+void lua::push_sstring(lua_State* l, const sstring& v) {
     lua_pushlstring(l, v.c_str(), v.size());
 }
 
@@ -1110,4 +1097,24 @@ future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<d
                                                         lua_tostring(l, -1));
         }
     });
+}
+
+namespace lua {
+
+void register_metatables(lua_State* l) {
+    luaL_newmetatable(l, scylla_decimal_metatable_name);
+    lua_pushvalue(l, -1);
+    lua_setfield(l, -2, "__index");
+    luaL_setfuncs(l, decimal_methods, 0);
+    lua_pop(l, 1);
+}
+
+void push_data_value(lua_State* l, const data_value& value) {
+    push_argument(l, value);
+}
+
+data_value pop_data_value(lua_State* l, const data_type& type) {
+    return convert_from_lua(l, type);
+}
+
 }
