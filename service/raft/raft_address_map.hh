@@ -61,9 +61,7 @@ class raft_address_map {
         }
     };
 
-    using lru_list_hook = bi::list_base_hook<>;
-
-    class expiring_entry_ptr : public lru_list_hook {
+    class expiring_entry_ptr : public bi::list_base_hook<> {
     public:
         // Base type for LRU list of expiring entries.
         //
@@ -79,20 +77,17 @@ class raft_address_map {
         explicit expiring_entry_ptr(list_type& l, const raft::server_id& entry_id)
             : _expiring_list(l), _last_accessed(Clock::now()), _entry_id(entry_id)
         {
+            _expiring_list.push_front(*this);
         }
 
         ~expiring_entry_ptr() {
-            if (lru_list_hook::is_linked()) {
-                _expiring_list.erase(_expiring_list.iterator_to(*this));
-            }
+            _expiring_list.erase(_expiring_list.iterator_to(*this));
         }
 
         // Update last access timestamp and move ourselves to the front of LRU list.
         void touch() {
             _last_accessed = Clock::now();
-            if (lru_list_hook::is_linked()) {
-                _expiring_list.erase(_expiring_list.iterator_to(*this));
-            }
+            _expiring_list.erase(_expiring_list.iterator_to(*this));
             _expiring_list.push_front(*this);
         }
         // Test whether the entry has expired or not given a base time point and
@@ -164,7 +159,6 @@ class raft_address_map {
 
     void add_expiring_entry(const raft::server_id& entry_id, timestamped_entry& entry) {
         entry._lru_entry = std::make_unique<expiring_entry_ptr>(_expiring_list, entry_id);
-        _expiring_list.push_front(*entry._lru_entry);
         if (!_timer.armed()) {
             _timer.arm(_expiry_period);
         }
