@@ -9,7 +9,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/messaging.hh"
-#include "service/raft/group0_upgrade.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace cql3 { class query_processor; }
 
@@ -34,15 +34,15 @@ public:
 
     // See `discovery::discovery`.
     // The provided seed list will be extended with already known persisted peers.
-    // `self` must be the same across restarts.
-    static future<persistent_discovery> make(raft::server_address self, peer_list seeds, cql3::query_processor&);
+    // `my_addr` must be the same across restarts.
+    static future<persistent_discovery> make(discovery_peer my_addr, peer_list seeds, cql3::query_processor&);
 
     // Run the discovery algorithm to find information about group 0.
     future<group0_info> run(
         netw::messaging_service&,
         gate::holder pause_shutdown,
         abort_source&,
-        raft::server_address my_addr);
+        discovery_peer my_addr);
 
     // Must be called and waited for before destroying the object.
     // Must not be called concurrently with `run`.
@@ -54,12 +54,12 @@ public:
 
 private:
     // See `discovery::response`.
-    void response(raft::server_address from, const peer_list& peers);
+    void response(discovery_peer from, const peer_list& peers);
 
     // See `discovery::tick`.
     future<tick_output> tick();
 
-    persistent_discovery(raft::server_address, const peer_list&, cql3::query_processor&);
+    persistent_discovery(discovery_peer my_addr, const peer_list&, cql3::query_processor&);
 };
 
 class raft_group0 {
@@ -155,6 +155,10 @@ public:
     // We'll look for the other node's Raft ID in the group 0 configuration.
     future<> remove_from_group0(gms::inet_address host);
 
+    // Loads server id for group 0 from disk if present,
+    // otherwise randomly generates a new one and persists it.
+    // Execute on shard 0 only.
+    future<raft::server_id> load_or_create_my_id();
 private:
     void init_rpc_verbs();
     future<> uninit_rpc_verbs();
@@ -164,19 +168,15 @@ private:
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
-    raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_address my_addr);
+    raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id);
 
-    // Assumes server address for group 0 is already persisted and loads it from disk.
-    // It's a fatal error if the address is missing.
+    // Assumes server id for group 0 is already persisted and loads it from disk.
+    // It's a fatal error if the id is missing.
     //
     // Execute on shard 0 only.
     //
     // The returned ID is not empty.
-    future<raft::server_address> load_my_addr();
-
-    // Loads server address for group 0 from disk if present, otherwise randomly generates a new one and persists it.
-    // Execute on shard 0 only.
-    future<raft::server_address> load_or_create_my_addr();
+    future<raft::server_id> load_my_id();
 
     // Run the discovery algorithm.
     //
@@ -185,7 +185,8 @@ private:
     // (in particular, we may become that leader).
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(raft::server_address my_addr, const std::vector<raft::server_info>& seeds);
+    future<group0_info> discover_group0(raft::server_id my_id,
+        const std::vector<gms::inet_address>& seeds);
 
     // Creates or joins group 0 and switches schema/topology changes to use group 0.
     // Can be restarted after a crash. Does nothing if the procedure was already finished once.
@@ -223,7 +224,7 @@ private:
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0(std::vector<raft::server_info> seeds, bool as_voter);
+    future<> join_group0(std::vector<gms::inet_address> seeds, bool as_voter);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.

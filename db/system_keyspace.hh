@@ -25,7 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
-#include "service/raft/group0_upgrade.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace service {
 

@@ -18,7 +18,7 @@
 
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group_registry.hh"
-#include "service/raft/group0_upgrade.hh"
+#include "service/raft/group0_fwd.hh"
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
