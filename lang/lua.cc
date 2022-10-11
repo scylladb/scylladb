@@ -473,7 +473,7 @@ static sstring get_string(lua_State *l, int index) {
         }));
 }
 
-static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
+static data_value convert_from_lua(lua_State* l, const data_type& type);
 
 namespace {
 struct lua_date_table {
@@ -541,7 +541,7 @@ static lua_date_table get_lua_date_table(lua_State* l, int index) {
 }
 
 struct simple_date_return_visitor {
-    lua_slice_state& l;
+    lua_State* l;
     template <typename T>
     uint32_t operator()(const T&) {
         throw exceptions::invalid_request_exception("date must be a string, integer or date table");
@@ -559,7 +559,7 @@ struct simple_date_return_visitor {
 };
 
 struct timestamp_return_visitor {
-    lua_slice_state& l;
+    lua_State* l;
     template <typename T>
     db_clock::time_point operator()(const T&) {
         throw exceptions::invalid_request_exception("timestamp must be a string, integer or date table");
@@ -578,7 +578,7 @@ struct timestamp_return_visitor {
 };
 
 struct from_lua_visitor {
-    lua_slice_state& l;
+    lua_State* l;
 
     data_value operator()(const reversed_type_impl& t) {
         // This is unreachable since reversed_type_impl is used only
@@ -890,7 +890,7 @@ db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
 }
 }
 
-static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {
+static data_value convert_from_lua(lua_State* l, const data_type& type) {
     if (lua_isnil(l, -1)) {
         return data_value::make_null(type);
     }
@@ -910,15 +910,15 @@ static bytes_opt convert_return(lua_slice_state &l, const data_type& return_type
     return convert_from_lua(l, return_type).serialize();
 }
 
-static void push_sstring(lua_slice_state& l, const sstring& v) {
+static void push_sstring(lua_State* l, const sstring& v) {
     lua_pushlstring(l, v.c_str(), v.size());
 }
 
-static void push_argument(lua_slice_state& l, const data_value& arg);
+static void push_argument(lua_State* l, const data_value& arg);
 
 namespace {
 struct to_lua_visitor {
-    lua_slice_state& l;
+    lua_State* l;
 
     void operator()(const varint_type_impl& t, const emptyable<utils::multiprecision_int>* v) {
         push_cpp_int(l, *v);
@@ -1054,7 +1054,7 @@ struct to_lua_visitor {
 };
 }
 
-static void push_argument(lua_slice_state& l, const data_value& arg) {
+static void push_argument(lua_State* l, const data_value& arg) {
     if (arg.is_null()) {
         lua_pushnil(l);
         return;
