@@ -613,7 +613,7 @@ class CQLApprovalTest(Test):
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
-        self.path = "pytest"
+        self.path = "./test/pytest"
         self.cql = suite.suite_path / (self.shortname + ".cql")
         self.result = suite.suite_path / (self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
@@ -769,7 +769,7 @@ class PythonTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = "pytest"
+        self.path = "./test/pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
