@@ -112,24 +112,24 @@ class raft_address_map {
         // end.
         using list_type = bi::list<expiring_entry_ptr>;
 
-        explicit expiring_entry_ptr(list_type& l, timestamped_entry* e)
+        explicit expiring_entry_ptr(list_type& l, timestamped_entry& e)
             : _expiring_list(l), _ptr(e)
         {
-            _ptr->_last_accessed = Clock::now();
-            _ptr->set_lru_back_pointer(this);
+            _ptr._last_accessed = Clock::now();
+            _ptr.set_lru_back_pointer(this);
         }
 
         ~expiring_entry_ptr() {
             if (lru_list_hook::is_linked()) {
                 _expiring_list.erase(_expiring_list.iterator_to(*this));
             }
-            _ptr->_last_accessed = std::nullopt;
-            _ptr->set_lru_back_pointer(nullptr);
+            _ptr._last_accessed = std::nullopt;
+            _ptr.set_lru_back_pointer(nullptr);
         }
 
         // Update last access timestamp and move ourselves to the front of LRU list.
         void touch() {
-            _ptr->_last_accessed = Clock::now();
+            _ptr._last_accessed = Clock::now();
             if (lru_list_hook::is_linked()) {
                 _expiring_list.erase(_expiring_list.iterator_to(*this));
             }
@@ -139,17 +139,17 @@ class raft_address_map {
         // an expiration period (the time period since the last access lies within
         // the given expiration period time frame).
         bool expired(clock_duration expiry_period) const {
-            auto last_access_delta = Clock::now() - *_ptr->_last_accessed;
+            auto last_access_delta = Clock::now() - *_ptr._last_accessed;
             return expiry_period < last_access_delta;
         }
 
-        timestamped_entry* timestamped_entry_ptr() {
+        struct timestamped_entry& timestamped_entry() {
             return _ptr;
         }
 
     private:
         list_type& _expiring_list;
-        timestamped_entry* _ptr;
+        struct timestamped_entry& _ptr;
     };
 
     struct id_compare {
@@ -182,7 +182,7 @@ class raft_address_map {
 
     set_iterator to_set_iterator(expiring_list_iterator it) const {
         if (it != _expiring_list.end()) {
-            return _set.iterator_to(*it->timestamped_entry_ptr());
+            return _set.iterator_to(it->timestamped_entry());
         }
         return _set.end();
     }
@@ -241,7 +241,7 @@ class raft_address_map {
         _expiring_list.erase_and_dispose(it, [] (expiring_entry_ptr* ptr) { delete ptr; });
     }
 
-    void add_expiring_entry(timestamped_entry* entry) {
+    void add_expiring_entry(timestamped_entry& entry) {
         auto exp_entry_ptr = new expiring_entry_ptr(_expiring_list, entry);
         _expiring_list.push_front(*exp_entry_ptr);
         if (!_timer.armed()) {
@@ -300,7 +300,7 @@ public:
             auto entry = new timestamped_entry(_set, std::move(id), std::move(addr), expiring);
             _set.insert(*entry);
             if (expiring) {
-                add_expiring_entry(entry);
+                add_expiring_entry(*entry);
             }
             return;
         }
@@ -333,7 +333,7 @@ public:
             // Update timestamp of expiring entry
             to_list_iterator(set_it)->touch(); // Re-insert in the front of _expiring_list
         } else {
-            add_expiring_entry(&*set_it);
+            add_expiring_entry(*set_it);
         }
         return set_it->_addr;
     }
