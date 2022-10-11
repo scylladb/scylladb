@@ -2116,7 +2116,6 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     }
 
     std::exception_ptr recycle_error;
-    size_t num_deleted = 0;
     auto exts = cfg.extensions;
 
     clogger.debug("Discarding segments {}", ftd);
@@ -2164,7 +2163,6 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 
             // last resort.
             co_await f.remove_file();
-            ++num_deleted;
         } catch (...) {
             clogger.error("Could not delete segment {}: {}", f.name(), std::current_exception());
         }
