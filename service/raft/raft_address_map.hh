@@ -42,22 +42,18 @@ class raft_address_map {
 
     class expiring_entry_ptr;
 
-    // Basically `inet_address` optionally equipped with a timestamp of the last
-    // access time.
-    // If timestamp is set an entry is considered to be expiring and
-    // in such case it also contains a corresponding entry in LRU list
-    // of expiring entries.
+    // An `inet_address` optionally equipped with a pointer to an entry
+    // in LRU list of 'expiring entries'. If the pointer is set, it means that this
+    // `timestamped_entry` is expiring; the corresponding LRU list entry contains
+    // the last access time and we periodically delete elements from the LRU list
+    // when they become too old.
     struct timestamped_entry {
         gms::inet_address _addr;
-        std::optional<clock_time_point> _last_accessed;
         expiring_entry_ptr* _lru_entry;
 
-        explicit timestamped_entry(gms::inet_address addr, bool expiring)
+        explicit timestamped_entry(gms::inet_address addr)
             : _addr(std::move(addr)), _lru_entry(nullptr)
         {
-            if (expiring) {
-                _last_accessed = Clock::now();
-            }
         }
 
         ~timestamped_entry() {
@@ -74,7 +70,7 @@ class raft_address_map {
         }
 
         bool expiring() const {
-            return static_cast<bool>(_last_accessed);
+            return _lru_entry != nullptr;
         }
     };
 
@@ -94,9 +90,8 @@ class raft_address_map {
         using list_type = bi::list<expiring_entry_ptr>;
 
         explicit expiring_entry_ptr(list_type& l, const raft::server_id& entry_id, timestamped_entry& entry)
-            : _expiring_list(l), _entry_id(entry_id), _ptr(entry)
+            : _expiring_list(l), _last_accessed(Clock::now()), _entry_id(entry_id), _ptr(entry)
         {
-            _ptr._last_accessed = Clock::now();
             _ptr.set_lru_back_pointer(this);
         }
 
@@ -104,13 +99,12 @@ class raft_address_map {
             if (lru_list_hook::is_linked()) {
                 _expiring_list.erase(_expiring_list.iterator_to(*this));
             }
-            _ptr._last_accessed = std::nullopt;
             _ptr.set_lru_back_pointer(nullptr);
         }
 
         // Update last access timestamp and move ourselves to the front of LRU list.
         void touch() {
-            _ptr._last_accessed = Clock::now();
+            _last_accessed = Clock::now();
             if (lru_list_hook::is_linked()) {
                 _expiring_list.erase(_expiring_list.iterator_to(*this));
             }
@@ -120,7 +114,7 @@ class raft_address_map {
         // an expiration period (the time period since the last access lies within
         // the given expiration period time frame).
         bool expired(clock_duration expiry_period) const {
-            auto last_access_delta = Clock::now() - *_ptr._last_accessed;
+            auto last_access_delta = Clock::now() - _last_accessed;
             return expiry_period < last_access_delta;
         }
 
@@ -130,6 +124,7 @@ class raft_address_map {
 
     private:
         list_type& _expiring_list;
+        clock_time_point _last_accessed;
         const raft::server_id& _entry_id;
         struct timestamped_entry& _ptr;
     };
@@ -240,7 +235,7 @@ public:
     // nonetheless the function can be used to promote the entry from
     // expiring to permanent or vice versa.
     void set(raft::server_id id, gms::inet_address addr, bool expiring) {
-        auto [it, emplaced] = _map.try_emplace(std::move(id), std::move(addr), expiring);
+        auto [it, emplaced] = _map.try_emplace(std::move(id), std::move(addr));
         auto& entry = it->second;
         if (emplaced) {
             if (expiring) {
