@@ -22,8 +22,6 @@ class strategy_control;
 
 namespace sstables {
 
-compaction_backlog_tracker& get_unimplemented_backlog_tracker();
-
 class sstable_set_impl;
 class resharding_descriptor;
 
