@@ -1877,6 +1877,26 @@ SEASTAR_TEST_CASE(test_commutativity_and_associativity) {
     return make_ready_future<>();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_row_merging) {
+    simple_schema table;
+    auto&& s = *table.schema();
+
+    row r1;
+    table.set_cell(r1, "v1");
+
+    row r2;
+    table.set_cell(r2, "v2");
+
+    row r3;
+    table.set_cell(r3, "v3");
+
+    r2.apply_monotonically(s, column_kind::regular_column, std::move(r1));
+
+    auto r3_backup = row(s, column_kind::regular_column, r3);
+    r1.apply_monotonically(s, column_kind::regular_column, std::move(r3));
+    BOOST_REQUIRE(r1.equal(column_kind::regular_column, s, r3_backup, s));
+}
+
 SEASTAR_TEST_CASE(test_continuity_merging) {
     return seastar::async([] {
         simple_schema table;
