@@ -138,6 +138,15 @@ public:
         return t;
     }
 
+    api::timestamp_type set_cell(row& r, const sstring& v, api::timestamp_type t = api::missing_timestamp) {
+        if (t == api::missing_timestamp) {
+            t = new_timestamp();
+        }
+        const column_definition& v_def = get_v_def(*_s);
+        r.apply_monotonically(v_def, atomic_cell::make_live(*v_def.type, t, serialized(v)));
+        return t;
+    }
+
     std::pair<sstring, api::timestamp_type> get_value(const schema& s, const clustering_row& row) {
         const column_definition& v_def = get_v_def(s);
         auto cell = row.cells().find_cell(v_def.id);
