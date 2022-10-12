@@ -22,15 +22,41 @@ static const sstring COMPRESSOR_NAME = compressor::namespace_prefix + "ZstdCompr
 class zstd_processor : public compressor {
     int _compression_level = 3;
 
-    // Manages memory for the compression context.
-    std::unique_ptr<char[], free_deleter> _cctx_raw;
-    // Compression context. Observer of _cctx_raw.
-    ZSTD_CCtx* _cctx;
+    // We share buffers among instances of the compressor to limit the number
+    // of large allocations and to prevent OOM in case there are many
+    // compressors alive simultaneously.
+    //
+    // However, we don't share buffers bigger than a certain arbitrary
+    // threshold. The threshold is expected to be bigger than any buffer
+    // encountered with reasonable settings.
+    //
+    // This is a simple protection from huge shared leftover compression
+    // buffers staying in memory indefinitely. Huge buffers are not expected to
+    // arise during normal operation, but if a user messes up his table
+    // compression settings by setting 64 MiB chunks and max compression level,
+    // the compression context can grow up to 680 MiB. If we share this buffer,
+    // it will live and take up the memory even after the user fixes the
+    // settings.
+    //
+    // The max context size for the default compression level 3 is 1.3 MiB.
+    // The max context size for max compression level 22 and chunks of size
+    // 64 KiB is 1.8 MiB. So 2 MiB seems like a good threshold for "reasonable"
+    // setups.
+    constexpr static size_t max_shared_cctx_size = size_t(2)*1024*1024;
 
-    // Manages memory for the decompression context.
-    std::unique_ptr<char[], free_deleter> _dctx_raw;
-    // Decompression context. Observer of _dctx_raw.
-    ZSTD_DCtx* _dctx;
+    static thread_local size_t _shared_cctx_size;
+    static thread_local std::unique_ptr<char[], free_deleter> _shared_cctx;
+    static thread_local std::unique_ptr<char[], free_deleter> _shared_dctx;
+
+    // Used for compression iff this instance needs more memory than max_shared_cctx_size.
+    // This should only happen if the user messes up his compression settings.
+    // Otherwise, the shared cctx is used.
+    std::unique_ptr<char[], free_deleter> _private_cctx;
+
+    size_t _cctx_size;
+
+    ZSTD_DCtx* get_dctx() const;
+    ZSTD_CCtx* get_cctx();
 public:
     zstd_processor(const opt_getter&);
 
@@ -43,6 +69,10 @@ public:
     std::set<sstring> option_names() const override;
     std::map<sstring, sstring> options() const override;
 };
+
+thread_local size_t zstd_processor::_shared_cctx_size;
+thread_local std::unique_ptr<char[], free_deleter> zstd_processor::_shared_cctx;
+thread_local std::unique_ptr<char[], free_deleter> zstd_processor::_shared_dctx;
 
 zstd_processor::zstd_processor(const opt_getter& opts)
     : compressor(COMPRESSOR_NAME) {
@@ -74,35 +104,63 @@ zstd_processor::zstd_processor(const opt_getter& opts)
 
     // We assume that the uncompressed input length is always <= chunk_len.
     auto cparams = ZSTD_getCParams(_compression_level, chunk_len, 0);
-    auto cctx_size = ZSTD_estimateCCtxSize_usingCParams(cparams);
-    // According to the ZSTD documentation, pointer to the context buffer must be 8-bytes aligned.
-    _cctx_raw = allocate_aligned_buffer<char>(cctx_size, 8);
-    _cctx = ZSTD_initStaticCCtx(_cctx_raw.get(), cctx_size);
-    if (!_cctx) {
-        throw std::runtime_error("Unable to initialize ZSTD compression context");
-    }
+    _cctx_size = ZSTD_estimateCCtxSize_usingCParams(cparams);
 
-    auto dctx_size = ZSTD_estimateDCtxSize();
-    _dctx_raw = allocate_aligned_buffer<char>(dctx_size, 8);
-    _dctx = ZSTD_initStaticDCtx(_dctx_raw.get(), dctx_size);
-    if (!_cctx) {
-        throw std::runtime_error("Unable to initialize ZSTD decompression context");
+    if (!_shared_dctx) [[unlikely]] {
+        auto dctx_size = ZSTD_estimateDCtxSize();
+        _shared_dctx = allocate_aligned_buffer<char>(dctx_size, 8);
+        if (!ZSTD_initStaticDCtx(_shared_dctx.get(), dctx_size)) {
+            // This should never happen.
+            throw std::runtime_error("Unable to initialize ZSTD decompression context");
+        }
     }
 }
 
+ZSTD_DCtx* zstd_processor::get_dctx() const {
+    return reinterpret_cast<ZSTD_DCtx*>(_shared_dctx.get());
+}
+
 size_t zstd_processor::uncompress(const char* input, size_t input_len, char* output, size_t output_len) const {
-    auto ret = ZSTD_decompressDCtx(_dctx, output, output_len, input, input_len);
+    auto ret = ZSTD_decompressDCtx(get_dctx(), output, output_len, input, input_len);
     if (ZSTD_isError(ret)) {
-        throw std::runtime_error( format("ZSTD decompression failure: {}", ZSTD_getErrorName(ret)));
+        throw std::runtime_error(format("ZSTD decompression failure: {}", ZSTD_getErrorName(ret)));
     }
     return ret;
 }
 
+ZSTD_CCtx* zstd_processor::get_cctx() {
+    // We allocate the compression buffer lazily in compress(),
+    // rather than in the constructor, so that readers never allocate it.
+    // With default compression settings, the compression buffer is shared,
+    // so this doesn't matter. But in the event that misconfigured compression
+    // caused huge chunks to appear in an SSTable, every reader of this SSTable
+    // would allocate a huge context buffer for no reason, potentially
+    // preventing reads from this SSTable due to OOM.
+    void* cctx_buf;
+    if (_cctx_size <= _shared_cctx_size) [[likely]] {
+        cctx_buf = _shared_cctx.get();
+    } else {
+        auto new_buf = allocate_aligned_buffer<char>(_cctx_size, 8);
+        if (!ZSTD_initStaticCCtx(new_buf.get(), _cctx_size)) {
+            // This should never happen.
+            throw std::runtime_error("Unable to initialize ZSTD compression context");
+        }
+        if (_cctx_size <= max_shared_cctx_size) {
+            _shared_cctx_size = _cctx_size;
+            _shared_cctx = std::move(new_buf);
+            cctx_buf = _shared_cctx.get();
+        } else {
+            _private_cctx = std::move(new_buf);
+            cctx_buf = _private_cctx.get();
+        }
+    }
+    return static_cast<ZSTD_CCtx*>(cctx_buf);
+}
 
-size_t zstd_processor::compress(const char* input, size_t input_len, char* output, size_t output_len) const {
-    auto ret = ZSTD_compressCCtx(_cctx, output, output_len, input, input_len, _compression_level);
+size_t zstd_processor::compress(const char* input, size_t input_len, char* output, size_t output_len) {
+    auto ret = ZSTD_compressCCtx(get_cctx(), output, output_len, input, input_len, _compression_level);
     if (ZSTD_isError(ret)) {
-        throw std::runtime_error( format("ZSTD compression failure: {}", ZSTD_getErrorName(ret)));
+        throw std::runtime_error(format("ZSTD compression failure: {}", ZSTD_getErrorName(ret)));
     }
     return ret;
 }
