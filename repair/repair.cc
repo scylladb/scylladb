@@ -1224,6 +1224,11 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     return id.id;
 }
 
+future<> user_requested_repair_task_impl::run() {
+    // TODO: implement
+    return make_ready_future<>();
+}
+
 future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
     return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {

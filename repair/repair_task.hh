@@ -17,8 +17,37 @@ public:
         : tasks::task_manager::task::impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(type), std::move(entity), parent_id) {
         _status.progress_units = "ranges";
     }
+protected:
+    repair_uniq_id get_repair_uniq_id() const noexcept {
+        return repair_uniq_id{
+            .id = _status.sequence_number,
+            .task_data = tasks::task_info(_status.id, _status.shard)
+        };
+    }
 
     virtual future<> run() override = 0;
+};
+
+class user_requested_repair_task_impl : public repair_task_impl {
+private:
+    std::vector<sstring> _cfs;
+    dht::token_range_vector _ranges;
+    std::vector<sstring> _hosts;
+    std::vector<sstring> _data_centers;
+    std::unordered_set<gms::inet_address> _ignore_nodes;
+public:
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes)
+        : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity))
+        , _cfs(std::move(cfs))
+        , _ranges(std::move(ranges))
+        , _hosts(std::move(hosts))
+        , _data_centers(std::move(data_centers))
+        , _ignore_nodes(std::move(ignore_nodes))
+    {}
+protected:
+    future<> run() override;
+
+    // TODO: implement abort and progress for user-requested repairs
 };
 
 class repair_module : public tasks::task_manager::module {
@@ -29,5 +58,12 @@ public:
 
     repair_service& repair_service() noexcept {
         return _rs;
+    }
+
+    repair_uniq_id new_repair_uniq_id() noexcept {
+        return repair_uniq_id{
+            .id = new_sequence_number(),
+            .task_data = tasks::task_info(tasks::task_id::create_random_id(), this_shard_id())
+        };
     }
 };
