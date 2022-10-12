@@ -1169,8 +1169,11 @@ struct multi_column_range_accumulator {
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
             const cql3::raw_value tup = expr::evaluate(binop.rhs, options);
-            statements::request_validations::check_false(tup.is_null(), "Invalid null value for IN restriction");
-            process_in_values(expr::get_list_of_tuples_elements(tup, *type_of(binop.rhs)));
+            utils::chunked_vector<std::vector<managed_bytes_opt>> tuple_elems;
+            if (tup.is_value()) {
+                tuple_elems = expr::get_list_of_tuples_elements(tup, *type_of(binop.rhs));
+            }
+            process_in_values(std::move(tuple_elems));
         } else {
             on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
         }
