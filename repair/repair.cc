@@ -1289,6 +1289,11 @@ future<> repair_service::sync_data_using_repair(
     });
 }
 
+future<> data_sync_repair_task_impl::run() {
+    // TODO: implement
+    return make_ready_future<>();
+}
+
 future<> repair_service::do_sync_data_using_repair(
         sstring keyspace,
         dht::token_range_vector ranges,
