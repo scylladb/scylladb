@@ -2331,6 +2331,15 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             }
             slogger.info("removenode[{}]: Started removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
 
+            if (ss._gossiper.is_alive(endpoint)) {
+                const std::string message = format(
+                    "removenode[{}]: Rejected removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}; "
+                    "the node being removed is alive, maybe you should use decommission instead?",
+                    uuid, endpoint, nodes, ignore_nodes);
+                slogger.warn(std::string_view(message));
+                throw std::runtime_error(message);
+            }
+
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
@@ -3102,9 +3111,9 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
         for (auto& source : sources) {
             if (_gossiper.is_alive(source)) {
                 source_ranges.emplace(source, r);
-                break;
+                    break;
+                }
             }
-        }
 
         co_await coroutine::maybe_yield();
     }
