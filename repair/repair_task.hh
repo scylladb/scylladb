@@ -52,6 +52,26 @@ protected:
     // TODO: implement progress for user-requested repairs
 };
 
+class data_sync_repair_task_impl : public repair_task_impl {
+private:
+    dht::token_range_vector _ranges;
+    std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
+    streaming::stream_reason _reason;
+    shared_ptr<node_ops_info> _ops_info;
+public:
+    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
+        : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity), tasks::task_id::create_null_id())
+        , _ranges(std::move(ranges))
+        , _neighbors(std::move(neighbors))
+        , _reason(reason)
+        , _ops_info(ops_info) 
+    {}
+protected:
+    future<> run() override;
+
+    // TODO: implement progress for data-sync repairs
+};
+
 // The repair_module tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
 // table, but a failed repair will remain in the table forever so it can
