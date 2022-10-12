@@ -1290,21 +1290,15 @@ future<> repair_service::sync_data_using_repair(
 }
 
 future<> data_sync_repair_task_impl::run() {
-    // TODO: implement
-    return make_ready_future<>();
-}
+    auto module = dynamic_pointer_cast<repair_module>(_module);
+    auto& rs = module->repair_service();
+    auto keyspace = _status.keyspace;
 
-future<> repair_service::do_sync_data_using_repair(
-        sstring keyspace,
-        dht::token_range_vector ranges,
-        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
-        streaming::stream_reason reason,
-        std::optional<node_ops_id> ops_uuid) {
-    seastar::sharded<replica::database>& db = get_db();
+    seastar::sharded<replica::database>& db = rs.get_db();
 
-    repair_uniq_id id = repair_tracker().next_repair_command();
+    auto id = get_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    return repair_tracker().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+    return rs.repair_tracker().run(id, [this, &rs, id, &db, keyspace, &ranges = _ranges, &neighbors = _neighbors, reason = _reason, ops_uuid = _ops_uuid] () mutable {
         auto cfs = list_column_families(db.local(), keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
@@ -1313,11 +1307,11 @@ future<> repair_service::do_sync_data_using_repair(
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
-        if (repair_tracker().is_aborted(id.uuid())) {
+        if (rs.repair_tracker().is_aborted(id.uuid())) {
             throw std::runtime_error("aborted by user request");
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
@@ -1354,6 +1348,18 @@ future<> repair_service::do_sync_data_using_repair(
         rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
         return make_exception_future<>(ep);
     });
+}
+
+future<> repair_service::do_sync_data_using_repair(
+        sstring keyspace,
+        dht::token_range_vector ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+        streaming::stream_reason reason,
+        std::optional<node_ops_id> ops_uuid) {
+    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, repair_tracker().next_repair_command(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_uuid);
+    auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
+    task->start();
+    co_await task->done();
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
