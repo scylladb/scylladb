@@ -14,4 +14,16 @@ namespace tasks {
 
 using task_id = utils::tagged_uuid<struct task_id_tag>;
 
+struct task_info {
+    task_id id;
+    unsigned shard;
+
+    task_info() noexcept : id(task_id::create_null_id()) {}
+    task_info(task_id parent_id, unsigned parent_shard) noexcept : id(parent_id), shard(parent_shard) {}
+
+    operator bool() const noexcept {
+        return bool(id);
+    }
+};
+
 }

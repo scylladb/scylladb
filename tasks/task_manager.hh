@@ -65,17 +65,6 @@ public:
         failed
     };
 
-    struct parent_data {
-        task_id id;
-        unsigned shard;
-
-        parent_data() : id(task_id::create_null_id()) {}
-
-        operator bool() const noexcept {
-            return bool(id);
-        }
-    };
-
     class task : public enable_lw_shared_from_this<task> {
     public:
         struct progress {
@@ -332,7 +321,7 @@ public:
 
         template<typename T>
         requires std::is_base_of_v<task_manager::task::impl, T>
-        future<task_id> make_task(unsigned shard, task_id id = task_id::create_null_id(), std::string keyspace = "", std::string table = "", std::string type = "", std::string entity = "", parent_data parent_d = parent_data{}) {
+        future<task_id> make_task(unsigned shard, task_id id = task_id::create_null_id(), std::string keyspace = "", std::string table = "", std::string type = "", std::string entity = "", task_info parent_d = task_info{}) {
             foreign_task_ptr parent;
             uint64_t sequence_number = 0;
             if (parent_d) {

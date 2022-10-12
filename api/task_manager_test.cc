@@ -52,7 +52,7 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
         it = req->query_parameters.find("entity");
         std::string entity = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("parent_id");
-        tasks::task_manager::parent_data data;
+        tasks::task_info data;
         if (it != req->query_parameters.end()) {
             data.id = tasks::task_id{utils::UUID{it->second}};
             auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(ctx.tm, data.id);
