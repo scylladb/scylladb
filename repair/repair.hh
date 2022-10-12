@@ -147,7 +147,6 @@ public:
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
     repair_uniq_id id;
-    shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::unordered_set<gms::inet_address> ignore_nodes;

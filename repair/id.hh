@@ -17,7 +17,15 @@ struct repair_uniq_id {
     // The integer ID used to identify a repair job. It is currently used by nodetool and http API.
     int id;
     // A UUID to identifiy a repair job. We will transit to use UUID over the integer ID.
-    tasks::task_id uuid;
+    tasks::task_info task_data;
+
+    tasks::task_id uuid() const noexcept {
+        return task_data.id;
+    }
+
+    unsigned shard() const noexcept {
+        return task_data.shard;
+    }
 };
 
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
