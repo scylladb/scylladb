@@ -28,6 +28,30 @@ protected:
     virtual future<> run() override = 0;
 };
 
+class user_requested_repair_task_impl : public repair_task_impl {
+private:
+    lw_shared_ptr<locator::global_effective_replication_map> _germs;
+    std::vector<sstring> _cfs;
+    dht::token_range_vector _ranges;
+    std::vector<sstring> _hosts;
+    std::vector<sstring> _data_centers;
+    std::unordered_set<gms::inet_address> _ignore_nodes;
+public:
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, lw_shared_ptr<locator::global_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes)
+        : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity), tasks::task_id::create_null_id())
+        , _germs(germs)
+        , _cfs(std::move(cfs))
+        , _ranges(std::move(ranges))
+        , _hosts(std::move(hosts))
+        , _data_centers(std::move(data_centers))
+        , _ignore_nodes(std::move(ignore_nodes))
+    {}
+protected:
+    future<> run() override;
+
+    // TODO: implement progress for user-requested repairs
+};
+
 // The repair_module tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
 // table, but a failed repair will remain in the table forever so it can
