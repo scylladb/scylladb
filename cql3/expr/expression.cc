@@ -460,8 +460,9 @@ bool like(const column_value& cv, const raw_value_view& pattern, const evaluatio
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
     const cql3::raw_value in_list = evaluate(rhs, inputs);
-    statements::request_validations::check_false(
-            in_list.is_null(), "Invalid null value for column {}", col);
+    if (in_list.is_null()) {
+        return false;
+    }
 
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
         return equal(col, b, inputs);
@@ -697,7 +698,9 @@ value_list get_IN_values(
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
-    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
+    if (in_list.is_null()) {
+        return value_list();
+    }
     utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
