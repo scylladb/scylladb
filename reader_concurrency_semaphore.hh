@@ -169,7 +169,7 @@ public:
     };
 
 private:
-    const resources _initial_resources;
+    resources _initial_resources;
     resources _resources;
 
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
@@ -399,6 +399,12 @@ public:
     /// \ref obtain_permit(), then \ref with_ready_permit() is less
     /// optimal then just using \ref with_permit().
     future<> with_ready_permit(reader_permit permit, read_func func);
+
+    /// Set the total resources of the semaphore to \p r.
+    ///
+    /// After this call, \ref initial_resources() will reflect the new value.
+    /// Available resources will be adjusted by the delta.
+    void set_resources(resources r);
 
     const resources initial_resources() const {
         return _initial_resources;

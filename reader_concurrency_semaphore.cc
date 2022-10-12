@@ -1030,6 +1030,13 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, r
     return fut;
 }
 
+void reader_concurrency_semaphore::set_resources(resources r) {
+    auto delta = r - _initial_resources;
+    _initial_resources = r;
+    _resources += delta;
+    maybe_admit_waiters();
+}
+
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
     if (!ex) {
         ex = std::make_exception_ptr(broken_semaphore{});

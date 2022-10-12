@@ -1072,3 +1072,40 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_with_inactive_re
     permit = {};
     stop_f.get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{4, 4 * 1024};
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(2, 2 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
+
+    semaphore.set_resources({8, 8 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(6, 6 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(8, 8 * 1024));
+
+    semaphore.set_resources({2, 2 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(0, 0));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(2, 2 * 1024));
+
+    semaphore.set_resources({3, 128});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 128 - 2 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(3, 128));
+
+    semaphore.set_resources({1, 3 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(-1, 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(1, 3 * 1024));
+
+    auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+
+    semaphore.set_resources({4, 4 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
+    permit3_fut.get();
+}
