@@ -63,8 +63,17 @@ public:
 struct repair_uniq_id {
     // The integer ID used to identify a repair job. It is currently used by nodetool and http API.
     int id;
-    // A UUID to identifiy a repair job. We will transit to use UUID over the integer ID.
-    tasks::task_id uuid;
+    // Task info containing a UUID to identifiy a repair job, and a shard of the job.
+    // We will transit to use UUID over the integer ID.
+    tasks::task_info task_info;
+
+    tasks::task_id uuid() const noexcept {
+        return task_info.id;
+    }
+
+    unsigned shard() const noexcept {
+        return task_info.shard;
+    }
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
@@ -171,7 +180,6 @@ public:
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
     repair_uniq_id id;
-    shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::unordered_set<gms::inet_address> ignore_nodes;
