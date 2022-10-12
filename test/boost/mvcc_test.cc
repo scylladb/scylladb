@@ -285,7 +285,7 @@ public:
     // Call only when this container was constructed without a tracker
     mvcc_partition make_not_evictable(const mutation_partition& mp);
     logalloc::region& region() { return *_region; }
-    cache_tracker* tracker() { return &*_tracker; }
+    cache_tracker* tracker() { return _tracker ? &*_tracker : nullptr; }
     mutation_cleaner& cleaner() { return *_cleaner; }
     partition_snapshot::phase_type next_phase() { return ++_phase; }
     partition_snapshot::phase_type phase() const { return _phase; }
