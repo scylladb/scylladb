@@ -925,6 +925,11 @@ private:
     }
 };
 
+static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manager::task::task_impl_ptr task_impl_ptr, shared_ptr<repair_module> module, tasks::task_info pd = {}) {
+    auto task = co_await module->make_task(std::move(task_impl_ptr), pd);
+    task->start();
+    co_return task;
+}
 
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // Repair tables in the keyspace one after another
@@ -999,7 +1004,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     seastar::sharded<replica::database>& db = get_db();
     auto& topology = db.local().get_token_metadata().get_topology();
     repair_tracker().check_in_shutdown();
@@ -1094,12 +1099,23 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         options.column_families.size() ? options.column_families : list_column_families(db.local(), keyspace);
     if (cfs.empty()) {
         rlogger.info("repair[{}]: completed successfully: no tables to repair", id.uuid());
-        return id.id;
+        return make_ready_future<int>(id.id);
     }
 
-    // Do it in the background.
-    (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
-            cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
+    auto task_impl_ptr = std::make_unique<user_requested_repair_task_impl>(_repair_module, id, std::move(keyspace), format("{}", streaming::stream_reason::repair), "", std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes));
+    return start_repair_task(std::move(task_impl_ptr), _repair_module).then([id] (auto task) {
+        return make_ready_future<int>(id.id);
+    });
+}
+
+future<> user_requested_repair_task_impl::run() {
+    auto module = dynamic_pointer_cast<repair_module>(_module);
+    auto& rs = module->repair_service();
+    seastar::sharded<replica::database>& db = rs.get_db();
+    auto id = get_repair_uniq_id();
+
+    return rs.repair_tracker().run(id, [this, &rs, &db, id, keyspace = _status.keyspace,
+            cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
 
         bool needs_flush_before_repair = false;
@@ -1114,7 +1130,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         }
 
         bool hints_batchlog_flushed = false;
-        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
+        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         if (needs_flush_before_repair) {
             auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
@@ -1125,11 +1141,11 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             repair_flush_hints_batchlog_request req{id.uuid(), participants, hints_timeout, batchlog_timeout};
 
             try {
-                parallel_for_each(waiting_nodes, [this, uuid, &req, &participants] (gms::inet_address node) -> future<> {
+                parallel_for_each(waiting_nodes, [this, &rs, uuid, &req, &participants] (gms::inet_address node) -> future<> {
                     rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, started",
                             uuid, node, participants);
                     try {
-                        auto& ms = get_messaging();
+                        auto& ms = rs.get_messaging();
                         auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
                         (void)resp; // nothing to do with response yet
                     } catch (...) {
@@ -1151,14 +1167,14 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         abort_source as;
-        auto off_strategy_updater = seastar::async([this, uuid = node_ops_id{uuid.uuid()}, &table_ids, &participants, &as] {
+        auto off_strategy_updater = seastar::async([this, &rs, uuid = node_ops_id{uuid.uuid()}, &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
-                parallel_for_each(participants, [this, uuid, &req] (gms::inet_address node) {
-                    return _messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(participants, [this, &rs, uuid, &req] (gms::inet_address node) {
+                    return rs._messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -1180,21 +1196,21 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
-        auto cleanup_repair_range_history = defer([this, uuid] () mutable {
+        auto cleanup_repair_range_history = defer([this, &rs, uuid] () mutable {
             try {
-                this->cleanup_history(tasks::task_id{uuid.uuid()}).get();
+                rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
                 rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
             }
         });
 
-        if (repair_tracker().is_aborted(id.uuid())) {
+        if (rs.repair_tracker().is_aborted(id.uuid())) {
             throw std::runtime_error("aborted by user request");
         }
 
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
-                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
+                    data_centers, hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
@@ -1219,14 +1235,8 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         }).get();
     }).handle_exception([id] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid(), ep);
+        return make_exception_future<>(ep);
     });
-
-    return id.id;
-}
-
-future<> user_requested_repair_task_impl::run() {
-    // TODO: implement
-    return make_ready_future<>();
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair,
