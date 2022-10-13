@@ -17,12 +17,10 @@
 
 future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
     return do_with_cql_env([func](auto &env) {
-        // supervisor::notify("creating tracing");
         tracing::backend_registry tracing_backend_registry;
         tracing::register_tracing_keyspace_backend(tracing_backend_registry);
         tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
 
-        // supervisor::notify("starting tracing");
         tracing::tracing::start_tracing(env.qp()).get();
 
         return do_with(std::move(tracing_backend_registry), [func, &env](auto &reg) {
