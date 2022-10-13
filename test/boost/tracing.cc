@@ -10,20 +10,16 @@
 
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
-#include "tracing/tracing_backend_registry.hh"
 #include "utils/class_registrator.hh"
 
 #include "test/lib/cql_test_env.hh"
 
 future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
     return do_with_cql_env([func](auto &env) {
-        tracing::backend_registry tracing_backend_registry;
-        tracing::register_tracing_keyspace_backend(tracing_backend_registry);
-        tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
+        tracing::tracing::create_tracing("trace_keyspace_helper").get();
 
         tracing::tracing::start_tracing(env.qp()).get();
 
-        return do_with(std::move(tracing_backend_registry), [func, &env](auto &reg) {
             return func(env).finally([]() {
                 return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
                     return local_tracing.shutdown();
@@ -31,7 +27,6 @@ future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_te
                     return tracing::tracing::tracing_instance().stop();
                 });
             });
-        });
     }, std::move(cfg_in));
 }
 

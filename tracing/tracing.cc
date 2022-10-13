@@ -10,7 +10,6 @@
 #include <seastar/core/metrics.hh>
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
-#include "tracing/tracing_backend_registry.hh"
 #include "utils/class_registrator.hh"
 
 namespace tracing {
@@ -26,7 +25,7 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_class_name)
+tracing::tracing(sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
@@ -67,8 +66,8 @@ tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_clas
     });
 }
 
-future<> tracing::create_tracing(const backend_registry& br, sstring tracing_backend_class_name) {
-    return tracing_instance().start(std::ref(br), std::move(tracing_backend_class_name));
+future<> tracing::create_tracing(sstring tracing_backend_class_name) {
+    return tracing_instance().start(std::move(tracing_backend_class_name));
 }
 
 future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {

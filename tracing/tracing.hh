@@ -32,7 +32,6 @@ extern logging::logger tracing_logger;
 
 class trace_state_ptr;
 class tracing;
-class backend_registry;
 
 enum class trace_type : uint8_t {
     NONE,
@@ -413,10 +412,10 @@ public:
         return !_down;
     }
 
-    static future<> create_tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
+    static future<> create_tracing(sstring tracing_backend_helper_class_name);
     static future<> start_tracing(sharded<cql3::query_processor>& qp);
     static future<> stop_tracing();
-    tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
+    tracing(sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
     future<> start(cql3::query_processor& qp);
