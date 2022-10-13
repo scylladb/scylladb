@@ -19,6 +19,7 @@
 #include "types/map.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/class_registrator.hh"
 
 namespace tracing {
 
@@ -469,5 +470,8 @@ std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_sess
 void register_tracing_keyspace_backend(backend_registry& tbr) {
     tbr.register_backend<trace_keyspace_helper>("trace_keyspace_helper");
 }
+
+using registry_default = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
+static registry_default registrator_default("trace_keyspace_helper");
 
 }
