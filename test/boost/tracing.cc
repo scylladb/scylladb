@@ -20,13 +20,13 @@ future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_te
 
         tracing::tracing::start_tracing(env.qp()).get();
 
-            func(env).finally([]() {
-                return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
-                    return local_tracing.shutdown();
-                }).finally([]() {
-                    return tracing::tracing::tracing_instance().stop();
-                });
-            }).get();
+        func(env).finally([]() {
+            return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
+                return local_tracing.shutdown();
+            }).finally([]() {
+                return tracing::tracing::tracing_instance().stop();
+            });
+        }).get();
     }, std::move(cfg_in));
 }
 
