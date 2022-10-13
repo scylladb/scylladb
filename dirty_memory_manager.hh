@@ -226,8 +226,8 @@ private:
     region_heap _regions;
 
     condition_variable _relief;
-    future<> _releaser;
     bool _shutdown_requested = false;
+    future<> _releaser;
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
