@@ -94,8 +94,9 @@ struct reclaim_config {
     reclaim_stop_callback stop_reclaiming = [] () noexcept {};
 };
 
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
+// A container for memtables. Called "region_group" for historical
+// reasons. Receives updates about memtable size change via the
+// LSA region_listener interface.
 class region_group : public region_listener {
 public:
     struct allocating_function {
