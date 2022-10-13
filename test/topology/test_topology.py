@@ -53,6 +53,7 @@ async def test_remove_node_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Flaky due to #11780")
 async def test_decommission_node_add_column(manager, random_tables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
