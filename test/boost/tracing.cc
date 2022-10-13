@@ -15,18 +15,18 @@
 #include "test/lib/cql_test_env.hh"
 
 future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
-    return do_with_cql_env([func](auto &env) {
+    return do_with_cql_env_thread([func](auto &env) {
         tracing::tracing::create_tracing("trace_keyspace_helper").get();
 
         tracing::tracing::start_tracing(env.qp()).get();
 
-            return func(env).finally([]() {
+            func(env).finally([]() {
                 return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
                     return local_tracing.shutdown();
                 }).finally([]() {
                     return tracing::tracing::tracing_instance().stop();
                 });
-            });
+            }).get();
     }, std::move(cfg_in));
 }
 
