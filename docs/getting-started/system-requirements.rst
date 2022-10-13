@@ -6,8 +6,10 @@ System Requirements
 
 Supported Platforms
 ===================
+ScyllaDB runs on 64-bit Linux. The x86_64 and AArch64 architectures are supported (AArch64 support includes AWS EC2 Graviton).
 
-Scylla runs on 64-bit Linux. Here, you can find which :doc:`operating systems, distros, and versions </getting-started/os-support>` are supported.
+See OS :doc:`Support by Platform and Version <</getting-started/os-support>` for information about 
+supported operating systems, distros, and versions.
 
 .. _system-requirements-hardware:
 
