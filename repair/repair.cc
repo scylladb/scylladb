@@ -974,6 +974,11 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     co_return;
 }
 
+future<> shard_repair_task_impl::run() {
+    // TODO: impletment
+    return make_ready_future<>();
+}
+
 // repair_ranges repairs a list of token ranges, each assumed to be a token
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
