@@ -463,14 +463,14 @@ named_semaphore& repair_module::range_parallelism_semaphore() {
 }
 
 future<> repair_module::run(repair_uniq_id id, std::function<void ()> func) {
-        start(id);
-        return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
-            rlogger.info("repair[{}]: completed successfully", id.uuid());
-            done(id, true);
-        }).handle_exception([this, id] (std::exception_ptr ep) {
-            done(id, false);
-            return make_exception_future(std::move(ep));
-        });
+    start(id);
+    return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
+        rlogger.info("repair[{}]: completed successfully", id.uuid());
+        done(id, true);
+    }).handle_exception([this, id] (std::exception_ptr ep) {
+        done(id, false);
+        return make_exception_future(std::move(ep));
+    });
 }
 
 void repair_info::check_in_shutdown() {
@@ -942,28 +942,28 @@ future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                 auto ri = tmp_ri;
                 task->start();
                 co_await task->done();
-                    if (ri->reason == streaming::stream_reason::bootstrap) {
-                        ri->rs.get_metrics().bootstrap_finished_ranges++;
-                    } else if (ri->reason == streaming::stream_reason::replace) {
-                        ri->rs.get_metrics().replace_finished_ranges++;
-                    } else if (ri->reason == streaming::stream_reason::rebuild) {
-                        ri->rs.get_metrics().rebuild_finished_ranges++;
-                    } else if (ri->reason == streaming::stream_reason::decommission) {
-                        ri->rs.get_metrics().decommission_finished_ranges++;
-                    } else if (ri->reason == streaming::stream_reason::removenode) {
-                        ri->rs.get_metrics().removenode_finished_ranges++;
-                    } else if (ri->reason == streaming::stream_reason::repair) {
-                        ri->rs.get_metrics().repair_finished_ranges_sum++;
-                        ri->nr_ranges_finished++;
-                    }
-                    rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
-                        ri->id.uuid(),
-                        ri->rs.get_metrics().bootstrap_finished_percentage(),
-                        ri->rs.get_metrics().replace_finished_percentage(),
-                        ri->rs.get_metrics().rebuild_finished_percentage(),
-                        ri->rs.get_metrics().decommission_finished_percentage(),
-                        ri->rs.get_metrics().removenode_finished_percentage(),
-                        ri->rs.get_metrics().repair_finished_percentage());
+                if (ri->reason == streaming::stream_reason::bootstrap) {
+                    ri->rs.get_metrics().bootstrap_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::replace) {
+                    ri->rs.get_metrics().replace_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::rebuild) {
+                    ri->rs.get_metrics().rebuild_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::decommission) {
+                    ri->rs.get_metrics().decommission_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::removenode) {
+                    ri->rs.get_metrics().removenode_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::repair) {
+                    ri->rs.get_metrics().repair_finished_ranges_sum++;
+                    ri->nr_ranges_finished++;
+                }
+                rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
+                    ri->id.uuid(),
+                    ri->rs.get_metrics().bootstrap_finished_percentage(),
+                    ri->rs.get_metrics().replace_finished_percentage(),
+                    ri->rs.get_metrics().rebuild_finished_percentage(),
+                    ri->rs.get_metrics().decommission_finished_percentage(),
+                    ri->rs.get_metrics().removenode_finished_percentage(),
+                    ri->rs.get_metrics().repair_finished_percentage());
             });
         });
 
@@ -1216,20 +1216,20 @@ future<> user_requested_repair_task_impl::run() {
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable -> future<> {
-              lw_shared_ptr<repair_info> ri;
-              std::exception_ptr ex;
-              auto task_id = tasks::task_id{id.uuid().uuid()};
-              try {
-                local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                ri = make_lw_shared<repair_info>(local_repair,
-                        std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, node_ops_id{id.uuid().uuid()}, hints_batchlog_flushed);
-              } catch (...) {
-                ex = std::current_exception();
-              }
-              auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
-              auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
-              co_await task->done();
+                lw_shared_ptr<repair_info> ri;
+                std::exception_ptr ex;
+                auto task_id = tasks::task_id{id.uuid().uuid()};
+                try {
+                    local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
+                    ri = make_lw_shared<repair_info>(local_repair,
+                            std::move(keyspace), std::move(ranges), std::move(table_ids),
+                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, node_ops_id{id.uuid().uuid()}, hints_batchlog_flushed);
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
+                auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+                co_await task->done();
             });
             repair_results.push_back(std::move(f));
         }
@@ -1324,24 +1324,24 @@ future<> data_sync_repair_task_impl::run() {
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable -> future<> {
-              lw_shared_ptr<repair_info> ri;
-              std::exception_ptr ex;
-              auto task_id = tasks::task_id{id.uuid().uuid()};
-              try {
-                auto data_centers = std::vector<sstring>();
-                auto hosts = std::vector<sstring>();
-                auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                bool hints_batchlog_flushed = false;
-                auto ri = make_lw_shared<repair_info>(local_repair,
-                        std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid, hints_batchlog_flushed);
-                ri->neighbors = std::move(neighbors);
-              } catch (...) {
-                ex = std::current_exception();
-              }
-              auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
-              auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
-              co_await task->done();
+                lw_shared_ptr<repair_info> ri;
+                std::exception_ptr ex;
+                auto task_id = tasks::task_id{id.uuid().uuid()};
+                try {
+                    auto data_centers = std::vector<sstring>();
+                    auto hosts = std::vector<sstring>();
+                    auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                    bool hints_batchlog_flushed = false;
+                    auto ri = make_lw_shared<repair_info>(local_repair,
+                            std::move(keyspace), std::move(ranges), std::move(table_ids),
+                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid, hints_batchlog_flushed);
+                    ri->neighbors = std::move(neighbors);
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
+                auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+                co_await task->done();
             });
             repair_results.push_back(std::move(f));
         }
