@@ -98,6 +98,7 @@ struct reclaim_config {
 // reasons. Receives updates about memtable size change via the
 // LSA region_listener interface.
 class region_group : public region_listener {
+    using region_heap = dirty_memory_manager_logalloc::region_heap;
 public:
     struct allocating_function {
         virtual ~allocating_function() = default;
@@ -165,6 +166,15 @@ private:
 
     uint64_t _blocked_requests_counter = 0;
 
+    size_t _unspooled_total_memory = 0;
+
+    region_heap _regions;
+
+    condition_variable _relief;
+    bool _shutdown_requested = false;
+    future<> _releaser;
+
+private:
     size_t real_throttle_threshold() const noexcept {
         return _cfg.real_hard_limit;
     }
@@ -219,15 +229,6 @@ private:
     size_t unspooled_soft_limit_threshold() const noexcept {
         return _cfg.unspooled_soft_limit;
     }
-    using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    size_t _unspooled_total_memory = 0;
-
-    region_heap _regions;
-
-    condition_variable _relief;
-    bool _shutdown_requested = false;
-    future<> _releaser;
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
