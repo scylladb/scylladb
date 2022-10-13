@@ -85,6 +85,26 @@ protected:
     future<> run() override;
 };
 
+class range_repair_task_impl : public repair_task_impl {
+private:
+    lw_shared_ptr<repair_info> _ri;
+    dht::token_range _range;
+    table_id _table_id;
+public:
+    range_repair_task_impl(tasks::task_manager::module_ptr module, tasks::task_id id, std::string keyspace, std::string table, std::string type, tasks::task_id parent_id, lw_shared_ptr<repair_info> ri, dht::token_range range, table_id table_id)
+        : repair_task_impl(module, id, 0, std::move(keyspace), std::move(table), std::move(type), "", parent_id)
+        , _ri(ri)
+        , _range(range)
+        , _table_id(table_id)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
+protected:
+    future<> run() override;
+};
+
 // The repair_module tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
 // table, but a failed repair will remain in the table forever so it can

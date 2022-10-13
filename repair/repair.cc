@@ -920,6 +920,11 @@ static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manag
     co_return task;
 }
 
+future<> range_repair_task_impl::run() {
+    // TODO: implement
+    return make_ready_future<>();
+}
+
 future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // Repair tables in the keyspace one after another
     assert(ri->table_names().size() == ri->table_ids.size());
