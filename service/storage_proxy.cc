@@ -5148,7 +5148,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     try {
         auto timeout = query_options.timeout(*this);
-        auto handle_completion = [&used_replicas, tmptr] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
+        auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
                 used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
                 auto latency = rex->max_request_latency();
@@ -5164,7 +5164,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
                 handle_completion(exec[0]);
             }
         } else {
-            auto mapper = [timeout, &handle_completion] (
+            auto mapper = [&] (
                     std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<::result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto result = co_await executor_and_token_range.first->execute(timeout);
                 // Handle success here. Failure is handled (only once) just outside the try..catch.
