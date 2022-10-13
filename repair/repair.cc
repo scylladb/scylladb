@@ -921,11 +921,11 @@ static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manag
 }
 
 future<> range_repair_task_impl::run() {
-    // TODO: implement
-    return make_ready_future<>();
+    return _ri->repair_range(_range, _table_id);
 }
 
 future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
+    auto parent_data = get_repair_uniq_id().task_data;
     // Repair tables in the keyspace one after another
     assert(ri->table_names().size() == ri->table_ids.size());
     for (int idx = 0; idx < ri->table_ids.size(); idx++) {
@@ -934,9 +934,14 @@ future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 ri->id.uuid(), idx + 1, ri->table_ids.size(), ri->keyspace, table_name, table_id, ri->reason);
-        co_await coroutine::parallel_for_each(ri->ranges, [ri, table_id] (auto&& range) {
-            return with_semaphore(ri->rs.get_repair_module().range_parallelism_semaphore(), 1, [ri, &range, table_id] {
-                return ri->repair_range(range, table_id).then([ri] {
+        co_await coroutine::parallel_for_each(ri->ranges, [ri, table_id, parent_data, table_name] (auto&& range) -> future<> {
+            auto tmp_ri = ri;
+            auto task_impl_ptr = std::make_unique<range_repair_task_impl>(ri->rs.get_repair_module().shared_from_this(), tasks::task_id::create_random_id(), ri->keyspace, table_name, format("{}", ri->reason), parent_data.id, ri, range, table_id);
+            auto task = co_await ri->rs.get_repair_module().make_task(std::move(task_impl_ptr), parent_data);
+            co_await with_semaphore(tmp_ri->rs.get_repair_module().range_parallelism_semaphore(), 1, [task, tmp_ri] () -> future<> {
+                auto ri = tmp_ri;
+                task->start();
+                co_await task->done();
                     if (ri->reason == streaming::stream_reason::bootstrap) {
                         ri->rs.get_metrics().bootstrap_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::replace) {
@@ -959,7 +964,6 @@ future<> repair_task_impl::do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                         ri->rs.get_metrics().decommission_finished_percentage(),
                         ri->rs.get_metrics().removenode_finished_percentage(),
                         ri->rs.get_metrics().repair_finished_percentage());
-                });
             });
         });
 
