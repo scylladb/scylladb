@@ -166,6 +166,42 @@ public:
 protected:
     future<> do_repair_ranges();
     future<> run() override;
+
+    friend class range_repair_task_impl;
+};
+
+class range_repair_task_impl : public repair_task_impl {
+private:
+    shard_repair_task_impl& _shard_task;
+    repair_service& _rs;
+    dht::token_range& _range;
+    table_id _table_id;
+public:
+    range_repair_task_impl(tasks::task_manager::module_ptr module,
+            shard_repair_task_impl& shard_task,
+            repair_service& rs,
+            dht::token_range& range,
+            table_info table,
+            streaming::stream_reason reason)
+        : repair_task_impl(module, tasks::task_id::create_random_id(), 0, shard_task._status.keyspace, table.name, "", shard_task._status.id, reason)
+        , _shard_task(shard_task)
+        , _rs(rs)
+        , _range(range)
+        , _table_id(table.id)
+    {}
+
+    table_info get_table_info() const noexcept {
+        return table_info{
+            .name = _status.table,
+            .id = _table_id
+        };
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
+protected:
+    future<> run() override;
 };
 
 // The repair::task_manager_module tracks ongoing repair operations and their progress.

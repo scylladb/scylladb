@@ -936,6 +936,35 @@ private:
     }
 };
 
+future<> repair::range_repair_task_impl::run() {
+    return with_semaphore(_rs.get_repair_module().range_parallelism_semaphore(), 1, [this] {
+        return _shard_task.repair_range(_range, get_table_info()).then([this] {
+            if (_reason == streaming::stream_reason::bootstrap) {
+                _rs.get_metrics().bootstrap_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::replace) {
+                _rs.get_metrics().replace_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::rebuild) {
+                _rs.get_metrics().rebuild_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::decommission) {
+                _rs.get_metrics().decommission_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::removenode) {
+                _rs.get_metrics().removenode_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::repair) {
+                _rs.get_metrics().repair_finished_ranges_sum++;
+                _shard_task.nr_ranges_finished++;
+            }
+            rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
+                _shard_task.global_repair_id.uuid(),
+                _rs.get_metrics().bootstrap_finished_percentage(),
+                _rs.get_metrics().replace_finished_percentage(),
+                _rs.get_metrics().rebuild_finished_percentage(),
+                _rs.get_metrics().decommission_finished_percentage(),
+                _rs.get_metrics().removenode_finished_percentage(),
+                _rs.get_metrics().repair_finished_percentage());
+        });
+    });
+}
+
 future<> repair::shard_repair_task_impl::do_repair_ranges() {
     // Repair tables in the keyspace one after another
     assert(table_names().size() == table_ids.size());
@@ -947,33 +976,9 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 global_repair_id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_info.name, table_info.id, _reason);
-        co_await coroutine::parallel_for_each(ranges, [this, table_info] (auto&& range) {
-            return with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_info] {
-                return repair_range(range, table_info).then([this] {
-                    if (_reason == streaming::stream_reason::bootstrap) {
-                        rs.get_metrics().bootstrap_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::replace) {
-                        rs.get_metrics().replace_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::rebuild) {
-                        rs.get_metrics().rebuild_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::decommission) {
-                        rs.get_metrics().decommission_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::removenode) {
-                        rs.get_metrics().removenode_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::repair) {
-                        rs.get_metrics().repair_finished_ranges_sum++;
-                        nr_ranges_finished++;
-                    }
-                    rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
-                        global_repair_id.uuid(),
-                        rs.get_metrics().bootstrap_finished_percentage(),
-                        rs.get_metrics().replace_finished_percentage(),
-                        rs.get_metrics().rebuild_finished_percentage(),
-                        rs.get_metrics().decommission_finished_percentage(),
-                        rs.get_metrics().removenode_finished_percentage(),
-                        rs.get_metrics().repair_finished_percentage());
-                });
-            });
+        co_await coroutine::parallel_for_each(ranges, [this, table_info] (auto& range) -> future<> {
+            auto task = co_await rs.get_repair_module().make_and_start_task<range_repair_task_impl>(get_repair_uniq_id().task_info, *this, rs, range, table_info, _reason);
+            co_await task->done();
         });
 
         if (_reason != streaming::stream_reason::repair) {
