@@ -974,16 +974,16 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     co_return;
 }
 
-future<> shard_repair_task_impl::run() {
-    // TODO: impletment
-    return make_ready_future<>();
-}
-
-// repair_ranges repairs a list of token ranges, each assumed to be a token
+// Repairs a list of token ranges, each assumed to be a token
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
-static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
+future<> shard_repair_task_impl::run() {
+    if (_ex) {
+        return make_exception_future(_ex);
+    }
+
+    auto& ri = _ri;
     ri->rs.get_repair_module().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
@@ -1215,12 +1215,22 @@ future<> user_requested_repair_task_impl::run() {
 
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
-                    data_centers, hosts, ignore_nodes, germs] (repair_service& local_repair) mutable {
+                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable {
+              lw_shared_ptr<repair_info> ri;
+              std::exception_ptr ex;
+              auto task_id = id.uuid();
+              try {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto ri = make_lw_shared<repair_info>(local_repair,
+                ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, nullptr, hints_batchlog_flushed);
-                return repair_ranges(ri);
+              } catch (...) {
+                ex = std::current_exception();
+              }
+              auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
+              return start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data).then([] (auto task) {
+                return task->done();
+              });
             });
             repair_results.push_back(std::move(f));
         }
@@ -1320,7 +1330,11 @@ future<> data_sync_repair_task_impl::run() {
             throw std::runtime_error("aborted by user request");
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_info, germs] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_info, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable {
+              lw_shared_ptr<repair_info> ri;
+              std::exception_ptr ex;
+              auto task_id = id.uuid();
+              try {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
@@ -1330,7 +1344,13 @@ future<> data_sync_repair_task_impl::run() {
                         std::move(keyspace), germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, asp, hints_batchlog_flushed);
                 ri->neighbors = std::move(neighbors);
-                return repair_ranges(ri);
+              } catch (...) {
+                ex = std::current_exception();
+              }
+              auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
+              return start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data).then([] (auto task) {
+                return task->done();
+              });
             });
             repair_results.push_back(std::move(f));
         }
