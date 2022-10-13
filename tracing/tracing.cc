@@ -84,6 +84,26 @@ future<> tracing::stop_tracing() {
     });
 }
 
+bool tracing::may_create_new_session(const std::optional<utils::UUID>& session_id) {
+    // Don't create a session if its records are likely to be dropped
+    if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
+        if (session_id) {
+            tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", *session_id);
+        } else {
+            tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
+        }
+
+        if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
+            tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
+                        stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
 trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) noexcept {
     if (!started()) {
         return nullptr;
