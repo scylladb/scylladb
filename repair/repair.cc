@@ -1206,7 +1206,7 @@ future<> user_requested_repair_task_impl::run() {
 
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
-                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable {
+                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable -> future<> {
               lw_shared_ptr<repair_info> ri;
               std::exception_ptr ex;
               auto task_id = tasks::task_id{id.uuid().uuid()};
@@ -1219,9 +1219,8 @@ future<> user_requested_repair_task_impl::run() {
                 ex = std::current_exception();
               }
               auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
-              return start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data).then([] (auto task) {
-                return task->done();
-              });
+              auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+              co_await task->done();
             });
             repair_results.push_back(std::move(f));
         }
@@ -1316,7 +1315,7 @@ future<> data_sync_repair_task_impl::run() {
             throw std::runtime_error("aborted by user request");
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid, parent_data = get_repair_uniq_id().task_data] (repair_service& local_repair) mutable -> future<> {
               lw_shared_ptr<repair_info> ri;
               std::exception_ptr ex;
               auto task_id = tasks::task_id{id.uuid().uuid()};
@@ -1333,9 +1332,8 @@ future<> data_sync_repair_task_impl::run() {
                 ex = std::current_exception();
               }
               auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}", streaming::stream_reason::repair), task_id, ri, ex);
-              return start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data).then([] (auto task) {
-                return task->done();
-              });
+              auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+              co_await task->done();
             });
             repair_results.push_back(std::move(f));
         }
