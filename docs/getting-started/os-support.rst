@@ -6,6 +6,8 @@ The following matrix shows which Operating Systems, Platforms, and Containers / 
 Scylla requires a fix to the XFS append introduced in kernel 3.15 (back-ported to 3.10 in RHEL/CentOS).
 Scylla will not run with earlier kernel versions. Details in `Scylla issue 885 <https://github.com/scylladb/scylla/issues/885>`_.
 
+ .. REMOVE IN FUTURE VERSIONS - Remove information about versions from the notes below in version 5.2.
+
 .. note::
    
    **Supported Architecture**
@@ -64,7 +66,7 @@ Scylla Enterprise
 
     - Ubuntu 20.04 for versions 2021.1 and later.
     - CentOS 7 for versions earlier than 2021.1.
-    
+
 +--------------------------+-----------------------------------+---------------------------+--------+-------+
 | Platform                 |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
 |                          |                                   |                           | RHEL   | RHEL  |
