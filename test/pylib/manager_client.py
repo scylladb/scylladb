@@ -15,7 +15,7 @@ from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
-from time import time
+import aiohttp
 
 
 logger = logging.getLogger(__name__)
@@ -41,9 +41,7 @@ class ManagerClient():
         self.api = ScyllaRESTAPIClient()
 
     async def stop(self):
-        """Close api, client, and driver"""
-        await self.api.close()
-        await self.client.close()
+        """Close driver"""
         self.driver_close()
 
     async def driver_connect(self) -> None:
@@ -74,9 +72,10 @@ class ManagerClient():
         dirty = await self.is_dirty()
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
-        resp = await self.client.get(f"/cluster/before-test/{test_case_name}")
-        if resp.status != 200:
-            raise RuntimeError(f"Failed before test check {await resp.text()}")
+        try:
+            await self.client.get(f"/cluster/before-test/{test_case_name}")
+        except aiohttp.ClientError as exc:
+            raise RuntimeError(f"Failed before test check {exc}") from exc
         if self.cql is None:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
@@ -163,16 +162,13 @@ class ManagerClient():
         self._driver_update()
 
     async def server_get_config(self, server_id: str) -> dict[str, object]:
-        resp = await self.client.get(f"/cluster/server/{server_id}/get_config")
-        if resp.status != 200:
-            raise Exception(await resp.text())
-        return await resp.json()
+        data = await self.client.get_json(f"/cluster/server/{server_id}/get_config")
+        assert isinstance(data, dict), f"server_get_config: got {type(data)} expected dict"
+        return data
 
     async def server_update_config(self, server_id: str, key: str, value: object) -> None:
-        resp = await self.client.put_json(f"/cluster/server/{server_id}/update_config",
-                                       {"key": key, "value": value})
-        if resp.status != 200:
-            raise Exception(await resp.text())
+        await self.client.put_json(f"/cluster/server/{server_id}/update_config",
+                                   {"key": key, "value": value})
 
     async def get_host_id(self, server_id: str) -> str:
         """Get host id through Scylla REST API"""

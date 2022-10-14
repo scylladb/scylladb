@@ -5,132 +5,123 @@
 #
 """Asynchronous helper for Scylla REST API operations.
 """
+from abc import ABCMeta
+from collections.abc import Mapping
 import logging
-import pytest
 import os.path
-import aiohttp
-from typing import Optional
+from typing import Any, Optional, Union
 from contextlib import asynccontextmanager
+from aiohttp import request, BaseConnector, UnixConnector
+import pytest
 
 
 logger = logging.getLogger(__name__)
 
 
-class RESTSession:
-    def __init__(self, connector: aiohttp.BaseConnector = None):
-        self.session: aiohttp.ClientSession = aiohttp.ClientSession(connector = connector)
+class HTTPError(Exception):
+    def __init__(self, uri, code, message):            
+        super().__init__(message)
+        self.uri = uri
+        self.code = code
+        self.message = message
 
-    async def close(self) -> None:
-        """End session"""
-        await self.session.close()
+    def __str__(self):
+        return f"HTTP error {self.code}: {self.message}, uri {self.uri}"
 
-    async def get(self, resource_uri: str) -> aiohttp.ClientResponse:
-        """Fetch remote resource or raise"""
+
+# TODO: support ssl and verify_ssl
+class RESTClient(metaclass=ABCMeta):
+    """Base class for sesion-free REST client"""
+    connector: Optional[BaseConnector]
+    uri_scheme: str   # e.g. http, http+unix
+    default_host: str
+    default_port: Optional[int]
+    # pylint: disable=too-many-arguments
+
+    async def _fetch(self, method: str, resource: str, response_type: Optional[str] = None,
+                     host: Optional[str] = None, port: Optional[int] = None,
+                     params: Optional[Mapping[str, str]] = None,
+                     json: Optional[Mapping] = None) -> Any:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
-        resp = await self.session.get(resource_uri)
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"status code: {resp.status}, body text: {text}")
-        return resp
+        assert method in ["GET", "POST", "PUT", "DELETE"], f"Invalid HTTP request method {method}"
+        assert response_type is None or response_type in ["text", "json"], \
+                f"Invalid response type requested {response_type} (expected 'text' or 'json')"
+        # Build the URI
+        port = port if port else self.default_port if hasattr(self, "default_port") else None
+        port_str = f":{port}" if port else ""
+        assert host is not None or hasattr(self, "default_host"), "_fetch: missing host for " \
+                "{method} {resource}"
+        host_str = host if host is not None else self.default_host
+        uri = self.uri_scheme + "://" + host_str + port_str + resource
+        logging.debug(f"RESTClient fetching {method} {uri}")
 
-    async def get_text(self, resource_uri: str) -> str:
-        """Fetch remote resource text response or raise"""
-        resp = await self.get(resource_uri)
-        return await resp.text()
+        async with request(method, uri,
+                           connector = self.connector if hasattr(self, "connector") else None,
+                           params = params, json = json) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise HTTPError(uri, resp.status, f"{text}, params {params}, json {json}")
+            if response_type is not None:
+                # Return response.text() or response.json()
+                return await getattr(resp, response_type)()
+        return None
 
-    async def post(self, resource_uri: str, params: Optional[dict[str, str]]) \
-            -> aiohttp.ClientResponse:
-        """Post to remote resource or raise"""
-        resp = await self.session.post(resource_uri, params=params)
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"status code: {resp.status}, body text: {text}, "
-                               f"resource {resource_uri} params {params}")
-        return resp
+    async def get(self, resource_uri: str, host: Optional[str] = None, port: Optional[int] = None,
+                  params: Optional[Mapping[str, str]] = None) -> Any:
+        return await self._fetch("GET", resource_uri, host = host, port = port, params = params)
 
-    async def put_json(self, resource_uri: str, json: dict) \
-            -> aiohttp.ClientResponse:
-        """Put JSON"""
-        resp = await self.session.request(method="PUT", url=resource_uri, json=json)
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"status code: {resp.status}, body text: {text}, "
-                               f"resource {resource_uri} json {json}")
-        return resp
+    async def get_text(self, resource_uri: str, host: Optional[str] = None,
+                       port: Optional[int] = None, params: Optional[Mapping[str, str]] = None
+                       ) -> str:
+        ret = await self._fetch("GET", resource_uri, response_type = "text", host = host,
+                                port = port, params = params)
+        assert isinstance(ret, str), f"get_text: expected str but got {type(ret)} {ret}"
+        return ret
 
-    async def delete(self, resource_uri: str) -> aiohttp.ClientResponse:
-        resp = await self.session.delete(url=resource_uri)
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"status code: {resp.status}, body text: {text}")
-        return resp
+    async def get_json(self, resource_uri: str, host: Optional[str] = None,
+                       port: Optional[int] = None, params: Optional[Mapping[str, str]] = None
+                       ) -> Any:
+        """Fetch URL and get JSON. Caller must check JSON content types."""
+        ret = await self._fetch("GET", resource_uri, response_type = "json", host = host,
+                                port = port, params = params)
+        return ret
+
+    async def post(self, resource_uri: str, host: Optional[str] = None,
+                   port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
+                   json: Mapping = None) -> None:
+        await self._fetch("POST", resource_uri, host = host, port = port, params = params,
+                          json = json)
+
+    async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
+                       port: Optional[int] = None, params: Optional[dict[str, str]] = None) -> None:
+        await self._fetch("PUT", resource_uri, host = host, port = port, params = params,
+                          json = data)
+
+    async def delete(self, resource_uri: str, host: Optional[str] = None,
+                     port: Optional[int] = None, params: Optional[dict[str, str]] = None,
+                     json: Mapping = None) -> None:
+        await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
+                          json = json)
 
 
-class UnixRESTClient:
+class UnixRESTClient(RESTClient):
     """An async helper for REST API operations using AF_UNIX socket"""
 
     def __init__(self, sock_path: str):
-        self.sock_name: str = os.path.basename(sock_path)
-        self.session = RESTSession(aiohttp.UnixConnector(path=sock_path))
-
-    async def close(self) -> None:
-        """End session"""
-        await self.session.close()
-
-    async def get(self, resource: str) -> aiohttp.ClientResponse:
-        return await self.session.get(self._resource_uri(resource))
-
-    async def put_json(self, resource: str, json: dict) -> aiohttp.ClientResponse:
-        """Put JSON"""
-        return await self.session.put_json(self._resource_uri(resource), json=json)
-
-    async def get_text(self, resource: str) -> str:
-        """Fetch remote resource text response or raise"""
-        return await self.session.get_text(self._resource_uri(resource))
-
-    async def post(self, resource: str, params: Optional[dict[str, str]] = None) \
-            -> aiohttp.ClientResponse:
-        """Post to remote resource or raise"""
-        return await self.session.post(self._resource_uri(resource), params)
-
-    def _resource_uri(self, resource: str) -> str:
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
-        #       host parameter is ignored
-        return f"http+unix://{self.sock_name}{resource}"
+        #       host parameter is ignored but set to socket name as convention
+        self.uri_scheme: str = "http+unix"
+        self.default_host: str = f"{os.path.basename(sock_path)}"
+        self.connector = UnixConnector(path=sock_path)
 
 
-class TCPRESTClient:
+class TCPRESTClient(RESTClient):
     """An async helper for REST API operations"""
 
     def __init__(self, port: int):
-        self.port: int = port
-        self.session = RESTSession()
-
-    async def close(self) -> None:
-        """End session"""
-        await self.session.close()
-
-    async def get(self, resource: str, host: str) -> aiohttp.ClientResponse:
-        return await self.session.get(self._resource_uri(resource, host))
-
-    async def put_json(self, resource: str, host: str, json: dict) -> aiohttp.ClientResponse:
-        """Put JSON"""
-        return await self.session.put_json(self._resource_uri(resource, host), json=json)
-
-    async def get_text(self, resource: str, host: str) -> str:
-        """Fetch remote resource text response or raise"""
-        return await self.session.get_text(self._resource_uri(resource, host))
-
-    async def post(self, resource: str, host: str, params: Optional[dict[str, str]] = None) \
-            -> aiohttp.ClientResponse:
-        """Post to remote resource or raise"""
-        return await self.session.post(self._resource_uri(resource, host), params)
-
-    async def delete(self, resource: str, host: str) -> aiohttp.ClientResponse:
-        return await self.session.delete(self._resource_uri(resource, host))
-
-    def _resource_uri(self, resource: str, host: str) -> str:
-        return f"http://{host}:{self.port}{resource}"
+        self.uri_scheme = "http"
+        self.connector = None
+        self.default_port: int = port
 
 
 class ScyllaRESTAPIClient():
@@ -139,13 +130,11 @@ class ScyllaRESTAPIClient():
     def __init__(self, port: int = 10000):
         self.client = TCPRESTClient(port)
 
-    async def close(self):
-        """Close session"""
-        await self.client.close()
-
     async def get_host_id(self, server_id: str) -> str:
         """Get server id (UUID)"""
         host_uuid = await self.client.get_text("/storage_service/hostid/local", host=server_id)
+        assert isinstance(host_uuid, str) and len(host_uuid) > 10, \
+                f"get_host_id: invalid {host_uuid}"
         host_uuid = host_uuid.lstrip('"').rstrip('"')
         return host_uuid
 
@@ -163,22 +152,24 @@ class ScyllaRESTAPIClient():
         assert(type(result) == list)
         return result
 
-    async def remove_node(self, initiator_ip: str, server_uuid: str, ignore_dead: list[str]) -> None:
+    async def remove_node(self, initiator_ip: str, server_uuid: str, ignore_dead: list[str]) \
+            -> None:
         """Initiate remove node of server_uuid in initiator initiator_ip"""
-        resp = await self.client.post("/storage_service/remove_node",
-                               params={"host_id": server_uuid, "ignore_nodes": ",".join(ignore_dead)},
-                               host=initiator_ip)
-        logger.info("remove_node status %s for %s", resp.status, server_uuid)
+        logger.info("remove_node for %s", server_uuid)
+        await self.client.post("/storage_service/remove_node",
+                               params = {"host_id": server_uuid,
+                                         "ignore_nodes": ",".join(ignore_dead)},
+                               host = initiator_ip)
 
     async def decommission_node(self, node_ip: str) -> None:
         """Initiate remove node of server_uuid in initiator initiator_ip"""
-        resp = await self.client.post("/storage_service/decommission", host=node_ip)
-        logger.debug("decommission_node status %s for %s", resp.status, node_ip)
+        logger.debug("decommission_node %s", node_ip)
+        await self.client.post("/storage_service/decommission", host=node_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
         """Get the current generation number of `target_ip` observed by `node_ip`."""
-        resp = await self.client.get(f"/gossiper/generation_number/{target_ip}", host=node_ip)
-        data = await resp.json()
+        data = await self.client.get_json(f"/gossiper/generation_number/{target_ip}",
+                                          host = node_ip)
         assert(type(data) == int)
         return data
 
@@ -194,8 +185,7 @@ class ScyllaRESTAPIClient():
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
     async def get_enabled_injections(self, node_ip: str) -> list[str]:
-        resp = await self.client.get("/v2/error_injection/injection", host=node_ip)
-        data = await resp.json()
+        data = await self.client.get_json("/v2/error_injection/injection", host=node_ip)
         assert(type(data) == list)
         assert(type(e) == str for e in data)
         return data

@@ -493,7 +493,7 @@ class ScyllaCluster:
             for _ in range(self.replicas):
                 await self.add_server()
             self.keyspace_count = self._get_keyspace_count()
-        except (RuntimeError, NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
+        except Exception as exc:
             # If start fails, swallow the error to throw later,
             # at test time.
             self.start_exception = exc
@@ -745,7 +745,6 @@ class ScyllaClusterManager:
         """Stop, cycle last cluster if not dirty and present"""
         logging.info("ScyllaManager stopping for test %s", self.test_uname)
         await self.site.stop()
-        await self.api.close()
         if not self.cluster.is_dirty:
             logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
