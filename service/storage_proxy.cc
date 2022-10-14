@@ -806,8 +806,6 @@ private:
     }
 };
 
-thread_local uint64_t paxos_response_handler::next_id = 0;
-
 distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
@@ -1028,6 +1026,99 @@ public:
                 *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info);
     }
 };
+
+// A Paxos (AKA Compare And Swap, CAS) protocol involves multiple roundtrips between the coordinator
+// and endpoint participants. Some endpoints may be unavailable or slow, and this does not stop the
+// protocol progress. paxos_response_handler stores the shared state of the storage proxy associated
+// with all the futures associated with a Paxos protocol step (prepare, accept, learn), including
+// those outstanding by the time the step ends.
+//
+class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
+private:
+    shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
+    // The schema for the table the operation works upon.
+    schema_ptr _schema;
+    // Read command used by this CAS request.
+    lw_shared_ptr<query::read_command> _cmd;
+    // SERIAL or LOCAL SERIAL - influences what endpoints become Paxos protocol participants,
+    // as well as Paxos quorum size. Is either set explicitly in the query or derived from
+    // the value set by SERIAL CONSISTENCY [SERIAL|LOCAL SERIAL] control statement.
+    db::consistency_level _cl_for_paxos;
+    // QUORUM, LOCAL_QUORUM, etc - defines how many replicas to wait for in LEARN step.
+    // Is either set explicitly or derived from the consistency level set in keyspace options.
+    db::consistency_level _cl_for_learn;
+    // Live endpoints, as per get_paxos_participants()
+    inet_address_vector_replica_set _live_endpoints;
+    // How many endpoints need to respond favourably for the protocol to progress to the next step.
+    size_t _required_participants;
+    // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
+    storage_proxy::clock_type::time_point _timeout;
+    // A deadline when the CAS operation gives up due to contention, derived from cas_contention_timeout_in_ms
+    storage_proxy::clock_type::time_point _cas_timeout;
+    // The key this request is working on.
+    dht::decorated_key _key;
+    // service permit from admission control
+    service_permit _permit;
+    // how many replicas replied to learn
+    uint64_t _learned = 0;
+
+    // Unique request id generator.
+    static thread_local uint64_t next_id;
+
+    // Unique request id for logging purposes.
+    const uint64_t _id = next_id++;
+
+    // max pruning operations to run in parralel
+    static constexpr uint16_t pruning_limit = 1000;
+
+public:
+    tracing::trace_state_ptr tr_state;
+
+public:
+    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
+        service_permit permit_arg,
+        dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
+        db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
+        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg);
+
+    ~paxos_response_handler();
+
+    // Result of PREPARE step, i.e. begin_and_repair_paxos().
+    struct ballot_and_data {
+        // Accepted ballot.
+        utils::UUID ballot;
+        // Current value of the requested key or none.
+        foreign_ptr<lw_shared_ptr<query::result>> data;
+    };
+
+    // Steps of the Paxos protocol
+    future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
+    future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
+    future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted = true);
+    future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false);
+    void prune(utils::UUID ballot);
+    uint64_t id() const {
+        return _id;
+    }
+    size_t block_for() const {
+        return _required_participants;
+    }
+    schema_ptr schema() const {
+        return _schema;
+    }
+    const partition_key& key() const {
+        return _key.key();
+    }
+    void set_cl_for_learn(db::consistency_level cl) {
+        _cl_for_learn = cl;
+    }
+    // this is called with an id of a replica that replied to learn request
+    // adn returns true when quorum of such requests are accumulated
+    bool learned(gms::inet_address ep);
+};
+
+thread_local uint64_t paxos_response_handler::next_id = 0;
 
 class cas_mutation : public mutation_holder {
     lw_shared_ptr<paxos::proposal> _proposal;
@@ -1532,6 +1623,38 @@ static future<> sleep_approx_50ms() {
     static thread_local std::default_random_engine re{std::random_device{}()};
     static thread_local std::uniform_int_distribution<> dist(0, 100);
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
+}
+
+paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
+        service_permit permit_arg,
+        dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
+        db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
+        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
+        : _proxy(proxy_arg)
+        , _schema(std::move(schema_arg))
+        , _cmd(cmd_arg)
+        , _cl_for_paxos(cl_for_paxos_arg)
+        , _cl_for_learn(cl_for_learn_arg)
+        , _timeout(timeout_arg)
+        , _cas_timeout(cas_timeout_arg)
+        , _key(std::move(key_arg))
+        , _permit(std::move(permit_arg))
+        , tr_state(tr_state_arg) {
+    auto ks_name = _schema->ks_name();
+    replica::keyspace& ks = _proxy->_db.local().find_keyspace(ks_name);
+    _effective_replication_map_ptr = ks.get_effective_replication_map();
+    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, *_effective_replication_map_ptr, _key.token(), _cl_for_paxos);
+    _live_endpoints = std::move(pp.endpoints);
+    _required_participants = pp.required_participants;
+    tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
+            _key.token(), _live_endpoints, _required_participants);
+    _proxy->get_stats().cas_foreground++;
+    _proxy->get_stats().cas_total_running++;
+    _proxy->get_stats().cas_total_operations++;
+}
+
+paxos_response_handler::~paxos_response_handler() {
+    _proxy->get_stats().cas_total_running--;
 }
 
 /**
@@ -2969,13 +3092,11 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
     }));
 }
 
-gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, db::consistency_level cl) {
-    auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-    auto erm = ks.get_effective_replication_map();
-    auto live_endpoints = get_live_endpoints(*erm, m.token());
+gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl) {
+    auto live_endpoints = get_live_endpoints(erm, m.token());
 
     if (live_endpoints.empty()) {
-        throw exceptions::unavailable_exception(cl, block_for(*erm, cl), 0);
+        throw exceptions::unavailable_exception(cl, block_for(erm, cl), 0);
     }
 
     const auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -2986,11 +3107,11 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
     }
 
     const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
-        | boost::adaptors::filtered(erm->get_topology().get_local_dc_filter()));
+        | boost::adaptors::filtered(erm.get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
-        erm->get_topology().sort_by_proximity(my_address, live_endpoints);
+        erm.get_topology().sort_by_proximity(my_address, live_endpoints);
         return live_endpoints[0];
     } else {
         static thread_local std::default_random_engine re{std::random_device{}()};
@@ -3011,8 +3132,16 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Choose a leader for each mutation
     std::unordered_map<gms::inet_address, std::vector<frozen_mutation_and_schema>> leaders;
+
+    // The interface doesn't preclude multiple keyspaces (and thus effective_replication_maps),
+    // so we need a container for them. std::set<> will result in the fewest allocations if there is just one.
+    std::set<locator::effective_replication_map_ptr> erms;
+
     for (auto& m : mutations) {
-        auto leader = find_leader_for_counter_update(m, cl);
+        auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+        auto erm = ks.get_effective_replication_map();
+        erms.insert(erm);
+        auto leader = find_leader_for_counter_update(m, *erm, cl);
         leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
         // FIXME: check if CL can be reached
     }
@@ -3049,6 +3178,11 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         auto s = first_schema;
         auto exp = std::current_exception();
         {
+            // Would be better to use the effective replication map we started with, but:
+            // - this is wrong anyway since we picked a random schema
+            // - we only use this to calculate some infomation for the error message
+            // - the topology coordinator should prevent incompatible changes while requests
+            //   (like this one) are in flight
             auto& ks = _db.local().find_keyspace(s->ks_name());
             auto erm = ks.get_effective_replication_map();
             try {
@@ -3066,14 +3200,12 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 }
 
 storage_proxy::paxos_participants
-storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
-    replica::keyspace& ks = _db.local().find_keyspace(ks_name);
-    auto erm = ks.get_effective_replication_map();
-    inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
+storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token &token, db::consistency_level cl_for_paxos) {
+    inet_address_vector_replica_set natural_endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
+    inet_address_vector_topology_change pending_endpoints = erm.get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+        auto local_dc_filter = erm.get_topology().get_local_dc_filter();
         auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
         itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
@@ -4934,6 +5066,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
+        locator::effective_replication_map_ptr erm,
         schema_ptr schema,
         dht::partition_range pr,
         db::consistency_level cl,
@@ -4943,8 +5076,6 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         bool& is_read_non_local,
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
-    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    auto erm = ks.get_effective_replication_map();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
@@ -5102,6 +5233,9 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
 
+    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
+
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
 
@@ -5109,7 +5243,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // not once per partition.
     bool is_read_non_local = false;
 
-    const auto tmptr = get_token_metadata_ptr();
+    const auto& tm = erm->get_token_metadata();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
             co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
@@ -5118,9 +5252,9 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
         const auto replicas = it == query_options.preferred_replicas.end()
-            ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
+            ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
 
-        auto r_read_executor = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
+        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
                                                  query_options.permit);
         if (!r_read_executor) {
@@ -5147,9 +5281,9 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     try {
         auto timeout = query_options.timeout(*this);
-        auto handle_completion = [&used_replicas, tmptr] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
+        auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
-                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
+                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(tm, rex->used_targets()));
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
@@ -5163,7 +5297,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
                 handle_completion(exec[0]);
             }
         } else {
-            auto mapper = [timeout, &handle_completion] (
+            auto mapper = [&] (
                     std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<::result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto result = co_await executor_and_token_range.first->execute(timeout);
                 // Handle success here. Failure is handled (only once) just outside the try..catch.
@@ -5218,6 +5352,7 @@ bool storage_proxy::is_worth_merging_for_range_query(
 
 future<result<query_partition_key_range_concurrent_result>>
 storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout,
+        locator::effective_replication_map_ptr erm,
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
@@ -5229,22 +5364,20 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         replicas_per_token_range preferred_replicas,
         service_permit permit) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    auto erm = ks.get_effective_replication_map();
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
-    const auto tmptr = get_token_metadata_ptr();
+    const auto& tm = erm->get_token_metadata();
 
     if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 
-    const auto preferred_replicas_for_range = [this, &preferred_replicas, tmptr] (const dht::partition_range& r) {
+    const auto preferred_replicas_for_range = [this, &preferred_replicas, &tm] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
-        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
+        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
@@ -5376,7 +5509,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
     return utils::result_futurize_try([&] {
       return f.then(utils::result_wrap([p,
-            tmptr,
+            erm, // protects &tm
+            &tm,
             exec = std::move(exec),
             results = std::move(results),
             ranges_to_vnodes = std::move(ranges_to_vnodes),
@@ -5402,7 +5536,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // 1) The list of replicas is determined for each vnode
                 // separately and thus this makes lookups more convenient.
                 // 2) On the next page the ranges might not be merged.
-                auto replica_ids = endpoints_to_replica_ids(*tmptr, e->used_targets());
+                auto replica_ids = endpoints_to_replica_ids(tm, e->used_targets());
                 for (auto& r : ranges_per_exec[e.get()]) {
                     used_replicas.emplace(std::move(r), replica_ids);
                 }
@@ -5411,7 +5545,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         } else {
             cmd->set_row_limit(remaining_row_count);
             cmd->partition_limit = remaining_partition_count;
-            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(ranges_to_vnodes),
+            return p->query_partition_key_range_concurrent(timeout, std::move(erm), std::move(results), cmd, cl, std::move(ranges_to_vnodes),
                     concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas), std::move(permit));
         }
       }));
@@ -5428,12 +5562,13 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
 
     // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
     // (which can be expensive in clusters with vnodes)
     auto merge_tokens = !ks.get_replication_strategy().natural_endpoints_depend_on_token();
 
-    query_ranges_to_vnodes_generator ranges_to_vnodes(get_token_metadata_ptr(), schema, std::move(partition_ranges), merge_tokens);
+    query_ranges_to_vnodes_generator ranges_to_vnodes(erm->get_token_metadata_ptr(), schema, std::move(partition_ranges), merge_tokens);
 
     int result_rows_per_range = 0;
     int concurrency_factor = 1;
@@ -5457,6 +5592,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     const auto partition_limit = cmd->partition_limit;
 
     return query_partition_key_range_concurrent(query_options.timeout(*this),
+            std::move(erm),
             std::move(results),
             cmd,
             cl,

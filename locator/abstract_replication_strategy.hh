@@ -172,6 +172,10 @@ public:
     effective_replication_map(effective_replication_map&&) = default;
     ~effective_replication_map();
 
+    const token_metadata& get_token_metadata() const noexcept {
+        return *_tmptr;
+    }
+
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept {
         return _tmptr;
     }
