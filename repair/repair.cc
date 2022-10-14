@@ -383,6 +383,7 @@ repair_uniq_id tracker::next_repair_command() {
 }
 
 future<> tracker::shutdown() {
+    abort_all_repairs();
     _shutdown.store(true, std::memory_order_relaxed);
     return _gate.close();
 }
