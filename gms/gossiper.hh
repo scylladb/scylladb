@@ -226,6 +226,7 @@ private:
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
+    logger::rate_limit _send_warning_rl = logger::rate_limit(std::chrono::seconds(30));
 
     void run();
     // Replicates given endpoint_state to all other shards.

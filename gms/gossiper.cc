@@ -551,11 +551,11 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    return _messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([id, kind = std::move(kind)] (auto ep) {
+    return _messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([this, id, kind = std::move(kind)] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
         // failure_detector thinks that peer node is down.
-        logger.trace("Fail to send GossipDigestSyn to {} {}: {}", kind, id, ep);
+        logger.log(log_level::warn, _send_warning_rl, "Fail to send GossipDigestSyn to {} {}: {}", kind, id, ep);
     });
 }
 
