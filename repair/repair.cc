@@ -445,16 +445,6 @@ void tracker::abort_all_repairs() {
     rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
 }
 
-void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
-    for (auto& x : _repairs) {
-        auto& ri = x.second;
-        if (ri->ops_uuid() && ri->ops_uuid().value() == ops_uuid) {
-            rlogger.info0("Aborted repair jobs for ops_uuid={}", ops_uuid);
-            ri->abort();
-        }
-    }
-}
-
 float tracker::report_progress(streaming::stream_reason reason) {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
@@ -1718,12 +1708,6 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
                 table->trigger_offstrategy_compaction();
             }
         });
-    });
-}
-
-future<> repair_service::abort_repair_node_ops(utils::UUID ops_uuid) {
-    return container().invoke_on_all([ops_uuid] (repair_service& rs) {
-        rs.repair_tracker().abort_repair_node_ops(ops_uuid);
     });
 }
 

@@ -254,7 +254,6 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
-    void abort_repair_node_ops(utils::UUID ops_uuid);
     bool is_aborted(const utils::UUID& uuid);
 };
 
