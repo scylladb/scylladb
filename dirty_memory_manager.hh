@@ -94,14 +94,18 @@ struct reclaim_config {
     reclaim_stop_callback stop_reclaiming = [] () noexcept {};
 };
 
-class allocation_queue {
+// A container for memtables. Called "region_group" for historical
+// reasons. Receives updates about memtable size change via the
+// LSA region_listener interface.
+class region_group : public region_listener {
+    using region_heap = dirty_memory_manager_logalloc::region_heap;
 public:
     struct allocating_function {
         virtual ~allocating_function() = default;
         virtual void allocate() = 0;
         virtual void fail(std::exception_ptr) = 0;
     };
-
+private:
     template <typename Func>
     struct concrete_allocating_function : public allocating_function {
         using futurator = futurize<std::result_of_t<Func()>>;
@@ -137,6 +141,17 @@ public:
         void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
 private:
+    reclaim_config _cfg;
+
+    bool _under_unspooled_pressure = false;
+    bool _under_unspooled_soft_pressure = false;
+
+    region_group* _subgroup = nullptr;
+
+    size_t _real_total_memory = 0;
+
+    bool _under_real_pressure = false;
+
     // It is a more common idiom to just hold the promises in the circular buffer and make them
     // ready. However, in the time between the promise being made ready and the function execution,
     // it could be that our memory usage went up again. To protect against that, we have to recheck
@@ -151,36 +166,15 @@ private:
 
     uint64_t _blocked_requests_counter = 0;
 
-public:
-    explicit allocation_queue(on_request_expiry on_expiry);
+    size_t _unspooled_total_memory = 0;
 
-    void execute_one();
+    region_heap _regions;
 
-    void push_back(std::unique_ptr<allocating_function>, db::timeout_clock::time_point timeout);
+    condition_variable _relief;
+    bool _shutdown_requested = false;
+    future<> _releaser;
 
-    size_t blocked_requests() const noexcept;
-
-    uint64_t blocked_requests_counter() const noexcept;
-
-    size_t size() const noexcept { return _blocked_requests.size(); }
-
-    bool empty() const noexcept { return _blocked_requests.empty(); }
-};
-
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
-class region_group : public region_listener {
-    reclaim_config _cfg;
-
-    bool _under_unspooled_pressure = false;
-    bool _under_unspooled_soft_pressure = false;
-
-    region_group* _subgroup = nullptr;
-
-    size_t _real_total_memory = 0;
-
-    bool _under_real_pressure = false;
-
+private:
     size_t real_throttle_threshold() const noexcept {
         return _cfg.real_hard_limit;
     }
@@ -226,6 +220,7 @@ private:
         _under_unspooled_pressure = false;
     }
 
+    void execute_one();
 public:
     size_t unspooled_throttle_threshold() const noexcept {
         return _cfg.unspooled_hard_limit;
@@ -234,27 +229,10 @@ private:
     size_t unspooled_soft_limit_threshold() const noexcept {
         return _cfg.unspooled_soft_limit;
     }
-    using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    size_t _unspooled_total_memory = 0;
-
-    region_heap _regions;
-
-    using allocating_function = allocation_queue::allocating_function;
-
-    template <typename Func>
-    using concrete_allocating_function = allocation_queue::concrete_allocating_function<Func>;
-
-    using on_request_expiry = allocation_queue::on_request_expiry;
-
-    allocation_queue _blocked_requests;
-
-    condition_variable _relief;
-    future<> _releaser;
-    bool _shutdown_requested = false;
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
+    future<> release_queued_allocations();
     void notify_unspooled_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 private: // from region_listener
@@ -356,7 +334,6 @@ private:
     virtual void del(region* child) override; // from region_listener
 
     friend class test_region_group;
-    friend class memory_hard_limit;
 };
 
 }
@@ -584,12 +561,10 @@ template <typename Func>
 requires (!is_future<std::invoke_result_t<Func>>::value)
 futurize_t<std::result_of_t<Func()>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-    auto rg = this;
     bool blocked = 
-        !(rg->_blocked_requests.empty() && !rg->under_unspooled_pressure());
-    if (!blocked) {
-        blocked = _under_real_pressure;
-    }
+        !_blocked_requests.empty()
+        || under_unspooled_pressure()
+        || _under_real_pressure;
 
     if (!blocked) {
         return futurize_invoke(func);
@@ -598,15 +573,9 @@ region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_poi
     auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
     auto fut = fn->get_future();
     _blocked_requests.push_back(std::move(fn), timeout);
+    ++_blocked_requests_counter;
 
     return fut;
-}
-
-inline
-void
-allocation_queue::push_back(std::unique_ptr<allocation_queue::allocating_function> f, db::timeout_clock::time_point timeout) {
-    _blocked_requests.push_back(std::move(f));
-    ++_blocked_requests_counter;
 }
 
 inline
@@ -617,14 +586,8 @@ region_group::blocked_requests() const noexcept {
 
 inline
 uint64_t
-allocation_queue::blocked_requests_counter() const noexcept {
-    return _blocked_requests_counter;
-}
-
-inline
-uint64_t
 region_group::blocked_requests_counter() const noexcept {
-    return _blocked_requests.blocked_requests_counter();
+    return _blocked_requests_counter;
 }
 
 }

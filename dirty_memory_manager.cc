@@ -5,6 +5,7 @@
 #include "dirty_memory_manager.hh"
 #include <seastar/util/later.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "seastarx.hh"
 
 // Code previously under logalloc namespace
@@ -89,12 +90,11 @@ region_group::moved(region* old_address, region* new_address) {
 
 bool
 region_group::execution_permitted() noexcept {
-    return !(this->under_unspooled_pressure()
-                || (_under_real_pressure));
+    return !under_unspooled_pressure() && !_under_real_pressure;
 }
 
 void
-allocation_queue::execute_one() {
+region_group::execute_one() {
     auto req = std::move(_blocked_requests.front());
     _blocked_requests.pop_front();
     req->allocate();
@@ -102,27 +102,25 @@ allocation_queue::execute_one() {
 
 future<>
 region_group::start_releaser(scheduling_group deferred_work_sg) {
-    return with_scheduling_group(deferred_work_sg, [this] {
-        return yield().then([this] {
-            return repeat([this] () noexcept {
-                if (_shutdown_requested) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
+    return with_scheduling_group(deferred_work_sg, std::bind(&region_group::release_queued_allocations, this));
+}
 
-                if (!_blocked_requests.empty() && execution_permitted()) {
-                    _blocked_requests.execute_one();
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
-                } else {
-                    // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
-                    // FIXME: handle allocation failures (not very likely) like allocating_section does
-                    tracker_reclaimer_lock rl(logalloc::shard_tracker());
-                    return _relief.wait().then([] {
-                        return stop_iteration::no;
-                    });
-                }
+future<> region_group::release_queued_allocations() {
+    while (!_shutdown_requested) {
+        if (!_blocked_requests.empty() && execution_permitted()) {
+            execute_one();
+            co_await coroutine::maybe_yield();
+        } else {
+            // We want `rl` to hold for the call to _relief.wait(), but not to wait
+            // for the future to resolve, hence the inner lambda.
+            co_await std::invoke([&] {
+                // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
+                // FIXME: handle allocation failures (not very likely) like allocating_section does
+                tracker_reclaimer_lock rl(logalloc::shard_tracker());
+                return _relief.wait();
             });
-        });
-    });
+        }
+    }
 }
 
 region_group::region_group(sstring name,
@@ -192,12 +190,8 @@ region_group::shutdown() noexcept {
     return std::move(_releaser);
 }
 
-void allocation_queue::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
+void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
-}
-
-allocation_queue::allocation_queue(allocation_queue::on_request_expiry on_expiry)
-        : _blocked_requests(std::move(on_expiry)) {
 }
 
 }
