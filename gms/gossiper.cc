@@ -917,9 +917,7 @@ void gossiper::run() {
                     logger.debug("Talk to live nodes: {}", live_nodes);
                     for (auto& ep: live_nodes) {
                         // Do it in the background.
-                        (void)do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
-                            logger.trace("Failed to do_gossip_to_live_member: {}", ep);
-                        });
+                        (void)do_gossip_to_live_member(message, ep);
                     }
                 } else {
                     logger.debug("No one to talk with");
@@ -927,9 +925,7 @@ void gossiper::run() {
 
                 /* Gossip to some unreachable member with some probability to check if he is back up */
                 // Do it in the background.
-                (void)do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
-                    logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
-                });
+                (void)do_gossip_to_unreachable_member(message);
 
                 do_status_check().get();
             }
