@@ -665,9 +665,19 @@ std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
                 out << ", ";
             }
             if (v->is_referenced()) {
-                out << "(*) ";
+                partition_snapshot* snp = nullptr;
+                if (first) {
+                    snp = e._snapshot;
+                } else {
+                    snp = &partition_snapshot::container_of(&v->back_reference());
+                }
+                out << "(*";
+                if (snp) {
+                    out << " snp=" << snp << ", phase=" << snp->phase();
+                }
+                out << ") ";
             }
-            out << mutation_partition::printer(p._schema, v->partition());
+            out << fmt::ptr(v) << ": " << mutation_partition::printer(p._schema, v->partition());
             v = v->next();
             first = false;
         }

@@ -163,7 +163,7 @@ public:
     bool is_referenced() const { return _backref; }
     // Returns true iff this version is directly referenced from a partition_entry (is its newset version).
     bool is_referenced_from_entry() const;
-    partition_version_ref& back_reference() { return *_backref; }
+    partition_version_ref& back_reference() const { return *_backref; }
 
     size_t size_in_allocator(const schema& s, allocation_strategy& allocator) const;
 };
@@ -412,6 +412,8 @@ public:
                                     bool reversed = false);
     // Returns all range tombstones
     range_tombstone_result range_tombstones();
+
+    phase_type phase() const { return _phase; }
 };
 
 class partition_snapshot_ptr {
