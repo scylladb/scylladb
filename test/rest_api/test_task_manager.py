@@ -2,9 +2,7 @@ import requests
 import time
 import asyncio
 
-from rest_util import new_test_module, new_test_task, set_tmp_task_ttl
-
-long_time = 1000000000
+from rest_util import new_test_module, new_test_task, set_tmp_task_ttl, long_time
 
 def check_field_correctness(field_name, status, expected_status):
     if field_name in expected_status:

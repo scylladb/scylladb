@@ -3,6 +3,8 @@ import pytest
 
 from contextlib import contextmanager
 
+long_time = 1000000000
+
 # A utility function for creating a new temporary snapshot.
 # If no keyspaces are given, a snapshot is taken over all keyspaces and tables.
 # If no tables are given, a snapshot is taken over all tables in the keyspace.
