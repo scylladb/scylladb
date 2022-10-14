@@ -10,8 +10,6 @@ Scylla will not run with earlier kernel versions. Details in `Scylla issue 885 <
 
    Scylla Open Source supports x86_64 for all versions and aarch64 starting from Scylla 4.6 and nightly build. In particular, aarch64 support includes AWS EC2 Graviton.
 
-   For Scylla Open Source **4.5** and later, the recommended OS and Scylla AMI/IMage OS is Ubuntu 20.04.4 LTS.
-
 
 Scylla Open Source
 -------------------
@@ -61,8 +59,6 @@ Scylla Enterprise
 -----------------
 
 .. note:: Enterprise versions **prior to** 2021.1, the recommended OS and Scylla AMI/IMage OS is CentOS 7.
-
-   For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/IMage OS is Ubuntu 20.04.4 LTS.
 
    For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
 
