@@ -539,7 +539,7 @@ future<> gossiper::uninit_messaging_service_handler() {
     ).discard_result();
 }
 
-future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
+future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset, sstring kind) {
     utils::chunked_vector<inet_address> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
     if (size < 1) {
@@ -551,11 +551,11 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    return _messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
+    return _messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([id, kind = std::move(kind)] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
         // failure_detector thinks that peer node is down.
-        logger.trace("Fail to send GossipDigestSyn to {}: {}", id, ep);
+        logger.trace("Fail to send GossipDigestSyn to {} {}: {}", kind, id, ep);
     });
 }
 
@@ -1265,7 +1265,7 @@ future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
 }
 
 future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet_address ep) {
-    return send_gossip(message, {ep});
+    return send_gossip(message, {ep}, "live");
 }
 
 future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
@@ -1286,7 +1286,7 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
             }
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
-            return send_gossip(message, addrs);
+            return send_gossip(message, addrs, "unreachable");
         }
     }
     return make_ready_future<>();

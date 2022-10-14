@@ -369,7 +369,7 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    future<> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    future<> send_gossip(gossip_digest_syn message, std::set<inet_address> epset, sstring kind);
 
     /* Sends a Gossip message to a live member */
     future<> do_gossip_to_live_member(gossip_digest_syn message, inet_address ep);
