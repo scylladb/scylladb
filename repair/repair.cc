@@ -19,6 +19,7 @@
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "locator/network_topology_strategy.hh"
 #include "service/migration_manager.hh"
@@ -45,6 +46,8 @@
 
 #include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
+
+using namespace std::chrono_literals;
 
 logging::logger rlogger("repair");
 
@@ -988,6 +991,11 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
                 rs.get_metrics().decommission_finished_percentage(),
                 rs.get_metrics().removenode_finished_percentage(),
                 rs.get_metrics().repair_finished_percentage());
+
+            if (2 * (_ranges_complete + 1) > ranges_size()) {
+                co_await utils::get_local_injector().inject_with_handler("repair_shard_repair_task_impl_do_repair_ranges",
+                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+            }
         });
 
         if (_reason != streaming::stream_reason::repair) {
