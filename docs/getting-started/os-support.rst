@@ -7,17 +7,21 @@ Scylla requires a fix to the XFS append introduced in kernel 3.15 (back-ported t
 Scylla will not run with earlier kernel versions. Details in `Scylla issue 885 <https://github.com/scylladb/scylla/issues/885>`_.
 
 .. note::
+   
+   **Supported Architecture**
 
-   Scylla Open Source supports x86_64 for all versions and aarch64 starting from Scylla 4.6 and nightly build. In particular, aarch64 support includes AWS EC2 Graviton.
+   Scylla Open Source supports x86_64 for all versions and AArch64 starting from Scylla 4.6 and nightly build. In particular, aarch64 support includes AWS EC2 Graviton.
 
 
 Scylla Open Source
 -------------------
 
-.. note:: For Enterprise versions **prior to** 4.6, the recommended OS and Scylla AMI/Image OS is CentOS 7.
+.. note:: 
 
-   For Scylla Open Source versions **4.6 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
+    Recommended OS and ScyllaDB AMI/Image OS for ScyllaDB Open Source:
 
+       - Ubuntu 20.04 for versions 4.6 and later.
+       - CentOS 7 for versions earlier than 4.6.
 
 
 +--------------------------+----------------------------------+-----------------------------+-------------+
@@ -55,10 +59,12 @@ All releases are available as a Docker container, EC2 AMI, and a GCP image (GCP 
 Scylla Enterprise
 -----------------
 
-.. note:: Enterprise versions **prior to** 2021.1, the recommended OS and Scylla AMI/IMage OS is CentOS 7.
+.. note:: 
+   Recommended OS and ScyllaDB AMI/Image OS for ScyllaDB Enterprise:
 
-   For Enterprise versions **2021.1 and later**, the recommended OS and Scylla AMI/Image OS is Ubuntu 20.04.
-
+    - Ubuntu 20.04 for versions 2021.1 and later.
+    - CentOS 7 for versions earlier than 2021.1.
+    
 +--------------------------+-----------------------------------+---------------------------+--------+-------+
 | Platform                 |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
 |                          |                                   |                           | RHEL   | RHEL  |
