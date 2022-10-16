@@ -50,7 +50,6 @@
 #include <sys/resource.h>
 #include <sys/prctl.h>
 #include "tracing/tracing.hh"
-#include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include "db/sstables-format-selector.hh"
@@ -744,9 +743,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // });
 
             supervisor::notify("creating tracing");
-            tracing::backend_registry tracing_backend_registry;
-            tracing::register_tracing_keyspace_backend(tracing_backend_registry);
-            tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
+            tracing::tracing::create_tracing("trace_keyspace_helper").get();
             auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
                 tracing::tracing::tracing_instance().stop().get();
             });

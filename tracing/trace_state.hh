@@ -276,6 +276,7 @@ private:
     }
 
     template <typename Func>
+    requires std::is_invocable_r_v<sstring, Func>
     void begin(const seastar::lazy_eval<Func>& lf, gms::inet_address client) {
         begin(lf(), client);
     }

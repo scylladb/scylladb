@@ -32,7 +32,6 @@ extern logging::logger tracing_logger;
 
 class trace_state_ptr;
 class tracing;
-class backend_registry;
 
 enum class trace_type : uint8_t {
     NONE,
@@ -377,7 +376,6 @@ private:
     bool _ignore_trace_events = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
-    const backend_registry& _backend_registry;
     sstring _tracing_backend_helper_class_name;
     seastar::metrics::metric_groups _metrics;
     double _trace_probability = 0.0; // keep this one for querying purposes
@@ -414,10 +412,10 @@ public:
         return !_down;
     }
 
-    static future<> create_tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
+    static future<> create_tracing(sstring tracing_backend_helper_class_name);
     static future<> start_tracing(sharded<cql3::query_processor>& qp);
     static future<> stop_tracing();
-    tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
+    tracing(sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
     future<> start(cql3::query_processor& qp);
@@ -637,25 +635,7 @@ private:
      *
      * @return TRUE if conditions are allowing creating a new tracing session
      */
-    bool may_create_new_session(const std::optional<utils::UUID>& session_id = std::nullopt) {
-        // Don't create a session if its records are likely to be dropped
-        if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
-            if (session_id) {
-                tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", *session_id);
-            } else {
-                tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
-            }
-
-            if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
-                tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
-                            stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    bool may_create_new_session(const std::optional<utils::UUID>& session_id = std::nullopt);
 };
 
 void one_session_records::set_pending_for_write() {

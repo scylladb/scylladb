@@ -10,7 +10,7 @@
 #include <seastar/core/metrics.hh>
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
-#include "tracing/tracing_backend_registry.hh"
+#include "utils/class_registrator.hh"
 
 namespace tracing {
 
@@ -25,10 +25,9 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_class_name)
+tracing::tracing(sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
-        , _backend_registry(br)
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
@@ -67,8 +66,8 @@ tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_clas
     });
 }
 
-future<> tracing::create_tracing(const backend_registry& br, sstring tracing_backend_class_name) {
-    return tracing_instance().start(std::ref(br), std::move(tracing_backend_class_name));
+future<> tracing::create_tracing(sstring tracing_backend_class_name) {
+    return tracing_instance().start(std::move(tracing_backend_class_name));
 }
 
 future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {
@@ -82,6 +81,26 @@ future<> tracing::stop_tracing() {
         // It might have been shut down while draining
         return local_tracing._down ? make_ready_future<>() : local_tracing.shutdown();
     });
+}
+
+bool tracing::may_create_new_session(const std::optional<utils::UUID>& session_id) {
+    // Don't create a session if its records are likely to be dropped
+    if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
+        if (session_id) {
+            tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", *session_id);
+        } else {
+            tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
+        }
+
+        if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
+            tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
+                        stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) noexcept {
@@ -127,8 +146,8 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
 
 future<> tracing::start(cql3::query_processor& qp) {
     try {
-        _tracing_backend_helper_ptr = _backend_registry.create_backend(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_tracing_backend& e) {
+        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
+    } catch (no_such_class& e) {
         tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
         throw;
     } catch (...) {
