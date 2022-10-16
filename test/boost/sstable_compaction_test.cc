@@ -5017,3 +5017,44 @@ SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
     testlog.info("stopping compaction manager");
     co_await cm.stop();
 }
+
+SEASTAR_TEST_CASE(move_sstables_from_staging_test) {
+    return test_env::do_with_async([](test_env &env) {
+        auto builder = schema_builder("tests", "table_move_sstables_from_staging_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        // Such that no compaction is triggered when adding sstables to the table.
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::null);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto staging_path = tmp.path() / fs::path(sstables::staging_dir);
+        testlog.info("staging_path={}", staging_path);
+        touch_directory(staging_path.native()).get();
+
+        table_for_tests cf(env.manager(), s, tmp.path().native());
+        auto close_cf = deferred_stop(cf);
+
+        auto sst_gen = [&env, s, &tmp, &cf, &staging_path] (uint64_t gen, bool staging) mutable {
+            sstring dir = (staging) ? staging_path.native() : tmp.path().native();
+            column_family_test::update_sstables_known_generation(*cf, gen);
+            return env.make_sstable(s, dir, gen, sstables::sstable::version_types::md, big);
+        };
+
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto make_mutation = [&] () {
+            auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+            mutation m(s, pkey);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1);
+            return m;
+        };
+
+        auto staging_sst = make_sstable_containing(std::bind(sst_gen, 1, true), {make_mutation()});
+        auto non_staging_sst = make_sstable_containing(std::bind(sst_gen, 1, false), {make_mutation()});
+
+        cf->add_sstable_and_update_cache(staging_sst).get();
+        cf->add_sstable_and_update_cache(non_staging_sst).get();
+
+        cf->move_sstables_from_staging({staging_sst}).get();
+    });
+}
