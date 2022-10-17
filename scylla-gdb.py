@@ -2667,7 +2667,7 @@ class scylla_lsa(gdb.Command):
         region = regions['_M_impl']['_M_start']
         gdb.write('LSA regions:\n')
         while region != regions['_M_impl']['_M_finish']:
-            gdb.write('    Region #{r_id} (logalloc::region_impl*) 0x{r_addr}\n      - reclaimable: {r_en:>14}\n'
+            gdb.write('    Region #{r_id} (logalloc::region_impl*) {r_addr}\n      - reclaimable: {r_en:>14}\n'
                       '      - evictable: {r_ev:16}\n      - non-LSA memory: {r_non_lsa:>11}\n'
                       '      - closed LSA memory: {r_lsa:>8}\n      - unused memory: {r_unused:>12}\n'
                       .format(r_addr=str(region.dereference()), r_id=int(region['_id']), r_en=bool(region['_reclaiming_enabled']),
