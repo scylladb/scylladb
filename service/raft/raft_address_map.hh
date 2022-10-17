@@ -14,11 +14,14 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 
 #include <boost/intrusive/list.hpp>
 
 #include <chrono>
+#include <experimental/source_location>
 
 namespace bi = boost::intrusive;
 
@@ -141,6 +144,8 @@ class raft_address_map : public peering_sharded_service<raft_address_map<Clock>>
     seastar::timer<Clock> _timer;
     clock_duration _expiry_period;
 
+    std::optional<future<>> _replication_fiber{make_ready_future<>()};
+
     void drop_expired_entries() {
         auto list_it = _expiring_list.rbegin();
         while (list_it != _expiring_list.rend() && list_it->expired(_expiry_period)) {
@@ -167,12 +172,76 @@ class raft_address_map : public peering_sharded_service<raft_address_map<Clock>>
         }
     }
 
+    template <std::invocable<raft_address_map&> F>
+    void replicate(F f, std::experimental::source_location l = std::experimental::source_location::current()) {
+        if (!_replication_fiber) {
+            return;
+        }
+
+        _replication_fiber = _replication_fiber->then([this, f = std::move(f), l] () -> future<> {
+            try {
+                co_await this->container().invoke_on_others([f] (raft_address_map& self) {
+                    f(self);
+                });
+            } catch (...) {
+                rslog.error("raft_address_map::replicate (called from {}) failed: {}",
+                            l.function_name(), std::current_exception());
+            }
+        });
+    }
+
+    void replicate_set_nonexpiring_entry(const raft::server_id& id, const gms::inet_address& addr) {
+        replicate([id, addr] (raft_address_map& self) {
+            self.handle_set_nonexpiring_entry(id, addr);
+        });
+    }
+
+    void replicate_set_expiring_flag(const raft::server_id& id) {
+        replicate([id] (raft_address_map& self) {
+            self.handle_set_expiring_flag(id);
+        });
+    }
+
+    void handle_set_nonexpiring_entry(const raft::server_id& id, const gms::inet_address& addr) {
+        auto [it, _] = _map.try_emplace(id, addr);
+        auto& entry = it->second;
+
+        if (entry._addr != addr) {
+            entry._addr = addr;
+        }
+
+        if (entry.expiring()) {
+            entry._lru_entry = nullptr;
+        }
+    }
+
+    void handle_set_expiring_flag(const raft::server_id& id) {
+        auto it = _map.find(id);
+        if (it == _map.end()) {
+            return;
+        }
+        auto& entry = it->second;
+        if (entry.expiring()) {
+            return;
+        }
+        add_expiring_entry(it->first, entry);
+    }
+
 public:
     raft_address_map()
         : _map(initial_buckets_count),
         _timer([this] { drop_expired_entries(); }),
         _expiry_period(default_expiry_period)
     {}
+
+    future<> stop() {
+        assert(_replication_fiber);
+        co_await *std::exchange(_replication_fiber, std::nullopt);
+    }
+
+    ~raft_address_map() {
+        assert(!_replication_fiber);
+    }
 
     // Find a mapping with a given id.
     //
@@ -208,12 +277,22 @@ public:
     // This means that we cannot remap the entry's actual inet_address but
     // nonetheless the function can be used to promote the entry from
     // expiring to permanent or vice versa.
+    //
+    // Non-expiring entries can only be set on shard 0 and are replicated to other shards.
+    // Expiring entries are shard-local.
     void set(raft::server_id id, gms::inet_address addr, bool expiring) {
-        auto [it, emplaced] = _map.try_emplace(std::move(id), std::move(addr));
+        if (!expiring && this_shard_id() != 0) {
+            on_internal_error(rslog, format(
+                "raft_address_map::set({}, {}, {}) called on shard {} != 0", id, addr, false, this_shard_id()));
+        }
+
+        auto [it, emplaced] = _map.try_emplace(id, addr);
         auto& entry = it->second;
         if (emplaced) {
             if (expiring) {
                 add_expiring_entry(it->first, entry);
+            } else {
+                replicate_set_nonexpiring_entry(it->first, addr);
             }
             return;
         }
@@ -227,6 +306,7 @@ public:
         if (entry.expiring()) {
             if (!expiring) {
                 entry._lru_entry = nullptr;
+                replicate_set_nonexpiring_entry(it->first, addr);
             } else {
                 // Update timestamp of expiring entry
                 entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
@@ -235,8 +315,15 @@ public:
         // No action needed when a regular entry is updated
     }
 
-    // Convert a non-expiring entry to an expiring one
+    // Convert a non-expiring entry to an expiring one.
+    // Can be called only on shard 0.
+    // The expiring state is replicated to other shards.
     std::optional<gms::inet_address> set_expiring_flag(raft::server_id id) {
+        if (this_shard_id() != 0) {
+            on_internal_error(rslog, format(
+                "raft_address_map::set_expiring_flag({}) called on shard {} != 0", id, this_shard_id()));
+        }
+
         auto it = _map.find(id);
         if (it == _map.end()) {
             return std::nullopt;
@@ -247,11 +334,13 @@ public:
             entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
         } else {
             add_expiring_entry(it->first, entry);
+            replicate_set_expiring_flag(it->first);
         }
         return entry._addr;
     }
 
-    // A shortcut to setting a new permanent address
+    // A shortcut to setting a new permanent address.
+    // Can be called only on shard 0.
     void set(raft::server_address addr) {
         return set(addr.id,
             ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{}),
