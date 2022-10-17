@@ -146,9 +146,11 @@ class raft_address_map : public peering_sharded_service<raft_address_map<Clock>>
         while (list_it != _expiring_list.rend() && list_it->expired(_expiry_period)) {
             // Remove from both LRU list and base storage
             auto map_it = _map.find(list_it->entry_id());
-            if (map_it != _map.end()) {
-                _map.erase(map_it);
+            if (map_it == _map.end()) {
+                on_internal_error(rslog, format(
+                    "raft_address_map::drop_expired_entries: missing entry with id {}", list_it->entry_id()));
             }
+            _map.erase(map_it);
             // Point at the oldest entry again
             list_it = _expiring_list.rbegin();
         }
