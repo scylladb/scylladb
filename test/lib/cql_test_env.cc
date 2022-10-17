@@ -31,6 +31,7 @@
 #include "service/migration_manager.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
+#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
@@ -623,6 +624,12 @@ public:
             sharded<streaming::stream_manager> stream_manager;
             sharded<service::forward_service> forward_service;
             sharded<direct_failure_detector::failure_detector> fd;
+            sharded<service::raft_address_map<>> raft_address_map;
+
+            raft_address_map.start().get();
+            auto stop_address_map = defer([&raft_address_map] {
+                raft_address_map.stop().get();
+            });
 
             direct_fd_clock fd_clock;
             fd.start(
@@ -635,7 +642,7 @@ public:
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
+                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 

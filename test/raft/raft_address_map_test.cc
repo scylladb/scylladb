@@ -17,6 +17,7 @@
 #include "utils/UUID.hh"
 
 #include <seastar/core/manual_clock.hh>
+#include <seastar/util/defer.hh>
 
 using namespace raft;
 using namespace service;
@@ -36,7 +37,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
 
     {
         // Set regular entry + set_expiring_flag works as expected
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, false);
         {
             const auto found = m.find(id1);
@@ -51,7 +56,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Set expiring entry + set_expiring_flag works as expected
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, true);
         {
             const auto found = m.find(id1);
@@ -66,7 +75,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Set expiring + wait for expiration works as expected
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, true);
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
@@ -76,7 +89,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that regular entries don't expire
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, false);
         manual_clock::advance(expiration_time);
         BOOST_CHECK(!!m.find(id1) && *m.find(id1) == addr1);
@@ -84,7 +101,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Set two expirable entries with different timestamps, check for
         // automatic rearming of expiration timer after the first one expires.
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, true);
         manual_clock::advance(30min);
         m.set(id2, addr2, true);
@@ -100,13 +121,21 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Throw on re-mapping address for the same id
         scoped_no_abort_on_internal_error abort_guard;
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, false);
         BOOST_CHECK_THROW(m.set(id1, addr2, false), std::runtime_error);
     }
     {
         // Check that transition from regular to expiring entry is not possible
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, false);
         m.set(id1, addr1, true);
         manual_clock::advance(expiration_time);
@@ -114,7 +143,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that transition from expiring to regular entry works
-        raft_address_map<manual_clock> m;
+        sharded<raft_address_map<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
         m.set(id1, addr1, true);
         m.set(id1, addr1, false);
         manual_clock::advance(expiration_time);

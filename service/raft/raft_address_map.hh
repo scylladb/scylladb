@@ -13,6 +13,7 @@
 
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
 #include <boost/intrusive/list.hpp>
@@ -32,7 +33,7 @@ static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::mi
 // This class provides an abstraction of expirable server address mappings
 // used by the raft rpc module to store connection info for servers in a raft group.
 template <typename Clock = seastar::lowres_clock>
-class raft_address_map {
+class raft_address_map : public peering_sharded_service<raft_address_map<Clock>> {
 
     // Expiring mappings stay in the cache for 1 hour (if not accessed during this time period)
     static constexpr std::chrono::hours default_expiry_period{1};

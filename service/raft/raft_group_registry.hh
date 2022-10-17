@@ -57,7 +57,7 @@ private:
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
-    raft_address_map<> _srv_address_mappings;
+    raft_address_map<>& _srv_address_mappings;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
@@ -78,7 +78,8 @@ private:
 
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
+    raft_group_registry(bool is_enabled, raft_address_map<>&,
+            netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start
