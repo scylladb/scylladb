@@ -92,7 +92,7 @@ public:
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
     void insert(rows_entry&) noexcept;
-    void on_remove() noexcept;
+    void remove(rows_entry&) noexcept;
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;
@@ -123,9 +123,12 @@ public:
 };
 
 inline
-void cache_tracker::on_remove() noexcept {
+void cache_tracker::remove(rows_entry& entry) noexcept {
     --_stats.rows;
     ++_stats.row_removals;
+    if (entry.is_linked()) {
+        _lru.remove(entry);
+    }
 }
 
 inline

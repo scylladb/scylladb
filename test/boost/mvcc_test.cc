@@ -320,6 +320,7 @@ public:
     mvcc_partition(mvcc_partition&&) = default;
 
     ~mvcc_partition() {
+        evict();
         with_allocator(region().allocator(), [&] {
             _e = {};
         });
@@ -569,8 +570,6 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
             BOOST_REQUIRE(cursor.continuous());
             BOOST_REQUIRE(cursor.key().equal(s, ck1));
 
-            e.evict();
-
             {
                 logalloc::reclaim_lock rl(ms.region());
                 cursor.maybe_refresh();
@@ -769,6 +768,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
                 assert_that(s, actual2)
                     .has_same_continuity(expected)
                     .is_equal_to_compacted(expected);
+                e.evict(tracker.cleaner());
             }
         });
     });
@@ -940,6 +940,7 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
                 BOOST_REQUIRE(eq(cur.position(), table.make_ckey(5)));
                 BOOST_REQUIRE(cur.continuous());
             }
+            e.evict(tracker.cleaner());
         });
     });
 }
@@ -1238,6 +1239,7 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
 
                 BOOST_REQUIRE(!cur.next());
             }
+            e.evict(tracker.cleaner());
         });
     });
 }
@@ -1293,6 +1295,7 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
                     BOOST_REQUIRE(!res.inserted);
                 }
             }
+            e.evict(tracker.cleaner());
         });
     });
 }
@@ -1344,6 +1347,7 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
                 // the entry for ckey 2 in latest version should not be marked as continuous.
                 BOOST_REQUIRE(!cur.continuous());
             }
+            e.evict(tracker.cleaner());
         });
     });
 }
