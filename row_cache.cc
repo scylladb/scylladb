@@ -952,6 +952,11 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
             _prev_snapshot = {};
         });
         utils::coroutine update; // Destroy before cleanup to release snapshots before invalidating.
+        auto destroy_update = defer([&] {
+            with_allocator(_tracker.allocator(), [&] {
+                update = {};
+            });
+        });
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
