@@ -374,3 +374,32 @@ BOOST_AUTO_TEST_CASE(boolean_factors_test) {
         )
     );
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_constant_null) {
+    expression constant_null = constant::make_null();
+    BOOST_REQUIRE_EQUAL(evaluate(constant_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression constant_null_with_type = constant::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(constant_null_with_type, evaluation_inputs{}), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_constant_unset) {
+    expression constant_unset = constant::make_unset_value();
+    BOOST_REQUIRE_EQUAL(evaluate(constant_unset, evaluation_inputs{}), raw_value::make_unset_value());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_constant_empty) {
+    expression constant_empty_bool = constant(raw_value::make_value(bytes()), boolean_type);
+    BOOST_REQUIRE(evaluate(constant_empty_bool, evaluation_inputs{}).is_empty_value());
+
+    expression constant_empty_int = constant(raw_value::make_value(bytes()), int32_type);
+    BOOST_REQUIRE(evaluate(constant_empty_int, evaluation_inputs{}).is_empty_value());
+
+    expression constant_empty_text = constant(raw_value::make_value(bytes()), utf8_type);
+    BOOST_REQUIRE_EQUAL(evaluate(constant_empty_text, evaluation_inputs{}), make_text_raw(""));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_constant_int) {
+    expression const_int = make_int_const(723);
+    BOOST_REQUIRE_EQUAL(evaluate(const_int, evaluation_inputs{}), make_int_raw(723));
+}
