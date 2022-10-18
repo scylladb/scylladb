@@ -220,7 +220,7 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
     return default_format;
 }
 
-class mutation_fragment_json_writer : public sstable_consumer {
+class mutation_fragment_json_writer {
     const schema& _schema;
     json_writer _writer;
     bool _clustering_array_created;
@@ -400,16 +400,14 @@ private:
     }
 public:
     explicit mutation_fragment_json_writer(const schema& s) : _schema(s) {}
-    virtual future<> on_start_of_stream() override {
+    void start_stream() {
         _writer.StartStream();
-        return make_ready_future<>();
     }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+    void start_sstable(const sstables::sstable* const sst) {
         _writer.SstableKey(sst);
         _writer.StartArray();
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(partition_start&& ps) override {
+    void start_partition(const partition_start& ps) {
         const auto& dk = ps.key();
         _clustering_array_created = false;
 
@@ -422,46 +420,38 @@ public:
             _writer.Key("tombstone");
             write(ps.partition_tombstone());
         }
-
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(static_row&& sr) override {
+    void partition_element(const static_row& sr) {
         _writer.Key("static_row");
         write(sr.cells(), column_kind::static_column);
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(clustering_row&& cr) override {
+    void partition_element(const clustering_row& cr) {
         if (!_clustering_array_created) {
             _writer.Key("clustering_elements");
             _writer.StartArray();
             _clustering_array_created = true;
         }
         write(cr);
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+    void partition_element(const range_tombstone_change& rtc) {
         if (!_clustering_array_created) {
             _writer.Key("clustering_elements");
             _writer.StartArray();
             _clustering_array_created = true;
         }
         write(rtc);
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> consume(partition_end&& pe) override {
+    void end_partition() {
         if (_clustering_array_created) {
             _writer.EndArray();
         }
         _writer.EndObject();
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> on_end_of_sstable() override {
+    void end_sstable() {
         _writer.EndArray();
-        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<> on_end_of_stream() override {
+    void end_stream() {
         _writer.EndStream();
-        return make_ready_future<>();
     }
 };
 
@@ -512,31 +502,40 @@ class dumping_consumer : public sstable_consumer {
     public:
         explicit json_dumper(const schema& s) : _writer(s) {}
         virtual future<> on_start_of_stream() override {
-            return _writer.on_start_of_stream();
+            _writer.start_stream();
+            return make_ready_future<>();
         }
         virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
-            return _writer.on_new_sstable(sst);
+            _writer.start_sstable(sst);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_start&& ps) override {
-            return _writer.consume(std::move(ps));
+            _writer.start_partition(ps);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(static_row&& sr) override {
-            return _writer.consume(std::move(sr));
+            _writer.partition_element(sr);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(clustering_row&& cr) override {
-            return _writer.consume(std::move(cr));
+            _writer.partition_element(cr);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-            return _writer.consume(std::move(rtc));
+            _writer.partition_element(rtc);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
-            return _writer.consume(std::move(pe));
+            _writer.end_partition();
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> on_end_of_sstable() override {
-            return _writer.on_end_of_sstable();
+            _writer.end_sstable();
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<> on_end_of_stream() override {
-            return _writer.on_end_of_stream();
+            _writer.end_stream();
+            return make_ready_future<>();
         }
     };
 
