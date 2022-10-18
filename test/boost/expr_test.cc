@@ -543,3 +543,181 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
     auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {{"pk", make_int_raw(123)}}, {invalid_int_value});
     BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_empty) {
+    // TODO: Empty multi-cell collections are trated as NULL in the database,
+    // should the conversion happen in evaluate?
+    expression empty_list = make_list_constructor({}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_list, evaluation_inputs{}), make_int_list_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor) {
+    expression int_list = make_list_constructor({make_int_const(1), make_int_const(2), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(int_list, evaluation_inputs{}), make_int_list_raw({1, 2, 3}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_does_not_sort) {
+    expression int_list =
+        make_list_constructor({make_int_const(3), make_int_const(1), make_int_const(3), make_int_const(1)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(int_list, evaluation_inputs{}), make_int_list_raw({3, 1, 3, 1}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_null) {
+    expression list_with_null =
+        make_list_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(list_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_unset) {
+    expression list_with_unset = make_list_constructor(
+        {make_int_const(1), constant::make_unset_value(int32_type), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(list_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_empty_value) {
+    expression list_with_empty =
+        make_list_constructor({make_int_const(1), make_empty_const(int32_type), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(list_with_empty, evaluation_inputs{}),
+                        make_list_raw({make_int_raw(1), make_empty_raw(), make_int_raw(3)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_empty) {
+    // TODO: Empty multi-cell collections are trated as NULL in the database,
+    // should the conversion happen in evaluate?
+    expression empty_set = make_set_constructor({}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_set, evaluation_inputs{}), make_int_set_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_sorted) {
+    expression sorted_set = make_set_constructor({make_int_const(1), make_int_const(2), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(sorted_set, evaluation_inputs{}), make_int_set_raw({1, 2, 3}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_unsorted) {
+    expression unsorted_set =
+        make_set_constructor({make_int_const(1), make_int_const(3), make_int_const(2)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(unsorted_set, evaluation_inputs{}), make_int_set_raw({1, 2, 3}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_null) {
+    expression set_with_null =
+        make_set_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(set_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_unset) {
+    expression set_with_unset = make_set_constructor(
+        {make_int_const(1), constant::make_unset_value(int32_type), make_int_const(3)}, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(set_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_empty) {
+    expression set_with_only_one_empty = make_set_constructor({make_empty_const(int32_type)}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(set_with_only_one_empty, evaluation_inputs{}), make_set_raw({make_empty_raw()}));
+
+    expression set_two_with_empty =
+        make_set_constructor({make_int_const(-1), make_empty_const(int32_type), make_int_const(0),
+                              make_empty_const(int32_type), make_int_const(1)},
+                             int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(set_two_with_empty, evaluation_inputs{}),
+                        make_set_raw({make_empty_raw(), make_int_raw(-1), make_int_raw(0), make_int_raw(1)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty) {
+    // TODO: Empty multi-cell collections are trated as NULL in the database,
+    // should the conversion happen in evaluate?
+    expression empty_map = make_map_constructor(std::vector<expression>(), int32_type, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_map, evaluation_inputs{}), make_int_int_map_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_sorted) {
+    expression map = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {make_int_const(3), make_int_const(4)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(map, evaluation_inputs{}), make_int_int_map_raw({{1, 2}, {3, 4}, {5, 6}}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_unsorted) {
+    expression map = make_map_constructor(
+        {
+            {make_int_const(3), make_int_const(4)},
+            {make_int_const(5), make_int_const(6)},
+            {make_int_const(1), make_int_const(2)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate(map, evaluation_inputs{}), make_int_int_map_raw({{1, 2}, {3, 4}, {5, 6}}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_null_key) {
+    expression map_with_null_key = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {constant::make_null(int32_type), make_int_const(4)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(map_with_null_key, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_null_value) {
+    expression map_with_null_value = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {make_int_const(3), constant::make_null(int32_type)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(map_with_null_value, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_unset_key) {
+    expression map_with_unset_key = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {constant::make_unset_value(int32_type), make_int_const(4)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(map_with_unset_key, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_unset_value) {
+    expression map_with_unset_value = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {make_int_const(3), constant::make_unset_value(int32_type)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    BOOST_REQUIRE_THROW(evaluate(map_with_unset_value, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty_key) {
+    expression map_with_empty_key = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {make_empty_const(int32_type), make_int_const(4)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    raw_value expected = make_map_raw(
+        {{make_empty_raw(), make_int_raw(4)}, {make_int_raw(1), make_int_raw(2)}, {make_int_raw(5), make_int_raw(6)}});
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_key, evaluation_inputs{}), expected);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty_value) {
+    expression map_with_empty_key = make_map_constructor(
+        {
+            {make_int_const(1), make_int_const(2)},
+            {make_int_const(3), make_empty_const(int32_type)},
+            {make_int_const(5), make_int_const(6)},
+        },
+        int32_type, int32_type);
+    raw_value expected = make_map_raw(
+        {{make_int_raw(1), make_int_raw(2)}, {make_int_raw(3), make_empty_raw()}, {make_int_raw(5), make_int_raw(6)}});
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_key, evaluation_inputs{}), expected);
+}

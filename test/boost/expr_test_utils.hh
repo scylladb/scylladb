@@ -68,6 +68,172 @@ inline constant make_text_const(const sstring_view& text) {
     return constant(make_text_raw(text), utf8_type);
 }
 
+// This function implements custom serialization of collection values.
+// Some tests require the collection to contain unset_value or an empty value,
+// which is impossible to express using the existing code.
+inline cql3::raw_value make_collection_raw(size_t size_to_write,
+                                           const std::vector<cql3::raw_value>& elements_to_write) {
+    cql_serialization_format sf = cql_serialization_format::latest();
+
+    size_t serialized_len = 0;
+    serialized_len += collection_size_len(sf);
+    for (const cql3::raw_value& val : elements_to_write) {
+        serialized_len += collection_value_len(sf);
+        if (val.is_value()) {
+            serialized_len += val.view().with_value([](const FragmentedView auto& view) { return view.size_bytes(); });
+        }
+    }
+
+    bytes b(bytes::initialized_later(), serialized_len);
+    bytes::iterator out = b.begin();
+
+    write_collection_size(out, size_to_write, sf);
+    for (const cql3::raw_value& val : elements_to_write) {
+        if (val.is_null()) {
+            write_int32(out, -1);
+        } else if (val.is_unset_value()) {
+            write_int32(out, -2);
+        } else {
+            val.view().with_value(
+                [&](const FragmentedView auto& val_view) { write_collection_value(out, sf, linearized(val_view)); });
+        }
+    }
+
+    return cql3::raw_value::make_value(b);
+}
+
+inline raw_value make_list_raw(const std::vector<raw_value>& values) {
+    return make_collection_raw(values.size(), values);
+}
+
+inline raw_value make_set_raw(const std::vector<raw_value>& values) {
+    return make_collection_raw(values.size(), values);
+}
+
+inline raw_value make_map_raw(const std::vector<std::pair<raw_value, raw_value>>& values) {
+    std::vector<raw_value> flattened_values;
+    for (const std::pair<raw_value, raw_value>& pair_val : values) {
+        flattened_values.push_back(pair_val.first);
+        flattened_values.push_back(pair_val.second);
+    }
+    return make_collection_raw(values.size(), flattened_values);
+}
+
+template <class T>
+raw_value to_raw_value(const T& t) {
+    if constexpr (std::same_as<T, raw_value>) {
+        return t;
+    } else if constexpr (std::same_as<T, constant>) {
+        return t.value;
+    } else {
+        return make_raw<T>(t);
+    }
+}
+
+// A concept which expresses that it's possible to convert T to raw_value.
+// Satisfied for raw_value, constant, int32_t, and various other types.
+template <class T>
+concept ToRawValue = requires(T t) {
+    data_value(t);
+    { to_raw_value(t) } -> std::same_as<raw_value>;
+}
+|| std::same_as<T, constant> || std::same_as<T, raw_value>;
+
+template <ToRawValue T>
+inline std::vector<raw_value> to_raw_values(const std::vector<T>& values) {
+    std::vector<raw_value> raw_vals;
+    for (const T& val : values) {
+        raw_vals.push_back(to_raw_value(val));
+    }
+    return raw_vals;
+}
+
+template <ToRawValue T1, ToRawValue T2>
+inline std::vector<std::pair<raw_value, raw_value>> to_raw_value_pairs(const std::vector<std::pair<T1, T2>>& values) {
+    std::vector<std::pair<raw_value, raw_value>> raw_vals;
+    for (const std::pair<T1, T2>& val : values) {
+        raw_vals.emplace_back(to_raw_value(val.first), to_raw_value(val.second));
+    }
+    return raw_vals;
+}
+
+inline constant make_list_const(const std::vector<raw_value>& vals, data_type elements_type) {
+    raw_value raw_list = make_list_raw(vals);
+    data_type list_type = list_type_impl::get_instance(elements_type, true);
+    return constant(std::move(raw_list), std::move(list_type));
+}
+
+inline constant make_list_const(const std::vector<constant>& vals, data_type elements_type) {
+    return make_list_const(to_raw_values(vals), elements_type);
+}
+
+inline constant make_set_const(const std::vector<raw_value>& vals, data_type elements_type) {
+    raw_value raw_set = make_set_raw(vals);
+    data_type set_type = set_type_impl::get_instance(elements_type, true);
+    return constant(std::move(raw_set), std::move(set_type));
+}
+
+inline constant make_set_const(const std::vector<constant>& vals, data_type elements_type) {
+    return make_set_const(to_raw_values(vals), elements_type);
+}
+
+inline constant make_map_const(const std::vector<std::pair<raw_value, raw_value>>& vals,
+                               data_type key_type,
+                               data_type value_type) {
+    raw_value raw_map = make_map_raw(vals);
+    data_type map_type = map_type_impl::get_instance(key_type, value_type, true);
+    return constant(std::move(raw_map), std::move(map_type));
+}
+
+inline constant make_map_const(const std::vector<std::pair<constant, constant>>& vals,
+                               data_type key_type,
+                               data_type value_type) {
+    return make_map_const(to_raw_value_pairs(vals), key_type, value_type);
+}
+
+inline raw_value make_int_list_raw(const std::vector<int32_t>& values) {
+    return make_list_raw(to_raw_values(values));
+}
+
+inline raw_value make_int_set_raw(const std::vector<int32_t>& values) {
+    return make_set_raw(to_raw_values(values));
+}
+
+inline raw_value make_int_int_map_raw(const std::vector<std::pair<int32_t, int32_t>>& values) {
+    return make_map_raw(to_raw_value_pairs(values));
+}
+
+inline collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type) {
+    return collection_constructor{.style = collection_constructor::style_type::list,
+                                  .elements = std::move(elements),
+                                  .type = list_type_impl::get_instance(elements_type, true)};
+}
+
+inline collection_constructor make_set_constructor(std::vector<expression> elements, data_type elements_type) {
+    return collection_constructor{.style = collection_constructor::style_type::set,
+                                  .elements = std::move(elements),
+                                  .type = set_type_impl::get_instance(elements_type, true)};
+}
+
+inline collection_constructor make_map_constructor(const std::vector<expression> elements,
+                                                   data_type key_type,
+                                                   data_type element_type) {
+    return collection_constructor{.style = collection_constructor::style_type::map,
+                                  .elements = std::move(elements),
+                                  .type = map_type_impl::get_instance(key_type, element_type, true)};
+}
+
+inline collection_constructor make_map_constructor(const std::vector<std::pair<expression, expression>>& elements,
+                                                   data_type key_type,
+                                                   data_type element_type) {
+    std::vector<expression> map_element_pairs;
+    for (const std::pair<expression, expression>& element : elements) {
+        map_element_pairs.push_back(tuple_constructor{.elements = {element.first, element.second},
+                                                      .type = tuple_type_impl::get_instance({key_type, element_type})});
+    }
+    return make_map_constructor(map_element_pairs, key_type, element_type);
+}
+
 struct evaluation_inputs_data {
     std::vector<bytes> partition_key;
     std::vector<bytes> clustering_key;
