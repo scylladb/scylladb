@@ -220,21 +220,20 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
     return default_format;
 }
 
-class mutation_fragment_json_writer {
-    const schema& _schema;
-    json_writer _writer;
-    bool _clustering_array_created;
-private:
-    sstring to_string(gc_clock::time_point tp) {
+} // anonymous namespace
+
+namespace tools {
+
+    sstring mutation_fragment_json_writer::to_string(gc_clock::time_point tp) {
         return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
     }
-    void write(gc_clock::duration ttl, gc_clock::time_point expiry) {
+    void mutation_fragment_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {
         _writer.Key("ttl");
         _writer.AsString(ttl);
         _writer.Key("expiry");
         _writer.String(to_string(expiry));
     }
-    void write(const tombstone& t) {
+    void mutation_fragment_json_writer::write(const tombstone& t) {
         _writer.StartObject();
         if (t) {
             _writer.Key("timestamp");
@@ -244,7 +243,7 @@ private:
         }
         _writer.EndObject();
     }
-    void write(const row_marker& m) {
+    void mutation_fragment_json_writer::write(const row_marker& m) {
         _writer.StartObject();
         _writer.Key("timestamp");
         _writer.Int64(m.timestamp());
@@ -253,7 +252,7 @@ private:
         }
         _writer.EndObject();
     }
-    void write(counter_cell_view cv) {
+    void mutation_fragment_json_writer::write(counter_cell_view cv) {
         _writer.StartArray();
         for (const auto& shard : cv.shards()) {
             _writer.StartObject();
@@ -267,7 +266,7 @@ private:
         }
         _writer.EndArray();
     }
-    void write(const atomic_cell_view& cell, data_type type) {
+    void mutation_fragment_json_writer::write(const atomic_cell_view& cell, data_type type) {
         _writer.StartObject();
         _writer.Key("is_live");
         _writer.Bool(cell.is_live());
@@ -306,7 +305,7 @@ private:
         }
         _writer.EndObject();
     }
-    void write(const collection_mutation_view_description& mv, data_type type) {
+    void mutation_fragment_json_writer::write(const collection_mutation_view_description& mv, data_type type) {
         _writer.StartObject();
 
         if (mv.tomb) {
@@ -343,7 +342,7 @@ private:
 
         _writer.EndObject();
     }
-    void write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+    void mutation_fragment_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
         if (cdef.is_atomic()) {
             write(cell.as_atomic_cell(cdef), cdef.type);
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
@@ -354,7 +353,7 @@ private:
             _writer.Null();
         }
     }
-    void write(const row& r, column_kind kind) {
+    void mutation_fragment_json_writer::write(const row& r, column_kind kind) {
         _writer.StartObject();
         r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
             auto cdef = _schema.column_at(kind, id);
@@ -363,7 +362,7 @@ private:
         });
         _writer.EndObject();
     }
-    void write(const clustering_row& cr) {
+    void mutation_fragment_json_writer::write(const clustering_row& cr) {
         _writer.StartObject();
         _writer.Key("type");
         _writer.String("clustering-row");
@@ -383,7 +382,7 @@ private:
         write(cr.cells(), column_kind::regular_column);
         _writer.EndObject();
     }
-    void write(const range_tombstone_change& rtc) {
+    void mutation_fragment_json_writer::write(const range_tombstone_change& rtc) {
         _writer.StartObject();
         _writer.Key("type");
         _writer.String("range-tombstone-change");
@@ -398,16 +397,14 @@ private:
         write(rtc.tombstone());
         _writer.EndObject();
     }
-public:
-    explicit mutation_fragment_json_writer(const schema& s) : _schema(s) {}
-    void start_stream() {
+    void mutation_fragment_json_writer::start_stream() {
         _writer.StartStream();
     }
-    void start_sstable(const sstables::sstable* const sst) {
+    void mutation_fragment_json_writer::start_sstable(const sstables::sstable* const sst) {
         _writer.SstableKey(sst);
         _writer.StartArray();
     }
-    void start_partition(const partition_start& ps) {
+    void mutation_fragment_json_writer::start_partition(const partition_start& ps) {
         const auto& dk = ps.key();
         _clustering_array_created = false;
 
@@ -421,11 +418,11 @@ public:
             write(ps.partition_tombstone());
         }
     }
-    void partition_element(const static_row& sr) {
+    void mutation_fragment_json_writer::partition_element(const static_row& sr) {
         _writer.Key("static_row");
         write(sr.cells(), column_kind::static_column);
     }
-    void partition_element(const clustering_row& cr) {
+    void mutation_fragment_json_writer::partition_element(const clustering_row& cr) {
         if (!_clustering_array_created) {
             _writer.Key("clustering_elements");
             _writer.StartArray();
@@ -433,7 +430,7 @@ public:
         }
         write(cr);
     }
-    void partition_element(const range_tombstone_change& rtc) {
+    void mutation_fragment_json_writer::partition_element(const range_tombstone_change& rtc) {
         if (!_clustering_array_created) {
             _writer.Key("clustering_elements");
             _writer.StartArray();
@@ -441,19 +438,22 @@ public:
         }
         write(rtc);
     }
-    void end_partition() {
+    void mutation_fragment_json_writer::end_partition() {
         if (_clustering_array_created) {
             _writer.EndArray();
         }
         _writer.EndObject();
     }
-    void end_sstable() {
+    void mutation_fragment_json_writer::end_sstable() {
         _writer.EndArray();
     }
-    void end_stream() {
+    void mutation_fragment_json_writer::end_stream() {
         _writer.EndStream();
     }
-};
+
+} // namespace tools
+
+namespace {
 
 class dumping_consumer : public sstable_consumer {
     class text_dumper : public sstable_consumer {
@@ -498,7 +498,7 @@ class dumping_consumer : public sstable_consumer {
         }
     };
     class json_dumper : public sstable_consumer {
-        mutation_fragment_json_writer _writer;
+        tools::mutation_fragment_json_writer _writer;
     public:
         explicit json_dumper(const schema& s) : _writer(s) {}
         virtual future<> on_start_of_stream() override {

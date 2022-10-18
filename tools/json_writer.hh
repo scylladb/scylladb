@@ -83,4 +83,33 @@ public:
     }
 };
 
+class mutation_fragment_json_writer {
+    const schema& _schema;
+    json_writer _writer;
+    bool _clustering_array_created;
+private:
+    sstring to_string(gc_clock::time_point tp);
+    void write(gc_clock::duration ttl, gc_clock::time_point expiry);
+    void write(const tombstone& t);
+    void write(const row_marker& m);
+    void write(counter_cell_view cv);
+    void write(const atomic_cell_view& cell, data_type type);
+    void write(const collection_mutation_view_description& mv, data_type type);
+    void write(const atomic_cell_or_collection& cell, const column_definition& cdef);
+    void write(const row& r, column_kind kind);
+    void write(const clustering_row& cr);
+    void write(const range_tombstone_change& rtc);
+public:
+    explicit mutation_fragment_json_writer(const schema& s) : _schema(s) {}
+    void start_stream();
+    void start_sstable(const sstables::sstable* const sst);
+    void start_partition(const partition_start& ps);
+    void partition_element(const static_row& sr);
+    void partition_element(const clustering_row& cr);
+    void partition_element(const range_tombstone_change& rtc);
+    void end_partition();
+    void end_sstable();
+    void end_stream();
+};
+
 } // namespace tools
