@@ -403,3 +403,143 @@ BOOST_AUTO_TEST_CASE(evaluate_constant_int) {
     expression const_int = make_int_const(723);
     BOOST_REQUIRE_EQUAL(evaluate(const_int, evaluation_inputs{}), make_int_raw(723));
 }
+
+// Creates a schema_ptr that can be used for testing
+// The schema corresponds to a table created by:
+// CREATE TABLE test_ks.test_cf (pk int, ck int, r int, s int static, primary key (pk, ck));
+static schema_ptr make_simple_test_schema() {
+    return schema_builder("test_ks", "test_cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("r", int32_type, column_kind::regular_column)
+        .with_column("s", int32_type, column_kind::static_column)
+        .build();
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_partition_key_column) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+                                                                         {"pk", make_int_raw(1)},
+                                                                         {"ck", make_int_raw(2)},
+                                                                         {"r", make_int_raw(3)},
+                                                                         {"s", make_int_raw(4)},
+                                                                     });
+    expression pk_val = column_value(test_schema->get_column_definition("pk"));
+    raw_value val = evaluate(pk_val, inputs);
+    BOOST_REQUIRE_EQUAL(val, make_int_raw(1));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_clustering_key_column) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+                                                                         {"pk", make_int_raw(1)},
+                                                                         {"ck", make_int_raw(2)},
+                                                                         {"r", make_int_raw(3)},
+                                                                         {"s", make_int_raw(4)},
+                                                                     });
+    expression ck_val = column_value(test_schema->get_column_definition("ck"));
+    raw_value val = evaluate(ck_val, inputs);
+    BOOST_REQUIRE_EQUAL(val, make_int_raw(2));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_regular_column) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+                                                                         {"pk", make_int_raw(1)},
+                                                                         {"ck", make_int_raw(2)},
+                                                                         {"r", make_int_raw(3)},
+                                                                         {"s", make_int_raw(4)},
+                                                                     });
+    expression r_val = column_value(test_schema->get_column_definition("r"));
+    raw_value val = evaluate(r_val, inputs);
+    BOOST_REQUIRE_EQUAL(val, make_int_raw(3));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_static_column) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+                                                                         {"pk", make_int_raw(1)},
+                                                                         {"ck", make_int_raw(2)},
+                                                                         {"r", make_int_raw(3)},
+                                                                         {"s", make_int_raw(4)},
+                                                                     });
+    expression s_val = column_value(test_schema->get_column_definition("s"));
+    raw_value val = evaluate(s_val, inputs);
+    BOOST_REQUIRE_EQUAL(val, make_int_raw(4));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_column_value_does_not_perfrom_validation) {
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+
+    raw_value invalid_int_value = make_bool_raw(true);
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {{"pk", invalid_int_value}});
+
+    expression pk_column = column_value(test_schema->get_column_definition("pk"));
+    raw_value val = evaluate(pk_column, inputs);
+    BOOST_REQUIRE_EQUAL(val, invalid_int_value);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema,
+                                                        {
+                                                            {"pk", make_int_raw(1)},
+                                                            {"ck", make_int_raw(2)},
+                                                            {"r", make_int_raw(3)},
+                                                            {"s", make_int_raw(4)},
+                                                        },
+                                                        {make_int_raw(123)});
+
+    expression bind_var = bind_variable{
+        .bind_index = 0,
+        .receiver = ::make_lw_shared<column_specification>(
+            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var_0", true), int32_type)};
+
+    raw_value val = evaluate(bind_var, inputs);
+    BOOST_REQUIRE_EQUAL(val, make_int_raw(123));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_two_bind_variables) {
+    schema_ptr test_schema = make_simple_test_schema();
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema,
+                                                        {
+                                                            {"pk", make_int_raw(1)},
+                                                            {"ck", make_int_raw(2)},
+                                                            {"r", make_int_raw(3)},
+                                                            {"s", make_int_raw(4)},
+                                                        },
+                                                        {make_int_raw(123), make_int_raw(456)});
+
+    expression bind_variable0 =
+        bind_variable{.bind_index = 0,
+                      .receiver = ::make_lw_shared<column_specification>(
+                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_0", true), int32_type)};
+
+    expression bind_variable1 =
+        bind_variable{.bind_index = 1,
+                      .receiver = ::make_lw_shared<column_specification>(
+                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_1", true), int32_type)};
+
+    raw_value val0 = evaluate(bind_variable0, inputs);
+    BOOST_REQUIRE_EQUAL(val0, make_int_raw(123));
+
+    raw_value val1 = evaluate(bind_variable1, inputs);
+    BOOST_REQUIRE_EQUAL(val1, make_int_raw(456));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+
+    raw_value invalid_int_value = make_bool_raw(true);
+
+    expression bind_var =
+        bind_variable{.bind_index = 0,
+                      .receiver = ::make_lw_shared<column_specification>(
+                          "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), int32_type)};
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {{"pk", make_int_raw(123)}}, {invalid_int_value});
+    BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
+}

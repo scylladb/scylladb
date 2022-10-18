@@ -68,6 +68,115 @@ inline constant make_text_const(const sstring_view& text) {
     return constant(make_text_raw(text), utf8_type);
 }
 
+struct evaluation_inputs_data {
+    std::vector<bytes> partition_key;
+    std::vector<bytes> clustering_key;
+    std::vector<managed_bytes_opt> static_and_regular_columns;
+    ::shared_ptr<selection::selection> selection;
+    query_options options;
+};
+using column_values = std::map<sstring, raw_value>;
+
+// Creates evaluation_inputs that can be used to evaluate columns and bind variables using evaluate()
+inline std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evaluation_inputs(
+    const schema_ptr& table_schema,
+    const column_values& column_vals,
+    const std::vector<raw_value>& bind_marker_values = {}) {
+    auto throw_error = [&](const auto&... fmt_args) -> sstring {
+        sstring error_msg = format(fmt_args...);
+        sstring final_msg = format("make_evaluation_inputs error: {}. (table_schema: {}, column_vals: {})", error_msg,
+                                   *table_schema, column_vals);
+        throw std::runtime_error(final_msg);
+    };
+
+    auto get_col_val = [&](const column_definition& col) -> const raw_value& {
+        auto col_value_iter = column_vals.find(col.name_as_text());
+        if (col_value_iter == column_vals.end()) {
+            throw_error("no value for column {}", col.name_as_text());
+        }
+        return col_value_iter->second;
+    };
+
+    std::vector<bytes> partition_key;
+    for (const column_definition& pk_col : table_schema->partition_key_columns()) {
+        const raw_value& col_value = get_col_val(pk_col);
+
+        if (col_value.is_null()) {
+            throw_error("Passed NULL as value for {}. This is not allowed for partition key columns.",
+                        pk_col.name_as_text());
+        }
+        if (col_value.is_unset_value()) {
+            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed for partition key columns.",
+                        pk_col.name_as_text());
+        }
+        partition_key.push_back(raw_value(col_value).to_bytes());
+    }
+
+    std::vector<bytes> clustering_key;
+    for (const column_definition& ck_col : table_schema->clustering_key_columns()) {
+        const raw_value& col_value = get_col_val(ck_col);
+
+        if (col_value.is_null()) {
+            throw_error("Passed NULL as value for {}. This is not allowed for clustering key columns.",
+                        ck_col.name_as_text());
+        }
+        if (col_value.is_unset_value()) {
+            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed for clustering key columns.",
+                        ck_col.name_as_text());
+        }
+        clustering_key.push_back(raw_value(col_value).to_bytes());
+    }
+
+    std::vector<const column_definition*> selection_columns;
+    for (const column_definition& cdef : table_schema->regular_columns()) {
+        selection_columns.push_back(&cdef);
+    }
+    for (const column_definition& cdef : table_schema->static_columns()) {
+        selection_columns.push_back(&cdef);
+    }
+
+    ::shared_ptr<selection::selection> selection =
+        cql3::selection::selection::for_columns(table_schema, std::move(selection_columns));
+    std::vector<managed_bytes_opt> static_and_regular_columns(table_schema->regular_columns_count() +
+                                                              table_schema->static_columns_count());
+
+    for (const column_definition& col : table_schema->regular_columns()) {
+        const raw_value& col_value = get_col_val(col);
+        if (col_value.is_unset_value()) {
+            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed.", col.name_as_text());
+        }
+        int32_t index = selection->index_of(col);
+        static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
+    }
+
+    for (const column_definition& col : table_schema->static_columns()) {
+        const raw_value& col_value = get_col_val(col);
+        if (col_value.is_unset_value()) {
+            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed.", col.name_as_text());
+        }
+        int32_t index = selection->index_of(col);
+        static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
+    }
+
+    query_options options(default_cql_config, db::consistency_level::ONE, std::nullopt, bind_marker_values, true,
+                          query_options::specific_options::DEFAULT, cql_serialization_format::internal());
+
+    std::unique_ptr<evaluation_inputs_data> data = std::make_unique<evaluation_inputs_data>(
+        evaluation_inputs_data{.partition_key = std::move(partition_key),
+                               .clustering_key = std::move(clustering_key),
+                               .static_and_regular_columns = std::move(static_and_regular_columns),
+                               .selection = std::move(selection),
+                               .options = std::move(options)});
+
+    evaluation_inputs inputs{.partition_key = &data->partition_key,
+                             .clustering_key = &data->clustering_key,
+                             .static_and_regular_columns = &data->static_and_regular_columns,
+                             .selection = data->selection.get(),
+                             .options = &data->options};
+
+    return std::pair(std::move(inputs), std::move(data));
+}
+
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3
