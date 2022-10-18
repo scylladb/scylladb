@@ -235,16 +235,18 @@ public:
     void AsString(const T& obj) {
         String(fmt::format("{}", obj));
     }
-    void PartitionKey(const schema& schema, const partition_key& pkey, std::optional<dht::token> token = {}) {
+    // partition or clustering key
+    template <typename KeyType>
+    void DataKey(const schema& schema, const KeyType& key, std::optional<dht::token> token = {}) {
         StartObject();
         if (token) {
             Key("token");
             AsString(*token);
         }
         Key("raw");
-        String(to_hex(pkey.representation()));
+        String(to_hex(key.representation()));
         Key("value");
-        AsString(pkey.with_schema(schema));
+        AsString(key.with_schema(schema));
         EndObject();
     }
     void StartStream() {
@@ -341,15 +343,6 @@ class dumping_consumer : public sstable_consumer {
             _writer.AsString(ttl);
             _writer.Key("expiry");
             _writer.String(to_string(expiry));
-        }
-        template <typename Key>
-        void write_key(const Key& key) {
-            _writer.StartObject();
-            _writer.Key("raw");
-            _writer.String(to_hex(key.representation()));
-            _writer.Key("value");
-            _writer.AsString(key.with_schema(_schema));
-            _writer.EndObject();
         }
         void write(const tombstone& t) {
             _writer.StartObject();
@@ -485,7 +478,7 @@ class dumping_consumer : public sstable_consumer {
             _writer.Key("type");
             _writer.String("clustering-row");
             _writer.Key("key");
-            write_key(cr.key());
+            _writer.DataKey(_schema, cr.key());
             if (cr.tomb()) {
                 _writer.Key("tombstone");
                 write(cr.tomb().regular());
@@ -507,7 +500,7 @@ class dumping_consumer : public sstable_consumer {
             const auto pos = rtc.position();
             if (pos.has_key()) {
                 _writer.Key("key");
-                write_key(pos.key());
+                _writer.DataKey(_schema, pos.key());
             }
             _writer.Key("weight");
             _writer.Int(static_cast<int>(pos.get_bound_weight()));
@@ -533,7 +526,7 @@ class dumping_consumer : public sstable_consumer {
             _writer.StartObject();
 
             _writer.Key("key");
-            _writer.PartitionKey(_schema, dk.key(), dk.token());
+            _writer.DataKey(_schema, dk.key(), dk.token());
 
             if (ps.partition_tombstone()) {
                 _writer.Key("tombstone");
@@ -961,7 +954,7 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
 
             writer.StartObject();
             writer.Key("key");
-            writer.PartitionKey(*schema, pkey);
+            writer.DataKey(*schema, pkey);
             writer.Key("pos");
             writer.Uint64(pos);
             writer.EndObject();
@@ -1059,7 +1052,7 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
             auto pkey = e.get_key().to_partition_key(*schema);
             writer.Key("key");
-            writer.PartitionKey(*schema, pkey, e.token);
+            writer.DataKey(*schema, pkey, e.token);
             writer.Key("position");
             writer.Uint64(e.position);
 
@@ -1069,11 +1062,11 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
         auto first_key = sstables::key_view(summary.first_key.value).to_partition_key(*schema);
         writer.Key("first_key");
-        writer.PartitionKey(*schema, first_key);
+        writer.DataKey(*schema, first_key);
 
         auto last_key = sstables::key_view(summary.last_key.value).to_partition_key(*schema);
         writer.Key("last_key");
-        writer.PartitionKey(*schema, last_key);
+        writer.DataKey(*schema, last_key);
 
         writer.EndObject();
     }
