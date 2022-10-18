@@ -98,6 +98,11 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     const schema_ptr& table_schema,
     const column_values& column_vals,
     const std::vector<raw_value>& bind_marker_values = {});
+
+// Creates a mock implementation of data_dictionary::database, useful in tests.
+std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> make_data_dictionary_database(
+    const schema_ptr& table_schema);
+
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3
