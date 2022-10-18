@@ -801,3 +801,189 @@ BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_empty) {
     BOOST_REQUIRE_EQUAL(evaluate(usertype_with_null, evaluation_inputs{}),
                         make_tuple_raw({make_int_raw(123), make_empty_raw(), make_bool_raw(true)}));
 }
+
+// Evaluates value[subscript_value]
+static raw_value evaluate_subscripted(constant value, constant subscript_value) {
+    // For now it's only possible to subscript columns, not values, so this is tested.
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("v", value.type, column_kind::regular_column)
+                                  .build();
+
+    const column_definition* value_col = table_schema->get_column_definition("v");
+
+    expression sub = subscript{.val = column_value(value_col), .sub = subscript_value};
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(table_schema, {{"pk", make_int_raw(0)}, {"v", value.value}});
+    return evaluate(sub, inputs);
+}
+
+BOOST_AUTO_TEST_CASE(evalaute_subscripted_empty_list) {
+    constant list = make_list_const(std::vector<constant>{}, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(0)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(4)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(std::numeric_limits<int32_t>::max())),
+                        raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-4)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(std::numeric_limits<int32_t>::min())),
+                        raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
+    BOOST_REQUIRE_THROW(evaluate_subscripted(list, constant::make_unset_value(int32_type)),
+                        exceptions::invalid_request_exception);
+    
+    // TODO: Should empty value list indexes cause an error? Why not return NULL?
+    BOOST_REQUIRE_THROW(evaluate_subscripted(list, make_empty_const(int32_type)), empty_value_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_empty) {
+    // Empty list values seem to not be allowed.
+    constant list = make_empty_const(list_type_impl::get_instance(int32_type, true));
+    BOOST_REQUIRE_THROW(evaluate_subscripted(list, make_int_const(0)), marshal_exception);
+}
+
+constant make_subscript_test_list() {
+    return make_list_const({make_int_const(357), make_int_const(468), make_empty_const(int32_type), make_int_const(123)},
+                     int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_basic) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(0)), make_int_raw(357));
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(1)), make_int_raw(468));
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(3)), make_int_raw(123));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_empty_value) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(2)), make_empty_raw());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_negative_index) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-2)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-3)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(-1000)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(std::numeric_limits<int32_t>::min())),
+                        raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_too_big_index) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(5)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(6)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(7)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(1000)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(std::numeric_limits<int32_t>::max())),
+                        raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_null_index) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_unset_index) {
+    constant list = make_subscript_test_list();
+    BOOST_REQUIRE_THROW(evaluate_subscripted(list, constant::make_unset_value(int32_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_empty_index) {
+    constant list = make_subscript_test_list();
+    // TODO: Should empty value list indexes cause an error? Why not return NULL?
+    BOOST_REQUIRE_THROW(evaluate_subscripted(list, make_empty_const(int32_type)), empty_value_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_null_list) {
+    constant list = constant::make_null(list_type_impl::get_instance(int32_type, true));
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(0)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_empty_const(int32_type)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
+
+    // TODO: Shouldn't this throw an error?
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_unset_value(int32_type)), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_empty_map) {
+    constant map = make_map_const(std::vector<std::pair<constant, constant>>(), int32_type, int32_type);
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(0)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(-1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(-4)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(4)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(std::numeric_limits<int32_t>::min())),
+                        raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(std::numeric_limits<int32_t>::max())),
+                        raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
+    BOOST_REQUIRE_THROW(evaluate_subscripted(map, constant::make_unset_value(int32_type)),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_empty_const(int32_type)), raw_value::make_null());
+}
+
+static constant make_subscript_test_map() {
+    return make_map_const({{make_empty_const(int32_type), make_int_const(1)},
+                     {make_int_const(2), make_int_const(3)},
+                     {make_int_const(4), make_empty_const(int32_type)},
+                     {make_int_const(6), make_int_const(7)}},
+                    int32_type, int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_basic) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(2)), make_int_raw(3));
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(6)), make_int_raw(7));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_nonexistant_key) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(3)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(5)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(-1)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(-1000)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(1000)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(std::numeric_limits<int32_t>::min())),
+                        raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(std::numeric_limits<int32_t>::max())),
+                        raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evalute_subscripted_map_empty_key) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(4)), make_empty_raw());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_empty_value) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_empty_const(int32_type)), make_int_raw(1));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_null_index) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_unset_index) {
+    constant map = make_subscript_test_map();
+    BOOST_REQUIRE_THROW(evaluate_subscripted(map, constant::make_unset_value(int32_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_empty) {
+    // Empty list values seem to not be allowed.
+    constant map = make_empty_const(map_type_impl::get_instance(int32_type, int32_type, true));
+    BOOST_REQUIRE_THROW(evaluate_subscripted(map, make_int_const(0)), marshal_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_null_map) {
+    constant map = constant::make_null(map_type_impl::get_instance(int32_type, int32_type, true));
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(0)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_empty_const(int32_type)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
+
+    // TODO: Shouldn't this throw an error?
+    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_unset_value(int32_type)), raw_value::make_null());
+}
