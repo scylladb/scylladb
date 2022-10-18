@@ -535,6 +535,7 @@ repair_info::repair_info(repair_service& repair,
     const std::unordered_set<gms::inet_address>& ignore_nodes_,
     streaming::stream_reason reason_,
     std::optional<utils::UUID> ops_uuid,
+    shared_ptr<abort_source> as,
     bool hints_batchlog_flushed)
     : rs(repair)
     , db(repair.get_db())
@@ -558,6 +559,9 @@ repair_info::repair_info(repair_service& repair,
     , nr_ranges_total(ranges.size())
     , _ops_uuid(std::move(ops_uuid))
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed)) {
+    if (as != nullptr) {
+        _abort_subscription = as->subscribe([this] () noexcept { abort(); });
+    }
 }
 
 void repair_info::check_failed_ranges() {
@@ -1190,7 +1194,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid, hints_batchlog_flushed);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid, nullptr, hints_batchlog_flushed);
                 return repair_ranges(ri);
             });
             repair_results.push_back(std::move(f));
@@ -1293,7 +1297,7 @@ future<> repair_service::do_sync_data_using_repair(
                 bool hints_batchlog_flushed = false;
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_info ? std::make_optional<utils::UUID>(ops_info->ops_uuid) : std::nullopt, hints_batchlog_flushed);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_info ? std::make_optional<utils::UUID>(ops_info->ops_uuid) : std::nullopt, ops_info ? ops_info->as : nullptr, hints_batchlog_flushed);
                 ri->neighbors = std::move(neighbors);
                 return repair_ranges(ri);
             });

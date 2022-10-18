@@ -168,6 +168,7 @@ public:
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
     std::optional<utils::UUID> _ops_uuid;
+    optimized_optional<abort_source::subscription> _abort_subscription;
     bool _hints_batchlog_flushed = false;
 public:
     repair_info(repair_service& repair,
@@ -180,6 +181,7 @@ public:
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
             std::optional<utils::UUID> ops_uuid,
+            shared_ptr<abort_source> as,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
     void abort() noexcept;
