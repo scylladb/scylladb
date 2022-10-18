@@ -2785,7 +2785,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
         auto ops_uuid = utils::make_random_uuid();
-        auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::list<gms::inet_address>()});
+        auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, nullptr, std::list<gms::inet_address>()});
         return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
@@ -3554,16 +3554,13 @@ node_ops_meta_data::node_ops_meta_data(
     , _abort(std::move(abort_func))
     , _abort_source(seastar::make_shared<abort_source>())
     , _signal(std::move(signal_func))
-    , _ops(seastar::make_shared<node_ops_info>({_ops_uuid, false, std::move(ignore_nodes)}))
+    , _ops(seastar::make_shared<node_ops_info>({_ops_uuid, _abort_source, std::move(ignore_nodes)}))
     , _watchdog([sig = _signal] { sig(); }) {
     _watchdog.arm(_watchdog_interval);
 }
 
 future<> node_ops_meta_data::abort() {
     slogger.debug("node_ops_meta_data: ops_uuid={} abort", _ops_uuid);
-    if (_ops) {
-        _ops->abort = true;
-    }
     _watchdog.cancel();
     return _abort();
 }

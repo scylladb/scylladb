@@ -49,7 +49,7 @@
 logging::logger rlogger("repair");
 
 void node_ops_info::check_abort() {
-    if (abort) {
+    if (as && as->abort_requested()) {
         auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
