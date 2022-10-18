@@ -15,9 +15,11 @@
 #include "cql3/query_options.hh"
 #include "types/set.hh"
 #include "types/user.hh"
+#include "expr_test_utils.hh"
 
 using namespace cql3;
 using namespace cql3::expr;
+using namespace cql3::expr::test_utils;
 
 bind_variable new_bind_variable(int bind_index) {
     return bind_variable {
@@ -108,10 +110,6 @@ static sstring value_print(const cql3::raw_value& v, const expression& e) {
     return expr_print(constant(v, type_of(e)));
 }
 
-static constant make_int(int value) {
-    return constant(raw_value::make_value(int32_type->decompose(value)), int32_type);
-}
-
 static unresolved_identifier make_column(const char* col_name) {
     return unresolved_identifier{::make_shared<column_identifier_raw>(col_name, true)};
 }
@@ -120,7 +118,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_test) {
     expression col_eq_1234 = binary_operator(
         make_column("col"),
         oper_t::EQ,
-        make_int(1234)
+        make_int_const(1234)
     );
     BOOST_REQUIRE_EQUAL(expr_print(col_eq_1234), "col = 1234");
 
@@ -130,7 +128,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_test) {
             unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
         }),
         oper_t::LT,
-        make_int(-56)
+        make_int_const(-56)
     );
     BOOST_REQUIRE_EQUAL(expr_print(token_p1_p2_lt_min_56), "token(p1, p2) < -56");
 }
@@ -186,14 +184,14 @@ BOOST_AUTO_TEST_CASE(expr_printer_duration_test) {
 BOOST_AUTO_TEST_CASE(expr_printer_list_test) {
     collection_constructor int_list {
         .style = collection_constructor::style_type::list,
-        .elements = {make_int(13), make_int(45), make_int(90)},
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, true)
     };
     BOOST_REQUIRE_EQUAL(expr_print(int_list), "[13, 45, 90]");
 
     collection_constructor frozen_int_list {
         .style = collection_constructor::style_type::list,
-        .elements = {make_int(13), make_int(45), make_int(90)},
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, false)
     };
     BOOST_REQUIRE_EQUAL(expr_print(frozen_int_list), "[13, 45, 90]");
@@ -208,14 +206,14 @@ BOOST_AUTO_TEST_CASE(expr_printer_list_test) {
 BOOST_AUTO_TEST_CASE(expr_printer_set_test) {
     collection_constructor int_set {
         .style = collection_constructor::style_type::set,
-        .elements = {make_int(13), make_int(45), make_int(90)},
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = set_type_impl::get_instance(int32_type, true)
     };
     BOOST_REQUIRE_EQUAL(expr_print(int_set), "{13, 45, 90}");
 
     collection_constructor frozen_int_set {
         .style = collection_constructor::style_type::set,
-        .elements = {make_int(13), make_int(45), make_int(90)},
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = set_type_impl::get_instance(int32_type, true)
     };
     BOOST_REQUIRE_EQUAL(expr_print(frozen_int_set), "{13, 45, 90}");
@@ -232,10 +230,10 @@ BOOST_AUTO_TEST_CASE(expr_printer_map_test) {
         .style = collection_constructor::style_type::map,
         .elements = {
             tuple_constructor {
-                .elements = {make_int(12), make_int(34)}
+                .elements = {make_int_const(12), make_int_const(34)}
             },
             tuple_constructor {
-                .elements = {make_int(56), make_int(78)}
+                .elements = {make_int_const(56), make_int_const(78)}
             }
         },
         .type = map_type_impl::get_instance(int32_type, int32_type, true)
@@ -258,7 +256,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_map_test) {
 
 BOOST_AUTO_TEST_CASE(expr_printer_tuple_test) {
     tuple_constructor int_int_tuple {
-        .elements = {make_int(456), make_int(789)},
+        .elements = {make_int_const(456), make_int_const(789)},
         .type = tuple_type_impl::get_instance({int32_type, int32_type})
     };
     BOOST_REQUIRE_EQUAL(expr_print(int_int_tuple), "(456, 789)");
@@ -271,8 +269,8 @@ BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
     column_identifier field_a("a", true);
     column_identifier field_b("b", true);
     usertype_constructor::elements_map_type user_type_elements;
-    user_type_elements.emplace(field_a, make_int(333));
-    user_type_elements.emplace(field_b, make_int(666));
+    user_type_elements.emplace(field_a, make_int_const(333));
+    user_type_elements.emplace(field_b, make_int_const(666));
     usertype_constructor user_typ {
         .elements = user_type_elements,
         .type = user_type_impl::get_instance("ks", "expr_test_type", {field_a.name(), field_b.name()}, {int32_type, int32_type}, true)
@@ -287,7 +285,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
 BOOST_AUTO_TEST_CASE(expr_printer_in_test) {
     collection_constructor int_list {
         .style = collection_constructor::style_type::list,
-        .elements = {make_int(13), make_int(45), make_int(90)},
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, true)
     };
 
@@ -344,7 +342,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
 }
 
 BOOST_AUTO_TEST_CASE(boolean_factors_test) {
-    BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_bool(true)), std::vector<expression>({constant::make_bool(true)}));
+    BOOST_REQUIRE_EQUAL(boolean_factors(make_bool_const(true)), std::vector<expression>({make_bool_const(true)}));
 
     BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_null(boolean_type)), std::vector<expression>({constant::make_null(boolean_type)}));
 
