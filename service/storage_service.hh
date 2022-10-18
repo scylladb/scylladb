@@ -104,7 +104,6 @@ class node_ops_meta_data {
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
     std::chrono::seconds _watchdog_interval{30};
-    bool _aborted = false;
 public:
     explicit node_ops_meta_data(
             utils::UUID ops_uuid,

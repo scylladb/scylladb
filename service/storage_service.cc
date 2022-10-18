@@ -3561,7 +3561,6 @@ node_ops_meta_data::node_ops_meta_data(
 
 future<> node_ops_meta_data::abort() {
     slogger.debug("node_ops_meta_data: ops_uuid={} abort", _ops_uuid);
-    _aborted = true;
     if (_ops) {
         _ops->abort = true;
     }
@@ -3571,7 +3570,7 @@ future<> node_ops_meta_data::abort() {
 
 void node_ops_meta_data::update_watchdog() {
     slogger.debug("node_ops_meta_data: ops_uuid={} update_watchdog", _ops_uuid);
-    if (_aborted) {
+    if (_abort_source->abort_requested()) {
         return;
     }
     _watchdog.cancel();
