@@ -167,7 +167,6 @@ public:
     int ranges_index = 0;
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
-    std::optional<utils::UUID> _ops_uuid;
     optimized_optional<abort_source::subscription> _abort_subscription;
     bool _hints_batchlog_flushed = false;
 public:
@@ -180,7 +179,6 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
-            std::optional<utils::UUID> ops_uuid,
             shared_ptr<abort_source> as,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
@@ -194,9 +192,6 @@ public:
     const std::vector<sstring>& table_names() {
         return cfs;
     }
-    const std::optional<utils::UUID>& ops_uuid() const {
-        return _ops_uuid;
-    };
 
     bool hints_batchlog_flushed() const {
         return _hints_batchlog_flushed;
