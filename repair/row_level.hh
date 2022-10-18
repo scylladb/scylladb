@@ -193,8 +193,6 @@ public:
     // Abort all the repairs
     future<> abort_all();
 
-    future<> abort_repair_node_ops(utils::UUID ops_uuid);
-
     std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map() noexcept {
         return _repair_metas;
     }
