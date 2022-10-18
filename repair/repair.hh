@@ -182,7 +182,7 @@ public:
             std::optional<utils::UUID> ops_uuid,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
-    void abort();
+    void abort() noexcept;
     void check_in_abort();
     void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
