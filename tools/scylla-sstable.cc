@@ -129,8 +129,10 @@ partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_co
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, const std::vector<sstring>& sstable_names) {
     std::vector<sstables::shared_sstable> sstables;
+    sstables.resize(sstable_names.size());
 
-    parallel_for_each(sstable_names, [schema, &sst_man, &sstables] (const sstring& sst_name) -> future<> {
+    parallel_for_each(sstable_names, [schema, &sst_man, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
+        const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
         const auto sst_path = std::filesystem::path(sst_name);
 
         if (const auto ftype_opt = co_await file_type(sst_path.c_str(), follow_symlink::yes)) {
@@ -150,7 +152,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         co_await sst->load();
 
-        sstables.push_back(std::move(sst));
+        sstables[i] = std::move(sst);
     }).get();
 
     return sstables;
