@@ -103,7 +103,7 @@ public:
     explicit node_ops_meta_data(
             utils::UUID ops_uuid,
             gms::inet_address coordinator,
-            shared_ptr<node_ops_info> ops,
+            std::list<gms::inet_address> ignore_nodes,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();
