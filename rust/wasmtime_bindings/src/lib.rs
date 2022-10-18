@@ -12,6 +12,8 @@ use core::task::Poll;
 use futures::future::{BoxFuture, Future};
 mod memory_creator;
 use memory_creator::ScyllaMemoryCreator;
+mod test_memory_creator;
+use test_memory_creator::TestScyllaMemoryCreator;
 
 #[cxx::bridge(namespace = "wasmtime")]
 mod ffi {
@@ -61,6 +63,7 @@ mod ffi {
 
         type Engine;
         fn create_engine(max_size: u32) -> Result<Box<Engine>>;
+        fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>>;
 
         type Func;
         fn create_func(
@@ -261,6 +264,29 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
     config.with_host_memory(std::sync::Arc::new(ScyllaMemoryCreator::new(
         max_size as usize,
+    )));
+    // The following configuration settings make wasmtime allocate only as much memory as it needs
+    config.static_memory_maximum_size(0);
+    config.dynamic_memory_reserved_for_growth(0);
+    config.dynamic_memory_guard_size(0);
+    config.max_wasm_stack(128 * 1024);
+    config.async_stack_size(256 * 1024);
+
+    let engine =
+        wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
+    Ok(Box::new(Engine {
+        wasmtime_engine: engine,
+    }))
+}
+
+fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
+    let mut config = wasmtime::Config::new();
+    config.async_support(true);
+    config.consume_fuel(true);
+    // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
+    config.with_host_memory(std::sync::Arc::new(TestScyllaMemoryCreator::new(
+        max_size as usize,
+        fail_after,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
     config.static_memory_maximum_size(0);
