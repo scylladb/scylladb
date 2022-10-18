@@ -575,7 +575,7 @@ void repair_info::check_failed_ranges() {
     }
 }
 
-void repair_info::abort() {
+void repair_info::abort() noexcept {
     aborted = true;
 }
 
