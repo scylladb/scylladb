@@ -721,3 +721,49 @@ BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty_value) {
         {{make_int_raw(1), make_int_raw(2)}, {make_int_raw(3), make_empty_raw()}, {make_int_raw(5), make_int_raw(6)}});
     BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_key, evaluation_inputs{}), expected);
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_empty) {
+    expression empty_tuple = make_tuple_constructor({}, {});
+    BOOST_REQUIRE_EQUAL(evaluate(empty_tuple, evaluation_inputs{}), make_tuple_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_empty_prefix) {
+    // It's legal for tuples to not have all fields present.
+    expression empty_int_text_tuple = make_tuple_constructor({}, {int32_type, utf8_type});
+    BOOST_REQUIRE_EQUAL(evaluate(empty_int_text_tuple, evaluation_inputs{}), make_tuple_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_int_text) {
+    expression int_text_tuple =
+        make_tuple_constructor({make_int_const(123), make_text_const("tupled")}, {int32_type, utf8_type});
+    BOOST_REQUIRE_EQUAL(evaluate(int_text_tuple, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(123), make_text_raw("tupled")}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_null) {
+    expression tuple_with_null =
+        make_tuple_constructor({make_int_const(12), constant::make_null(int32_type), make_int_const(34)},
+                               {int32_type, int32_type, int32_type});
+    BOOST_REQUIRE_EQUAL(evaluate(tuple_with_null, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(12), raw_value::make_null(), make_int_raw(34)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_unset) {
+    expression tuple_with_unset =
+        make_tuple_constructor({make_int_const(12), constant::make_unset_value(int32_type)}, {int32_type, utf8_type});
+    BOOST_REQUIRE_THROW(evaluate(tuple_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_empty) {
+    expression tuple_with_empty = make_tuple_constructor(
+        {make_int_const(12), make_empty_const(int32_type), make_int_const(34)}, {int32_type, utf8_type, int32_type});
+    BOOST_REQUIRE_EQUAL(evaluate(tuple_with_empty, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(12), make_empty_raw(), make_int_raw(34)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_prefix_fields) {
+    // Tests evaluating a value of type tuple<int, text, int, double>, but only two fields are present
+    expression tuple = make_tuple_constructor({make_int_const(1), make_text_const("12")},
+                                              {int32_type, utf8_type, int32_type, double_type});
+    BOOST_REQUIRE_EQUAL(evaluate(tuple, evaluation_inputs{}), make_tuple_raw({make_int_raw(1), make_text_raw("12")}));
+}

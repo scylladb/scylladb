@@ -119,6 +119,34 @@ inline raw_value make_map_raw(const std::vector<std::pair<raw_value, raw_value>>
     return make_collection_raw(values.size(), flattened_values);
 }
 
+// This function implements custom serialization of tuples.
+// Some tests require the tuple to contain unset_value or an empty value,
+// which is impossible to express using the existing code.
+inline raw_value make_tuple_raw(const std::vector<raw_value>& values) {
+    size_t serialized_len = 0;
+    for (const raw_value& val : values) {
+        serialized_len += 4;
+        if (val.is_value()) {
+            serialized_len += val.view().size_bytes();
+        }
+    }
+    managed_bytes ret(managed_bytes::initialized_later(), serialized_len);
+    managed_bytes_mutable_view out(ret);
+    for (const raw_value& val : values) {
+        if (val.is_null()) {
+            write<int32_t>(out, -1);
+        } else if (val.is_unset_value()) {
+            write<int32_t>(out, -2);
+        } else {
+            val.view().with_value([&](const FragmentedView auto& bytes_view) {
+                write<int32_t>(out, bytes_view.size_bytes());
+                write_fragmented(out, bytes_view);
+            });
+        }
+    }
+    return raw_value::make_value(std::move(ret));
+}
+
 template <class T>
 raw_value to_raw_value(const T& t) {
     if constexpr (std::same_as<T, raw_value>) {
@@ -191,6 +219,16 @@ inline constant make_map_const(const std::vector<std::pair<constant, constant>>&
     return make_map_const(to_raw_value_pairs(vals), key_type, value_type);
 }
 
+inline constant make_tuple_const(const std::vector<raw_value>& vals, const std::vector<data_type>& element_types) {
+    raw_value raw_tuple = make_tuple_raw(vals);
+    data_type tuple_type = tuple_type_impl::get_instance(element_types);
+    return constant(std::move(raw_tuple), std::move(tuple_type));
+}
+
+inline constant make_tuple_const(const std::vector<constant>& vals, const std::vector<data_type>& element_types) {
+    return test_utils::make_tuple_const(to_raw_values(vals), element_types);
+}
+
 inline raw_value make_int_list_raw(const std::vector<int32_t>& values) {
     return make_list_raw(to_raw_values(values));
 }
@@ -232,6 +270,12 @@ inline collection_constructor make_map_constructor(const std::vector<std::pair<e
                                                       .type = tuple_type_impl::get_instance({key_type, element_type})});
     }
     return make_map_constructor(map_element_pairs, key_type, element_type);
+}
+
+inline tuple_constructor make_tuple_constructor(std::vector<expression> elements,
+                                                std::vector<data_type> element_types) {
+    return tuple_constructor{.elements = std::move(elements),
+                             .type = tuple_type_impl::get_instance(std::move(element_types))};
 }
 
 struct evaluation_inputs_data {
