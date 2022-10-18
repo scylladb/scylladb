@@ -767,3 +767,37 @@ BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_prefix_fields) {
                                               {int32_type, utf8_type, int32_type, double_type});
     BOOST_REQUIRE_EQUAL(evaluate(tuple, evaluation_inputs{}), make_tuple_raw({make_int_raw(1), make_text_raw("12")}));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_empty) {
+    expression empty_usertype = make_usertype_constructor({});
+    BOOST_REQUIRE_EQUAL(evaluate(empty_usertype, evaluation_inputs{}), make_tuple_raw({}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor) {
+    expression usertype = make_usertype_constructor(
+        {{"field1", make_int_const(123)}, {"field2", make_text_const("field2val")}, {"field3", make_bool_const(true)}});
+    BOOST_REQUIRE_EQUAL(evaluate(usertype, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(123), make_text_raw("field2val"), make_bool_raw(true)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_null) {
+    expression usertype_with_null = make_usertype_constructor({{"field1", make_int_const(123)},
+                                                               {"field2", constant::make_null(utf8_type)},
+                                                               {"field3", make_bool_const(true)}});
+    BOOST_REQUIRE_EQUAL(evaluate(usertype_with_null, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(123), raw_value::make_null(), make_bool_raw(true)}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_unset) {
+    expression usertype_with_unset = make_usertype_constructor({{"field1", make_int_const(123)},
+                                                                {"field2", constant::make_unset_value(utf8_type)},
+                                                                {"field3", make_bool_const(true)}});
+    BOOST_REQUIRE_THROW(evaluate(usertype_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_empty) {
+    expression usertype_with_null = make_usertype_constructor(
+        {{"field1", make_int_const(123)}, {"field2", make_empty_const(utf8_type)}, {"field3", make_bool_const(true)}});
+    BOOST_REQUIRE_EQUAL(evaluate(usertype_with_null, evaluation_inputs{}),
+                        make_tuple_raw({make_int_raw(123), make_empty_raw(), make_bool_raw(true)}));
+}

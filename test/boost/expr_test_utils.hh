@@ -278,6 +278,19 @@ inline tuple_constructor make_tuple_constructor(std::vector<expression> elements
                              .type = tuple_type_impl::get_instance(std::move(element_types))};
 }
 
+inline usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_view, constant>> field_values) {
+    usertype_constructor::elements_map_type elements_map;
+    std::vector<bytes> field_names;
+    std::vector<data_type> field_types;
+    for (auto& [field_name, field_value] : field_values) {
+        field_names.push_back(field_name.data());
+        field_types.push_back(field_value.type);
+        elements_map.emplace(column_identifier(sstring(field_name), true), field_value);
+    }
+    data_type type = user_type_impl::get_instance("test_ks", "test_user_type", field_names, field_types, true);
+    return usertype_constructor{.elements = std::move(elements_map), .type = std::move(type)};
+}
+
 struct evaluation_inputs_data {
     std::vector<bytes> partition_key;
     std::vector<bytes> clustering_key;
