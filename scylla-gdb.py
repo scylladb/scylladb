@@ -2485,7 +2485,7 @@ class scylla_ptr(gdb.Command):
             return False
 
     @staticmethod
-    def analyze(ptr):
+    def _do_analyze(ptr):
         owning_thread = None
         for t, start, size in seastar_memory_layout():
             if ptr >= start and ptr < start + size:
@@ -2552,6 +2552,14 @@ class scylla_ptr(gdb.Command):
         ptr_meta.is_lsa = bool(desc['_region'])
 
         return ptr_meta
+
+    @staticmethod
+    def analyze(ptr):
+        orig = gdb.selected_thread()
+        try:
+            return scylla_ptr._do_analyze(ptr)
+        finally:
+            orig.switch()
 
     def invoke(self, arg, from_tty):
         ptr = int(gdb.parse_and_eval(arg))
