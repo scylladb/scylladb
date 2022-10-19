@@ -22,6 +22,7 @@ namespace tasks {
 
 using task_id = utils::tagged_uuid<struct task_id_tag>;
 using is_abortable = bool_class <struct abortable_tag>;
+using is_internal = bool_class<struct internal_tag>;
 
 extern logging::logger tmlogger;
 
@@ -129,6 +130,10 @@ public:
 
             virtual is_abortable is_abortable() const noexcept {
                 return is_abortable::no;
+            }
+
+            virtual is_internal is_internal() const noexcept {
+                return is_internal::no;
             }
 
             virtual future<> abort() noexcept {
@@ -242,6 +247,10 @@ public:
         is_abortable is_abortable() const noexcept {
             return _impl->is_abortable();
         };
+
+        is_internal is_internal() const noexcept {
+            return _impl->is_internal();
+        }
 
         future<> abort() noexcept {
             return _impl->abort();
