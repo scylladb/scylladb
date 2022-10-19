@@ -1594,14 +1594,20 @@ class schema_ptr:
 
     @property
     def ks_name(self):
-        return self.ptr['_raw']['_ks_name']
+        return str(self.ptr['_raw']['_ks_name'])[1:-1]
 
     @property
     def cf_name(self):
-        return self.ptr['_raw']['_cf_name']
+        return str(self.ptr['_raw']['_cf_name'])[1:-1]
 
     def table_name(self):
         return '%s.%s' % (self.ptr['_raw']['_ks_name'], self.ptr['_raw']['_cf_name'])
+
+    def __getitem__(self, item):
+        return self.ptr[item]
+
+    def is_system(self):
+        return self.ks_name in ["system", "system_schema", "system_distributed", "system_traces", "system_auth", "audit"]
 
 
 class scylla_active_sstables(gdb.Command):
