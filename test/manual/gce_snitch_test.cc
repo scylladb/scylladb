@@ -26,7 +26,6 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/std-compat.hh>
-#include "gms/gossiper.hh"
 
 namespace fs = std::filesystem;
 
@@ -85,9 +84,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
-            sharded<gms::gossiper> g;
             sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(cfg, std::ref(g)).get();
+            snitch.start(cfg).get();
             snitch.invoke_on_all(&snitch_ptr::start).get();
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed configuration file");
@@ -103,13 +101,13 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             auto my_address = utils::fb_utilities::get_broadcast_address();
 
             i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
-                *cpu0_dc =inst->get_datacenter(my_address);
-                *cpu0_rack = inst->get_rack(my_address);
+                *cpu0_dc =inst->get_datacenter();
+                *cpu0_rack = inst->get_rack();
             }).get();
 
             i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
-                if (*cpu0_dc != inst->get_datacenter(my_address) ||
-                    *cpu0_rack != inst->get_rack(my_address)) {
+                if (*cpu0_dc != inst->get_datacenter() ||
+                    *cpu0_rack != inst->get_rack()) {
                     *res = false;
                 }
             }).get();

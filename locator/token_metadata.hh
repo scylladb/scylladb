@@ -45,15 +45,21 @@ struct endpoint_dc_rack {
 
 class topology {
 public:
-    topology() {}
+    struct config {
+        endpoint_dc_rack local_dc_rack;
+        bool disable_proximity_sorting = false;
+    };
+    topology(config cfg);
     topology(const topology& other);
 
     future<> clear_gently() noexcept;
 
+    using pending = bool_class<struct pending_tag>;
+
     /**
      * Stores current DC/rack assignment for ep
      */
-    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
+    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend);
 
     /**
      * Removes current DC/rack assignment for ep
@@ -63,7 +69,7 @@ public:
     /**
      * Returns true iff contains given endpoint
      */
-    bool has_endpoint(inet_address) const;
+    bool has_endpoint(inet_address, pending with_pending = pending::no) const;
 
     const std::unordered_map<sstring,
                            std::unordered_set<inet_address>>&
@@ -101,16 +107,13 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
-    void disable_proximity_sorting() noexcept {
-        _sort_by_proximity = false;
-    }
-
 private:
     /**
      * compares two endpoints in relation to the target endpoint, returning as
      * Comparator.compare would
      */
     int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    void remove_pending_location(const inet_address& ep);
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
@@ -125,6 +128,7 @@ private:
 
     /** reverse-lookup map: endpoint -> current known dc/rack assignment */
     std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
+    std::unordered_map<inet_address, endpoint_dc_rack> _pending_locations;
 
     bool _sort_by_proximity = true;
 };
@@ -135,6 +139,9 @@ class token_metadata_impl;
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 public:
+    struct config {
+        topology::config topo_cfg;
+    };
     using inet_address = gms::inet_address;
 private:
     class tokens_iterator {
@@ -157,8 +164,9 @@ private:
 
         friend class token_metadata_impl;
     };
+
 public:
-    token_metadata();
+    token_metadata(config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
@@ -177,7 +185,7 @@ public:
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
-    void update_topology(inet_address ep, endpoint_dc_rack dr);
+    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend = topology::pending::no);
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
@@ -350,8 +358,8 @@ class shared_token_metadata {
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
-    explicit shared_token_metadata(token_metadata_lock_func lock_func)
-        : _shared(make_token_metadata_ptr())
+    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
+        : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
     { }
 

@@ -40,7 +40,9 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
-        : production_snitch_base(cfg), _file_reader_cpu_id(cfg.io_cpu_id) {
+        : production_snitch_base(cfg)
+        , _file_reader_cpu_id(cfg.io_cpu_id)
+        , _listen_address(cfg.listen_address) {
     if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }
@@ -102,7 +104,7 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
 }
 
 std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
-    sstring ip = format("{}", local().get_local_gossiper().get_local_messaging().listen_address());
+    sstring ip = format("{}", _listen_address);
     return {
         {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
         {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},

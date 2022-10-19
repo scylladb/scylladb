@@ -22,18 +22,18 @@ namespace locator {
  */
 struct simple_snitch : public snitch_base {
     simple_snitch(const snitch_config& cfg) {
-        _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
-        _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+        _my_dc = get_datacenter();
+        _my_rack = get_rack();
 
         // This snitch is ready on creation
         set_snitch_ready();
     }
 
-    virtual sstring get_rack(inet_address endpoint) override {
+    virtual sstring get_rack() const override {
         return "rack1";
     }
 
-    virtual sstring get_datacenter(inet_address endpoint) override {
+    virtual sstring get_datacenter() const override {
         return "datacenter1";
     }
 

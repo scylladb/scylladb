@@ -74,9 +74,14 @@ private:
 
     void sort_tokens();
 
+    struct shallow_copy {};
+    token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
+            : _topology(topology::config{})
+    {}
+
 public:
-    token_metadata_impl() noexcept {};
-    token_metadata_impl(const token_metadata_impl&) = default;
+    token_metadata_impl(token_metadata::config cfg) noexcept : _topology(std::move(cfg.topo_cfg)) {};
+    token_metadata_impl(const token_metadata_impl&) = delete; // it's too huge for direct copy, use clone_async()
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
@@ -96,8 +101,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.update_endpoint(ep, std::move(dr));
+    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
+        _topology.update_endpoint(ep, std::move(dr), pend);
     }
 
     /**
@@ -358,7 +363,7 @@ future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone_sorted_tokens) const noexcept {
-    return do_with(token_metadata_impl(), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
+    return do_with(token_metadata_impl(shallow_copy{}, *this), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
         ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
         return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
             ret._token_to_endpoint_map.emplace(p);
@@ -737,11 +742,18 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         return;
     }
     std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
+    std::unordered_set<inet_address> endpoints;
     for (const auto& x : new_pending_ranges) {
         if (can_yield) {
             seastar::thread::maybe_yield();
         }
         map[x.first].emplace(x.second);
+        auto ins = endpoints.emplace(x.second);
+        if (ins.second) { // insertion took place, i.e. -- new endpoint
+            if (!_topology.has_endpoint(x.second, topology::pending::yes)) {
+                on_internal_error(tlogger, format("token_metadata_impl: {} must be member or pending to set pending tokens", x.second));
+            }
+        }
     }
 
     // construct a interval map to speed up the search
@@ -969,8 +981,8 @@ token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
     : _impl(std::move(impl)) {
 }
 
-token_metadata::token_metadata()
-        : _impl(std::make_unique<token_metadata_impl>()) {
+token_metadata::token_metadata(config cfg)
+        : _impl(std::make_unique<token_metadata_impl>(std::move(cfg))) {
 }
 
 token_metadata::~token_metadata() = default;
@@ -1026,8 +1038,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
-    _impl->update_topology(ep, std::move(dr));
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
+    _impl->update_topology(ep, std::move(dr), pend);
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
@@ -1238,18 +1250,37 @@ inline future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
     co_await utils::clear_gently(_current_locations);
+    co_await utils::clear_gently(_pending_locations);
     co_return;
+}
+
+topology::topology(config cfg)
+        : _sort_by_proximity(!cfg.disable_proximity_sorting)
+{
+    _pending_locations[utils::fb_utilities::get_broadcast_address()] = std::move(cfg.local_dc_rack);
 }
 
 topology::topology(const topology& other)
         : _dc_endpoints(other._dc_endpoints)
         , _dc_racks(other._dc_racks)
         , _current_locations(other._current_locations)
+        , _pending_locations(other._pending_locations)
 {
 }
 
-void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
+void topology::remove_pending_location(const inet_address& ep) {
+    if (ep != utils::fb_utilities::get_broadcast_address()) {
+        _pending_locations.erase(ep);
+    }
+}
+
+void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend)
 {
+    if (pend) {
+        _pending_locations[ep] = std::move(dr);
+        return;
+    }
+
     auto current = _current_locations.find(ep);
 
     if (current != _current_locations.end()) {
@@ -1262,6 +1293,7 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
     _dc_endpoints[dr.dc].insert(ep);
     _dc_racks[dr.dc][dr.rack].insert(ep);
     _current_locations[ep] = std::move(dr);
+    remove_pending_location(ep);
 }
 
 void topology::remove_endpoint(inet_address ep)
@@ -1269,6 +1301,7 @@ void topology::remove_endpoint(inet_address ep)
     auto cur_dc_rack = _current_locations.find(ep);
 
     if (cur_dc_rack == _current_locations.end()) {
+        remove_pending_location(ep);
         return;
     }
 
@@ -1284,13 +1317,21 @@ void topology::remove_endpoint(inet_address ep)
     _current_locations.erase(cur_dc_rack);
 }
 
-bool topology::has_endpoint(inet_address ep) const
+bool topology::has_endpoint(inet_address ep, pending with_pending) const
 {
-    return _current_locations.contains(ep);
+    return _current_locations.contains(ep) || (with_pending && _pending_locations.contains(ep));
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
-    return _current_locations.at(ep);
+    if (_current_locations.contains(ep)) {
+        return _current_locations.at(ep);
+    }
+
+    if (_pending_locations.contains(ep)) {
+        return _pending_locations.at(ep);
+    }
+
+    on_internal_error(tlogger, format("Node {} is not in topology", ep));
 }
 
 // FIXME -- both methods below should rather return data from the
@@ -1303,7 +1344,7 @@ sstring topology::get_rack() const {
 }
 
 sstring topology::get_rack(inet_address ep) const {
-    return i_endpoint_snitch::get_local_snitch_ptr()->get_rack(ep);
+    return get_location(ep).rack;
 }
 
 sstring topology::get_datacenter() const {
@@ -1311,7 +1352,7 @@ sstring topology::get_datacenter() const {
 }
 
 sstring topology::get_datacenter(inet_address ep) const {
-    return i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(ep);
+    return get_location(ep).dc;
 }
 
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {

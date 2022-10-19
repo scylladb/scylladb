@@ -711,8 +711,37 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
+            supervisor::notify("creating snitch");
+            snitch_config snitch_cfg;
+            snitch_cfg.name = cfg->endpoint_snitch();
+            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
+            snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
+            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            snitch.start(snitch_cfg).get();
+            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
+                snitch.stop().get();
+            });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+            // #293 - do not stop anything (unless snitch.on_all(start) fails)
+            stop_snitch->cancel();
+
             supervisor::notify("starting tokens manager");
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
+            locator::token_metadata::config tm_cfg;
+            tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+            if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
+                //
+                // Simple snitch wants sort_by_proximity() not to reorder nodes anyhow
+                //
+                // "Making all endpoints equal ensures we won't change the original
+                // ordering." - quote from C* code.
+                //
+                // The snitch_base implementation should handle the above case correctly.
+                // I'm leaving the this implementation anyway since it's the C*'s
+                // implementation and some installations may depend on it.
+                //
+                tm_cfg.topo_cfg.disable_proximity_sorting = true;
+            }
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             // storage_proxy holds a reference on it and is not yet stopped.
             // what's worse is that the calltrace
             //   storage_proxy::do_query 
@@ -884,40 +913,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            supervisor::notify("creating snitch");
-            snitch_config snitch_cfg;
-            snitch_cfg.name = cfg->endpoint_snitch();
-            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
-            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-            snitch.start(snitch_cfg, std::ref(gossiper)).get();
-            auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
-                snitch.stop().get();
-            });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
-            // #293 - do not stop anything (unless snitch.on_all(start) fails)
-            stop_snitch->cancel();
-
-            if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
-                //
-                // Simple snitch wants sort_by_proximity() not to reorder nodes anyhow
-                //
-                // "Making all endpoints equal ensures we won't change the original
-                // ordering." - quote from C* code.
-                //
-                // The snitch_base implementation should handle the above case correctly.
-                // I'm leaving the this implementation anyway since it's the C*'s
-                // implementation and some installations may depend on it.
-                //
-                token_metadata.invoke_on_all([] (shared_token_metadata& tm) mutable {
-                    const auto& topo = tm.get()->get_topology();
-                    // There's no real need in mutate_token_metadata here as it just
-                    // sets a single boolean bit on topology object, this change is
-                    // never ever performed again and by this point no code uses neither
-                    // topology nor the token metadata itself
-                    const_cast<locator::topology&>(topo).disable_proximity_sorting();
-                }).get();
-            }
 
             static direct_fd_clock fd_clock;
             static sharded<direct_failure_detector::failure_detector> fd;
