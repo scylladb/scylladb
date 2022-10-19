@@ -2662,12 +2662,8 @@ class scylla_lsa(gdb.Command):
                   'Free segments:         {free_segments:>12}\n\n'
                   .format(er_goal=er_goal, er_max=er_max, free_segments=free_segments))
 
-        lsa_tracker = std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl'))
-        regions = lsa_tracker['_regions']
-        region = regions['_M_impl']['_M_start']
-        gdb.write('LSA regions:\n')
-        while region != regions['_M_impl']['_M_finish']:
-            gdb.write('    Region #{r_id} (logalloc::region_impl*) 0x{r_addr}\n      - reclaimable: {r_en:>14}\n'
+        for region in lsa_regions():
+            gdb.write('    Region #{r_id} (logalloc::region_impl*) {r_addr}\n      - reclaimable: {r_en:>14}\n'
                       '      - evictable: {r_ev:16}\n      - non-LSA memory: {r_non_lsa:>11}\n'
                       '      - closed LSA memory: {r_lsa:>8}\n      - unused memory: {r_unused:>12}\n'
                       .format(r_addr=str(region.dereference()), r_id=int(region['_id']), r_en=bool(region['_reclaiming_enabled']),
@@ -2675,7 +2671,6 @@ class scylla_lsa(gdb.Command):
                               r_non_lsa=int(region['_non_lsa_occupancy']['_total_space']),
                               r_lsa=int(region['_closed_occupancy']['_total_space']),
                               r_unused=int(region['_closed_occupancy']['_free_space'])))
-            region = region + 1
 
 
 names = {}  # addr (int) -> name (str)
@@ -2696,6 +2691,17 @@ def resolve(addr, cache=True, startswith=None):
         names[addr] = name
     return name
 
+
+class lsa_regions(object):
+    def __init__(self):
+        lsa_tracker = std_unique_ptr(gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl'))
+        self._regions = lsa_tracker['_regions']
+        self._region = self._regions['_M_impl']['_M_start']
+
+    def __iter__(self):
+        while self._region != self._regions['_M_impl']['_M_finish']:
+            yield self._region
+            self._region = self._region + 1
 
 class lsa_object_descriptor(object):
     @staticmethod
