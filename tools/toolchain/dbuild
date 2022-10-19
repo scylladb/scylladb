@@ -178,6 +178,10 @@ fi
 
 tmpdir=$(mktemp -d)
 
+if [ -e ~/.gdbinit ]; then
+    docker_common_args+=(-v "$HOME/.gdbinit:$HOME/.gdbinit:ro")
+fi
+
 docker_common_args+=(
        --security-opt seccomp=unconfined \
        --security-opt label=disable \
@@ -187,7 +191,6 @@ docker_common_args+=(
        -v "$tmpdir:/tmp" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
        -v /etc/localtime:/etc/localtime:ro \
-       -v ~/.gdbinit:$HOME/.gdbinit:ro \
        -w "$PWD" \
        -e HOME="$HOME" \
        "${docker_args[@]}" \
