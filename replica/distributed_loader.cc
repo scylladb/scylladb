@@ -475,16 +475,15 @@ public:
 
     future<> start() {
         assert(this_shard_id() == 0);
-        return async([this] {
+        // FIXME: indentation
             for (auto subdir : { "", sstables::staging_dir, sstables::quarantine_dir }) {
-                start_subdir(subdir);
+                co_await start_subdir(subdir);
             }
 
-            smp::invoke_on_all([this] {
+            co_await smp::invoke_on_all([this] {
                 _global_table->update_sstables_known_generation(_highest_generation);
                 return _global_table->disable_auto_compaction();
-            }).get();
-        });
+            });
     }
 
     future<> stop() {
@@ -530,30 +529,28 @@ public:
     }
 
 private:
-    void start_subdir(sstring subdir);
+    future<> start_subdir(sstring subdir);
 };
 
-// Must be called in a seastar thread
-// FIXME: turn into a coroutine
-void table_population_metadata::start_subdir(sstring subdir) {
+future<> table_population_metadata::start_subdir(sstring subdir) {
     sstring sstdir = get_path(subdir).native();
-    if (!file_exists(sstdir).get0()) {
-        return;
+    if (!co_await file_exists(sstdir)) {
+        co_return;
     }
 
     // First pass, cleanup temporary sstable directories and sstables pending delete.
-    distributed_loader::cleanup_column_family_temp_sst_dirs(sstdir).get();
+    co_await distributed_loader::cleanup_column_family_temp_sst_dirs(sstdir);
     auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
-    auto exists = file_exists(pending_delete_dir).get0();
+    auto exists = co_await file_exists(pending_delete_dir);
     if (exists) {
-        distributed_loader::handle_sstables_pending_delete(pending_delete_dir).get();
+        co_await distributed_loader::handle_sstables_pending_delete(pending_delete_dir);
     }
 
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
     auto& global_table = _global_table;
     auto& db = _db;
-    directory.start(fs::path(sstdir), default_priority_class(),
+    co_await directory.start(fs::path(sstdir), default_priority_class(),
         db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
         sstables::sstable_directory::need_mutate_level::no,
         sstables::sstable_directory::lack_of_toc_fatal::yes,
@@ -561,13 +558,13 @@ void table_population_metadata::start_subdir(sstring subdir) {
         sstables::sstable_directory::allow_loading_materialized_view::yes,
         [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
             return global_table->make_sstable(dir.native(), gen, v, f);
-    }).get();
+    });
 
     // directory must be stopped using table_population_metadata::stop below
     _sstable_directories[subdir] = dptr;
 
-    distributed_loader::lock_table(directory, _db, _ks, _cf).get();
-    distributed_loader::process_sstable_dir(directory).get();
+    co_await distributed_loader::lock_table(directory, _db, _ks, _cf);
+    co_await distributed_loader::process_sstable_dir(directory);
 
     // If we are resharding system tables before we can read them, we will not
     // know which is the highest format we support: this information is itself stored
@@ -575,8 +572,8 @@ void table_population_metadata::start_subdir(sstring subdir) {
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
     auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
-    auto sst_version = highest_version_seen(directory, sys_format).get0();
-    auto generation = highest_generation_seen(directory).get0();
+    auto sst_version = co_await highest_version_seen(directory, sys_format);
+    auto generation = co_await highest_generation_seen(directory);
 
     _highest_version = std::max(sst_version, _highest_version);
     _highest_generation = std::max(generation, _highest_generation);
