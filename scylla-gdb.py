@@ -1731,10 +1731,16 @@ class dirty_mem_mgr():
         self.ref = ref
 
     def real_dirty(self):
-        return int(self.ref['_region_group']['_real_total_memory'])
+        try:
+            return int(self.ref['_region_group']['_real_total_memory'])
+        except gdb.error: # backward compatibility with <= 5.1
+            return int(self.ref['_real_region_group']['_total_memory'])
 
     def unspooled(self):
-        return int(self.ref['_region_group']['_unspooled_total_memory'])
+        try:
+            return int(self.ref['_region_group']['_unspooled_total_memory'])
+        except gdb.error: # backward compatibility with <= 5.1
+            return int(self.ref['_virtual_region_group']['_total_memory'])
 
 
 def find_instances(type_name):
