@@ -189,6 +189,9 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
     i_endpoint_snitch* operator->() {
         return _ptr.get();
     }
+    const i_endpoint_snitch* operator->() const {
+        return _ptr.get();
+    }
 
     snitch_ptr& operator=(ptr_type&& new_val) {
         _ptr = std::move(new_val);
