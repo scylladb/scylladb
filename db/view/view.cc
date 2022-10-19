@@ -1064,13 +1064,18 @@ void view_updates::generate_update(
     bool same_row = true;
     for (auto col_id : col_ids) {
         auto* after = update.cells().find_cell(col_id);
-        // Note: multi-cell columns can't be part of the primary key.
         auto& cdef = _base->regular_column_at(col_id);
         if (existing) {
             auto* before = existing->cells().find_cell(col_id);
+            // Note that this cell is necessarily atomic, because col_ids are
+            // view key columns, and keys must be atomic.
             if (before && before->as_atomic_cell(cdef).is_live()) {
                 if (after && after->as_atomic_cell(cdef).is_live()) {
-                    auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
+                    // We need to compare just the values of the keys, not
+                    // metadata like the timestamp. This is because below,
+                    // if the old and new view row have the same key, we need
+                    // to be sure to reach the update_entry() case.
+                    auto cmp = compare_unsigned(before->as_atomic_cell(cdef).value(), after->as_atomic_cell(cdef).value());
                     if (cmp != 0) {
                         same_row = false;
                     }
@@ -1090,6 +1095,11 @@ void view_updates::generate_update(
             if (same_row) {
                 update_entry(base_key, update, *existing, now);
             } else {
+                // This code doesn't work if the old and new view row have the
+                // same key, because if they do we get both data and tombstone
+                // for the same timestamp (now) and the tombstone wins. This
+                // is why we need the "same_row" case above - it's not just a
+                // performance optimization.
                 delete_old_entry(base_key, *existing, update, now);
                 create_entry(base_key, update, now);
             }
