@@ -1357,20 +1357,40 @@ class scylla_keyspaces(gdb.Command):
                 gdb.write('{:5} {:20} (replica::keyspace*){}\n'.format(shard, str(key), value.address))
 
 
-class scylla_column_families(gdb.Command):
+class scylla_tables(gdb.Command):
+    """Lists tables (column-families)"""
     def __init__(self):
-        gdb.Command.__init__(self, 'scylla column_families', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+        gdb.Command.__init__(self, 'scylla tables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        for shard in range(cpus()):
+        parser = argparse.ArgumentParser(description="scylla tables")
+        parser.add_argument("-a", "--all", action="store_true", default=False,
+                help="List tables from all shards")
+        parser.add_argument("-u", "--user", action="store_true",
+                help="List only user tables")
+        parser.add_argument("-k", "--keyspace", action="store",
+                help="List tables only for provided keyspace")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        if args.all:
+            shards = list(range(cpus()))
+        else:
+            shards = [current_shard()]
+
+        for shard in shards:
             db = find_db(shard)
             cfs = db['_column_families']
             for (key, value) in unordered_map(cfs):
-                value = value['_p'].reinterpret_cast(lookup_type(['replica::table', 'column_family'])[1].pointer()).dereference()  # it's a lw_shared_ptr
-                schema = value['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer())
-                name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
+                value = seastar_lw_shared_ptr(value).get().dereference()
+                schema = schema_ptr(value['_schema'])
+                if args.user and schema.is_system():
+                    continue
                 schema_version = str(schema['_raw']['_version'])
-                gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, name, value.address))
+                gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, schema.table_name(), value.address))
 
 
 class scylla_task_histogram(gdb.Command):
@@ -5253,7 +5273,7 @@ class scylla_gdb_func_variant_member(gdb.Function):
 scylla()
 scylla_databases()
 scylla_keyspaces()
-scylla_column_families()
+scylla_tables()
 scylla_memory()
 scylla_ptr()
 scylla_mem_ranges()
