@@ -3,5 +3,5 @@
 # Modern pytest excludes site-packages, so it doesn't see scylla-driver.
 # This script is a workaround.
 
-exec python -m pytest "$@"
+exec python3 -m pytest "$@"
 
