@@ -584,57 +584,57 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
     const auto& cf = metadata.cf();
     auto sstdir = metadata.get_path(subdir).native();
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
-    // FIXME: indentation
-        assert(this_shard_id() == 0);
 
-        if (!co_await file_exists(sstdir)) {
-            if (dir_must_exist) {
-                throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
-            }
-            co_return;
+    assert(this_shard_id() == 0);
+
+    if (!co_await file_exists(sstdir)) {
+        if (dir_must_exist) {
+            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
         }
+        co_return;
+    }
 
-        auto& global_table = metadata.global_table();
-        if (!metadata.sstable_directories().contains(subdir)) {
-            dblog.error("Could not find sstables directory {}.{}/{}", ks, cf, subdir);
+    auto& global_table = metadata.global_table();
+    if (!metadata.sstable_directories().contains(subdir)) {
+        dblog.error("Could not find sstables directory {}.{}/{}", ks, cf, subdir);
+    }
+    auto& directory = *metadata.sstable_directories().at(subdir);
+    auto sst_version = metadata.highest_version();
+
+    co_await reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
+        auto gen = smp::submit_to(shard, [&global_table] () {
+            return global_table->calculate_generation_for_new_table();
+        }).get0();
+
+        return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+    });
+
+    // The node is offline at this point so we are very lenient with what we consider
+    // offstrategy.
+    // SSTables created by repair may not conform to compaction strategy layout goal
+    // because data segregation is only performed by compaction
+    // Instead of reshaping them on boot, let's add them to maintenance set and allow
+    // off-strategy compaction to reshape them. This will allow node to become online
+    // ASAP. Given that SSTables with repair origin are disjoint, they can be efficiently
+    // read from.
+    auto eligible_for_reshape_on_boot = [] (const sstables::shared_sstable& sst) {
+        return sst->get_origin() != sstables::repair_origin;
+    };
+
+    co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
+        auto gen = global_table->calculate_generation_for_new_table();
+        return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+    }, eligible_for_reshape_on_boot);
+
+    co_await directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
+        co_await dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
+            auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
+            return global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
+        });
+        if (do_allow_offstrategy_compaction) {
+            global_table->trigger_offstrategy_compaction();
         }
-        auto& directory = *metadata.sstable_directories().at(subdir);
-        auto sst_version = metadata.highest_version();
-
-        co_await reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
-            auto gen = smp::submit_to(shard, [&global_table] () {
-                return global_table->calculate_generation_for_new_table();
-            }).get0();
-
-            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
-        });
-
-        // The node is offline at this point so we are very lenient with what we consider
-        // offstrategy.
-        // SSTables created by repair may not conform to compaction strategy layout goal
-        // because data segregation is only performed by compaction
-        // Instead of reshaping them on boot, let's add them to maintenance set and allow
-        // off-strategy compaction to reshape them. This will allow node to become online
-        // ASAP. Given that SSTables with repair origin are disjoint, they can be efficiently
-        // read from.
-        auto eligible_for_reshape_on_boot = [] (const sstables::shared_sstable& sst) {
-            return sst->get_origin() != sstables::repair_origin;
-        };
-
-        co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
-            auto gen = global_table->calculate_generation_for_new_table();
-            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
-        }, eligible_for_reshape_on_boot);
-
-        co_await directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
-            co_await dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
-                auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
-                return global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
-            });
-              if (do_allow_offstrategy_compaction) {
-                global_table->trigger_offstrategy_compaction();
-              }
-        });
+    });
 }
 
 future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name) {
