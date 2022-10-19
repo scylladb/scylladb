@@ -3608,10 +3608,24 @@ class scylla_fiber(gdb.Command):
         return ptr_meta, maybe_vptr, resolved_symbol
 
    # Find futures waiting on this task
-    def _walk_forward(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+    def _walk_forward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         ptr = ptr_meta.ptr
-        region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
-        region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
+
+        # thread_context has a self reference in its `_func` field which will be
+        # found before the ref to the next task if the whole object is scanned.
+        # Exploit that thread_context is a type we can cast to and scan the
+        # `_done` field explicitly to avoid that.
+        if 'thread_context' in name:
+            self._maybe_log("Current task is a thread, using its _done field to continue\n", verbose)
+            thread_context_ptr_type = gdb.lookup_type('seastar::thread_context').pointer()
+            ctxt = gdb.Value(int(ptr_meta.ptr)).reinterpret_cast(thread_context_ptr_type).dereference()
+            pr = ctxt['_done']
+            region_start = pr.address
+            region_end = region_start + pr.type.sizeof
+        else:
+            region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
+            region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
+
         self._maybe_log("Scanning task #{} @ 0x{:016x}: {}\n".format(i, ptr, str(ptr_meta)), verbose)
 
         for it in range(region_start, region_end, self._vptr_type.sizeof):
@@ -3626,8 +3640,22 @@ class scylla_fiber(gdb.Command):
         return None
 
    # Find futures waited-on by this task
-    def _walk_backward(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+    def _walk_backward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         res = None
+
+        # Threads need special handling as they allocate the thread_wait_task object on their stack.
+        if 'thread_context' in name:
+            context = gdb.parse_and_eval('(seastar::thread_context*)0x{:x}'.format(ptr_meta.ptr))
+            stack_ptr = int(std_unique_ptr(context['_stack']).get())
+            self._maybe_log("Current task is a thread, trying to find the thread_wake_task on its stack: 0x{:x}\n".format(stack_ptr), verbose)
+            stack_meta = scylla_ptr.analyze(stack_ptr)
+            # stack grows downwards, so walk from end of buffer towards the beginning
+            for maybe_tptr in range(stack_ptr + stack_meta.size - self._vptr_type.sizeof, stack_ptr - self._vptr_type.sizeof, -self._vptr_type.sizeof):
+                res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
+                if not res is None and 'thread_wake_task' in res[2]:
+                    return res
+            return None
+
         for maybe_tptr_meta, _ in scylla_find.find(ptr_meta.ptr):
             maybe_tptr_meta.ptr -= maybe_tptr_meta.offset_in_object
             res = self._probe_pointer(maybe_tptr_meta.ptr, scanned_region_size, using_seastar_allocator, verbose)
@@ -3635,7 +3663,7 @@ class scylla_fiber(gdb.Command):
                 return res
         return res
 
-    def _walk(self, walk_method, tptr_meta, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+    def _walk(self, walk_method, tptr_meta, name, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         i = 0
         fiber = []
         known_tasks = set()
@@ -3643,7 +3671,8 @@ class scylla_fiber(gdb.Command):
             if max_depth > -1 and i >= max_depth:
                 break
 
-            res = walk_method(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
+            self._maybe_log("_walk() 0x{:x} {}\n".format(int(tptr_meta.ptr), name), verbose)
+            res = walk_method(tptr_meta, name, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
             if res is None:
                 break
 
@@ -3692,7 +3721,7 @@ class scylla_fiber(gdb.Command):
                 gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(initial_task_ptr))
                 return
 
-            backwards_fiber = self._walk(self._walk_backward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
             for i, (tptr, vptr, name) in enumerate(reversed(backwards_fiber)):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i - len(backwards_fiber), int(tptr), int(vptr), name))
@@ -3700,7 +3729,7 @@ class scylla_fiber(gdb.Command):
             tptr, vptr, name = this_task
             gdb.write("#0 (task*) 0x{:016x} 0x{:016x} {}\n".format(int(tptr.ptr), int(vptr), name))
 
-            forward_fiber = self._walk(self._walk_forward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
+            forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
             for i, (tptr, vptr, name) in enumerate(forward_fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i + 1, int(tptr), int(vptr), name))
