@@ -475,15 +475,14 @@ public:
 
     future<> start() {
         assert(this_shard_id() == 0);
-        // FIXME: indentation
-            for (auto subdir : { "", sstables::staging_dir, sstables::quarantine_dir }) {
-                co_await start_subdir(subdir);
-            }
+        for (auto subdir : { "", sstables::staging_dir, sstables::quarantine_dir }) {
+            co_await start_subdir(subdir);
+        }
 
-            co_await smp::invoke_on_all([this] {
-                _global_table->update_sstables_known_generation(_highest_generation);
-                return _global_table->disable_auto_compaction();
-            });
+        co_await smp::invoke_on_all([this] {
+            _global_table->update_sstables_known_generation(_highest_generation);
+            return _global_table->disable_auto_compaction();
+        });
     }
 
     future<> stop() {
