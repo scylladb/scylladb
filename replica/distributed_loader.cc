@@ -536,51 +536,50 @@ private:
 // Must be called in a seastar thread
 // FIXME: turn into a coroutine
 void table_population_metadata::start_subdir(sstring subdir) {
-        // FIXME: indentation
-        sstring sstdir = get_path(subdir).native();
-        if (!file_exists(sstdir).get0()) {
-            return;
-        }
+    sstring sstdir = get_path(subdir).native();
+    if (!file_exists(sstdir).get0()) {
+        return;
+    }
 
-        // First pass, cleanup temporary sstable directories and sstables pending delete.
-        distributed_loader::cleanup_column_family_temp_sst_dirs(sstdir).get();
-        auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
-        auto exists = file_exists(pending_delete_dir).get0();
-        if (exists) {
-            distributed_loader::handle_sstables_pending_delete(pending_delete_dir).get();
-        }
+    // First pass, cleanup temporary sstable directories and sstables pending delete.
+    distributed_loader::cleanup_column_family_temp_sst_dirs(sstdir).get();
+    auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
+    auto exists = file_exists(pending_delete_dir).get0();
+    if (exists) {
+        distributed_loader::handle_sstables_pending_delete(pending_delete_dir).get();
+    }
 
-        auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
-        auto& directory = *dptr;
-        auto& global_table = _global_table;
-        auto& db = _db;
-        directory.start(fs::path(sstdir), default_priority_class(),
-            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
-            sstables::sstable_directory::need_mutate_level::no,
-            sstables::sstable_directory::lack_of_toc_fatal::yes,
-            sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
-            sstables::sstable_directory::allow_loading_materialized_view::yes,
-            [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f);
-        }).get();
+    auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
+    auto& directory = *dptr;
+    auto& global_table = _global_table;
+    auto& db = _db;
+    directory.start(fs::path(sstdir), default_priority_class(),
+        db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        sstables::sstable_directory::need_mutate_level::no,
+        sstables::sstable_directory::lack_of_toc_fatal::yes,
+        sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
+        sstables::sstable_directory::allow_loading_materialized_view::yes,
+        [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+            return global_table->make_sstable(dir.native(), gen, v, f);
+    }).get();
 
-        // directory must be stopped using table_population_metadata::stop below
-        _sstable_directories[subdir] = dptr;
+    // directory must be stopped using table_population_metadata::stop below
+    _sstable_directories[subdir] = dptr;
 
-        distributed_loader::lock_table(directory, _db, _ks, _cf).get();
-        distributed_loader::process_sstable_dir(directory).get();
+    distributed_loader::lock_table(directory, _db, _ks, _cf).get();
+    distributed_loader::process_sstable_dir(directory).get();
 
-        // If we are resharding system tables before we can read them, we will not
-        // know which is the highest format we support: this information is itself stored
-        // in the system tables. In that case we'll rely on what we find on disk: we'll
-        // at least not downgrade any files. If we already know that we support a higher
-        // format than the one we see then we use that.
-        auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
-        auto sst_version = highest_version_seen(directory, sys_format).get0();
-        auto generation = highest_generation_seen(directory).get0();
+    // If we are resharding system tables before we can read them, we will not
+    // know which is the highest format we support: this information is itself stored
+    // in the system tables. In that case we'll rely on what we find on disk: we'll
+    // at least not downgrade any files. If we already know that we support a higher
+    // format than the one we see then we use that.
+    auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
+    auto sst_version = highest_version_seen(directory, sys_format).get0();
+    auto generation = highest_generation_seen(directory).get0();
 
-        _highest_version = std::max(sst_version, _highest_version);
-        _highest_generation = std::max(generation, _highest_generation);
+    _highest_version = std::max(sst_version, _highest_version);
+    _highest_generation = std::max(generation, _highest_generation);
 }
 
 future<> distributed_loader::populate_column_family(table_population_metadata& metadata, sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
