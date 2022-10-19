@@ -584,14 +584,14 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
     const auto& cf = metadata.cf();
     auto sstdir = metadata.get_path(subdir).native();
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
-    return async([&metadata, &db, &ks, &cf, subdir = std::move(subdir), sstdir = std::move(sstdir), do_allow_offstrategy_compaction, dir_must_exist] {
+    // FIXME: indentation
         assert(this_shard_id() == 0);
 
-        if (!file_exists(sstdir).get0()) {
+        if (!co_await file_exists(sstdir)) {
             if (dir_must_exist) {
                 throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
             }
-            return;
+            co_return;
         }
 
         auto& global_table = metadata.global_table();
@@ -601,13 +601,13 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
         auto& directory = *metadata.sstable_directories().at(subdir);
         auto sst_version = metadata.highest_version();
 
-        reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
+        co_await reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
             auto gen = smp::submit_to(shard, [&global_table] () {
                 return global_table->calculate_generation_for_new_table();
             }).get0();
 
             return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
-        }).get();
+        });
 
         // The node is offline at this point so we are very lenient with what we consider
         // offstrategy.
@@ -621,22 +621,20 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
             return sst->get_origin() != sstables::repair_origin;
         };
 
-        reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
+        co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
             auto gen = global_table->calculate_generation_for_new_table();
             return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
-        }, eligible_for_reshape_on_boot).get();
+        }, eligible_for_reshape_on_boot);
 
-        directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) {
-            return dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
+        co_await directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
+            co_await dir.do_for_each_sstable([&global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
                 auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
                 return global_table->add_sstable_and_update_cache(sst, requires_offstrategy);
-            }).then([&global_table, do_allow_offstrategy_compaction] {
+            });
               if (do_allow_offstrategy_compaction) {
                 global_table->trigger_offstrategy_compaction();
               }
-            });
-        }).get();
-    });
+        });
 }
 
 future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name) {
