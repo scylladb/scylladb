@@ -1090,7 +1090,8 @@ void view_updates::generate_update(
             if (same_row) {
                 update_entry(base_key, update, *existing, now);
             } else {
-                replace_entry(base_key, update, *existing, now);
+                delete_old_entry(base_key, *existing, update, now);
+                create_entry(base_key, update, now);
             }
         } else {
             delete_old_entry(base_key, *existing, update, now);
