@@ -3964,11 +3964,15 @@ class scylla_sstables(gdb.Command):
         int_type = gdb.lookup_type('int')
         version_number = int(sst['_version'])
         version_name = list(version_to_format)[version_number]
+        try:
+            generation = sst['_generation']['_value']
+        except gdb.error:
+            generation = sst['_generation']
         return version_to_format[version_name].format(
                 keyspace=str(schema.ks_name)[1:-1],
                 table=str(schema.cf_name)[1:-1],
                 version=version_name,
-                generation=sst['_generation'],
+                generation=generation,
                 format=format_to_str[int(sst['_format'].cast(int_type))],
             )
 
