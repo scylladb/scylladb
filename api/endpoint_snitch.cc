@@ -48,4 +48,10 @@ void set_endpoint_snitch(http_context& ctx, routes& r) {
     });
 }
 
+void unset_endpoint_snitch(http_context& ctx, routes& r) {
+    httpd::endpoint_snitch_info_json::get_datacenter.unset(r);
+    httpd::endpoint_snitch_info_json::get_rack.unset(r);
+    httpd::endpoint_snitch_info_json::get_snitch_name.unset(r);
+}
+
 }
