@@ -282,7 +282,9 @@ static future<> expire_item(service::storage_proxy& proxy,
         auto ck = clustering_key::from_exploded(exploded_ck);
         m.partition().clustered_row(*schema, ck).apply(tombstone(ts, gc_clock::now()));
     }
-    return proxy.mutate(std::vector<mutation>{std::move(m)},
+    std::vector<mutation> mutations;
+    mutations.push_back(std::move(m));
+    return proxy.mutate(std::move(mutations),
         db::consistency_level::LOCAL_QUORUM,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
