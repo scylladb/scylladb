@@ -37,52 +37,51 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     snitch_config cfg;
     cfg.name = "Ec2Snitch";
     cfg.properties_file_name = fname.string();
-    auto start = [cfg] {
-        return i_endpoint_snitch::snitch_instance().start(cfg).then([] {
-            return i_endpoint_snitch::snitch_instance().invoke_on_all(&snitch_ptr::start);
-        });
-    };
-    return start().then_wrapped([exp_result] (auto&& f) {
+    auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
+    auto& snitch = *snitch_i;
+    return snitch.start(cfg).then([&snitch] () {
+        return snitch.invoke_on_all(&snitch_ptr::start);
+    }).then_wrapped([&snitch, exp_result] (auto&& f) {
             try {
                 f.get();
                 if (!exp_result) {
                     BOOST_ERROR("Failed to catch an error in a malformed "
                                 "configuration file");
-                    return i_endpoint_snitch::snitch_instance().stop();
+                    return snitch.stop();
                 }
                 auto cpu0_dc = make_lw_shared<sstring>();
                 auto cpu0_rack = make_lw_shared<sstring>();
                 auto res = make_lw_shared<bool>(true);
                 auto my_address = utils::fb_utilities::get_broadcast_address();
 
-                return i_endpoint_snitch::snitch_instance().invoke_on(0,
+                return snitch.invoke_on(0,
                         [cpu0_dc, cpu0_rack,
                          res, my_address] (snitch_ptr& inst) {
                     *cpu0_dc =inst->get_datacenter();
                     *cpu0_rack = inst->get_rack();
-                }).then([cpu0_dc, cpu0_rack, res, my_address] {
-                    return i_endpoint_snitch::snitch_instance().invoke_on_all(
+                }).then([&snitch, cpu0_dc, cpu0_rack, res, my_address] {
+                    return snitch.invoke_on_all(
                             [cpu0_dc, cpu0_rack,
                              res, my_address] (snitch_ptr& inst) {
                         if (*cpu0_dc != inst->get_datacenter() ||
                             *cpu0_rack != inst->get_rack()) {
                             *res = false;
                         }
-                    }).then([res] {
+                    }).then([&snitch, res] {
                         if (!*res) {
                             BOOST_ERROR("Data center or Rack do not match on "
                                         "different shards");
                         } else {
                             BOOST_CHECK(true);
                         }
-                        return i_endpoint_snitch::snitch_instance().stop();
+                        return snitch.stop();
                     });
                 });
             } catch (std::exception& e) {
                 BOOST_CHECK(!exp_result);
                 return make_ready_future<>();
             }
-        });
+        }).finally([ snitch_i = std::move(snitch_i) ] {});
 }
 
 #define GOSSIPING_TEST_CASE(tag, exp_res) \

@@ -58,7 +58,7 @@ struct i_endpoint_snitch {
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    static future<> reset_snitch(snitch_config cfg);
+    static future<> reset_snitch(sharded<snitch_ptr>& snitch, snitch_config cfg);
 
     /**
      * returns a String representing the rack local node belongs to
@@ -104,21 +104,6 @@ public:
     virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& enw_rack) {};
     virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
-
-    // DEPRECATED, DON'T USE!
-    // Pass references to services through constructor/function parameters. Don't use globals.
-    static distributed<snitch_ptr>& snitch_instance() {
-        // FIXME: leaked intentionally to avoid shutdown problems, see #293
-        static distributed<snitch_ptr>* snitch_inst = new distributed<snitch_ptr>();
-
-        return *snitch_inst;
-    }
-
-    // DEPRECATED, DON'T USE!
-    // Pass references to services through constructor/function parameters. Don't use globals.
-    static snitch_ptr& get_local_snitch_ptr() {
-        return snitch_instance().local();
-    }
 
     void set_snitch_ready() {
         _state = snitch_state::running;
@@ -189,6 +174,9 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
     i_endpoint_snitch* operator->() {
         return _ptr.get();
     }
+    const i_endpoint_snitch* operator->() const {
+        return _ptr.get();
+    }
 
     snitch_ptr& operator=(ptr_type&& new_val) {
         _ptr = std::move(new_val);
@@ -234,8 +222,8 @@ private:
  *  6) Start the new snitches.
  *  7) Stop() the temporary distributed<snitch_ptr> from (1).
  */
-inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
-    return seastar::async([cfg = std::move(cfg)] {
+inline future<> i_endpoint_snitch::reset_snitch(sharded<snitch_ptr>& snitch, snitch_config cfg) {
+    return seastar::async([cfg = std::move(cfg), &snitch] {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
@@ -253,7 +241,7 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // If we've got here then we may not fail
 
         // (3) stop the current snitch instances on all CPUs
-        snitch_instance().invoke_on_all([] (snitch_ptr& s) {
+        snitch.invoke_on_all([] (snitch_ptr& s) {
             return s->stop();
         }).get();
 
@@ -270,15 +258,15 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // (5) move the pointers - this would ensure the atomicity on a
         // per-shard level (since users are holding snitch_ptr objects only)
         //
-        tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
-            local_inst->set_backreference(snitch_instance().local());
-            snitch_instance().local() = std::move(local_inst);
+        tmp_snitch.invoke_on_all([&snitch] (snitch_ptr& local_inst) {
+            local_inst->set_backreference(snitch.local());
+            snitch.local() = std::move(local_inst);
 
             return make_ready_future<>();
         }).get();
 
         // (6) re-start I/O on the new snitches
-        snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+        snitch.invoke_on_all([] (snitch_ptr& local_inst) {
             local_inst->resume_io();
         }).get();
 

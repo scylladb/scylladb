@@ -84,7 +84,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
-            sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
+            sharded<snitch_ptr> snitch;
             snitch.start(cfg).get();
             snitch.invoke_on_all(&snitch_ptr::start).get();
             if (!exp_result) {
@@ -100,12 +100,12 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             auto res = make_lw_shared<bool>(true);
             auto my_address = utils::fb_utilities::get_broadcast_address();
 
-            i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+            snitch.invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
                 *cpu0_dc =inst->get_datacenter();
                 *cpu0_rack = inst->get_rack();
             }).get();
 
-            i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+            snitch.invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
                 if (*cpu0_dc != inst->get_datacenter() ||
                     *cpu0_rack != inst->get_rack()) {
                     *res = false;
