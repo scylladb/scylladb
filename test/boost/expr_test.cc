@@ -987,3 +987,320 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_null_map) {
     // TODO: Shouldn't this throw an error?
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_unset_value(int32_type)), raw_value::make_null());
 }
+
+enum expected_invalid_or_valid { expected_valid, expected_invalid };
+
+// Checks that trying to evaluate a bind variable with this value succeeds or fails.
+// This is used to test bind variable validation.
+static void check_bind_variable_evaluate(constant check_value, expected_invalid_or_valid expected_validity) {
+    schema_ptr test_schema = schema_builder("test_ks", "test_cf")
+                                 .with_column("pk", int32_type, column_kind::partition_key)
+                                 .with_column("r", check_value.type, column_kind::regular_column)
+                                 .build();
+
+    expression bind_var = bind_variable{
+        .bind_index = 0,
+        .receiver = ::make_lw_shared<column_specification>(
+            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), check_value.type)};
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(
+        test_schema, {{"pk", make_int_raw(0)}, {"r", raw_value::make_null()}}, {check_value.value});
+
+    switch (expected_validity) {
+        case expected_valid:
+            BOOST_REQUIRE_EQUAL(evaluate(bind_var, inputs), check_value.value);
+            return;
+        case expected_invalid:
+            BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
+            return;
+    }
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_in_list) {
+    constant list_with_null =
+        make_list_const({make_int_const(1), constant::make_null(int32_type), make_int_const(2)}, int32_type);
+    check_bind_variable_evaluate(list_with_null, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_in_list) {
+    constant list_with_unset =
+        make_list_const({make_int_const(1), constant::make_unset_value(int32_type), make_int_const(2)}, int32_type);
+    check_bind_variable_evaluate(list_with_unset, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_list) {
+    constant lis_with_empty =
+        make_list_const({make_int_const(1), make_empty_const(int32_type), make_int_const(2)}, int32_type);
+    check_bind_variable_evaluate(lis_with_empty, expected_valid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_in_set) {
+    constant set_with_null =
+        make_set_const({make_int_const(1), constant::make_null(int32_type), make_int_const(2)}, int32_type);
+    check_bind_variable_evaluate(set_with_null, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_in_set) {
+    constant set_with_unset =
+        make_set_const({make_int_const(1), constant::make_unset_value(int32_type), make_int_const(2)}, int32_type);
+    check_bind_variable_evaluate(set_with_unset, expected_invalid);
+}
+
+// TODO: This fails, but I feel like this is a bug.
+// BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_set) {
+//     constant set_with_empty =
+//         make_set_const({make_empty_const(int32_type), make_int_const(1), make_int_const(2)}, int32_type);
+//     check_bind_variable_evaluate(set_with_empty, expected_valid);
+// }
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_key_in_map) {
+    constant map_with_null_key = make_map_const({{make_int_const(1), make_int_const(2)},
+                                                 {constant::make_null(int32_type), make_int_const(4)},
+                                                 {make_int_const(5), make_int_const(6)}},
+                                                int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_null_key, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_key_in_map) {
+    constant map_with_unset_key = make_map_const({{make_int_const(1), make_int_const(2)},
+                                                  {constant::make_unset_value(int32_type), make_int_const(4)},
+                                                  {make_int_const(5), make_int_const(6)}},
+                                                 int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_unset_key, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_key_in_map) {
+    constant map_with_empty_key = make_map_const({{make_empty_const(int32_type), make_int_const(4)},
+                                                  {make_int_const(1), make_int_const(2)},
+                                                  {make_int_const(5), make_int_const(6)}},
+                                                 int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_empty_key, expected_valid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_value_in_map) {
+    constant map_with_null_value = make_map_const({{make_int_const(1), make_int_const(2)},
+                                                   {make_int_const(3), constant::make_null(int32_type)},
+                                                   {make_int_const(5), make_int_const(6)}},
+                                                  int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_null_value, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_value_in_map) {
+    constant map_with_unset_value = make_map_const({{make_int_const(1), make_int_const(2)},
+                                                    {make_int_const(3), constant::make_unset_value(int32_type)},
+                                                    {make_int_const(5), make_int_const(6)}},
+                                                   int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_unset_value, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_map) {
+    constant map_with_empty_value = make_map_const({{make_int_const(1), make_int_const(2)},
+                                                    {make_int_const(3), make_empty_const(int32_type)},
+                                                    {make_int_const(5), make_int_const(6)}},
+                                                   int32_type, int32_type);
+    check_bind_variable_evaluate(map_with_empty_value, expected_valid);
+}
+
+// Creates a list value of the following form:
+// [
+//  [[9, 10, 11], [8, 9, 10], [7, 8, 9]],
+//  [[8, 9, 10], [7, value_in_list, 9], [6, 7, 8]],
+//  [[7, 8, 9], [6, 7, 8], [5, 6, 7]]
+// ]
+// Used to check that validation recurses into the list
+static constant create_nested_list_with_value(constant value_in_list) {
+    data_type int_list_type = list_type_impl::get_instance(int32_type, true);
+    constant first_list = make_list_const(
+        {make_int_list_const({9, 10, 11}), make_int_list_const({8, 9, 10}), make_int_list_const({7, 8, 9})},
+        int_list_type);
+    constant list_with_value = make_list_const({make_int_const(7), value_in_list, make_int_const(9)}, int32_type);
+    constant second_list = make_list_const(
+        {make_int_list_const({8, 9, 10}), list_with_value, make_int_list_const({6, 7, 8})}, int_list_type);
+    constant third_list = make_list_const(
+        {make_int_list_const({7, 8, 9}), make_int_list_const({6, 7, 8}), make_int_list_const({5, 6, 7})},
+        int_list_type);
+
+    return make_list_const({first_list, second_list, third_list}, first_list.type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_lists_recursively) {
+    constant list_with_null = create_nested_list_with_value(constant::make_null(int32_type));
+    check_bind_variable_evaluate(list_with_null, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_in_lists_recursively) {
+    constant list_with_unset = create_nested_list_with_value(constant::make_unset_value(int32_type));
+    check_bind_variable_evaluate(list_with_unset, expected_invalid);
+}
+
+// TODO: This fails, but I feel like this is a bug.
+// BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_lists_recursively) {
+//     constant list_with_empty = create_nested_list_or_set_with_value(make_empty_const(int32_type));
+//     check_bind_variable_evaluate(list_with_empty, expected_valid);
+// }
+
+// Creates a set value of the following form:
+// {
+//  {{value_in_set, 2, 3}, {2, 3, 4}, {3, 4, 5}}
+//  {{10, 20, 30}, {20, 30, 40}, {30, 40, 50}},
+//  {{100, 200, 300}, {200, 300, 400}, {300, 400, 500}}
+// }
+// Used to check that validation recurses into the set
+static constant create_nested_set_with_value(constant value_in_set) {
+    data_type set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+    constant set_with_value = make_set_const({value_in_set, make_int_const(2), make_int_const(3)}, int32_type);
+    constant first_set = make_set_const({set_with_value, make_int_set_const({2, 3, 4}), make_int_set_const({3, 4, 5})},
+                                        set_of_ints_type);
+    constant second_set = make_set_const(
+        {make_int_set_const({10, 20, 30}), make_int_set_const({20, 30, 40}), make_int_set_const({30, 40, 50})},
+        set_of_ints_type);
+    constant third_set = make_set_const(
+        {make_int_set_const({100, 200, 300}), make_int_set_const({200, 300, 400}), make_int_set_const({300, 400, 500})},
+        set_of_ints_type);
+    return make_set_const({first_set, second_set, third_set}, first_set.type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_sets_recursively) {
+    constant set_with_null = create_nested_set_with_value(constant::make_null(int32_type));
+    check_bind_variable_evaluate(set_with_null, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_in_sets_recursively) {
+    constant set_with_unset = create_nested_set_with_value(constant::make_unset_value(int32_type));
+    check_bind_variable_evaluate(set_with_unset, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_sets_recursively) {
+    constant set_with_empty = create_nested_set_with_value(make_empty_const(int32_type));
+    check_bind_variable_evaluate(set_with_empty, expected_valid);
+}
+
+// Creates a map value of the following form:
+// {
+//   {{key1: 2, 2: 3}: {2: 3, 3: 4}, {5: 6, 7:8}: {9:10, 11:12}}
+//   :
+//   {{key2: 14, 15: 16}: {17: 18, 19: 20}, {21: 22, 23: 24}: {25: 26, 27: 28}}},
+//   {{29: 30, 31: 32}: {33: 34, 35: 36}, {37: 38, 39: 40}: {41: 42, 43: 44}}
+//   :
+//   {{45: 46, 47: 48}: {49: 50, 51: 52}, {53: 54, 55: 56}: {57: 58, 59: 60}}
+// }
+// Used to check that validation recurses into the map
+constant create_nested_map_with_key(constant key1, constant key2) {
+    auto i = [](int32_t i) -> constant { return make_int_const(i); };
+
+    constant key1_map = make_map_const({{key1, i(2)}, {i(2), i(3)}}, int32_type, int32_type);
+
+    constant map1 =
+        make_map_const({{key1_map, make_int_int_map_const({{2, 3}, {3, 4}})},
+                        {make_int_int_map_const({{5, 6}, {7, 8}}), make_int_int_map_const({{9, 10}, {11, 12}})}},
+                       key1_map.type, key1_map.type);
+
+    constant key2_map = make_map_const({{key2, i(14)}, {i(15), i(16)}}, int32_type, int32_type);
+    constant map2 =
+        make_map_const({{key2_map, make_int_int_map_const({{17, 18}, {19, 20}})},
+                        {make_int_int_map_const({{21, 22}, {23, 24}}), make_int_int_map_const({{25, 26}, {27, 28}})}},
+                       key1_map.type, key1_map.type);
+
+    constant map3 =
+        make_map_const({{make_int_int_map_const({{29, 30}, {31, 32}}), make_int_int_map_const({{33, 34}, {35, 36}})},
+                        {make_int_int_map_const({{37, 38}, {39, 40}}), make_int_int_map_const({{41, 42}, {43, 44}})}},
+                       key1_map.type, key1_map.type);
+
+    constant map4 =
+        make_map_const({{make_int_int_map_const({{45, 46}, {47, 48}}), make_int_int_map_const({{49, 50}, {51, 52}})},
+                        {make_int_int_map_const({{53, 54}, {55, 56}}), make_int_int_map_const({{57, 58}, {59, 60}})}},
+                       key1_map.type, key1_map.type);
+
+    return make_map_const({{map1, map2}, {map3, map4}}, map1.type, map1.type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_key_in_maps_recursively) {
+    constant map_with_null_key1 = create_nested_map_with_key(constant::make_null(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_null_key1, expected_invalid);
+
+    constant map_with_null_key2 = create_nested_map_with_key(make_int_const(1), constant::make_null(int32_type));
+    check_bind_variable_evaluate(map_with_null_key2, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_key_in_maps_recursively) {
+    constant map_with_unset_key1 =
+        create_nested_map_with_key(constant::make_unset_value(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_unset_key1, expected_invalid);
+
+    constant map_with_unset_key2 =
+        create_nested_map_with_key(make_int_const(1), constant::make_unset_value(int32_type));
+    check_bind_variable_evaluate(map_with_unset_key2, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_key_in_maps_recursively) {
+    constant map_with_empty_key1 = create_nested_map_with_key(make_empty_const(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_empty_key1, expected_valid);
+
+    constant map_with_empty_key2 = create_nested_map_with_key(make_int_const(1), make_empty_const(int32_type));
+    check_bind_variable_evaluate(map_with_empty_key2, expected_valid);
+}
+
+// Creates a map value of the following form:
+// {
+//   {{1: val1, 2: 3}: {2: 3, 3: 4}, {5: 6, 7:8}: {9:10, 11:12}}
+//   :
+//   {{13: val2, 15: 16}: {17: 18, 19: 20}, {21: 22, 23: 24}: {25: 26, 27: 28}}},
+//   {{29: 30, 31: 32}: {33: 34, 35: 36}, {37: 38, 39: 40}: {41: 42, 43: 44}}
+//   :
+//   {{45: 46, 47: 48}: {49: 50, 51: 52}, {53: 54, 55: 56}: {57: 58, 59: 60}}
+// }
+// Used to check that validation recurses into the map
+constant create_nested_map_with_value(constant val1, constant val2) {
+    auto i = [](int32_t i) -> constant { return make_int_const(i); };
+
+    constant val1_map = make_map_const({{i(1), val1}, {i(2), i(3)}}, int32_type, int32_type);
+
+    constant map1 =
+        make_map_const({{val1_map, make_int_int_map_const({{2, 3}, {3, 4}})},
+                        {make_int_int_map_const({{5, 6}, {7, 8}}), make_int_int_map_const({{9, 10}, {11, 12}})}},
+                       val1_map.type, val1_map.type);
+
+    constant val2_map = make_map_const({{i(13), val2}, {i(15), i(16)}}, int32_type, int32_type);
+    constant map2 =
+        make_map_const({{val2_map, make_int_int_map_const({{17, 18}, {19, 20}})},
+                        {make_int_int_map_const({{21, 22}, {23, 24}}), make_int_int_map_const({{25, 26}, {27, 28}})}},
+                       val1_map.type, val1_map.type);
+
+    constant map3 =
+        make_map_const({{make_int_int_map_const({{29, 30}, {31, 32}}), make_int_int_map_const({{33, 34}, {35, 36}})},
+                        {make_int_int_map_const({{37, 38}, {39, 40}}), make_int_int_map_const({{41, 42}, {43, 44}})}},
+                       val1_map.type, val1_map.type);
+
+    constant map4 =
+        make_map_const({{make_int_int_map_const({{45, 46}, {47, 48}}), make_int_int_map_const({{49, 50}, {51, 52}})},
+                        {make_int_int_map_const({{53, 54}, {55, 56}}), make_int_int_map_const({{57, 58}, {59, 60}})}},
+                       val1_map.type, val1_map.type);
+
+    return make_map_const({{map1, map2}, {map3, map4}}, map1.type, map1.type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_value_in_maps_recursively) {
+    constant map_with_null_value1 = create_nested_map_with_value(constant::make_null(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_null_value1, expected_invalid);
+
+    constant map_with_null_value2 = create_nested_map_with_value(make_int_const(1), constant::make_null(int32_type));
+    check_bind_variable_evaluate(map_with_null_value2, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_value_in_maps_recursively) {
+    constant map_with_unset_value1 =
+        create_nested_map_with_value(constant::make_unset_value(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_unset_value1, expected_invalid);
+
+    constant map_with_unset_value2 =
+        create_nested_map_with_value(make_int_const(1), constant::make_unset_value(int32_type));
+    check_bind_variable_evaluate(map_with_unset_value2, expected_invalid);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_maps_recursively) {
+    constant map_with_empty_value1 = create_nested_map_with_value(make_empty_const(int32_type), make_int_const(13));
+    check_bind_variable_evaluate(map_with_empty_value1, expected_valid);
+
+    constant map_with_empty_value2 = create_nested_map_with_value(make_int_const(1), make_empty_const(int32_type));
+    check_bind_variable_evaluate(map_with_empty_value2, expected_valid);
+}

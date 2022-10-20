@@ -241,6 +241,18 @@ inline raw_value make_int_int_map_raw(const std::vector<std::pair<int32_t, int32
     return make_map_raw(to_raw_value_pairs(values));
 }
 
+inline constant make_int_list_const(const std::vector<int32_t>& values) {
+    return constant(make_int_list_raw(values), list_type_impl::get_instance(int32_type, true));
+}
+
+inline constant make_int_set_const(const std::vector<int32_t>& values) {
+    return constant(make_int_set_raw(values), set_type_impl::get_instance(int32_type, true));
+}
+
+inline constant make_int_int_map_const(const std::vector<std::pair<int32_t, int32_t>>& values) {
+    return constant(make_int_int_map_raw(values), map_type_impl::get_instance(int32_type, int32_type, true));
+}
+
 inline collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type) {
     return collection_constructor{.style = collection_constructor::style_type::list,
                                   .elements = std::move(elements),
