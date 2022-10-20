@@ -126,7 +126,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
         }
         void maybe_emit_end_tombstone() {
             if (_active_tombstone) {
-                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::after_key(_current.end()), {}));
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::before_key(_current.end()), {}));
             }
         }
     public:

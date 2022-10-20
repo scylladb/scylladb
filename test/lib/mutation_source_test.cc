@@ -1444,6 +1444,21 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
                                   mutation_reader::forwarding::no))
             .produces_partition_start(pkey)
             .produces_end_of_stream()
+            .fast_forward_to(position_range(
+                    position_in_partition::after_key(s.make_ckey(0)),
+                    position_in_partition::for_key(s.make_ckey(2))))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(2)), {}))
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
 
             .fast_forward_to(position_range(
                     position_in_partition::before_key(s.make_ckey(0)),
