@@ -18,6 +18,13 @@ import time
 import socket
 
 
+def align_up(ptr, alignment):
+    res = ptr % alignment
+    if not res:
+        return ptr
+    return ptr + alignment - res
+
+
 def template_arguments(gdb_type):
     n = 0
     while True:
@@ -2873,6 +2880,12 @@ def reactors():
     orig.switch()
 
 
+def switch_to_shard(shard):
+    for r in reactors():
+        if int(r['_id']) == shard:
+            return
+
+
 class scylla_apply(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla apply', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -3641,6 +3654,7 @@ class scylla_fiber(gdb.Command):
 
    # Find futures waited-on by this task
     def _walk_backward(self, ptr_meta, name, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
+        orig = gdb.selected_thread()
         res = None
 
         # Threads need special handling as they allocate the thread_wait_task object on their stack.
@@ -3656,11 +3670,37 @@ class scylla_fiber(gdb.Command):
                     return res
             return None
 
-        for maybe_tptr_meta, _ in scylla_find.find(ptr_meta.ptr):
-            maybe_tptr_meta.ptr -= maybe_tptr_meta.offset_in_object
-            res = self._probe_pointer(maybe_tptr_meta.ptr, scanned_region_size, using_seastar_allocator, verbose)
-            if not res is None:
-                return res
+        # Async work items will have references on the remote shard, so we first
+        # have to find out which is the remote shard and then switch to it.
+        # Have to match the start of the name, as async_work_item kicks off
+        # continuation and so it will be found in the name of those lambdas.
+        if name.startswith('vtable for seastar::smp_message_queue::async_work_item'):
+            self._maybe_log("Current task is a async work item, trying to deduce the remote shard\n", verbose)
+            smp_mmessage_queue_ptr_type = gdb.lookup_type('seastar::smp_message_queue').pointer()
+            work_item_type = gdb.lookup_type('seastar::smp_message_queue::work_item')
+            # Casts to templates with lambda template arguments just don't work.
+            # We know the offset of the message queue reference in
+            # async_work_item (first field) so we calculate and cast a pointer to it.
+            q_ptr = align_up(int(ptr_meta.ptr) + work_item_type.sizeof, self._vptr_type.sizeof)
+            q = gdb.Value(q_ptr).reinterpret_cast(smp_mmessage_queue_ptr_type.pointer()).dereference()
+            shard = int(q['_pending']['remote']['_id'])
+            self._maybe_log("Deduced shard is {} (message queue 0x{:x} @ 0x{:x} + {})\n".format(shard, int(q), int(ptr_meta.ptr), q_ptr - int(ptr_meta.ptr)), verbose)
+            # Sanity check.
+            if shard < 0 or shard >= cpus():
+                return None
+            switch_to_shard(shard)
+        else:
+            ptr_meta.thread.switch()
+
+        try:
+            for maybe_tptr_meta, _ in scylla_find.find(ptr_meta.ptr):
+                maybe_tptr_meta.ptr -= maybe_tptr_meta.offset_in_object
+                res = self._probe_pointer(maybe_tptr_meta.ptr, scanned_region_size, using_seastar_allocator, verbose)
+                if not res is None:
+                    return res
+        finally:
+            orig.switch()
+
         return res
 
     def _walk(self, walk_method, tptr_meta, name, max_depth, scanned_region_size, using_seastar_allocator, verbose):
