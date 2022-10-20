@@ -85,6 +85,14 @@ public:
     bool is_unset_value() const {
         return std::holds_alternative<unset_value>(_data);
     }
+    // An empty value is not null or unset, but it has 0 bytes of data.
+    // An empty int value can be created in CQL using blobasint(0x).
+    bool is_empty_value() const {
+        if (is_null() || is_unset_value()) {
+            return false;
+        }
+        return size_bytes() == 0;
+    }
     bool is_value() const {
         return _data.index() <= 1;
     }
@@ -233,6 +241,14 @@ public:
     bool is_null_or_unset() const {
         return !is_value();
     }
+    // An empty value is not null or unset, but it has 0 bytes of data.
+    // An empty int value can be created in CQL using blobasint(0x).
+    bool is_empty_value() const {
+        if (is_null_or_unset()) {
+            return false;
+        }
+        return view().size_bytes() == 0;
+    }
     bool is_value() const {
         return _data.index() <= 1;
     }
@@ -291,6 +307,7 @@ public:
     friend class raw_value_view;
 
     friend bool operator==(const raw_value& v1, const raw_value& v2);
+    friend std::ostream& operator<<(std::ostream& os, const raw_value& value);
 };
 
 }

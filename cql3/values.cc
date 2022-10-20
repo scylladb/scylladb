@@ -78,4 +78,8 @@ bool operator==(const raw_value& v1, const raw_value& v2) {
     return false;
 }
 
+std::ostream& operator<<(std::ostream& os, const raw_value& value) {
+    return os << value.view();
+}
+
 }
