@@ -37,7 +37,7 @@ reader_permit::resource_units::resource_units(resource_units&& o) noexcept
 }
 
 reader_permit::resource_units::~resource_units() {
-    if (_resources) {
+    if (_resources.non_zero()) {
         reset();
     }
 }
@@ -59,7 +59,7 @@ void reader_permit::resource_units::add(resource_units&& o) {
 
 void reader_permit::resource_units::reset(reader_resources res) {
     _permit.consume(res);
-    if (_resources) {
+    if (_resources.non_zero()) {
         _permit.signal(_resources);
     }
     _resources = res;
@@ -143,7 +143,7 @@ public:
             signal(_base_resources);
         }
 
-        if (_resources) {
+        if (_resources.non_zero()) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
                         description(),
                         _resources.count,
@@ -834,7 +834,7 @@ void reader_concurrency_semaphore::close_reader(flat_mutation_reader_v2 reader) 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
     // Special case: when there is no active reader (based on count) admit one
     // regardless of availability of memory.
-    return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
+    return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
 bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
