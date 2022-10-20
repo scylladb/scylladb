@@ -14,13 +14,13 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "log.hh"
+#include "tasks/types.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
 namespace tasks {
 
-using task_id = utils::tagged_uuid<struct task_id_tag>;
 using is_abortable = bool_class <struct abortable_tag>;
 using is_internal = bool_class<struct internal_tag>;
 
