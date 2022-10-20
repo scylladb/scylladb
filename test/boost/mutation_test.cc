@@ -428,7 +428,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         const bytes blob(blob_size, 'a');
 
         const auto stats_before = memory::stats();
-        const memory::scoped_large_allocation_warning_threshold _{128 * 1024};
+        const memory::scoped_large_allocation_warning_threshold _{128 * 1024 + 1};
 
         const api::timestamp_type ts1 = 1;
         const api::timestamp_type ts2 = 2;
