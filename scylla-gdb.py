@@ -3750,6 +3750,10 @@ class scylla_fiber(gdb.Command):
         except SystemExit:
             return
 
+        def format_task_line(i, task_info):
+            tptr, vptr, name = task_info
+            gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+
         try:
             using_seastar_allocator = not args.force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
             if not using_seastar_allocator:
@@ -3763,16 +3767,15 @@ class scylla_fiber(gdb.Command):
 
             backwards_fiber = self._walk(self._walk_backward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
-            for i, (tptr, vptr, name) in enumerate(reversed(backwards_fiber)):
-                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i - len(backwards_fiber), int(tptr), int(vptr), name))
+            for i, task_info in enumerate(reversed(backwards_fiber)):
+                format_task_line(i - len(backwards_fiber), task_info)
 
-            tptr, vptr, name = this_task
-            gdb.write("#0 (task*) 0x{:016x} 0x{:016x} {}\n".format(int(tptr.ptr), int(vptr), name))
+            format_task_line(0, (this_task[0].ptr, this_task[1], this_task[2]))
 
             forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
-            for i, (tptr, vptr, name) in enumerate(forward_fiber):
-                gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i + 1, int(tptr), int(vptr), name))
+            for i, task_info in enumerate(forward_fiber):
+                format_task_line(i + 1, task_info)
 
             gdb.write("\nFound no further pointers to task objects.\n")
             if not backwards_fiber and not forward_fiber:
