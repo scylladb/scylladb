@@ -15,7 +15,7 @@
 #include "cql3/query_options.hh"
 #include "types/set.hh"
 #include "types/user.hh"
-#include "expr_test_utils.hh"
+#include "test/lib/expr_test_utils.hh"
 
 using namespace cql3;
 using namespace cql3::expr;
