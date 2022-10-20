@@ -3543,20 +3543,21 @@ class scylla_fiber(gdb.Command):
 
     Example (cropped for brevity):
     (gdb) scylla fiber 0x600016217c80
-    #-1 (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
-    #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
-    #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
-    #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
-     ^          ^                  ^                  ^
-    (1)        (2)                (3)                (4)
+    [shard  0] #-1 (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    [shard  0] #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
+    [shard  0] #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
+    [shard  0] #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
+     ^          ^          ^                  ^                  ^
+    (1)        (2)        (3)                (4)                (5)
 
-    1) Task index:
+    1) Shard the task lives on (continuation chains can spawn multiple shards)
+    2) Task index:
         - 0 is the task passed to the command
         - < 0 are tasks this task waits on
         - > 0 are tasks waiting on this task
-    2) Pointer to the task object.
-    3) Pointer to the task's vtable.
-    4) Symbol name of the task's vtable.
+    3) Pointer to the task object.
+    4) Pointer to the task's vtable.
+    5) Symbol name of the task's vtable.
 
     Invoke `scylla fiber --help` for more information on usage.
     """
@@ -3565,6 +3566,7 @@ class scylla_fiber(gdb.Command):
         gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
         self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
         self._task_symbol_matcher = task_symbol_matcher()
+        self._thread_map = None
 
     def _name_is_on_whitelist(self, name):
         return self._task_symbol_matcher(name)
@@ -3724,7 +3726,7 @@ class scylla_fiber(gdb.Command):
 
             known_tasks.add(tptr_meta.ptr)
 
-            fiber.append((tptr_meta.ptr, vptr, name))
+            fiber.append((tptr_meta, vptr, name))
 
             i += 1
 
@@ -3750,9 +3752,16 @@ class scylla_fiber(gdb.Command):
         except SystemExit:
             return
 
+        if self._thread_map is None:
+            self._thread_map = {}
+            for r in reactors():
+                self._thread_map[gdb.selected_thread().num] = int(r['_id'])
+
         def format_task_line(i, task_info):
-            tptr, vptr, name = task_info
-            gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+            tptr_meta, vptr, name = task_info
+            tptr = tptr_meta.ptr
+            shard = self._thread_map[tptr_meta.thread.num]
+            gdb.write("[shard {:2}] #{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(shard, i, int(tptr), int(vptr), name))
 
         try:
             using_seastar_allocator = not args.force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
@@ -3770,7 +3779,7 @@ class scylla_fiber(gdb.Command):
             for i, task_info in enumerate(reversed(backwards_fiber)):
                 format_task_line(i - len(backwards_fiber), task_info)
 
-            format_task_line(0, (this_task[0].ptr, this_task[1], this_task[2]))
+            format_task_line(0, this_task)
 
             forward_fiber = self._walk(self._walk_forward, this_task[0], this_task[2], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
