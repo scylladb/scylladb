@@ -3716,7 +3716,7 @@ class scylla_fiber(gdb.Command):
     def _walk(self, walk_method, tptr_meta, name, max_depth, scanned_region_size, using_seastar_allocator, verbose):
         i = 0
         fiber = []
-        known_tasks = set()
+        known_tasks = set([tptr_meta.ptr])
         while True:
             if max_depth > -1 and i >= max_depth:
                 break
