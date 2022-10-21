@@ -59,8 +59,11 @@ class distributed_loader_for_tests;
 
 namespace replica {
 
+class table_population_metadata;
+
 class distributed_loader {
     friend class ::distributed_loader_for_tests;
+    friend class table_population_metadata;
 
     static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
             sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter);
@@ -72,7 +75,7 @@ class distributed_loader {
             std::filesystem::path datadir, sstring ks, sstring cf);
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     using must_exist = bool_class<struct must_exist_tag>;
-    static future<> populate_column_family(distributed<replica::database>& db, sstring sstdir, sstring ks, sstring cf, allow_offstrategy_compaction, must_exist = must_exist::yes);
+    static future<> populate_column_family(table_population_metadata& metadata, sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);
     static future<> populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name);
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
