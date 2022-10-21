@@ -3650,8 +3650,14 @@ class scylla_fiber(gdb.Command):
 
             res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
 
-            if not res is None:
-                return res
+            if res is None:
+                continue
+
+            if int(res[0].ptr) == int(ptr):
+                self._maybe_log("Rejecting self reference\n", verbose)
+                continue
+
+            return res
 
         return None
 
@@ -3706,8 +3712,14 @@ class scylla_fiber(gdb.Command):
             for maybe_tptr_meta, _ in scylla_find.find(ptr_meta.ptr):
                 maybe_tptr_meta.ptr -= maybe_tptr_meta.offset_in_object
                 res = self._probe_pointer(maybe_tptr_meta.ptr, scanned_region_size, using_seastar_allocator, verbose)
-                if not res is None:
-                    return res
+                if res is None:
+                    continue
+
+                if int(res[0].ptr) == int(ptr_meta.ptr):
+                    self._maybe_log("Rejecting self reference\n", verbose)
+                    continue
+
+                return res
         finally:
             orig.switch()
 
