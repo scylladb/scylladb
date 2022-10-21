@@ -438,6 +438,126 @@ def test_gsi_update_second_regular_base_column(test_table_gsi_3):
         KeyConditions={'a': {'AttributeValueList': [items[3]['a']], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
 
+# Test reproducing issue #11801: In issue #5006 we noticed that in the special
+# case of a GSI with with two non-key attributes as keys (test_table_gsi_3),
+# an update of the second attribute forgot to delete the old row. We fixed
+# that bug, but a bug remained for updates which update the value to the *same*
+# value - in that case the old row shouldn't be deleted, but we did - as
+# noticed in issue #11801.
+def test_11801(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    item = {'p': p, 'a': a, 'b': b, 'd': random_string()}
+    test_table_gsi_3.put_item(Item=item)
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Update the attribute 'b' to the same value b that it already had.
+    # This shouldn't change anything in the base table or in the GSI
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'b': {'Value': b, 'Action': 'PUT'}})
+    assert item == test_table_gsi_3.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # In issue #11801, the following assertion failed (the view row was
+    # deleted and nothing matched the query).
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Above we checked that setting 'b' to the same value didn't remove
+    # the old GSI row. But the same update may actually modify the GSI row
+    # (e.g., an unrelated attribute d) -  check this modification took place:
+    item['d'] = random_string()
+    test_table_gsi_3.update_item(Key={'p':  p},
+        AttributeUpdates={'b': {'Value': b, 'Action': 'PUT'},
+                          'd': {'Value': item['d'], 'Action': 'PUT'}})
+    assert item == test_table_gsi_3.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+
+# This test is the same as test_11801, but updating the first attribute (a)
+# instead of the second (b). This test didn't fail, showing that issue #11801
+# is - like #5006 - specific to the case of updating the second attribute.
+def test_11801_variant1(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    d = random_string()
+    item = {'p': p, 'a': a, 'b': b, 'd': d}
+    test_table_gsi_3.put_item(Item=item)
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'a': {'Value': a, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+
+# This test is the same as test_11801, but updates b to a different value
+# (newb) instead of to the same one. This test didn't fail, showing that
+# issue #11801 is specific to updates to the same value. This test basically
+# reproduces the already-fixed #5006 (we also have another test above which
+# reproduces that issue - test_gsi_update_second_regular_base_column())
+def test_11801_variant2(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    item = {'p': p, 'a': a, 'b': b, 'd': random_string()}
+    test_table_gsi_3.put_item(Item=item)
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    newb = random_string()
+    item['b'] = newb
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'b': {'Value': newb, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [newb], 'ComparisonOperator': 'EQ'}})
+
+# This test is the same as test_11801, but uses a different table schema
+# (test_table_gsi_5) where there is only one new key column in the view (x).
+# This test passed, showing that issue #11801 was specific to the special
+# case of a view with two new key columns (test_table_gsi_3).
+def test_11801_variant3(test_table_gsi_5):
+    p = random_string()
+    c = random_string()
+    x = random_string()
+    item = {'p': p, 'c': c, 'x': x, 'd': random_string()}
+    test_table_gsi_5.put_item(Item=item)
+    assert_index_query(test_table_gsi_5, 'hello', [item],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    test_table_gsi_5.update_item(Key={'p':  p, 'c': c}, AttributeUpdates={'x': {'Value': x, 'Action': 'PUT'}})
+    assert item == test_table_gsi_5.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert_index_query(test_table_gsi_5, 'hello', [item],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# Another test similar to test_11801, but instead of updating a view key
+# column to the same value it already has, simply don't update it at all
+# (and just modify some other regular column). This test passed, showing
+# that issue #11801 is specific to the case of updating a view key column
+# to the same value it already had.
+def test_11801_variant4(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    item = {'p': p, 'a': a, 'b': b, 'd': random_string()}
+    test_table_gsi_3.put_item(Item=item)
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # An update that doesn't change the GSI keys (a or b), just a regular
+    # column d.
+    item['d'] = random_string()
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'d': {'Value': item['d'], 'Action': 'PUT'}})
+    assert item == test_table_gsi_3.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
 # This is the same feature we already tested in test_gsi_missing_attribute()
