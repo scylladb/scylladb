@@ -281,6 +281,7 @@ using sstable_list = sstables::sstable_list;
 namespace replica {
 
 class distributed_loader;
+struct table_population_metadata;
 
 // The CF has a "stats" structure. But we don't want all fields here,
 // since some of them are fairly complex for exporting to collectd. Also,
@@ -1101,6 +1102,7 @@ public:
     friend class ::column_family_test;
 
     friend class distributed_loader;
+    friend class table_population_metadata;
 
 private:
     timer<> _off_strategy_trigger;
