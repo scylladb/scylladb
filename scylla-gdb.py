@@ -3810,7 +3810,8 @@ class scylla_fiber(gdb.Command):
             if not backwards_fiber and not forward_fiber:
                 gdb.write("If this is unexpected, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(initial_task_ptr))
             else:
-                gdb.write("If you think there should be more, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(int(this_task[0].ptr)))
+                gdb.write("If you think there should be more, run `scylla fiber 0x{:016x} --verbose` to learn more.\n"
+                          "Note that continuation across user-created seastar::promise<> objects are not detected by scylla-fiber.\n".format(int(this_task[0].ptr)))
         except KeyboardInterrupt:
             return
 
