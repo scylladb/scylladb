@@ -98,12 +98,11 @@ class node_ops_meta_data {
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
     std::chrono::seconds _watchdog_interval{120};
-    bool _aborted = false;
 public:
     explicit node_ops_meta_data(
             utils::UUID ops_uuid,
             gms::inet_address coordinator,
-            shared_ptr<node_ops_info> ops,
+            std::list<gms::inet_address> ignore_nodes,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();

@@ -2524,8 +2524,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("removenode {}", req.leaving_nodes));
             }).get();
-            auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2573,8 +2572,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("decommission {}", req.leaving_nodes));
             }).get();
-            auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2616,8 +2614,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return make_ready_future<>();
             }).get();
-            auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.replace_nodes) {
                         auto existing_node = x.first;
@@ -2671,8 +2668,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", req.bootstrap_nodes));
             }).get();
-            auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.bootstrap_nodes) {
                         auto& endpoint = x.first;
@@ -2929,7 +2925,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
         auto ops_uuid = utils::make_random_uuid();
-        auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::list<gms::inet_address>()});
+        auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, nullptr, std::list<gms::inet_address>()});
         return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
@@ -3654,7 +3650,7 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
 node_ops_meta_data::node_ops_meta_data(
         utils::UUID ops_uuid,
         gms::inet_address coordinator,
-        shared_ptr<node_ops_info> ops,
+        std::list<gms::inet_address> ignore_nodes,
         std::function<future<> ()> abort_func,
         std::function<void ()> signal_func)
     : _ops_uuid(std::move(ops_uuid))
@@ -3662,24 +3658,20 @@ node_ops_meta_data::node_ops_meta_data(
     , _abort(std::move(abort_func))
     , _abort_source(seastar::make_shared<abort_source>())
     , _signal(std::move(signal_func))
-    , _ops(std::move(ops))
+    , _ops(seastar::make_shared<node_ops_info>({_ops_uuid, _abort_source, std::move(ignore_nodes)}))
     , _watchdog([sig = _signal] { sig(); }) {
     _watchdog.arm(_watchdog_interval);
 }
 
 future<> node_ops_meta_data::abort() {
     slogger.debug("node_ops_meta_data: ops_uuid={} abort", _ops_uuid);
-    _aborted = true;
-    if (_ops) {
-        _ops->abort = true;
-    }
     _watchdog.cancel();
     return _abort();
 }
 
 void node_ops_meta_data::update_watchdog() {
     slogger.debug("node_ops_meta_data: ops_uuid={} update_watchdog", _ops_uuid);
-    if (_aborted) {
+    if (_abort_source->abort_requested()) {
         return;
     }
     _watchdog.cancel();
@@ -3731,7 +3723,6 @@ future<> storage_service::node_ops_abort(utils::UUID ops_uuid) {
         if (as && !as->abort_requested()) {
             as->request_abort();
         }
-        co_await _repair.local().abort_repair_node_ops(ops_uuid);
         _node_ops.erase(it);
     }
 }
