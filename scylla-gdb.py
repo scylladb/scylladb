@@ -876,12 +876,12 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
 
 class optional_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
-        self.val = val
+        self.val = std_optional(val)
 
     def to_string(self):
-        if not self.val['_M_payload']['_M_engaged']:
+        if not self.val:
             return 'std::nullopt'
-        return str(self.val)
+        return str(self.val.get())
 
     def display_hint(self):
         return 'std::optional'
