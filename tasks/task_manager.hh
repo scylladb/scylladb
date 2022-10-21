@@ -415,8 +415,10 @@ protected:
     }
 private:
     future<> update_task_ttl() noexcept {
-        _task_ttl = _cfg.task_ttl.get();
-        return make_ready_future<>();
+        auto new_ttl = _cfg.task_ttl.get();
+        return container().invoke_on_all([new_ttl] (auto& tm) {
+            tm._task_ttl = new_ttl;
+        });
     }
 protected:
     void unregister_module(std::string name) noexcept;
