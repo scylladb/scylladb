@@ -3673,6 +3673,13 @@ class scylla_fiber(gdb.Command):
                     return res
             return None
 
+        if name.startswith('vtable for seastar::internal::when_all_state'):
+            when_all_state_base_ptr_type = gdb.lookup_type('seastar::internal::when_all_state_base').pointer()
+            when_all_state_base = gdb.Value(int(ptr_meta.ptr)).reinterpret_cast(when_all_state_base_ptr_type)
+            ptr = int(when_all_state_base['_continuation'])
+            self._maybe_log("Current task is a when_all_state, looking for references to its continuation field 0x{:x}\n".format(ptr), verbose)
+            return self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
+
         # Async work items will have references on the remote shard, so we first
         # have to find out which is the remote shard and then switch to it.
         # Have to match the start of the name, as async_work_item kicks off
