@@ -1301,6 +1301,7 @@ class task_symbol_matcher:
                 ("seastar", "parallel_for_each_state"),
                 ("seastar", "internal", "repeat_until_value_state"),
                 ("seastar", "internal", "repeater"),
+                ("seastar", "internal", "when_all_state"),
                 ("seastar", "internal", "when_all_state_component"),
                 ("seastar", "internal", "coroutine_traits_base", "promise_type"),
                 ("seastar", "lambda_task"),
