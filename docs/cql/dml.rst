@@ -946,7 +946,7 @@ however, that operations are only isolated within a single partition).
 
 There is a performance penalty for batch atomicity when a batch spans multiple partitions. If you do not want to incur
 this penalty, you can tell Scylla to skip the batchlog with the ``UNLOGGED`` option. If the ``UNLOGGED`` option is
-used, a failed batch might leave the patch only partly applied.
+used, a failed batch might leave the batch only partly applied.
 
 ``COUNTER`` batches
 ~~~~~~~~~~~~~~~~~~~
