@@ -237,7 +237,7 @@ filter_for_query(consistency_level cl,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  const gms::gossiper& g,
-                 gms::inet_address* extra,
+                 std::optional<gms::inet_address>* extra,
                  replica::column_family* cf) {
     size_t local_count;
 
