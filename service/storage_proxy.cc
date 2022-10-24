@@ -5077,7 +5077,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
-    gms::inet_address extra_replica;
+    std::optional<gms::inet_address> extra_replica;
 
     inet_address_vector_replica_set all_replicas = get_live_sorted_endpoints(*erm, token);
     // Check for a non-local read before heat-weighted load balancing
@@ -5141,12 +5141,12 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
         auto local_dc_filter = erm->get_topology().get_local_dc_filter();
-        if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
+        if (!extra_replica || (is_datacenter_local(cl) && !local_dc_filter(*extra_replica))) {
             slogger.trace("read executor no extra target to speculate");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
-            target_replicas.push_back(extra_replica);
-            slogger.trace("creating read executor with extra target {}", extra_replica);
+            target_replicas.push_back(*extra_replica);
+            slogger.trace("creating read executor with extra target {}", *extra_replica);
         }
     }
 
