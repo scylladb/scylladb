@@ -1237,7 +1237,7 @@
                "parameters":[
                   {
                      "name":"host_id",
-                     "description":"Remove the node with host_id from the cluster",
+                     "description":"Remove the node with host_id (uuid or ip address) from the cluster",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

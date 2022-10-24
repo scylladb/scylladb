@@ -2333,12 +2333,19 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
         return seastar::async([&ss, host_id_string, ignore_nodes = std::move(ignore_nodes)] {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto host_id = locator::host_id(utils::UUID(host_id_string));
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
-            if (!endpoint_opt) {
-                throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
+            gms::inet_address endpoint;
+            locator::host_id host_id;
+            try {
+                endpoint = gms::inet_address(host_id_string);
+                host_id = tmptr->get_host_id(endpoint);
+            } catch (const std::invalid_argument&) {
+                host_id = locator::host_id(utils::UUID(host_id_string));
+                auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
+                if (!endpoint_opt) {
+                    throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
+                }
+                endpoint = *endpoint_opt;
             }
-            auto endpoint = *endpoint_opt;
             auto tokens = tmptr->get_tokens(endpoint);
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
 
@@ -2358,7 +2365,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                     nodes.push_back(x.first);
                 }
             }
-            slogger.info("removenode[{}]: Started removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+            slogger.info("removenode[{}]: Started removenode operation, removing node={}, host_id={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, host_id, nodes, ignore_nodes);
 
             if (ss._gossiper.is_alive(endpoint)) {
                 const std::string message = format(
