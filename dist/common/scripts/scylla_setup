@@ -214,7 +214,7 @@ if __name__ == '__main__':
                         help='skip raid setup')
     parser.add_argument('--raid-level-5', action='store_true', default=False,
                         help='use RAID5 for RAID volume')
-    parser.add_argument('--online-discard', default=True,
+    parser.add_argument('--online-discard', default=1, choices=[0, 1], type=int,
                         help='Configure XFS to discard unused blocks as soon as files are deleted')
     parser.add_argument('--nic',
                         help='specify NIC')
@@ -458,7 +458,7 @@ if __name__ == '__main__':
         args.no_raid_setup = not raid_setup
         if raid_setup:
             level = '5' if raid_level_5 else '0'
-            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot --raid-level={level} --online-discard={int(online_discard)}')
+            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot --raid-level={level} --online-discard={online_discard}')
 
         coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', coredump_setup)
         args.no_coredump_setup = not coredump_setup
