@@ -48,6 +48,12 @@
 
 logging::logger rlogger("repair");
 
+node_ops_info::node_ops_info(utils::UUID ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
+    : ops_uuid(ops_uuid_)
+    , as(std::move(as_))
+    , ignore_nodes(std::move(ignore_nodes_))
+{}
+
 void node_ops_info::check_abort() {
     if (as && as->abort_requested()) {
         auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
