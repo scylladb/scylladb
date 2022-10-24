@@ -791,11 +791,11 @@ unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
 // using a range.
 // Use begin() and end() to iterate through the frozen vector,
 // deserializing (or skipping) one element at a time.
-template <typename T, typename InputStream = utils::input_stream>
+template <typename T>
 class vector_deserializer {
 public:
     using value_type = T;
-    using input_stream = InputStream;
+    using input_stream = utils::input_stream;
 
 private:
     input_stream _in;
