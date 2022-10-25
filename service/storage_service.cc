@@ -2329,9 +2329,9 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::removenode(locator::host_id host_id, std::list<gms::inet_address> ignore_nodes) {
-    return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes = std::move(ignore_nodes)] (storage_service& ss) mutable {
-        return seastar::async([&ss, host_id, ignore_nodes = std::move(ignore_nodes)] {
+future<> storage_service::removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
+    return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
@@ -2341,6 +2341,11 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<gms::in
             auto endpoint = *endpoint_opt;
             auto tokens = tmptr->get_tokens(endpoint);
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
+            std::list<gms::inet_address> ignore_nodes;
+            for (auto& hoep : ignore_nodes_params) {
+                hoep.resolve(*tmptr);
+                ignore_nodes.push_back(hoep.endpoint);
+            }
 
             // Step 1: Decide who needs to sync data
             //
