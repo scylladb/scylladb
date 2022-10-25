@@ -22,6 +22,7 @@
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/UUID_cmp.hh"
 #include "log.hh"
 
 namespace sstables {

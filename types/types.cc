@@ -47,6 +47,7 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/UUID_cmp.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
