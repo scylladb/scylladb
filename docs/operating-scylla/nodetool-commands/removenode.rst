@@ -25,7 +25,7 @@ Example:
 
 .. code-block:: console
 
-    nodetool removenode 192.168.1.3
+    nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
 
 Note that all the nodes in the cluster participate in the ``removenode`` operation to sync data if needed. For this reason, the operation will fail if one or more nodes in the cluster are not available.
 In such a case, to ensure that the operation succeeds, you must explicitly specify a list of unavailable nodes with the ``--ignore-dead-nodes`` option.
@@ -41,8 +41,7 @@ Example:
 
 .. code-block:: console
 
-    nodetool removenode 192.168.1.3
-    nodetool removenode --ignore-dead-nodes 192.168.1.4,192.168.1.5 192.168.1.3
+    nodetool removenode --ignore-dead-nodes 192.168.1.4,192.168.1.5 675ed9f4-6564-6dbd-can8-43fddce952gy
 
 
 .. versionadded:: version 4.6 ``--ignore-dead-nodes`` option    
