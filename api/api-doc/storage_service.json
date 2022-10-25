@@ -1228,7 +1228,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Removes token (and all data associated with enpoint that had it) from the ring",
+               "summary":"Removes a node from the cluster. Replicated data that logically belonged to this node is redistributed among the remaining nodes.",
                "type":"void",
                "nickname":"remove_node",
                "produces":[
