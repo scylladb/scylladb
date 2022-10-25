@@ -11,6 +11,7 @@
 #include <boost/test/unit_test.hpp>
 #include <utility>
 #include "utils/UUID_gen.hh"
+#include "utils/UUID_cmp.hh"
 #include "types.hh"
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
