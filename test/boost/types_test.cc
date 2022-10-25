@@ -170,6 +170,13 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     test_parsing_fails(timeuuid_type, utils::make_random_uuid().to_sstring());
 }
 
+BOOST_AUTO_TEST_CASE(test_timeuuid_v7_type_string_conversions) {
+    auto now = utils::UUID_gen::get_time_UUID_v7();
+    BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string(now.to_sstring()), timeuuid_type->decompose(now)));
+    auto uuid = utils::UUID(sstring("00003efe-9930-7000-8cb8-afff034bd362"));
+    BOOST_REQUIRE(timeuuid_type->equal(timeuuid_type->from_string("00003eFE-9930-7000-8Cb8-afff034bD362"), timeuuid_type->decompose(uuid)));
+}
+
 BOOST_AUTO_TEST_CASE(test_simple_date_type_string_conversions) {
     BOOST_REQUIRE(simple_date_type->equal(simple_date_type->from_string("1970-01-01"), serialized(simple_date_native_type{0x80000000})));
     BOOST_REQUIRE_EQUAL(simple_date_type->to_string(serialized(simple_date_native_type{0x80000000})), "1970-01-01");

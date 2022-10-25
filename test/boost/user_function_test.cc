@@ -685,6 +685,13 @@ SEASTAR_TEST_CASE(test_user_function_timeuuid_return) {
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS timeuuid LANGUAGE Lua AS 'return \"d18648bc-cf83-21e9-9820-107b4493b787\"';").get();
         auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
         BOOST_REQUIRE_EXCEPTION(fut.get(), marshal_exception, message_equals("marshaling error: Unsupported UUID version (2)"));
+
+        // Test returning timeuuid v7.
+        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS timeuuid LANGUAGE Lua AS 'return \"ffffd065-6385-7000-8a11-1f27a7a0e5e8\"';").get();
+        res = e.execute_cql("SELECT my_func3(val) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({
+            {serialized(timeuuid_native_type{utils::UUID("ffffd065-6385-7000-8a11-1f27a7a0e5e8")})}
+        });
     });
 }
 
