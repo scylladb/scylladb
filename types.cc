@@ -2291,7 +2291,7 @@ struct compare_visitor {
       return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
-                return utils::timeuuid_tri_compare(v1, v2);
+                return utils::timeuuid_cmp(v1, v2).tri_compare();
             });
         });
       });
@@ -2324,7 +2324,7 @@ struct compare_visitor {
         if (c1 == 1) {
             return with_linearized(v1, [&] (bytes_view v1) {
                 return with_linearized(v2, [&] (bytes_view v2) {
-                    return utils::uuid_tri_compare_timeuuid(v1, v2);
+                    return utils::timeuuid_cmp(v1, v2).uuid_tri_compare();
                 });
             });
         }

@@ -120,8 +120,8 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
             auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
-            bool t1 = utils::timeuuid_tri_compare(next, prev) > 0;
-            bool t2 = utils::timeuuid_tri_compare(next, first) > 0;
+            bool t1 = utils::timeuuid_cmp(next, prev).tri_compare() > 0;
+            bool t2 = utils::timeuuid_cmp(next, first).tri_compare() > 0;
             if (!t1 || !t2) {
                 BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later is not great than at test start: {} {}", i, str(scale), t1, t2));
             }
@@ -146,8 +146,8 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
             auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
-            bool t1 = utils::timeuuid_tri_compare(next, prev) == timeuuid_legacy_tri_compare(next, prev);
-            bool t2 = utils::timeuuid_tri_compare(next, first) == timeuuid_legacy_tri_compare(next, first);
+            bool t1 = utils::timeuuid_cmp(next, prev).tri_compare() == timeuuid_legacy_tri_compare(next, prev);
+            bool t2 = utils::timeuuid_cmp(next, first).tri_compare() == timeuuid_legacy_tri_compare(next, first);
             if (!t1 || !t2) {
                 BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later violates compare order", i, str(scale)));
             }
@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_submicro_is_monotonic) {
                 std::chrono::microseconds{micros}, i);
         check_is_valid_timeuuid(UUID_gen::get_UUID(uuid.data()));
         // UUID submicro part grows monotonically
-        BOOST_CHECK(utils::timeuuid_tri_compare({uuid.data(), 16}, {prev.data(), 16}) > 0);
+        BOOST_CHECK(utils::timeuuid_cmp({uuid.data(), 16}, {prev.data(), 16}).tri_compare() > 0);
         prev = uuid;
     }
     BOOST_CHECK_EXCEPTION(UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, 2 * maxsubmicro),
