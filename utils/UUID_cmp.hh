@@ -16,7 +16,7 @@ class timeuuid_cmp {
 
 private:
     static inline std::strong_ordering uint64_t_tri_compare(uint64_t a, uint64_t b) noexcept;
-    static inline uint64_t timeuuid_read_msb(const int8_t* b) noexcept;
+    static inline uint64_t timeuuid_v1_read_msb(const int8_t* b) noexcept;
     static inline uint64_t uuid_read_lsb(const int8_t* b) noexcept;
 
 public:
@@ -31,7 +31,7 @@ inline std::strong_ordering timeuuid_cmp::uint64_t_tri_compare(uint64_t a, uint6
 }
 
 // Read 8 most significant bytes of timeuuid from serialized bytes
-inline uint64_t timeuuid_cmp::timeuuid_read_msb(const int8_t* b) noexcept {
+inline uint64_t timeuuid_cmp::timeuuid_v1_read_msb(const int8_t* b) noexcept {
     // cast to unsigned to avoid sign-compliment during shift.
     auto u64 = [](uint8_t i) -> uint64_t { return i; };
     // Scylla and Cassandra use a standard UUID memory layout for MSB:
@@ -69,7 +69,7 @@ inline std::strong_ordering timeuuid_cmp::tri_compare() noexcept {
     auto timeuuid_read_lsb = [](bytes_view o) -> uint64_t {
         return uuid_read_lsb(o.begin()) ^ 0x8080808080808080;
     };
-    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+    auto res = uint64_t_tri_compare(timeuuid_v1_read_msb(o1.begin()), timeuuid_v1_read_msb(o2.begin()));
     if (res == 0) {
         res = uint64_t_tri_compare(timeuuid_read_lsb(o1), timeuuid_read_lsb(o2));
     }
@@ -86,7 +86,7 @@ inline std::strong_ordering timeuuid_cmp::tri_compare() noexcept {
 inline std::strong_ordering timeuuid_cmp::uuid_tri_compare() noexcept {
     const bytes_view& o1 = _o1;
     const bytes_view& o2 = _o2;
-    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+    auto res = uint64_t_tri_compare(timeuuid_v1_read_msb(o1.begin()), timeuuid_v1_read_msb(o2.begin()));
     if (res == 0) {
         res = uint64_t_tri_compare(uuid_read_lsb(o1.begin()), uuid_read_lsb(o2.begin()));
     }

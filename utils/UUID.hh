@@ -49,8 +49,12 @@ public:
         return (most_sig_bits >> 12) & 0xf;
     }
 
-    bool is_timestamp() const noexcept {
+    bool is_timestamp_v1() const noexcept {
         return version() == 1;
+    }
+
+    bool is_timestamp() const noexcept {
+        return is_timestamp_v1();
     }
 
     int64_t timestamp() const noexcept {

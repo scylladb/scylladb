@@ -105,7 +105,7 @@ std::strong_ordering timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
     return res;
 }
 
-BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
+BOOST_AUTO_TEST_CASE(test_timeuuid_v1_msb_is_monotonic) {
     using utils::UUID, utils::UUID_gen;
     auto uuid = UUID_gen::get_time_UUID();
     auto first = uuid.serialize();
@@ -119,7 +119,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
         int step = 1; /* + (random() % 169) ; */
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
-            auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
+            auto next =  UUID(UUID_gen::create_time_v1(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
             bool t1 = utils::timeuuid_cmp(next, prev).tri_compare() > 0;
             bool t2 = utils::timeuuid_cmp(next, first).tri_compare() > 0;
             if (!t1 || !t2) {
@@ -130,7 +130,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
+BOOST_AUTO_TEST_CASE(test_timeuuid_v1_tri_compare_legacy) {
     using utils::UUID, utils::UUID_gen;
     auto uuid = UUID_gen::get_time_UUID();
     auto first = uuid.serialize();
@@ -145,7 +145,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
         int step = 1; /* + (random() % 169) ; */
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
-            auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
+            auto next =  UUID(UUID_gen::create_time_v1(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
             bool t1 = utils::timeuuid_cmp(next, prev).tri_compare() == timeuuid_legacy_tri_compare(next, prev);
             bool t2 = utils::timeuuid_cmp(next, first).tri_compare() == timeuuid_legacy_tri_compare(next, first);
             if (!t1 || !t2) {
