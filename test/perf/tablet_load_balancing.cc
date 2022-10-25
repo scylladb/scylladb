@@ -46,7 +46,7 @@ cql_test_config tablet_cql_test_config() {
 
 static
 future<table_id> add_table(cql_test_env& e) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
+    auto id = table_id(utils::UUID_gen::get_time_UUID_v1());
     co_await e.create_table([id] (std::string_view ks_name) {
         return *schema_builder(ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)

@@ -4432,7 +4432,7 @@ future<> run_controller_test(sstables::compaction_strategy_type compaction_strat
         };
 
         auto create_table = [&] () {
-            auto cf = utils::UUID_gen::get_time_UUID();
+            auto cf = utils::UUID_gen::get_time_UUID_v1();
             simple_schema ss{"ks", fmt::to_string(cf)};
             auto s = ss.schema();
 

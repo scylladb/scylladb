@@ -47,7 +47,7 @@ static bool operator==(const log_entry& lhs, const log_entry& rhs) {
 
 using namespace service;
 
-static raft::group_id gid{utils::UUID_gen::min_time_UUID()};
+static raft::group_id gid{utils::UUID_gen::min_time_UUID_v1()};
 
 // Create a test log with entries of each kind to test that these get
 // serialized/deserialized properly

@@ -71,7 +71,7 @@ SEASTAR_TEST_CASE(test_canonical_token_range) {
 // and system_keyspace::get_range_cleanup_records().
 SEASTAR_TEST_CASE(test_commitlog_cleanup_records) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        auto tableid = table_id(utils::UUID_gen::get_time_UUID());
+        auto tableid = table_id(utils::UUID_gen::get_time_UUID_v1());
 
         auto insert_record = [&] (table_id tid, std::pair<int64_t, bool> lo, std::pair<int64_t, bool> hi, db::replay_position rp) {
             auto tr = dht::token_range::make({dht::token::from_int64(lo.first), lo.second}, {dht::token::from_int64(hi.first), hi.second});
@@ -87,7 +87,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_records) {
         // Insert an empty range, it shouldn't affect the result at all.
         insert_record(tableid, {0, false}, {1, false}, {42, 1337, 3});
         // Insert a record for a different table.
-        insert_record(table_id(utils::UUID_gen::get_time_UUID()), {0, false}, {1, false}, {42, 1337, 5});
+        insert_record(table_id(utils::UUID_gen::get_time_UUID_v1()), {0, false}, {1, false}, {42, 1337, 5});
         // Insert a record for a different shard.
         insert_record(tableid, {0, false}, {1, false}, {1, 1337, 5});
 

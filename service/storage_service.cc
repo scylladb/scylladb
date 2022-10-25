@@ -1725,7 +1725,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         .shard_count = smp::count,
         .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
         .supported_features = boost::copy_range<std::vector<sstring>>(_feature_service.supported_feature_set()),
-        .request_id = utils::UUID_gen::get_time_UUID(),
+        .request_id = utils::UUID_gen::get_time_UUID_v1(),
     };
 
     if (raft_replace_info) {

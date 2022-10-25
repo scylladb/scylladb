@@ -324,7 +324,7 @@ future<group0_info> persistent_discovery::run(
                 // Time-based ordering for groups identifiers may be
                 // useful to provide linearisability between group
                 // operations. Currently it's unused.
-                .group0_id = raft::group_id{utils::UUID_gen::get_time_UUID()},
+                .group0_id = raft::group_id{utils::UUID_gen::get_time_UUID_v1()},
                 .id = my_addr.id,
                 .ip_addr = my_addr.ip_addr
             };

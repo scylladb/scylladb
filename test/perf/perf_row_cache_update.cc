@@ -147,7 +147,7 @@ static void test_small_partitions() {
 
     run_test("Small partitions, no overwrites", s, [&] {
         auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-            serialized(utils::UUID_gen::get_time_UUID())));
+            serialized(utils::UUID_gen::get_time_UUID_v1())));
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
         m.set_clustered_cell(clustering_key::make_empty(), "v1", val, api::new_timestamp());
@@ -167,7 +167,7 @@ static void test_partition_with_lots_of_small_rows() {
         .build();
 
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-        serialized(utils::UUID_gen::get_time_UUID())));
+        serialized(utils::UUID_gen::get_time_UUID_v1())));
     int ck_idx = 0;
 
     run_test("Large partition, lots of small rows", s, [&] {
@@ -192,7 +192,7 @@ static void test_partition_with_few_small_rows() {
 
     run_test("Small partition with a few rows", s, [&] {
         auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-            serialized(utils::UUID_gen::get_time_UUID())));
+            serialized(utils::UUID_gen::get_time_UUID_v1())));
 
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
@@ -217,7 +217,7 @@ static void test_partition_with_lots_of_range_tombstones() {
         .build();
 
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-        serialized(utils::UUID_gen::get_time_UUID())));
+        serialized(utils::UUID_gen::get_time_UUID_v1())));
     int ck_idx = 0;
 
     run_test("Large partition, lots of range tombstones", s, [&] {
@@ -242,7 +242,7 @@ static void test_partition_with_lots_of_range_tombstones_with_residuals() {
         .build();
 
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-        serialized(utils::UUID_gen::get_time_UUID())));
+        serialized(utils::UUID_gen::get_time_UUID_v1())));
     int ck_idx = 0;
 
     run_test("Large partition, lots of range tombstones with residuals", s, [&] {

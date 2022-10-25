@@ -48,7 +48,7 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment_custom_prefix){
     cfg.commitlog_segment_size_in_mb = 1;
     return cl_test(cfg, [](commitlog& log) {
         return do_with(rp_set(), [&log](auto& set) {
-            auto uuid = table_id(utils::UUID_gen::get_time_UUID());
+            auto uuid = table_id(utils::UUID_gen::get_time_UUID_v1());
             return do_until([&set]() { return set.size() > 1; }, [&log, &set, uuid]() {
                 sstring tmp = "hej bubba cow";
                 return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {

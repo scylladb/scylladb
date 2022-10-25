@@ -303,7 +303,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
-        auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
+        auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID_v1()); };
         auto mmut1 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 101));
         mutation m1(s, key);
         m1.set_static_cell(column, mmut1.serialize(*my_list_type));
@@ -1945,7 +1945,7 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
         auto& col = s->column_at(column_kind::regular_column, 0);
         auto k = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
         mutation m1(s, k);
-        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+        auto uuid = utils::UUID_gen::get_time_UUID_v1_bytes();
         collection_mutation_description mcol1;
         mcol1.cells.emplace_back(
                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),

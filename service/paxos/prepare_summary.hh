@@ -31,7 +31,7 @@ public:
     // Most recent ballot, promised by any of the replicas that have responded. In case
     // a replica rejects a ballot, it responds with a newer ballot it promised, so that the proposer
     // can adjust its ballot accordingly and retry after a timeout.
-    utils::UUID most_recent_promised_ballot = utils::UUID_gen::min_time_UUID();
+    utils::UUID most_recent_promised_ballot = utils::UUID_gen::min_time_UUID_v1();
     // Most recent decision known to any of the replicas. The coordinator
     // will use it to repair lagging replicas (make sure they learn it), if necessary, before it
     // proceeds.

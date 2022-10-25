@@ -45,7 +45,7 @@ static api::timestamp_type next_timestamp() {
 }
 
 static bytes make_unique_bytes() {
-    return to_bytes(fmt::to_string(utils::UUID_gen::get_time_UUID()));
+    return to_bytes(fmt::to_string(utils::UUID_gen::get_time_UUID_v1()));
 }
 
 static void set_column(mutation& m, const sstring& column_name) {

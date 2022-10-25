@@ -25,7 +25,7 @@ shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
             [] (std::span<const bytes_opt> values) -> bytes_opt {
-        return {to_bytes(utils::UUID_gen::get_time_UUID())};
+        return {to_bytes(utils::UUID_gen::get_time_UUID_v1())};
     });
 }
 
@@ -51,7 +51,7 @@ make_min_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto uuid = utils::UUID_gen::min_time_UUID(get_valid_timestamp(ts_obj));
+        auto uuid = utils::UUID_gen::min_time_UUID_v1(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
 }
@@ -69,7 +69,7 @@ make_max_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto uuid = utils::UUID_gen::max_time_UUID(get_valid_timestamp(ts_obj));
+        auto uuid = utils::UUID_gen::max_time_UUID_v1(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
 }
@@ -147,7 +147,7 @@ shared_ptr<function>
 make_currenttimeuuid_fct() {
     return make_native_scalar_function<false>("currenttimeuuid", timeuuid_type, {},
             [] (std::span<const bytes_opt> values) -> bytes_opt {
-        return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()})};
+        return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID_v1()})};
     });
 }
 

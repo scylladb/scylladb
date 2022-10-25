@@ -22,7 +22,7 @@
 #include "utils/error_injection.hh"
 #include "test/lib/expr_test_utils.hh"
 
-const auto OLD_TIMEUUID = utils::UUID_gen::get_time_UUID(std::chrono::system_clock::time_point::min());
+const auto OLD_TIMEUUID = utils::UUID_gen::get_time_UUID_v1(std::chrono::system_clock::time_point::min());
 
 static service::group0_command create_command(utils::UUID id) {
     auto mut = canonical_mutation{mutation{db::system_keyspace::group0_history(), partition_key::make_empty()}};
@@ -79,7 +79,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         auto& group0 = env.get_raft_group_registry().local().group0();
         auto& mm = env.migration_manager().local();
-        auto id = utils::UUID_gen::get_time_UUID();
+        auto id = utils::UUID_gen::get_time_UUID_v1();
         service::group0_command group0_cmd {
             .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
                             id, gc_clock::duration{0}, "test")},

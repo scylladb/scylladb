@@ -63,7 +63,7 @@ void test_scans_with_dummy_entries() {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
-                                            serialized(utils::UUID_gen::get_time_UUID())));
+                                            serialized(utils::UUID_gen::get_time_UUID_v1())));
 
     cache_tracker tracker;
     memtable_snapshot_source mss(s);

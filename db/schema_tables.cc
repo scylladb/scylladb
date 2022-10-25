@@ -2265,7 +2265,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
 
         for (auto&& value : values) {
             auto dv = f(value);
-            auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+            auto uuid = utils::UUID_gen::get_time_UUID_v1_bytes();
             m.cells.emplace_back(
                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
                 atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(std::move(dv)), atomic_cell::collection_member::yes));

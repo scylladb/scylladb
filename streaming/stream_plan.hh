@@ -50,7 +50,7 @@ public:
     stream_plan(stream_manager& mgr, sstring description, stream_reason reason = stream_reason::unspecified,
                 service::frozen_topology_guard topo_guard = {})
         : _mgr(mgr)
-        , _plan_id(plan_id{utils::UUID_gen::get_time_UUID()})
+        , _plan_id(plan_id{utils::UUID_gen::get_time_UUID_v1()})
         , _description(description)
         , _reason(reason)
         , _topo_guard(topo_guard)

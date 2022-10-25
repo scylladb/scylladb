@@ -185,7 +185,7 @@ void tracing::set_trace_probability(double p) {
 one_session_records::one_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
             std::optional<utils::UUID> session_id_, span_id parent_id_)
     : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
-    , session_id(session_id_ ? *session_id_ : utils::UUID_gen::get_time_UUID())
+    , session_id(session_id_ ? *session_id_ : utils::UUID_gen::get_time_UUID_v1())
     , session_rec(type, slow_query_rec_ttl)
     , ttl(slow_query_ttl)
     , backend_state_ptr(_local_tracing_ptr->allocate_backend_session_state())

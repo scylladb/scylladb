@@ -463,7 +463,7 @@ data_value generate_date_value(std::mt19937& engine, size_t, size_t) {
 }
 
 data_value generate_timeuuid_value(std::mt19937&, size_t, size_t) {
-    return data_value(timeuuid_native_type{utils::UUID_gen::get_time_UUID()});
+    return data_value(timeuuid_native_type{utils::UUID_gen::get_time_UUID_v1()});
 }
 
 data_value generate_timestamp_value(std::mt19937& engine, size_t, size_t) {
