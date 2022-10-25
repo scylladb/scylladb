@@ -8,6 +8,7 @@
 
 
 #include "UUID.hh"
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/net/byteorder.hh>
 #include <random>
 #include <boost/iterator/function_input_iterator.hpp>
@@ -16,8 +17,11 @@
 #include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
 #include "marshal_exception.hh"
+#include "log.hh"
 
 namespace utils {
+
+logging::logger uuidlog("uuid");
 
 UUID
 make_random_uuid() noexcept {
@@ -49,6 +53,14 @@ UUID::UUID(sstring_view uuid) {
     int base = 16;
     this->most_sig_bits = std::stoull(most, nullptr, base);
     this->least_sig_bits = std::stoull(least, nullptr, base);
+}
+
+void not_a_time_uuid(UUID uuid) {
+    on_internal_error(uuidlog, format("UUID {} v{} is not a time-uuid", uuid, uuid.version()));
+}
+
+void UUID::not_a_time_uuid() const {
+    utils::not_a_time_uuid(*this);
 }
 
 }

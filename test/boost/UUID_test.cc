@@ -156,8 +156,86 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_v1_tri_compare_legacy) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_timeuuid_v1_unique_monotonicity) {
+    using utils::UUID, utils::UUID_gen;
+    auto u0 = UUID_gen::get_time_UUID();
+    auto u1 = UUID_gen::get_time_UUID();
+    auto uuid_cmp = utils::timeuuid_cmp(u0.serialize(), u1.serialize()).tri_compare();
 
-BOOST_AUTO_TEST_CASE(test_timeuuid_submicro_is_monotonic) {
+    BOOST_REQUIRE(uuid_cmp < 0);
+    BOOST_REQUIRE(u0.timestamp() < u1.timestamp());
+
+    auto s0 = u0.to_sstring();
+    auto s1 = u1.to_sstring();
+    auto str_cmp = s0.compare(s1);
+
+    BOOST_REQUIRE(str_cmp != 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_v7_unique_monotonicity) {
+    using utils::UUID, utils::UUID_gen;
+    auto u0 = UUID_gen::get_time_UUID_v7();
+    auto u1 = UUID_gen::get_time_UUID_v7();
+    auto uuid_cmp = utils::timeuuid_cmp(u0.serialize(), u1.serialize()).tri_compare();
+    BOOST_TEST_MESSAGE(format("u0={}", u0));
+    BOOST_TEST_MESSAGE(format("u1={}", u1));
+    BOOST_TEST_MESSAGE(format("uuid_cmp={}", uuid_cmp < 0 ? "-1" : uuid_cmp > 0 ? "1" : "0"));
+
+    BOOST_REQUIRE(uuid_cmp < 0);
+    BOOST_REQUIRE(u0.timestamp() < u1.timestamp());
+
+    auto s0 = u0.to_sstring();
+    auto s1 = u1.to_sstring();
+    auto str_cmp = s0.compare(s1);
+    BOOST_TEST_MESSAGE(format("str_cmp={}", str_cmp));
+
+    BOOST_REQUIRE_LT(str_cmp, 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_v7_monotonicity) {
+    using utils::UUID, utils::UUID_gen;
+    auto seed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    BOOST_TEST_MESSAGE(format("random-seed={}", seed));
+    srandom(seed);
+    auto t0 = UUID_gen::milliseconds(random() - (1UL << 30));
+    auto t1 = UUID_gen::milliseconds(random() - (1UL << 30));
+    auto u0 = UUID_gen::get_time_UUID_v7(t0);
+    auto u1 = UUID_gen::get_time_UUID_v7(t1);
+    auto s0 = u0.to_sstring();
+    auto s1 = u1.to_sstring();
+
+    BOOST_TEST_MESSAGE(format("t0={} u0={} serialized={}", t0.count(), u0, u0.serialize()));
+    BOOST_TEST_MESSAGE(format("t1={} u1={} serialized={}", t1.count(), u1, u1.serialize()));
+
+    BOOST_REQUIRE_EQUAL(u0, u0);
+    BOOST_REQUIRE_EQUAL(u1, u1);
+    BOOST_REQUIRE_NE(u0, u1);
+
+    BOOST_REQUIRE_EQUAL(UUID_gen::unix_timestamp(u0).count(), t0.count());
+    BOOST_REQUIRE_EQUAL(UUID_gen::unix_timestamp(u1).count(), t1.count());
+
+    auto uuid_cmp = utils::timeuuid_cmp(u0.serialize(), u1.serialize()).tri_compare();
+    BOOST_TEST_MESSAGE(format("uuid_cmp={}", uuid_cmp > 0 ? "1" : uuid_cmp < 0 ? "-1" : "0"));
+    BOOST_REQUIRE(uuid_cmp != 0);
+
+    auto str_cmp = s0.compare(s1);
+    BOOST_TEST_MESSAGE(format("str_cmp={}", str_cmp));
+    BOOST_REQUIRE_NE(str_cmp, 0);
+
+    if (uuid_cmp > 0) {
+        BOOST_REQUIRE_GE(t0.count(), t1.count());
+        if ((t0.count() >= 0) == (t1.count() >= 0)) {
+            BOOST_REQUIRE_GT(str_cmp, 0);
+        }
+    } else if (uuid_cmp < 0) {
+        BOOST_REQUIRE_LE(t0.count(), t1.count());
+        if ((t0.count() >= 0) == (t1.count() >= 0)) {
+            BOOST_REQUIRE_LT(str_cmp, 0);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_v1_submicro_is_monotonic) {
     const int64_t PAD6 = 0xFFFF'FFFF'FFFF;
     using namespace std::chrono;
     using utils::UUID, utils::UUID_gen;
