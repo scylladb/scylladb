@@ -1087,6 +1087,12 @@ token_metadata::get_endpoint_for_host_id(host_id host_id) const {
     return _impl->get_endpoint_for_host_id(host_id);
 }
 
+host_id_or_endpoint token_metadata::parse_host_id_and_endpoint(const sstring& host_id_string) const {
+    auto res = host_id_or_endpoint(host_id_string);
+    res.resolve(*this);
+    return res;
+}
+
 const std::unordered_map<inet_address, host_id>&
 token_metadata::get_endpoint_to_host_id_map_for_reading() const {
     return _impl->get_endpoint_to_host_id_map_for_reading();
@@ -1458,6 +1464,22 @@ host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) 
                 throw std::invalid_argument(format("Invalid host_id or inet_address {}", s));
             }
         }
+    }
+}
+
+void host_id_or_endpoint::resolve(const token_metadata& tm) {
+    if (id) {
+        auto endpoint_opt = tm.get_endpoint_for_host_id(id);
+        if (!endpoint_opt) {
+            throw std::runtime_error(format("Host ID {} not found in the cluster", id));
+        }
+        endpoint = *endpoint_opt;
+    } else {
+        auto opt_id = tm.get_host_id_if_known(endpoint);
+        if (!opt_id) {
+            throw std::runtime_error(format("Host inet address {} not found in the cluster", endpoint));
+        }
+        id = *opt_id;
     }
 }
 
