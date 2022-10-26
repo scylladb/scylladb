@@ -3653,6 +3653,7 @@ future<> storage_service::node_ops_abort_thread() {
                 auto uuid_opt = _node_ops_abort_queue.front();
                 _node_ops_abort_queue.pop_front();
                 if (!uuid_opt) {
+                    slogger.info("Stopped node_ops_abort_thread");
                     return;
                 }
                 try {
@@ -3662,7 +3663,7 @@ future<> storage_service::node_ops_abort_thread() {
                 }
             }
         }
-        slogger.info("Stopped node_ops_abort_thread");
+        __builtin_unreachable();
     });
 }
 
