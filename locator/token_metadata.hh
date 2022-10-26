@@ -133,6 +133,27 @@ private:
     bool _sort_by_proximity = true;
 };
 
+struct host_id_or_endpoint {
+    host_id id;
+    gms::inet_address endpoint;
+
+    enum class param_type {
+        host_id,
+        endpoint,
+        auto_detect
+    };
+
+    host_id_or_endpoint(const sstring& s, param_type restrict = param_type::auto_detect);
+
+    bool has_host_id() const noexcept {
+        return bool(id);
+    }
+
+    bool has_endpoint() const noexcept {
+        return endpoint != gms::inet_address();
+    }
+};
+
 using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;
 class token_metadata_impl;
 

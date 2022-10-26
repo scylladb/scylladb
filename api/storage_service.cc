@@ -69,6 +69,11 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
 }
 
+locator::host_id validate_host_id(const sstring& param) {
+    auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
+    return hoep.id;
+}
+
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
@@ -715,7 +720,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::remove_node.set(r, [&ss](std::unique_ptr<request> req) {
-        auto host_id = req->get_query_param("host_id");
+        auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
         auto ignore_nodes = std::list<gms::inet_address>();
         for (std::string n : ignore_nodes_strs) {

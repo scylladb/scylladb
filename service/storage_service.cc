@@ -2328,12 +2328,11 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes) {
-    return run_with_api_lock(sstring("removenode"), [host_id_string, ignore_nodes = std::move(ignore_nodes)] (storage_service& ss) mutable {
-        return seastar::async([&ss, host_id_string, ignore_nodes = std::move(ignore_nodes)] {
+future<> storage_service::removenode(locator::host_id host_id, std::list<gms::inet_address> ignore_nodes) {
+    return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes = std::move(ignore_nodes)] (storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes = std::move(ignore_nodes)] {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto host_id = locator::host_id(utils::UUID(host_id_string));
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
             if (!endpoint_opt) {
                 throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));

@@ -1432,4 +1432,33 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     set(make_token_metadata_ptr(std::move(tm)));
 }
 
+host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) {
+    switch (restrict) {
+    case param_type::host_id:
+        try {
+            id = host_id(utils::UUID(s));
+        } catch (const marshal_exception& e) {
+            throw std::invalid_argument(format("Invalid host_id {}: {}", s, e.what()));
+        }
+        break;
+    case param_type::endpoint:
+        try {
+            endpoint = gms::inet_address(s);
+        } catch (std::invalid_argument& e) {
+            throw std::invalid_argument(format("Invalid inet_address {}: {}", s, e.what()));
+        }
+        break;
+    case param_type::auto_detect:
+        try {
+            id = host_id(utils::UUID(s));
+        } catch (const marshal_exception& e) {
+            try {
+                endpoint = gms::inet_address(s);
+            } catch (std::invalid_argument& e) {
+                throw std::invalid_argument(format("Invalid host_id or inet_address {}", s));
+            }
+        }
+    }
+}
+
 } // namespace locator
