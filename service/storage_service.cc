@@ -3564,11 +3564,11 @@ node_ops_meta_data::node_ops_meta_data(
 }
 
 future<> node_ops_meta_data::start() {
-    return make_ready_future<>(); // for now
+    return _ops ? _ops->start() : make_ready_future<>();
 }
 
 future<> node_ops_meta_data::stop() noexcept {
-    return make_ready_future<>(); // for now
+    return _ops ? _ops->stop() : make_ready_future<>();
 }
 
 future<> node_ops_meta_data::abort() {

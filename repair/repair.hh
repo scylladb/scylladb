@@ -76,6 +76,9 @@ struct node_ops_info {
     node_ops_info(const node_ops_info&) = delete;
     node_ops_info(node_ops_info&&) = delete;
 
+    future<> start();
+    future<> stop() noexcept;
+
     void check_abort();
 };
 
