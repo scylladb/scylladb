@@ -2315,12 +2315,11 @@ struct compare_visitor {
             return std::strong_ordering::greater;
         }
 
-        // FIXME: indentation
-            return with_linearized(v1, [&] (bytes_view v1) {
-                return with_linearized(v2, [&] (bytes_view v2) {
-                    return utils::timeuuid_cmp(v1, v2).uuid_tri_compare();
-                });
+        return with_linearized(v1, [&] (bytes_view v1) {
+            return with_linearized(v2, [&] (bytes_view v2) {
+                return utils::timeuuid_cmp(v1, v2).uuid_tri_compare();
             });
+        });
     }
     std::strong_ordering operator()(const empty_type_impl&) { return std::strong_ordering::equal; }
     std::strong_ordering operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
