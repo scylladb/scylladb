@@ -3624,6 +3624,24 @@ void storage_service::node_ops_done(utils::UUID ops_uuid) {
 void storage_service::node_ops_abort(utils::UUID ops_uuid) {
     slogger.debug("node_ops_abort: ops_uuid={}", ops_uuid);
     auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
+
+    if (!ops_uuid) {
+        for (auto& [uuid, meta] : _node_ops) {
+            meta.abort().get();
+            auto as = meta.get_abort_source();
+            if (as && !as->abort_requested()) {
+                as->request_abort();
+            }
+        }
+
+        for (auto it = _node_ops.begin(); it != _node_ops.end(); it = _node_ops.erase(it)) {
+            node_ops_meta_data& meta = it->second;
+            meta.stop().get();
+        }
+
+        return;
+    }
+
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
@@ -3652,14 +3670,14 @@ future<> storage_service::node_ops_abort_thread() {
             while (!_node_ops_abort_queue.empty()) {
                 auto uuid_opt = _node_ops_abort_queue.front();
                 _node_ops_abort_queue.pop_front();
+                try {
+                    storage_service::node_ops_abort(uuid_opt.value_or(utils::null_uuid()));
+                } catch (...) {
+                    slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
+                }
                 if (!uuid_opt) {
                     slogger.info("Stopped node_ops_abort_thread");
                     return;
-                }
-                try {
-                    storage_service::node_ops_abort(*uuid_opt);
-                } catch (...) {
-                    slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
                 }
             }
         }
