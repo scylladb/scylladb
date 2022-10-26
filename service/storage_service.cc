@@ -2379,6 +2379,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::removenode_heartbeat) {
             slogger.debug("removenode[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
@@ -2427,6 +2428,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::decommission_heartbeat) {
             slogger.debug("decommission[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
@@ -2470,6 +2472,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::replace_prepare_mark_alive) {
             // Wait for local node has marked replacing node as alive
@@ -2523,6 +2526,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::bootstrap_heartbeat) {
             slogger.debug("bootstrap[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
@@ -3559,6 +3563,14 @@ node_ops_meta_data::node_ops_meta_data(
     _watchdog.arm(_watchdog_interval);
 }
 
+future<> node_ops_meta_data::start() {
+    return make_ready_future<>(); // for now
+}
+
+future<> node_ops_meta_data::stop() noexcept {
+    return make_ready_future<>(); // for now
+}
+
 future<> node_ops_meta_data::abort() {
     slogger.debug("node_ops_meta_data: ops_uuid={} abort", _ops_uuid);
     _watchdog.cancel();
@@ -3604,6 +3616,7 @@ void storage_service::node_ops_done(utils::UUID ops_uuid) {
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
         meta.cancel_watchdog();
+        meta.stop().get();
         _node_ops.erase(it);
     }
 }
@@ -3619,6 +3632,7 @@ void storage_service::node_ops_abort(utils::UUID ops_uuid) {
         if (as && !as->abort_requested()) {
             as->request_abort();
         }
+        meta.stop().get();
         _node_ops.erase(it);
     }
 }

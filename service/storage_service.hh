@@ -111,6 +111,8 @@ public:
             std::list<gms::inet_address> ignore_nodes,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
+    future<> start();
+    future<> stop() noexcept;
     shared_ptr<node_ops_info> get_ops_info();
     shared_ptr<abort_source> get_abort_source();
     future<> abort();
