@@ -318,9 +318,19 @@ public:
      * @param uuid
      * @return milliseconds since Unix epoch
      */
+    static decimicroseconds normalized_timestamp(UUID uuid)
+    {
+        auto epoch = START_EPOCH_V1;
+        return decimicroseconds(uuid.timestamp()) + epoch;
+    }
+
+    /**
+     * @param uuid
+     * @return milliseconds since Unix epoch
+     */
     static milliseconds unix_timestamp(UUID uuid)
     {
-        return duration_cast<milliseconds>(decimicroseconds(uuid.timestamp()) + START_EPOCH_V1);
+        return duration_cast<milliseconds>(normalized_timestamp(uuid));
     }
 
     /**
