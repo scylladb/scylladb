@@ -22,6 +22,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
@@ -5715,5 +5716,74 @@ SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
             e.execute_cql("alter table base with synchronous_updates = true").get(),
             exceptions::invalid_request_exception
         );
+    });
+}
+
+SEASTAR_TEST_CASE(test_timeuuid_ordering) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        size_t count = tests::random::get_int(2, 16);
+        std::vector<std::chrono::system_clock::time_point> data;
+        data.reserve(count);
+        for (auto i = 0; i < count; i++) {
+            auto millis = std::chrono::milliseconds(tests::random::get_int(-(1 << 30), 1 << 30));
+            testlog.trace("millis={}", millis.count());
+            data.emplace_back(millis);
+        }
+
+        struct time_point_and_idx {
+            std::chrono::system_clock::time_point tp;
+            int32_t idx;
+        };
+        std::vector<time_point_and_idx> sorted_data;
+        sorted_data.reserve(count);
+        for (auto i = 0; i < count; i++) {
+            sorted_data.emplace_back(time_point_and_idx{data[i], i});
+        }
+        std::sort(sorted_data.begin(), sorted_data.end(), [] (const time_point_and_idx& lhs, const time_point_and_idx& rhs) {
+            return lhs.tp < rhs.tp;
+        });
+
+        auto prepared = e.execute_cql(
+            "CREATE TABLE timeuuid_data (pk text, ts timeuuid, idx int, PRIMARY KEY(pk, ts));").get();
+        e.require_table_exists("ks", "timeuuid_data").get();
+
+        auto insert_and_verify_data = [&] (sstring pk, std::function<utils::UUID (std::chrono::system_clock::time_point tp)> get_timeuuid) {
+            std::vector<utils::UUID> uuids;
+            uuids.reserve(count);
+
+            for (auto i = 0; i < count; i++) {
+                auto ts = get_timeuuid(data[i]);
+                uuids.emplace_back(ts);
+                auto q = format("INSERT INTO timeuuid_data (pk, ts, idx) VALUES ('{}', {}, {});", pk, ts, i);
+                e.execute_cql(q).get();
+            }
+
+            std::vector<std::vector<bytes_opt>> expected_rows;
+            expected_rows.reserve(count);
+            for (auto i = 0; i < count; i++) {
+                auto idx = sorted_data[i].idx;
+                std::vector<bytes_opt> row = {
+                    timeuuid_type->decompose(uuids[idx]),
+                    int32_type->decompose(idx)
+                };
+                expected_rows.emplace_back(std::move(row));
+            }
+
+            auto q = format("SELECT ts, idx from timeuuid_data WHERE pk = '{}';", pk);
+            auto res = e.execute_cql(q).get0();
+            assert_that(res).is_rows().with_rows(expected_rows);
+        };
+
+        insert_and_verify_data("v1", [] (std::chrono::system_clock::time_point tp) {
+            return utils::UUID_gen::get_time_UUID(tp);
+        });
+
+        insert_and_verify_data("v7", [] (std::chrono::system_clock::time_point tp) {
+            return utils::UUID_gen::get_time_UUID_v7(tp);
+        });
+
+        insert_and_verify_data("mixed", [] (std::chrono::system_clock::time_point tp) {
+            return tests::random::get_bool() ? utils::UUID_gen::get_time_UUID_v7(tp) : utils::UUID_gen::get_time_UUID(tp);
+        });
     });
 }
