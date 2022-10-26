@@ -63,6 +63,14 @@ void node_ops_info::check_abort() {
     }
 }
 
+future<> node_ops_info::start() {
+    co_return;  // for now
+}
+
+future<> node_ops_info::stop() noexcept {
+    co_return;  // for now
+}
+
 node_ops_metrics::node_ops_metrics(tracker& tracker)
     : _tracker(tracker)
 {
