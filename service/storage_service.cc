@@ -1236,7 +1236,6 @@ future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_
         slogger.debug("Initiated reconnect to an Internal IP {} for the {}", local_ip, ep);
         co_await _messaging.invoke_on_all([ep, local_ip] (auto& local_ms) {
             local_ms.cache_preferred_ip(ep, local_ip);
-            local_ms.remove_rpc_client(netw::msg_addr(ep));
         });
     }
 }
