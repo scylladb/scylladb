@@ -46,6 +46,10 @@ gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_conf
     if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }
+    if (_listen_address->addr().is_addr_any()) {
+        logger().warn("Not gossiping INADDR_ANY as internal IP");
+        _listen_address.reset();
+    }
 }
 
 future<> gossiping_property_file_snitch::start() {
