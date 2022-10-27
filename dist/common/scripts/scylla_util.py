@@ -424,8 +424,13 @@ class sysconfig_parser:
     def __escape(self, val):
         return re.sub(r'"', r'\"', val)
 
+    def __format_line(self, key, val):
+        need_quotes = any([ch.isspace() for ch in val])
+        esc_val = self.__escape(val)
+        return f'{key}="{esc_val}"' if need_quotes else f'{key}={esc_val}'
+
     def __add(self, key, val):
-        self._data += '{}="{}"\n'.format(key, self.__escape(val))
+        self._data += self.__format_line(key, val) + '\n'
         self.__load()
 
     def __init__(self, filename):
@@ -448,7 +453,8 @@ class sysconfig_parser:
     def set(self, key, val):
         if not self.has_option(key):
             return self.__add(key, val)
-        self._data = re.sub('^{}=[^\n]*$'.format(key), '{}="{}"'.format(key, self.__escape(val)), self._data, flags=re.MULTILINE)
+        new_line = self.__format_line(key, val)
+        self._data = re.sub(f'^{key}=[^\n]*$', new_line, self._data, flags=re.MULTILINE)
         self.__load()
 
     def commit(self):
