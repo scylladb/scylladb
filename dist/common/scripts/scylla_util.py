@@ -424,6 +424,9 @@ class sysconfig_parser:
     def __escape(self, val):
         return re.sub(r'"', r'\"', val)
 
+    def __unescape(self, val):
+        return re.sub(r'\\"', r'"', val)
+
     def __format_line(self, key, val):
         need_quotes = any([ch.isspace() for ch in val])
         esc_val = self.__escape(val)
@@ -445,7 +448,8 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        return self._cfg.get('global', key).strip('"')
+        val = self._cfg.get('global', key).strip('"')
+        return self.__unescape(val)
 
     def has_option(self, key):
         return self._cfg.has_option('global', key)
