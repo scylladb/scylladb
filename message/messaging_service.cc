@@ -672,6 +672,11 @@ void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<g
 }
 
 void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
+    if (ip.addr().is_addr_any()) {
+        mlogger.warn("Cannot set INADDR_ANY as preferred IP for endpoint {}", ep);
+        return;
+    }
+
     _preferred_ip_cache[ep] = ip;
     _preferred_to_endpoint[ip] = ep;
     //
