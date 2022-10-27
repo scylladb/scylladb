@@ -2720,7 +2720,6 @@ class lsa_object_descriptor(object):
             value |= (b & 0x3f) << shift
         return lsa_object_descriptor(value, start_pos, pos)
     mig_re = re.compile(r'.* standard_migrator<(.*)>\+16>,')
-    vec_ext_re = re.compile(r'managed_vector<(.*), (.*u), (.*)>::external')
 
     def __init__(self, value, desc_pos, obj_pos):
         self.value = value
@@ -2733,10 +2732,12 @@ class lsa_object_descriptor(object):
     def dead_size(self):
         return self.value / 2
 
-    def migrator(self):
+    def migrator_ptr(self):
         static_migrators = gdb.parse_and_eval("'::debug::static_migrators'")
-        migrator = static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
-        return migrator.dereference()
+        return static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
+
+    def migrator(self):
+        return self.migrator_ptr().dereference()
 
     def migrator_str(self):
         mig = str(self.migrator())
@@ -2744,29 +2745,11 @@ class lsa_object_descriptor(object):
         return m.group(1)
 
     def live_size(self):
-        mig = str(self.migrator())
-        m = re.match(self.mig_re, mig)
-        if m:
-            type = m.group(1)
-            external = self.vec_ext_re.match(type)
-            if type == 'blob_storage':
-                t = gdb.lookup_type('blob_storage')
-                blob = self.obj_pos.cast(t.pointer())
-                return t.sizeof + blob['frag_size']
-            elif external:
-                element_type = external.group(1)
-                count = external.group(2)
-                size_type = external.group(3)
-                vec_type = gdb.lookup_type('managed_vector<%s, %s, %s>' % (element_type, count, size_type))
-                # gdb doesn't see 'external' for some reason
-                backref_ptr = self.obj_pos.cast(vec_type.pointer().pointer())
-                vec = backref_ptr.dereference()
-                element_count = vec['_capacity']
-                element_type = gdb.lookup_type(element_type)
-                return backref_ptr.type.sizeof + element_count * element_type.sizeof
-            else:
-                return gdb.lookup_type(type).sizeof
-        return 0
+        mig = self.migrator_ptr()
+        obj = int(self.obj_pos)
+        cmd = f'((migrate_fn_type*){mig})->size((const void*){obj})'
+        res = gdb.parse_and_eval(cmd)
+        return int(res)
 
     def end_pos(self):
         if self.is_live():
