@@ -239,6 +239,13 @@ public:
         return UUID(net::ntoh(t.msb), net::ntoh(t.lsb));
     }
 
+    /** creates uuid from raw bytes. src must point to a region of 8 bytes*/
+    static UUID get_UUID_from_msb(const int8_t* src) {
+        struct tmp { uint64_t msb; } t;
+        std::copy(src, src + 8, reinterpret_cast<char*>(&t));
+        return UUID(net::ntoh(t.msb), 0);
+    }
+
     /**
      * Creates a type 3 (name based) UUID based on the specified byte array.
      */
