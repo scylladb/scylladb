@@ -17,6 +17,13 @@ public:
         : tasks::task_manager::task::impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(type), std::move(entity), parent_id) {
         _status.progress_units = "ranges";
     }
+protected:
+    repair_uniq_id get_repair_uniq_id() const noexcept {
+        return repair_uniq_id{
+            .id = _status.sequence_number,
+            .task_info = tasks::task_info(_status.id, _status.shard)
+        };
+    }
 
     virtual future<> run() override = 0;
 };
@@ -29,5 +36,12 @@ public:
 
     repair_service& get_repair_service() noexcept {
         return _rs;
+    }
+
+    repair_uniq_id new_repair_uniq_id() noexcept {
+        return repair_uniq_id{
+            .id = new_sequence_number(),
+            .task_info = tasks::task_info(tasks::task_id::create_random_id(), this_shard_id())
+        };
     }
 };
