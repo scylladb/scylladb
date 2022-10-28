@@ -45,9 +45,46 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
     static const std::unordered_set<streaming::stream_reason> operations_supported = {
         streaming::stream_reason::bootstrap,
         streaming::stream_reason::replace,
+        streaming::stream_reason::removenode,
+        streaming::stream_reason::decommission,
+        streaming::stream_reason::repair,
+        streaming::stream_reason::rebuild,
     };
     return sstables::offstrategy(operations_supported.contains(reason));
 }
+
+class offstrategy_trigger {
+    sharded<replica::database>& _db;
+    table_id _id;
+    streaming::plan_id _plan_id;
+    replica::column_family& _cf;
+    lowres_clock::time_point last_update;
+
+public:
+    offstrategy_trigger(sharded<replica::database>& db, table_id id, streaming::plan_id plan_id)
+        : _db(db)
+        , _id(id)
+        , _plan_id(plan_id)
+        , _cf(_db.local().find_column_family(_id))
+    {
+        _cf.enable_off_strategy_trigger();
+    }
+    void update() {
+        auto now = lowres_clock::now();
+        // Call update_off_strategy_trigger at most every 30s. In the worst
+        // case, we would shorten the offstrategy trigger timer by 10%. The
+        // reward is that we now batch thousands or even millions of calls to
+        // update_off_strategy_trigger. The update() is called for each and
+        // every mutation fragment we received. So it is worth the
+        // optimization.
+        if (now - last_update > std::chrono::seconds(30)) {
+            sslog.debug("[Stream #{}] Updated offstrategy trigger for ks={}, table={}, table_id={}",
+                _plan_id, _cf.schema()->ks_name(), _cf.schema()->cf_name(), _id);
+            _cf.update_off_strategy_trigger();
+            last_update = now;
+        }
+    }
+};
 
 void stream_manager::init_messaging_service_handler() {
     auto& ms = _ms.local();
@@ -90,8 +127,9 @@ void stream_manager::init_messaging_service_handler() {
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto get_next_mutation_fragment = [&sm = container(), source, plan_id, from, s, cmd_status, permit] () mutable {
-                return source().then([&sm, plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+            auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
+            auto get_next_mutation_fragment = [&sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+                return source().then([&sm, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -112,6 +150,7 @@ void stream_manager::init_messaging_service_handler() {
                         auto sz = fmf.representation().size();
                         auto mf = fmf.unfreeze(*s, permit);
                         sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                        offstrategy_update->update();
                         return make_ready_future<mutation_fragment_opt>(std::move(mf));
                     } else {
                         // If the sender has sent stream_mutation_fragments_cmd it means it is
