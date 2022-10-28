@@ -308,11 +308,11 @@ elif [ "$ID" = "fedora" ]; then
         exit 1
     fi
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
-    pip3 install "geomet<0.3,>=0.1"
-    # Disable C extensions
-    pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
-    pip3 install traceback-with-variables
-    pip3 install scylla-api-client
+    PIP_DEFAULT_ARGS="--only-binary=:all: -v"
+    pip3 install "$PIP_DEFAULT_ARGS" "geomet<0.3,>=0.1"
+    pip3 install "$PIP_DEFAULT_ARGS" scylla-driver
+    pip3 install "$PIP_DEFAULT_ARGS" traceback-with-variables
+    pip3 install "$PIP_DEFAULT_ARGS" scylla-api-client
 
     cargo install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
