@@ -2449,7 +2449,7 @@ private:
 
     size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
         // Max buffer size per repair round
-        return is_rpc_stream_supported(algo) ?  tracker::max_repair_memory_per_range() : 256 * 1024;
+        return is_rpc_stream_supported(algo) ?  repair_module::max_repair_memory_per_range() : 256 * 1024;
     }
 
     // Step A: Negotiate sync boundary to use
@@ -2733,7 +2733,7 @@ public:
 
             auto& mem_sem = _ri.rs.memory_sem();
             auto max = _ri.rs.max_repair_memory();
-            auto wanted = (_all_live_peer_nodes.size() + 1) * tracker::max_repair_memory_per_range();
+            auto wanted = (_all_live_peer_nodes.size() + 1) * repair_module::max_repair_memory_per_range();
             wanted = std::min(max, wanted);
             rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _ri.id.uuid(), wanted, mem_sem.current(), max);
@@ -2929,10 +2929,9 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _sys_ks(sys_ks)
     , _view_update_generator(vug)
-    , _repair_module(seastar::make_shared<repair_module>(tm, *this))
+    , _repair_module(seastar::make_shared<repair_module>(tm, *this, max_repair_memory))
     , _mm(mm)
-    , _tracker(max_repair_memory)
-    , _node_ops_metrics(_tracker)
+    , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
 {
