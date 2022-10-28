@@ -348,7 +348,6 @@ float node_ops_metrics::repair_finished_percentage() {
 repair_module::repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
     : tasks::task_manager::module(tm, "repair")
     , _rs(rs)
-    , _shutdown(false)
     , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4)),
             named_semaphore_exception_factory{"repair range parallelism"})
 {
@@ -409,15 +408,8 @@ future<repair_status> repair_module::repair_await_completion(int id, std::chrono
     });
 }
 
-future<> repair_module::shutdown() {
-    _shutdown.store(true, std::memory_order_relaxed);
-    return make_ready_future();
-}
-
 void repair_module::check_in_shutdown() {
-    if (_shutdown.load(std::memory_order_relaxed)) {
-        throw std::runtime_error(format("Repair service is being shutdown"));
-    }
+    abort_source().check();
 }
 
 void repair_module::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
@@ -1270,7 +1262,6 @@ future<repair_status> repair_service::await_completion(int id, std::chrono::stea
 }
 
 future<> repair_service::shutdown() {
-    co_await get_repair_module().shutdown();
     co_await remove_repair_meta();
 }
 

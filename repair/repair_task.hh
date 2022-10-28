@@ -40,8 +40,6 @@ private:
     // Successfully-finished repairs are those with id <= repair_module::_sequence_number
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
-    // Set when the repair service is being shutdown
-    std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Map repair id into repair_info.
     std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
@@ -68,7 +66,6 @@ public:
     }
 
     repair_status get(int id) const;
-    future<> shutdown();
     void check_in_shutdown();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
     void remove_repair_info(int id);
