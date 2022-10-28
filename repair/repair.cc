@@ -386,7 +386,7 @@ repair_status repair_module::get(int id) const {
 }
 
 future<repair_status> repair_module::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
-    return seastar::with_gate(_gate, [this, id, timeout] {
+    return seastar::with_gate(async_gate(), [this, id, timeout] {
         if (id > _sequence_number) {
             return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {}", id)));
         }
@@ -411,7 +411,7 @@ future<repair_status> repair_module::repair_await_completion(int id, std::chrono
 
 future<> repair_module::shutdown() {
     _shutdown.store(true, std::memory_order_relaxed);
-    return _gate.close();
+    return make_ready_future();
 }
 
 void repair_module::check_in_shutdown() {
@@ -489,7 +489,7 @@ named_semaphore& repair_module::range_parallelism_semaphore() {
 }
 
 future<> repair_module::run(repair_uniq_id id, std::function<void ()> func) {
-    return seastar::with_gate(_gate, [this, id, func =std::move(func)] {
+    return seastar::with_gate(async_gate(), [this, id, func =std::move(func)] {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
             rlogger.info("repair[{}]: completed successfully", id.uuid());

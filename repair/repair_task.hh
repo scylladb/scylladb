@@ -40,8 +40,6 @@ private:
     // Successfully-finished repairs are those with id <= repair_module::_sequence_number
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
-    // Used to allow shutting down repairs in progress, and waiting for them.
-    seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Map repair id into repair_info.
