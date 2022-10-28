@@ -1087,6 +1087,12 @@ token_metadata::get_endpoint_for_host_id(host_id host_id) const {
     return _impl->get_endpoint_for_host_id(host_id);
 }
 
+host_id_or_endpoint token_metadata::parse_host_id_and_endpoint(const sstring& host_id_string) const {
+    auto res = host_id_or_endpoint(host_id_string);
+    res.resolve(*this);
+    return res;
+}
+
 const std::unordered_map<inet_address, host_id>&
 token_metadata::get_endpoint_to_host_id_map_for_reading() const {
     return _impl->get_endpoint_to_host_id_map_for_reading();
@@ -1430,6 +1436,51 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     tm.invalidate_cached_rings();
     co_await func(tm);
     set(make_token_metadata_ptr(std::move(tm)));
+}
+
+host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) {
+    switch (restrict) {
+    case param_type::host_id:
+        try {
+            id = host_id(utils::UUID(s));
+        } catch (const marshal_exception& e) {
+            throw std::invalid_argument(format("Invalid host_id {}: {}", s, e.what()));
+        }
+        break;
+    case param_type::endpoint:
+        try {
+            endpoint = gms::inet_address(s);
+        } catch (std::invalid_argument& e) {
+            throw std::invalid_argument(format("Invalid inet_address {}: {}", s, e.what()));
+        }
+        break;
+    case param_type::auto_detect:
+        try {
+            id = host_id(utils::UUID(s));
+        } catch (const marshal_exception& e) {
+            try {
+                endpoint = gms::inet_address(s);
+            } catch (std::invalid_argument& e) {
+                throw std::invalid_argument(format("Invalid host_id or inet_address {}", s));
+            }
+        }
+    }
+}
+
+void host_id_or_endpoint::resolve(const token_metadata& tm) {
+    if (id) {
+        auto endpoint_opt = tm.get_endpoint_for_host_id(id);
+        if (!endpoint_opt) {
+            throw std::runtime_error(format("Host ID {} not found in the cluster", id));
+        }
+        endpoint = *endpoint_opt;
+    } else {
+        auto opt_id = tm.get_host_id_if_known(endpoint);
+        if (!opt_id) {
+            throw std::runtime_error(format("Host inet address {} not found in the cluster", endpoint));
+        }
+        id = *opt_id;
+    }
 }
 
 } // namespace locator

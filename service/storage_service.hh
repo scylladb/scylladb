@@ -298,7 +298,7 @@ private:
     void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
-    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
+    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
@@ -704,7 +704,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
+    future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);

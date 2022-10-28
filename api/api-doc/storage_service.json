@@ -1228,7 +1228,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Removes token (and all data associated with enpoint that had it) from the ring",
+               "summary":"Removes a node from the cluster. Replicated data that logically belonged to this node is redistributed among the remaining nodes.",
                "type":"void",
                "nickname":"remove_node",
                "produces":[
@@ -1245,7 +1245,7 @@
                   },
                   {
                      "name":"ignore_nodes",
-                     "description":"List of dead nodes to ingore in removenode operation",
+                     "description":"Comma-separated list of dead nodes to ignore in removenode operation. Use the same method for all nodes to ignore: either Host IDs or ip addresses.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",

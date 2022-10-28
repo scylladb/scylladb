@@ -618,7 +618,7 @@ future<> storage_service::mark_existing_views_as_built(sharded<db::system_distri
     });
 }
 
-std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace() {
+std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(const token_metadata& tm) {
     std::vector<sstring> ignore_nodes_strs;
     std::list<gms::inet_address> ignore_nodes;
     boost::split(ignore_nodes_strs, _db.local().get_config().ignore_dead_nodes_for_replace(), boost::is_any_of(","));
@@ -628,11 +628,11 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
             std::replace(n.begin(), n.end(), '\'', ' ');
             boost::trim_all(n);
             if (!n.empty()) {
-                auto node = gms::inet_address(n);
-                ignore_nodes.push_back(node);
+                auto ep_and_id = tm.parse_host_id_and_endpoint(n);
+                ignore_nodes.push_back(ep_and_id.endpoint);
             }
         } catch (...) {
-            throw std::runtime_error(format("Failed to parse --ignore-dead-nodes-for-replace parameter: ignore_nodes={}, node={}", ignore_nodes_strs, n));
+            throw std::runtime_error(format("Failed to parse --ignore-dead-nodes-for-replace parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
         }
     }
     return ignore_nodes;
@@ -2204,7 +2204,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens) {
     auto replace_address = get_replace_address().value();
     auto uuid = utils::make_random_uuid();
-    std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
+    auto tmptr = get_token_metadata_ptr();
+    std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace(*tmptr);
     // Step 1: Decide who needs to sync data for replace operation
     std::list<gms::inet_address> sync_nodes;
     for (const auto& x :_gossiper.get_endpoint_states()) {
@@ -2248,7 +2249,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             throw std::runtime_error(msg);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes-for-replace <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes-for-replace 127.0.0.1,127.0.0.2", uuid, nodes_down);
+            auto msg = format("replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes-for-replace <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e", uuid, nodes_down);
             slogger.warn("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -2328,12 +2329,11 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes) {
-    return run_with_api_lock(sstring("removenode"), [host_id_string, ignore_nodes = std::move(ignore_nodes)] (storage_service& ss) mutable {
-        return seastar::async([&ss, host_id_string, ignore_nodes = std::move(ignore_nodes)] {
+future<> storage_service::removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
+    return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto host_id = locator::host_id(utils::UUID(host_id_string));
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
             if (!endpoint_opt) {
                 throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
@@ -2341,6 +2341,11 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             auto endpoint = *endpoint_opt;
             auto tokens = tmptr->get_tokens(endpoint);
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
+            std::list<gms::inet_address> ignore_nodes;
+            for (auto& hoep : ignore_nodes_params) {
+                hoep.resolve(*tmptr);
+                ignore_nodes.push_back(hoep.endpoint);
+            }
 
             // Step 1: Decide who needs to sync data
             //

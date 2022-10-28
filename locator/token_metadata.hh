@@ -133,6 +133,33 @@ private:
     bool _sort_by_proximity = true;
 };
 
+class token_metadata;
+
+struct host_id_or_endpoint {
+    host_id id;
+    gms::inet_address endpoint;
+
+    enum class param_type {
+        host_id,
+        endpoint,
+        auto_detect
+    };
+
+    host_id_or_endpoint(const sstring& s, param_type restrict = param_type::auto_detect);
+
+    bool has_host_id() const noexcept {
+        return bool(id);
+    }
+
+    bool has_endpoint() const noexcept {
+        return endpoint != gms::inet_address();
+    }
+
+    // Map the host_id to endpoint based on whichever of them is set,
+    // using the token_metadata
+    void resolve(const token_metadata& tm);
+};
+
 using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;
 class token_metadata_impl;
 
@@ -219,6 +246,10 @@ public:
 
     /** Return the end-point for a unique host ID */
     std::optional<inet_address> get_endpoint_for_host_id(locator::host_id host_id) const;
+
+    /// Parses the \c host_id_string either as a host uuid or as an ip address and returns the mapping.
+    /// Throws std::invalid_argument on parse error or std::runtime_error if the host_id wasn't found.
+    host_id_or_endpoint parse_host_id_and_endpoint(const sstring& host_id_string) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;

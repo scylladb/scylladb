@@ -69,6 +69,11 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
 }
 
+locator::host_id validate_host_id(const sstring& param) {
+    auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
+    return hoep.id;
+}
+
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
@@ -715,20 +720,23 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::remove_node.set(r, [&ss](std::unique_ptr<request> req) {
-        auto host_id = req->get_query_param("host_id");
+        auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
-        auto ignore_nodes = std::list<gms::inet_address>();
+        auto ignore_nodes = std::list<locator::host_id_or_endpoint>();
         for (std::string n : ignore_nodes_strs) {
             try {
                 std::replace(n.begin(), n.end(), '\"', ' ');
                 std::replace(n.begin(), n.end(), '\'', ' ');
                 boost::trim_all(n);
                 if (!n.empty()) {
-                    auto node = gms::inet_address(n);
-                    ignore_nodes.push_back(node);
+                    auto hoep = locator::host_id_or_endpoint(n);
+                    if (!ignore_nodes.empty() && hoep.has_host_id() != ignore_nodes.front().has_host_id()) {
+                        throw std::runtime_error("All nodes should be identified using the same method: either Host IDs or ip addresses.");
+                    }
+                    ignore_nodes.push_back(std::move(hoep));
                 }
             } catch (...) {
-                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}", ignore_nodes_strs, n));
+                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
         return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
