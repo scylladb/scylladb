@@ -33,7 +33,7 @@ enum class mask_type : uint8_t {
 
 // size_bits cannot be >= 64
 static inline uint64_t make_mask(uint8_t size_bits, uint8_t offset, mask_type t) noexcept {
-    const uint64_t mask = ((1 << size_bits) - 1) << offset;
+    const uint64_t mask = ((uint64_t(1) << size_bits) - 1) << offset;
     return t == mask_type::set ? mask : ~mask;
 }
 
