@@ -5330,6 +5330,8 @@ class scylla_gdb_func_collection_element(gdb.Function):
             return std_list(collection)[int(key)]
         elif typ.name.startswith('seastar::circular_buffer<'):
             return circular_buffer(collection)[int(key)]
+        elif typ.name.startswith('boost::intrusive::list<'):
+            return list(intrusive_list(collection))[int(key)]
 
         raise ValueError("Unsupported container type: {}".format(typ.name))
 
