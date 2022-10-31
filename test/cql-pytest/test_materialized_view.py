@@ -495,3 +495,28 @@ def test_is_not_null_requirement(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match="IS NOT NULL"):
             with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p1 is not null and p2 is not null and c1 is not null and c2 is not null') as mv:
                 pass
+
+# Reproducer for issue #11542 and #10026: We have a table with with a
+# materialized view with a filter and some data, at which point we modify
+# the base table (e.g., add some silly comment) and then try to modify the
+# data. The last modification used to fail, logging "Column definition v
+# does not match any column in the query selection".
+# The same test without the silly base-table modification works, and so does
+# the same test without the filter in the materialized view that uses the
+# base-regular column v. So does the same test without pre-modification data.
+#
+# This test is Scylla-only because Cassandra does not support filtering
+# on a base-regular column v that is only a key column in the view.
+def test_view_update_and_alter_base(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v >= 0 and p is not null') as mv:
+            cql.execute(f'INSERT INTO {table} (p,v) VALUES (1,1)')
+            # In our tests, MV writes are synchronous, so we can read
+            # immediately
+            assert len(list(cql.execute(f"SELECT v from {mv}"))) == 1
+            # Alter the base table, with a silly comment change that doesn't
+            # change anything important - but still the base schema changes.
+            cql.execute(f"ALTER TABLE {table} WITH COMMENT = '{unique_name()}'")
+            # Try to modify an item. This failed in #11542.
+            cql.execute(f'UPDATE {table} SET v=-1 WHERE p=1')
+            assert len(list(cql.execute(f"SELECT v from {mv}"))) == 0
