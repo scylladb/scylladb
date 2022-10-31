@@ -1,7 +1,7 @@
 OS Support by Platform and Version
 ==================================
 
-The following matrix shows which Linux Distribution, Containers, and images are supported with which versions of ScyllaDB.
+The following matrix shows which Linux distributions, containers, and images are supported with which versions of ScyllaDB.
 
 Where *supported* in this scope means:
 
