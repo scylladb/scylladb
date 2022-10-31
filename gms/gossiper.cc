@@ -1037,10 +1037,10 @@ std::set<inet_address> gossiper::get_live_members() {
 
 std::set<inet_address> gossiper::get_live_token_owners() {
     std::set<inet_address> token_owners;
-    for (auto& member : get_live_members()) {
-        auto es = get_endpoint_state_for_endpoint_ptr(member);
-        if (es && !is_dead_state(*es) && get_token_metadata_ptr()->is_member(member)) {
-            token_owners.insert(member);
+    auto normal_token_owners = get_token_metadata_ptr()->get_all_endpoints();
+    for (auto& node: normal_token_owners) {
+        if (is_alive(node)) {
+            token_owners.insert(node);
         }
     }
     return token_owners;
@@ -1048,10 +1048,10 @@ std::set<inet_address> gossiper::get_live_token_owners() {
 
 std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
-    for (auto&& x : _unreachable_endpoints) {
-        auto& endpoint = x.first;
-        if (get_token_metadata_ptr()->is_member(endpoint)) {
-            token_owners.insert(endpoint);
+    auto normal_token_owners = get_token_metadata_ptr()->get_all_endpoints();
+    for (auto& node: normal_token_owners) {
+        if (!is_alive(node)) {
+            token_owners.insert(node);
         }
     }
     return token_owners;
