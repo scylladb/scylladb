@@ -49,12 +49,40 @@
 
 logging::logger rlogger("repair");
 
+node_ops_info::node_ops_info(utils::UUID ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
+    : ops_uuid(ops_uuid_)
+    , as(std::move(as_))
+    , ignore_nodes(std::move(ignore_nodes_))
+{}
+
 void node_ops_info::check_abort() {
     if (as && as->abort_requested()) {
         auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
     }
+}
+
+future<> node_ops_info::start() {
+    if (as) {
+        co_await _sas.start();
+        _abort_subscription = as->subscribe([this] () noexcept {
+            _abort_done = _sas.invoke_on_all([] (abort_source& as) noexcept {
+                as.request_abort();
+            });
+        });
+    }
+}
+
+future<> node_ops_info::stop() noexcept {
+    if (as) {
+        co_await std::exchange(_abort_done, make_ready_future<>());
+        co_await _sas.stop();
+    }
+}
+
+abort_source* node_ops_info::local_abort_source() {
+    return as ? &_sas.local() : nullptr;
 }
 
 node_ops_metrics::node_ops_metrics(tracker& tracker)
@@ -532,7 +560,7 @@ repair_info::repair_info(repair_service& repair,
     const std::vector<sstring>& hosts_,
     const std::unordered_set<gms::inet_address>& ignore_nodes_,
     streaming::stream_reason reason_,
-    shared_ptr<abort_source> as,
+    abort_source* as,
     bool hints_batchlog_flushed)
     : rs(repair)
     , db(repair.get_db())
@@ -1295,9 +1323,10 @@ future<> repair_service::do_sync_data_using_repair(
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
+                abort_source* asp = ops_info ? ops_info->local_abort_source() : nullptr;
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_info ? ops_info->as : nullptr, hints_batchlog_flushed);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, asp, hints_batchlog_flushed);
                 ri->neighbors = std::move(neighbors);
                 return repair_ranges(ri);
             });

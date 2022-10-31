@@ -2539,6 +2539,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::removenode_heartbeat) {
             slogger.debug("removenode[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
@@ -2587,6 +2588,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::decommission_heartbeat) {
             slogger.debug("decommission[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
@@ -2631,6 +2633,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::replace_prepare_mark_alive) {
             // Wait for local node has marked replacing node as alive
@@ -2685,6 +2688,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 });
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
+            meta.start().get();
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::bootstrap_heartbeat) {
             slogger.debug("bootstrap[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
@@ -2930,7 +2934,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
         auto ops_uuid = utils::make_random_uuid();
-        auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, nullptr, std::list<gms::inet_address>()});
+        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, nullptr, std::list<gms::inet_address>());
         return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
@@ -3663,9 +3667,17 @@ node_ops_meta_data::node_ops_meta_data(
     , _abort(std::move(abort_func))
     , _abort_source(seastar::make_shared<abort_source>())
     , _signal(std::move(signal_func))
-    , _ops(seastar::make_shared<node_ops_info>({_ops_uuid, _abort_source, std::move(ignore_nodes)}))
+    , _ops(seastar::make_shared<node_ops_info>(_ops_uuid, _abort_source, std::move(ignore_nodes)))
     , _watchdog([sig = _signal] { sig(); }) {
     _watchdog.arm(_watchdog_interval);
+}
+
+future<> node_ops_meta_data::start() {
+    return _ops ? _ops->start() : make_ready_future<>();
+}
+
+future<> node_ops_meta_data::stop() noexcept {
+    return _ops ? _ops->stop() : make_ready_future<>();
 }
 
 future<> node_ops_meta_data::abort() {
@@ -3713,6 +3725,7 @@ future<> storage_service::node_ops_done(utils::UUID ops_uuid) {
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
         meta.cancel_watchdog();
+        co_await meta.stop();
         _node_ops.erase(it);
     }
 }
@@ -3720,6 +3733,24 @@ future<> storage_service::node_ops_done(utils::UUID ops_uuid) {
 future<> storage_service::node_ops_abort(utils::UUID ops_uuid) {
     slogger.debug("node_ops_abort: ops_uuid={}", ops_uuid);
     auto permit = co_await seastar::get_units(_node_ops_abort_sem, 1);
+
+    if (!ops_uuid) {
+        for (auto& [uuid, meta] : _node_ops) {
+            co_await meta.abort();
+            auto as = meta.get_abort_source();
+            if (as && !as->abort_requested()) {
+                as->request_abort();
+            }
+        }
+
+        for (auto it = _node_ops.begin(); it != _node_ops.end(); it = _node_ops.erase(it)) {
+            node_ops_meta_data& meta = it->second;
+            co_await meta.stop();
+        }
+
+        co_return;
+    }
+
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
@@ -3728,6 +3759,7 @@ future<> storage_service::node_ops_abort(utils::UUID ops_uuid) {
         if (as && !as->abort_requested()) {
             as->request_abort();
         }
+        co_await meta.stop();
         _node_ops.erase(it);
     }
 }
@@ -3746,17 +3778,18 @@ future<> storage_service::node_ops_abort_thread() {
         while (!_node_ops_abort_queue.empty()) {
             auto uuid_opt = _node_ops_abort_queue.front();
             _node_ops_abort_queue.pop_front();
-            if (!uuid_opt) {
-                co_return;
-            }
             try {
-                co_await node_ops_abort(*uuid_opt);
+                co_await node_ops_abort(uuid_opt.value_or(utils::null_uuid()));
             } catch (...) {
                 slogger.warn("Failed to abort node operation ops_uuid={}: {}", *uuid_opt, std::current_exception());
             }
+            if (!uuid_opt) {
+                slogger.info("Stopped node_ops_abort_thread");
+                co_return;
+            }
         }
     }
-    slogger.info("Stopped node_ops_abort_thread");
+    __builtin_unreachable();
 }
 
 } // namespace service
