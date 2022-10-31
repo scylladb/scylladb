@@ -47,11 +47,12 @@ private:
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
-    static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     seastar::condition_variable _done_cond;
     void start(repair_uniq_id id);
     void done(repair_uniq_id id, bool succeeded);
 public:
+    static constexpr size_t max_repair_memory_per_range = 32 * 1024 * 1024;
+
     repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept;
 
     repair_service& get_repair_service() noexcept {
@@ -74,7 +75,6 @@ public:
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
     named_semaphore& range_parallelism_semaphore();
-    static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);

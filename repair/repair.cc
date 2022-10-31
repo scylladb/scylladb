@@ -346,12 +346,12 @@ float node_ops_metrics::repair_finished_percentage() {
 repair_module::repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
     : tasks::task_manager::module(tm, "repair")
     , _rs(rs)
-    , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4)),
+    , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range / 4)),
             named_semaphore_exception_factory{"repair range parallelism"})
 {
     auto nr = _range_parallelism_semaphore.available_units();
     rlogger.info("Setting max_repair_memory={}, max_repair_memory_per_range={}, max_repair_ranges_in_parallel={}",
-        max_repair_memory, max_repair_memory_per_range(), nr);
+        max_repair_memory, max_repair_memory_per_range, nr);
 }
 
 void repair_module::start(repair_uniq_id id) {
