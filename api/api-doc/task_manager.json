@@ -50,6 +50,14 @@
                         "paramType":"path"
                     },
                     {
+                        "name":"internal",
+                        "description":"Boolean flag indicating whether internal tasks should be shown (false by default)",
+                        "required":false,
+                        "allowMultiple":false,
+                        "type":"boolean",
+                        "paramType":"query"
+                    },
+                    {
                         "name":"keyspace",
                         "description":"The keyspace to query about",
                         "required":false,

@@ -93,11 +93,12 @@ void set_task_manager(http_context& ctx, routes& r) {
 
     tm::get_tasks.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         using chunked_stats = utils::chunked_vector<task_stats>;
-        std::vector<chunked_stats> res = co_await ctx.tm.map([&req] (tasks::task_manager& tm) {
+        auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
+        std::vector<chunked_stats> res = co_await ctx.tm.map([&req, internal] (tasks::task_manager& tm) {
             chunked_stats local_res;
             auto module = tm.find_module(req->param["module"]);
-            const auto& filtered_tasks = module->get_tasks() | boost::adaptors::filtered([&params = req->query_parameters] (const auto& task) {
-                return filter_tasks(task.second, params);
+            const auto& filtered_tasks = module->get_tasks() | boost::adaptors::filtered([&params = req->query_parameters, internal] (const auto& task) {
+                return (internal || !task.second->is_internal()) && filter_tasks(task.second, params);
             });
             for (auto& [task_id, task] : filtered_tasks) {
                 local_res.push_back(task_stats{task});
