@@ -229,6 +229,7 @@ public:
     future<uint32_t> get_next_repair_meta_id();
 
     friend class user_requested_repair_task_impl;
+    friend class data_sync_repair_task_impl;
 };
 
 class repair_info;

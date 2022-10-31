@@ -1286,13 +1286,23 @@ future<> repair_service::sync_data_using_repair(
     }
 
     assert(this_shard_id() == 0);
-    auto& sharded_db = get_db();
+    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_info);
+    auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
+    task->start();
+    co_await task->done();
+}
+
+future<> data_sync_repair_task_impl::run() {
+    auto module = dynamic_pointer_cast<repair_module>(_module);
+    auto& rs = module->get_repair_service();
+    auto& keyspace = _status.keyspace;
+    auto& sharded_db = rs.get_db();
     auto& db = sharded_db.local();
     auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
 
-    repair_uniq_id id = get_repair_module().new_repair_uniq_id();
+    auto id = get_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    co_await get_repair_module().run(id, [this, id, &db, keyspace, germs = std::move(germs), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_info] () mutable {
+    co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, ops_info = _ops_info] () mutable {
         auto cfs = list_column_families(db, keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
@@ -1301,11 +1311,11 @@ future<> repair_service::sync_data_using_repair(
         auto table_ids = get_table_ids(db, keyspace, cfs);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
-        if (get_repair_module().is_aborted(id.uuid())) {
+        if (rs.get_repair_module().is_aborted(id.uuid())) {
             throw std::runtime_error("aborted by user request");
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_info, germs] (repair_service& local_repair) mutable {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_info, germs] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
