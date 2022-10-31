@@ -22,7 +22,7 @@ public:
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const override;
+                    size_t output_len) override;
     size_t compress_max_size(size_t input_len) const override;
 };
 
@@ -33,7 +33,7 @@ public:
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const override;
+                    size_t output_len) override;
     size_t compress_max_size(size_t input_len) const override;
 };
 
@@ -44,7 +44,7 @@ public:
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const override;
+                    size_t output_len) override;
     size_t compress_max_size(size_t input_len) const override;
 };
 
@@ -225,7 +225,7 @@ size_t lz4_processor::uncompress(const char* input, size_t input_len,
 }
 
 size_t lz4_processor::compress(const char* input, size_t input_len,
-                char* output, size_t output_len) const {
+                char* output, size_t output_len) {
     if (output_len < LZ4_COMPRESSBOUND(input_len) + 4) {
         throw std::runtime_error("LZ4 compression failure: length of output is too small");
     }
@@ -275,7 +275,7 @@ size_t deflate_processor::uncompress(const char* input,
 }
 
 size_t deflate_processor::compress(const char* input,
-                size_t input_len, char* output, size_t output_len) const {
+                size_t input_len, char* output, size_t output_len) {
     z_stream zs;
     zs.zalloc = Z_NULL;
     zs.zfree = Z_NULL;
@@ -324,7 +324,7 @@ size_t snappy_processor::uncompress(const char* input, size_t input_len,
 }
 
 size_t snappy_processor::compress(const char* input, size_t input_len,
-                char* output, size_t output_len) const {
+                char* output, size_t output_len) {
     auto ret = snappy_compress(input, input_len, output, &output_len);
     if (ret != SNAPPY_OK) {
         throw std::runtime_error("snappy compression failure: snappy_compress() failed");

@@ -36,7 +36,7 @@ public:
      * exception is thrown. Maximum required size is obtained via "compress_max_size"
      */
     virtual size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const = 0;
+                    size_t output_len) = 0;
     /**
      * Returns the maximum output size for compressing data on "input_len" size.
      */

@@ -37,7 +37,7 @@ public:
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const override;
+                    size_t output_len) override;
     size_t compress_max_size(size_t input_len) const override;
 
     std::set<sstring> option_names() const override;
