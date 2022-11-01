@@ -1,12 +1,17 @@
-OS Support by Platform and Version
-==================================
+OS Support by Linux Distributions and Version
+==============================================
 
-The following matrix shows which Operating Systems, Platforms, and Containers / Instance Engines are supported with which versions of ScyllaDB.
+The following matrix shows which Linux distributions, containers, and images are supported with which versions of ScyllaDB.
 
-ScyllaDB requires a fix to the XFS append introduced in kernel 3.15 (back-ported to 3.10 in RHEL/CentOS).
-ScyllaDB will not run with earlier kernel versions. Details in `ScyllaDB issue 885 <https://github.com/scylladb/scylla/issues/885>`_.
+Where *supported* in this scope means:
 
  .. REMOVE IN FUTURE VERSIONS - Remove information about versions from the notes below in version 5.2.
+
+- A binary installation package is available to `download <https://www.scylladb.com/download/>`_.
+- The download and install procedures are tested as part of ScyllaDB release process for each version.
+- An automated install is included from :doc:`ScyllaDB Web Installer for Linux tool </getting-started/install-scylla/scylla-web-installer>` (for latest versions)
+
+You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-prerequisites>`_ on other x86_64 or aarch64 platforms, without any guarantees.
 
 .. note::
    
@@ -27,7 +32,7 @@ ScyllaDB Open Source
 
 
 +----------------------------+----------------------------------+-----------------------------+---------+-------+
-| Platform                   |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
+| Linux Distributions        |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
 |                            |                                  |                             | RHEL    | RHEL  |
 +----------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 | ScyllaDB Version / Version | 14.04| 16.04| 18.04|20.04 |22.04 | 8    | 9    |  10   |  11   | 7       |   8   |
@@ -71,7 +76,7 @@ ScyllaDB Enterprise
     - CentOS 7 for versions earlier than 2021.1.
 
 +----------------------------+-----------------------------------+---------------------------+--------+-------+
-| Platform                   |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
+| Linux Distributions        |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
 |                            |                                   |                           | RHEL   | RHEL  |
 +----------------------------+------+------+------+------+-------+------+------+------+------+--------+-------+
 | ScyllaDB Version / Version | 14.04| 16.04| 18.04| 20.04| 22.04 | 8    | 9    | 10   | 11   |  7     | 8     |
