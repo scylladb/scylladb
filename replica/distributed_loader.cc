@@ -354,7 +354,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             return make_sstable(*global_table, upload, gen);
         }, [] (const sstables::shared_sstable&) { return true; }).get();
 
-        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get0();
 
         auto datadir = upload.parent_path();
         if (use_view_update_path) {
