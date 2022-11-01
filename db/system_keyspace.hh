@@ -26,6 +26,7 @@
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
 #include "service/raft/group0_fwd.hh"
+#include "tasks/task_manager.hh"
 
 namespace service {
 
@@ -312,7 +313,7 @@ public:
     static future<> get_compaction_history(compaction_history_consumer&& f);
 
     struct repair_history_entry {
-        utils::UUID id;
+        tasks::task_id id;
         table_id table_uuid;
         db_clock::time_point ts;
         sstring ks;

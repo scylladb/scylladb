@@ -11,6 +11,8 @@
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
+#include "repair/repair_task.hh"
+#include "tasks/task_manager.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -52,9 +54,9 @@ public:
 };
 
 class node_ops_metrics {
-    tracker& _tracker;
+    shared_ptr<repair_module> _module;
 public:
-    node_ops_metrics(tracker& tracker);
+    node_ops_metrics(shared_ptr<repair_module> module);
 
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
@@ -88,13 +90,13 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
+    shared_ptr<repair_module> _repair_module;
     service::migration_manager& _mm;
-    tracker _tracker;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
 
-    std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
+    std::unordered_map<tasks::task_id, repair_history> _finished_ranges_history;
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     bool _stopped = false;
@@ -114,6 +116,7 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,
             sharded<db::view::view_update_generator>& vug,
+            tasks::task_manager& tm,
             service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();
     future<> start();
@@ -126,8 +129,8 @@ public:
     // stop them abruptly).
     future<> shutdown();
 
-    future<std::optional<gc_clock::time_point>> update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
-    future<> cleanup_history(utils::UUID repair_id);
+    future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
+    future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
     int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
@@ -171,11 +174,8 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
-    tracker& repair_tracker() {
-        return _tracker;
-    }
-    const tracker& repair_tracker() const {
-        return _tracker;
+    repair_module& get_repair_module() noexcept {
+        return *_repair_module;
     }
 
     const node_ops_metrics& get_metrics() const noexcept {

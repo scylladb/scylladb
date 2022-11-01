@@ -9,6 +9,7 @@
 #include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
+#include "repair/repair_task.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation_fragment.hh"
@@ -2448,7 +2449,7 @@ private:
 
     size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
         // Max buffer size per repair round
-        return is_rpc_stream_supported(algo) ?  tracker::max_repair_memory_per_range() : 256 * 1024;
+        return is_rpc_stream_supported(algo) ?  repair_module::max_repair_memory_per_range() : 256 * 1024;
     }
 
     // Step A: Negotiate sync boundary to use
@@ -2684,7 +2685,7 @@ private:
         size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
         if (_ri.total_rf != repaired_replicas){
             rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _ri.id.uuid, _ri.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
+                    _ri.id.uuid(), _ri.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -2692,12 +2693,12 @@ private:
             co_return;
         }
         repair_service& rs = _ri.rs;
-        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_ri.id.uuid, _table_id, _range, _start_time);
+        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_ri.id.uuid(), _table_id, _range, _start_time);
         if (!repair_time_opt) {
             co_return;
         }
         auto repair_time = repair_time_opt.value();
-        repair_update_system_table_request req{_ri.id.uuid, _table_id, _ri.keyspace, _cf_name, _range, repair_time};
+        repair_update_system_table_request req{_ri.id.uuid(), _table_id, _ri.keyspace, _cf_name, _range, repair_time};
         auto all_nodes = _all_live_peer_nodes;
         all_nodes.push_back(utils::fb_utilities::get_broadcast_address());
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
@@ -2705,9 +2706,9 @@ private:
                 auto& ms = _ri.messaging.local();
                 repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
                 (void)resp;  // nothing to do with the response yet
-                rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _ri.id.uuid, node);
+                rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _ri.id.uuid(), node);
             } catch (...) {
-                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _ri.id.uuid, node, std::current_exception());
+                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _ri.id.uuid(), node, std::current_exception());
             }
         });
         co_return;
@@ -2732,13 +2733,13 @@ public:
 
             auto& mem_sem = _ri.rs.memory_sem();
             auto max = _ri.rs.max_repair_memory();
-            auto wanted = (_all_live_peer_nodes.size() + 1) * tracker::max_repair_memory_per_range();
+            auto wanted = (_all_live_peer_nodes.size() + 1) * repair_module::max_repair_memory_per_range();
             wanted = std::min(max, wanted);
             rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
-                    _ri.id.uuid, wanted, mem_sem.current(), max);
+                    _ri.id.uuid(), wanted, mem_sem.current(), max);
             auto mem_permit = seastar::get_units(mem_sem, wanted).get0();
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
-                    _ri.id.uuid, wanted, mem_sem.current(), max);
+                    _ri.id.uuid(), wanted, mem_sem.current(), max);
 
             auto permit = _ri.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
 
@@ -2810,11 +2811,11 @@ public:
             } catch (replica::no_such_column_family& e) {
                 table_dropped = true;
                 rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _ri.id.uuid, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
+                        _ri.id.uuid(), this_shard_id(), _ri.keyspace, _cf_name, _range, e);
                 _failed = true;
             } catch (std::exception& e) {
                 rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _ri.id.uuid, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
+                        _ri.id.uuid(), this_shard_id(), _ri.keyspace, _cf_name, _range, e);
                 // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
                 _failed = true;
             }
@@ -2917,6 +2918,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_update_generator>& vug,
+        tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
     : _gossiper(gossiper)
@@ -2927,12 +2929,13 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _sys_ks(sys_ks)
     , _view_update_generator(vug)
+    , _repair_module(seastar::make_shared<repair_module>(tm, *this, max_repair_memory))
     , _mm(mm)
-    , _tracker(max_repair_memory)
-    , _node_ops_metrics(_tracker)
+    , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
 {
+    tm.register_module("repair", _repair_module);
     if (this_shard_id() == 0) {
         _gossip_helper = make_shared<row_level_repair_gossip_helper>(*this);
         _gossiper.local().register_(_gossip_helper);
@@ -2945,6 +2948,7 @@ future<> repair_service::start() {
 }
 
 future<> repair_service::stop() {
+    co_await _repair_module->stop();
     co_await uninit_ms_handlers();
     if (this_shard_id() == 0) {
         co_await _gossiper.local().unregister_(_gossip_helper);
@@ -2956,12 +2960,12 @@ repair_service::~repair_service() {
     assert(_stopped);
 }
 
-static shard_id repair_id_to_shard(utils::UUID& repair_id) {
-    return shard_id(repair_id.get_most_significant_bits()) % smp::count;
+static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
+    return shard_id(repair_id.uuid().get_most_significant_bits()) % smp::count;
 }
 
 future<std::optional<gc_clock::time_point>>
-repair_service::update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
+repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id, table_id, range, repair_time] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
         repair_history& rh = rs._finished_ranges_history[repair_id];
@@ -2982,7 +2986,7 @@ repair_service::update_history(utils::UUID repair_id, table_id table_id, dht::to
     });
 }
 
-future<> repair_service::cleanup_history(utils::UUID repair_id) {
+future<> repair_service::cleanup_history(tasks::task_id repair_id) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id] (repair_service& rs) mutable {
         rs._finished_ranges_history.erase(repair_id);

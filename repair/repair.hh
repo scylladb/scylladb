@@ -28,6 +28,11 @@
 #include "locator/token_metadata.hh"
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
+#include "tasks/types.hh"
+
+namespace tasks {
+class repair_module;
+}
 
 namespace replica {
 class database;
@@ -62,8 +67,17 @@ public:
 struct repair_uniq_id {
     // The integer ID used to identify a repair job. It is currently used by nodetool and http API.
     int id;
-    // A UUID to identifiy a repair job. We will transit to use UUID over the integer ID.
-    utils::UUID uuid;
+    // Task info containing a UUID to identifiy a repair job, and a shard of the job.
+    // We will transit to use UUID over the integer ID.
+    tasks::task_info task_info;
+
+    tasks::task_id uuid() const noexcept {
+        return task_info.id;
+    }
+
+    unsigned shard() const noexcept {
+        return task_info.shard;
+    }
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
@@ -170,7 +184,6 @@ public:
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
     repair_uniq_id id;
-    shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::unordered_set<gms::inet_address> ignore_nodes;
@@ -217,58 +230,6 @@ public:
     future<> repair_range(const dht::token_range& range, table_id);
 
     size_t ranges_size();
-};
-
-// The repair_tracker tracks ongoing repair operations and their progress.
-// A repair which has already finished successfully is dropped from this
-// table, but a failed repair will remain in the table forever so it can
-// be queried about more than once (FIXME: reconsider this. But note that
-// failed repairs should be rare anwyay).
-// This object is not thread safe, and must be used by only one cpu.
-class tracker {
-private:
-    // Each repair_start() call returns a unique int which the user can later
-    // use to follow the status of this repair with repair_status().
-    // We can't use the number 0 - if repair_start() returns 0, it means it
-    // decide quickly that there is nothing to repair.
-    int _next_repair_command = 1;
-    // Note that there are no "SUCCESSFUL" entries in the "status" map:
-    // Successfully-finished repairs are those with id < _next_repair_command
-    // but aren't listed as running or failed the status map.
-    std::unordered_map<int, repair_status> _status;
-    // Used to allow shutting down repairs in progress, and waiting for them.
-    seastar::gate _gate;
-    // Set when the repair service is being shutdown
-    std::atomic_bool _shutdown alignas(seastar::cache_line_size);
-    // Map repair id into repair_info.
-    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
-    std::unordered_set<utils::UUID> _pending_repairs;
-    std::unordered_set<utils::UUID> _aborted_pending_repairs;
-    // The semaphore used to control the maximum
-    // ranges that can be repaired in parallel.
-    named_semaphore _range_parallelism_semaphore;
-    static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
-    seastar::condition_variable _done_cond;
-    void start(repair_uniq_id id);
-    void done(repair_uniq_id id, bool succeeded);
-public:
-    explicit tracker(size_t max_repair_memory);
-    repair_status get(int id) const;
-    repair_uniq_id next_repair_command();
-    future<> shutdown();
-    void check_in_shutdown();
-    void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
-    void remove_repair_info(int id);
-    lw_shared_ptr<repair_info> get_repair_info(int id);
-    std::vector<int> get_active() const;
-    size_t nr_running_repair_jobs();
-    void abort_all_repairs();
-    named_semaphore& range_parallelism_semaphore();
-    static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
-    future<> run(repair_uniq_id id, std::function<void ()> func);
-    future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
-    float report_progress(streaming::stream_reason reason);
-    bool is_aborted(const utils::UUID& uuid);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -430,7 +391,7 @@ struct node_ops_cmd_response {
 
 
 struct repair_update_system_table_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     table_id table_uuid;
     sstring keyspace_name;
     sstring table_name;
@@ -442,7 +403,7 @@ struct repair_update_system_table_response {
 };
 
 struct repair_flush_hints_batchlog_request {
-    utils::UUID repair_uuid;
+    tasks::task_id repair_uuid;
     std::list<gms::inet_address> target_nodes;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;
