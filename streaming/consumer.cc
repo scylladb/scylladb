@@ -29,7 +29,7 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
         std::exception_ptr ex;
         try {
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
-            auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), *cf, reason);
+            auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *cf, reason);
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
