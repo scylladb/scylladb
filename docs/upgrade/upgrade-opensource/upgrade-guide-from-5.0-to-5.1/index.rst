@@ -1,5 +1,5 @@
 ====================================
-Upgrade Guide - ScyllaDB 4.6 to 5.0
+Upgrade Guide - ScyllaDB 5.0 to 5.1
 ====================================
 
 .. toctree::
