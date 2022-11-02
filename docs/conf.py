@@ -104,9 +104,9 @@ html_theme_options = {
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
     'banner_button_text': 'Learn More',
-    'banner_button_url': 'https://lp.scylladb.com/university-live-2022-03-registration',
-    'banner_title_text': 'Join us for Scylla University LIVE, a half-day of FREE instructor-led training with exclusive new Scylla database content. March 22-23. Register for Free',
-    'hide_banner': 'true',
+    'banner_button_url': 'https://lp.scylladb.com/university-live-2022-12-registration',
+    'banner_title_text': 'Join us for ScyllaDB University LIVE, a half-day of FREE instructor-led training with exclusive new ScyllaDB database content. December 1. Register for Free',
+    'hide_banner': 'false',
     "collapse_navigation": 'true',
 }
 
