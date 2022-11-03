@@ -89,6 +89,7 @@
 #include "db/per_partition_rate_limit_extension.hh"
 #include "lang/wasm_instance_cache.hh"
 
+#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -916,6 +917,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
+            static sharded<service::raft_address_map<>> raft_address_map;
+            supervisor::notify("starting Raft address map");
+            raft_address_map.start().get();
+            auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
+                raft_address_map.stop().get();
+            });
+
             static direct_fd_clock fd_clock;
             static sharded<direct_failure_detector::failure_detector> fd;
             supervisor::notify("starting direct failure detector service");
@@ -1069,7 +1077,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
+                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during

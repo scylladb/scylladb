@@ -70,10 +70,11 @@ public:
     }
 };
 
-raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms,
-        gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
+raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map<>& address_map,
+        netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
+    , _srv_address_mappings{address_map}
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
 {
