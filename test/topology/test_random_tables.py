@@ -9,7 +9,7 @@ from cassandra.protocol import InvalidRequest                            # type:
 
 # Simple test of schema helper
 @pytest.mark.asyncio
-async def test_new_table(manager, random_tables):
+async def test_new_table(fails_aarch64, manager, random_tables):
     cql = manager.cql
     assert cql is not None
     table = await random_tables.add_table(ncolumns=5)
