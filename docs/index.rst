@@ -38,17 +38,17 @@
   :title: Let us manage your DB
   :link: https://cloud.docs.scylladb.com
   :class: large-4
-  :anchor: Get Started with Scylla Cloud
+  :anchor: ScyllaDB Cloud Documentation
 
-  Take advantage of Scylla Cloud, a fully-managed database-as-a-service.
+  Simplify application development with ScyllaDB Cloud - a fully managed database-as-a-service.
 
 .. topic-box::
   :title: Manage your own DB
   :link: getting-started
   :class: large-4
-  :anchor: Get Started with Scylla
+  :anchor: ScyllaDB Open Source and Enterprise Documentation
 
-  Provision and manage a Scylla cluster in your environment.
+  Deploy and manage your database in your own environment.
 
 
 .. raw:: html
@@ -59,8 +59,8 @@
 
   <div class="topics-grid topics-grid--products">
 
-      <h2 class="topics-grid__title">Our Product List</h2>
-      <p class="topics-grid__text">To begin choose a product from the list below</p>
+      <h2 class="topics-grid__title">Our Products</h2>
+      <p class="topics-grid__text">Choose a product from the list below to view its documentation.</p>
 
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
