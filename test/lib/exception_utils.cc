@@ -8,7 +8,7 @@
 
 #include "test/lib/exception_utils.hh"
 
-#include <regex>
+#include <boost/regex.hpp>
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -46,7 +46,8 @@ std::function<bool(const std::exception&)> exception_predicate::message_equals(
 std::function<bool(const std::exception&)> exception_predicate::message_matches(
         const std::string& regex,
         const std::experimental::source_location& loc) {
-    return make([=] (const std::exception& e) { return std::regex_search(e.what(), std::regex(regex)); },
+    // Use boost::regex since std::regex (with libstdc++ 12) uses too much stack
+    return make([=] (const std::exception& e) { return boost::regex_search(e.what(), boost::regex(regex)); },
                 [=] (const std::exception& e) {
                     return fmt::format("Message '{}' doesn't match '{}'\n{}:{}: invoked here",
                                        e.what(), regex, loc.file_name(), loc.line());
