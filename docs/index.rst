@@ -13,8 +13,6 @@
   :image: /_static/img/mascots/scylla-docs.svg
   :search_box:
 
-  New to ScyllaDB? Start `HERE <https://cloud.docs.scylladb.com/stable/scylladb-basics/>`_.
-
 .. raw:: html
 
   <div class="landing__content landing__content">
@@ -26,6 +24,15 @@
   <div class="grid-x grid-margin-x hs">
 
 .. topic-box::
+  :title: New to ScyllaDB? Start here!
+  :link: https://cloud.docs.scylladb.com/stable/scylladb-basics/
+  :class: large-4
+  :anchor: ScyllaDB Basics
+
+  Learn the essentials of ScyllaDB.
+
+
+.. topic-box::
   :title: ScyllaDB Cloud
   :link: https://cloud.docs.scylladb.com
   :class: large-4
@@ -34,10 +41,10 @@
   Simplify application development with the fully managed DBaaS.
 
 .. topic-box::
-  :title: ScyllaDB On-Premise
+  :title: ScyllaDB OSS and Enterprise
   :link: getting-started
   :class: large-4
-  :anchor: ScyllaDB Open Source and Enterprise Documentation
+  :anchor: ScyllaDB Documentation
 
   Deploy and manage the database in your environment.
 
@@ -45,10 +52,26 @@
   :title: ScyllaDB Drivers
   :link: using-scylla/drivers
   :class: large-4
-  :anchor: Choose a Driver
+  :anchor: Driver Documentation
 
   Use high performance ScyllaDB drivers to connect your application to a ScyllaDB cluster.
 
+.. topic-box::
+  :title: ScyllaDB Integrations
+  :link: using-scylla/integrations
+  :class: large-4
+  :anchor: Integration Projects
+
+  Use ScyllaDB with Apache Kafka, Kubernetes, JanusGraph, and more.
+
+
+.. topic-box::
+  :title: ScyllaDB FAQ
+  :link: faq
+  :class: large-4
+  :anchor: FAQ
+
+  Get answers to frequently asked questions about ScyllaDB.
 
 
 .. raw:: html
