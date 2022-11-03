@@ -27,8 +27,8 @@ def test_compaction_tasks(gdb):
 def test_databases(gdb):
     scylla(gdb, 'databases')
 
-def test_column_families(gdb):
-    scylla(gdb, 'column_families')
+def test_tables(gdb):
+    scylla(gdb, 'tables')
 
 def test_keyspaces(gdb):
     scylla(gdb, 'keyspaces')
