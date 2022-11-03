@@ -26,6 +26,15 @@
   <div class="grid-x grid-margin-x hs">
 
 .. topic-box::
+  :title: New to ScyllaDB? Start here!
+  :link: https://cloud.docs.scylladb.com/stable/scylladb-basics/
+  :class: large-4
+  :anchor: ScyllaDB Basics
+
+  Learn the essentials of ScyllaDB.
+
+
+.. topic-box::
   :title: Let us manage your DB
   :link: https://cloud.docs.scylladb.com
   :class: large-4
@@ -41,13 +50,6 @@
 
   Provision and manage a Scylla cluster in your environment.
 
-.. topic-box::
-  :title: Connect your application to Scylla
-  :link: using-scylla/drivers
-  :class: large-4
-  :anchor: Choose a Driver
-
-  Use high performance Scylla drivers to connect your application to a Scylla cluster.
 
 .. raw:: html
 
