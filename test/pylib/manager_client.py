@@ -12,8 +12,10 @@
 from typing import List, Optional, Callable
 import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
+from test.pylib.util import wait_for
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
+from time import time
 
 
 logger = logging.getLogger(__name__)
@@ -175,3 +177,20 @@ class ManagerClient():
     async def get_host_id(self, server_id: str) -> str:
         """Get host id through Scylla REST API"""
         return await self.api.get_host_id(server_id)
+
+    async def wait_for_host_known(self, dst_server_id: str, expect_host_id: str,
+                                  deadline: Optional[float] = None) -> None:
+        """Waits until dst_server_id knows about expect_host_id, with timeout"""
+        async def host_is_known():
+            host_id_map = await self.api.get_host_id_map(dst_server_id)
+            return True if any(entry for entry in host_id_map if entry['value'] == expect_host_id) else None
+
+        return await wait_for(host_is_known, deadline or (time() + 30))
+
+    async def wait_for_host_down(self, dst_server_id: str, server_id: str, deadline: Optional[float] = None) -> None:
+        """Waits for dst_server_id to consider server_id as down, with timeout"""
+        async def host_is_down():
+            down_endpoints = await self.api.get_down_endpoints(dst_server_id)
+            return True if server_id in down_endpoints else None
+
+        return await wait_for(host_is_down, deadline or (time() + 30))

@@ -17,9 +17,7 @@ from cassandra.pool import Host
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
-
-
-T = TypeVar('T')
+from test.pylib.util import wait_for
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
@@ -54,15 +52,6 @@ async def enable_raft(manager: ManagerClient, srv: str) -> None:
 async def enable_raft_and_restart(manager: ManagerClient, srv: str) -> None:
     await enable_raft(manager, srv)
     await restart(manager, srv)
-
-
-async def wait_for(pred: Callable[[], Awaitable[Optional[T]]], deadline: float) -> T:
-    while True:
-        assert(time.time() < deadline), "Deadline exceeded, failing test."
-        res = await pred()
-        if res is not None:
-            return res
-        await asyncio.sleep(1)
 
 
 async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
