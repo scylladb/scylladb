@@ -1761,7 +1761,7 @@ void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_ss
     }
 }
 
-void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) {
+void compaction_backlog_tracker::copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) const {
     for (auto&& w : _ongoing_writes) {
         new_bt.register_partially_written_sstable(w.first, *w.second);
     }
@@ -1771,8 +1771,6 @@ void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tra
             new_bt.register_compacting_sstable(w.first, *w.second);
         }
     }
-    _ongoing_writes = {};
-    _ongoing_compactions = {};
 }
 
 void compaction_backlog_tracker::revert_charges(sstables::shared_sstable sst) {

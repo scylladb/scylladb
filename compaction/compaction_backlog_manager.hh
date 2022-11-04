@@ -74,7 +74,7 @@ public:
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
     void register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp);
-    void transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true);
+    void copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true) const;
     void revert_charges(sstables::shared_sstable sst);
 
     void disable() {

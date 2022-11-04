@@ -1160,7 +1160,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     // FIXME: decouple backlog_tracker from compaction_strategy, so each group can have its own tracker.
     _compaction_manager.register_backlog_tracker(new_cs.get_backlog_tracker());
     auto move_read_charges = new_cs.type() == _compaction_strategy.type();
-    _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
+    _compaction_strategy.get_backlog_tracker().copy_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
 
     compaction_group& cg = *_compaction_group;
     auto new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(_schema));
