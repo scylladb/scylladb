@@ -102,4 +102,4 @@ Cluster Management Procedures
 
   Procedures for handling failures and practical examples of different scenarios.
 
-  * :ref:`Handling Failures<raft-handliing-failures>`
+  * :ref:`Handling Failures<raft-handling-failures>`
