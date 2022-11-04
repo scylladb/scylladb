@@ -194,16 +194,27 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
     }
 }
 
-using action_handler_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
-
 class action_handler {
+public:
+    using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
+    using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
+
+    enum class value_type {
+        bytes = 0,
+        string,
+    };
+
+private:
     std::string _name;
     std::string _summary;
     std::string _description;
-    action_handler_func _func;
+    std::variant<bytes_func, string_func> _func;
 
 public:
-    action_handler(std::string name, std::string summary, action_handler_func func, std::string description)
+    action_handler(std::string name, std::string summary, bytes_func func, std::string description)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
+    }
+    action_handler(std::string name, std::string summary, string_func func, std::string description)
         : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
 
@@ -211,8 +222,13 @@ public:
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
+    value_type get_value_type() const { return value_type(_func.index()); }
+
     void operator()(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) const {
-        _func(std::move(type), std::move(values), vm);
+        std::get<bytes_func>(_func)(std::move(type), std::move(values), vm);
+    }
+    void operator()(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) const {
+        std::get<string_func>(_func)(std::move(type), std::move(values), vm);
     }
 };
 
@@ -369,10 +385,20 @@ $ scylla types {{action}} --help
         if (!app.configuration().contains("value")) {
             throw std::invalid_argument("error: no values specified");
         }
-        auto values = boost::copy_range<std::vector<bytes>>(
-                app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-        handler(std::move(type), std::move(values), app.configuration());
+        switch (handler.get_value_type()) {
+            case action_handler::value_type::bytes:
+                {
+                    auto values = boost::copy_range<std::vector<bytes>>(
+                            app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
+
+                    handler(std::move(type), std::move(values), app.configuration());
+                }
+                break;
+            case action_handler::value_type::string:
+                handler(std::move(type), app.configuration()["value"].as<std::vector<sstring>>(), app.configuration());
+                break;
+        }
 
         co_return;
     });
