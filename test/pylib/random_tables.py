@@ -155,18 +155,19 @@ class RandomTable():
         """Get all column names comma separated for CQL query generation convenience"""
         return ", ".join([c.name for c in self.columns])
 
-    async def create(self) -> asyncio.Future:
+    async def create(self, if_not_exists: bool = False) -> asyncio.Future:
         """Create this table"""
         col_defs = ", ".join(f"{c.cql}" for c in self.columns)
         pk_names = ", ".join(c.name for c in self.columns[:self.pks])
-        cql_stmt = f"CREATE TABLE {self.full_name} ({col_defs}, , primary key({pk_names}))"
+        cql_stmt = f"CREATE TABLE {'IF NOT EXISTS ' if if_not_exists else ''} {self.full_name} "\
+                   f"({col_defs}, , primary key({pk_names}))"
         logger.debug(cql_stmt)
         assert self.manager.cql is not None
         return await self.manager.cql.run_async(cql_stmt)
 
-    async def drop(self) -> asyncio.Future:
+    async def drop(self, if_exists: bool = False) -> asyncio.Future:
         """Drop this table"""
-        cql_stmt = f"DROP TABLE {self.full_name}"
+        cql_stmt = f"DROP TABLE {'IF EXISTS ' if if_exists else ''}{self.full_name}"
         logger.debug(cql_stmt)
         assert self.manager.cql is not None
         return await self.manager.cql.run_async(cql_stmt)
@@ -253,20 +254,21 @@ class RandomTables():
         self.manager.cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
                                  "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
-    async def add_tables(self, ntables: int = 1, ncolumns: int = 5) -> None:
+    async def add_tables(self, ntables: int = 1, ncolumns: int = 5, if_not_exists: bool = False) -> None:
         """Add random tables to the list.
         ntables specifies how many tables.
         ncolumns specifies how many random columns per table."""
         tables = [RandomTable(self.manager, self.keyspace, ncolumns) for _ in range(ntables)]
-        await asyncio.gather(*(t.create() for t in tables))
+        await asyncio.gather(*(t.create(if_not_exists) for t in tables))
         self.tables.extend(tables)
 
     async def add_table(self, ncolumns: int = None, columns: List[Column] = None,
-                        pks: int = 2, name: str = None) -> RandomTable:
+                        pks: int = 2, name: str = None,
+                        if_not_exists: bool = False) -> RandomTable:
         """Add a random table. See random_tables.RandomTable()"""
         table = RandomTable(self.manager, self.keyspace, ncolumns=ncolumns, columns=columns,
                             pks=pks, name=name)
-        await table.create()
+        await table.create(if_not_exists)
         self.tables.append(table)
         return table
 
@@ -279,13 +281,13 @@ class RandomTables():
     def extend(self, tables: List[RandomTable]) -> None:
         self.tables.extend(tables)
 
-    async def drop_table(self, table: Union[str, RandomTable]) -> RandomTable:
+    async def drop_table(self, table: Union[str, RandomTable], if_exists: bool = False) -> RandomTable:
         """Drop managed RandomTable by name or by RandomTable instance"""
         if isinstance(table, str):
             table = next(t for t in self.tables if table in [t.name, t.full_name])
         else:
             assert isinstance(table, RandomTable), f"Invalid table type {type(table)}"
-        await table.drop()
+        await table.drop(if_exists)
         self.tables.remove(table)
         self.removed_tables.append(table)
         return table
