@@ -52,6 +52,7 @@ For each of the nodes in the cluster, serially (i.e. one node at a time), you wi
 * Backup the configuration file
 * Stop ScyllaDB
 * Download and install new ScyllaDB packages
+* (Optional) Enable consistent cluster management in the configuration file
 * Start ScyllaDB
 * Validate that the upgrade was successful
 
@@ -62,6 +63,9 @@ Apply the following procedure **serially** on each node. Do not move to the next
 * Not to use the new |NEW_VERSION| features
 * Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
 * Not to apply schema changes
+
+If you enabled consistent cluster management in each node's configuration file, then as soon as every node has been upgraded to the new version, the cluster will start a procedure which initializes the Raft algorithm for consistent cluster metadata management.
+You must then :ref:`verify <validate-raft-setup>` that this procedure successfully finishes.
 
 .. note:: Before upgrading, make sure to use the latest `ScyllaDB Monitoring <https://monitoring.docs.scylladb.com/>`_ stack.
 
@@ -206,6 +210,27 @@ Download and install the new release
 
         Answer ‘y’ to the first two questions.
 
+(Optional) Enable consistent cluster management in the node's configuration file
+--------------------------------------------------------------------------------
+
+If you enable this option on every node, this will cause the Scylla cluster to enable Raft and use it to consistently manage cluster-wide metadata as soon as you finish upgrading every node to the new version.
+Check the :doc:`Raft in ScyllaDB document </architecture/raft/>` to learn more.
+
+.. TODO: include enterprise versions
+
+In 5.2, Raft-based consistent cluster management is disabled by default.
+In 5.3 it will be enabled by default, but you'll be able to disable it explicitly during upgrade if needed (assuming you haven't previously enabled it on every node).
+In further versions the option will be removed and consistent cluster management will be enabled unconditionally.
+
+The option can also be enabled after the cluster is upgraded to |NEW_VERSION| (see :ref:`Enabling Raft in existing cluster <enabling-raft-existing-cluster>`).
+
+To enable the option, modify the ``scylla.yaml`` configuration file in ``/etc/scylla/`` and add the following:
+
+.. code:: yaml
+
+    consistent_cluster_management: true
+
+.. note:: Once you finish upgrading every node with `consistent_cluster_management` enabled, it won't be possible to turn the option back off.
 
 Start the node
 --------------
@@ -225,12 +250,39 @@ Once you are sure the node upgrade was successful, move to the next node in the 
 
 See |Scylla_METRICS|_ for more information..
 
+After upgrading every node
+==========================
+
+The following section applies only if you enabled the ``consistent_cluster_management`` option on every node when upgrading the cluster.
+
+.. _validate-raft-setup:
+
+Validate Raft setup
+-------------------
+
+Enabling ``consistent_cluster_management`` on every node during upgrade will cause the Scylla cluster to start an additional internal procedure as soon as every node is upgraded to the new version.
+The goal of this procedure is to initialize data structures used by the Raft algorithm to consistently manage cluster-wide metadata such as table schemas.
+
+Assuming you performed the rolling upgrade procedure correctly, in particular ensuring that schema is synchronized on every step, and if there are no problems with cluster connectivity, then this follow-up internal procedure should take no longer than a few seconds to finish.
+However, the procedure requires **full cluster availability**. If an unlucky accident (e.g. a hardware problem) causes one of your nodes to fail before this procedure finishes, the procedure may get stuck. This may cause the cluster to end up in a state where schema change operations are unavailable.
+
+Therefore, following the rolling upgrade, **you must verify** that this internal procedure has finished successfully by checking the logs of every Scylla node.
+If the procedure gets stuck, manual intervention is required.
+
+Refer to the following document for instructions on how to verify that the procedure was successful and how to proceed if it gets stuck: :ref:`Verifying that the internal Raft upgrade procedure finished successfully <verify-raft-procedure>`.
+
 Rollback Procedure
 ==================
 
 .. include:: /upgrade/_common/warning_rollback.rst
 
 The following procedure describes a rollback from |SCYLLA_NAME| |NEW_VERSION|.x to |SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to |NEW_VERSION| failed before completing on all nodes. Use this procedure only for nodes you upgraded to |NEW_VERSION|.
+
+.. warning::
+
+   The rollback procedure can be applied **only** if some nodes have not been upgraded to |NEW_VERSION| yet.
+   As soon as the last node in the rolling upgrade procedure is started with |NEW_VERSION|, rollback becomes impossible.
+   At that point, the only way to restore a cluster to |SRC_VERSION| is by restoring it from backup.
 
 ScyllaDB rollback is a rolling procedure which does **not** require full cluster shutdown.
 For each of the nodes you rollback to |SRC_VERSION|, serially (i.e. one node at a time), you will:
