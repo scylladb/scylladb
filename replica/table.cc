@@ -395,8 +395,8 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.replace_sstables({std::move(sstable)}, {});
 }
 
-void table::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
-    auto& tracker = _compaction_strategy.get_backlog_tracker();
+void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
+    auto& tracker = get_backlog_tracker();
     tracker.replace_sstables(old_sstables, new_sstables);
 }
 
@@ -991,7 +991,7 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
             _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
             _t.refresh_compound_sstable_set();
             // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
-            _t.backlog_tracker_adjust_charges({}, _new_main);
+            _cg.backlog_tracker_adjust_charges({}, _new_main);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
             return std::make_unique<sstable_lists_updater>(cg, std::move(permit), old_maintenance, new_main);
@@ -1066,7 +1066,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_sstables));
             _t.refresh_compound_sstable_set();
-            _t.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
+            _cg.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, std::move(permit), d);

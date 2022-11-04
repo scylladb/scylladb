@@ -53,6 +53,8 @@ private:
     lw_shared_ptr<sstables::sstable_set>
     do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
                    enable_backlog_tracker backlog_tracker);
+    // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
+    void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
 public:
     compaction_group(table& t);
 
