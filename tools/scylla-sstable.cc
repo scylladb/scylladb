@@ -2562,7 +2562,7 @@ $PARTITION := {
     },
     "tombstone: $TOMBSTONE, // optional
     "static_row": $COLUMNS, // optional
-    "clustering_fragments": [
+    "clustering_elements": [
         $CLUSTERING_ROW | $RANGE_TOMBSTONE_CHANGE,
         ...
     ]
