@@ -28,6 +28,43 @@ using type_variant = std::variant<
         compound_type<allow_prefixes::yes>,
         compound_type<allow_prefixes::no>>;
 
+struct serializing_visitor {
+    const std::vector<sstring>& values;
+
+    managed_bytes operator()(const data_type& type) {
+        if (values.size() != 1) {
+            throw std::runtime_error(fmt::format("serialize_handler(): expected 1 value for non-compound type, got {}", values.size()));
+        }
+        return managed_bytes(type->from_string(values.front()));
+    }
+    template <allow_prefixes AllowPrefixes>
+    managed_bytes operator()(const compound_type<AllowPrefixes>& type) {
+        if constexpr (AllowPrefixes == allow_prefixes::yes) {
+            if (values.size() > type.types().size()) {
+                throw std::runtime_error(fmt::format("serialize_handler(): expected at most {} (number of subtypes) values for prefix compound type, got {}", type.types().size(), values.size()));
+            }
+        } else {
+            if (values.size() != type.types().size()) {
+                throw std::runtime_error(fmt::format("serialize_handler(): expected {} (number of subtypes) values for non-prefix compound type, got {}", type.types().size(), values.size()));
+            }
+        }
+        std::vector<bytes> serialized_values;
+        serialized_values.reserve(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            serialized_values.push_back(type.types().at(i)->from_string(values.at(i)));
+        }
+        return type.serialize_value(serialized_values);
+    }
+
+    managed_bytes operator()(const type_variant& type) {
+        return std::visit(*this, type);
+    }
+};
+
+void serialize_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
+    fmt::print("{}\n", to_hex(serializing_visitor{values}(type)));
+}
+
 sstring to_printable_string(const data_type& type, bytes_view value) {
     return type->to_string(value);
 }
@@ -233,6 +270,33 @@ public:
 };
 
 const std::vector<action_handler> action_handlers = {
+    {"serialize", "serialize the value and print it in hex encoded form", serialize_handler,
+R"(
+Serialize the value and print it in a hex encoded form.
+
+Arguments:
+* 1 value for regular types
+* N values for non-prefix compound types (one value for each component)
+* <N values for prefix compound types (one value for each present component)
+
+To avoid boost::program_options trying to interpret values with special
+characters like '-' as options, separate values from the rest of the arguments
+with '--'.
+
+Only atomic, regular types are supported for now, collections, UDT and tuples are
+not supported, not even in frozen form.
+
+Examples:
+
+$ scylla types serialize -t Int32Type -- -1286905132
+b34b62d4
+
+$ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b 16
+0010d00819896f6b11ea00000000001c571b000400000010
+
+$ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
+0010d00819896f6b11ea00000000001c571b
+)"},
     {"deserialize", "deserialize the value(s) and print them in a human readable form", deserialize_handler,
 R"(
 Deserialize the value(s) and print them in a human-readable form.

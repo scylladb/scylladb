@@ -64,6 +64,7 @@ of the types on the command line must be the same as the order in the compound).
 
 Supported Operations
 ^^^^^^^^^^^^^^^^^^^^^^^
+* ``serialize`` - Serialize the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form. To avoid problems around special symbols, separate values with ``--`` from the rest of the arguments.
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
@@ -88,6 +89,45 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 
 Examples
 ^^^^^^^^
+* Serializing a value of type Int32Type:
+
+    .. code-block:: console
+
+        scylla types serialize -t Int32Type -- -1286905132
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        b34b62d4
+
+* Serializing a clustering-key (``--prefix-compound``):
+
+    .. code-block:: console
+
+        scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b 16
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0010d00819896f6b11ea00000000001c571b000400000010
+
+* Serializing a partition-key (``--full-compound``):
+
+    .. code-block:: console
+
+        scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0010d00819896f6b11ea00000000001c571b
+
 * Deserializing and printing a value of type Int32Type:
 
     .. code-block:: console
