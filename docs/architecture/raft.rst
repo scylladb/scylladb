@@ -4,70 +4,65 @@ Raft Consensus Algorithm in ScyllaDB
 
 Introduction
 --------------
-ScyllaDB was originally designed, following Apache Cassandra, to use gossip for topology and schema updates and the Paxos consensus algorithm for 
-strong data consistency (:doc:`LWT </using-scylla/lwt>`). To achieve stronger consistency without performance penalty, ScyllaDB 5.0 is  turning to Raft - a consensus algorithm designed as an alternative to both gossip and Paxos.
+ScyllaDB was originally designed, following Apache Cassandra, to use gossip for topology and schema updates and the Paxos consensus algorithm for
+strong data consistency (:doc:`LWT </using-scylla/lwt>`). To achieve stronger consistency without performance penalty, ScyllaDB 5.x has turned to Raft - a consensus algorithm designed as an alternative to both gossip and Paxos.
 
 Raft is a consensus algorithm that implements a distributed, consistent, replicated log across members (nodes). Raft implements consensus by first electing a distinguished leader, then giving the leader complete responsibility for managing the replicated log. The leader accepts log entries from clients, replicates them on other servers, and tells servers when it is safe to apply log entries to their state machines.
 
 Raft uses a heartbeat mechanism to trigger a leader election. All servers start as followers and remain in the follower state as long as they receive valid RPCs (heartbeat) from a leader or candidate. A leader sends periodic heartbeats to all followers to maintain his authority (leadership). Suppose a follower receives no communication over a period called the election timeout. In that case, it assumes no viable leader and begins an election to choose a new leader.
 
-Leader selection is described in detail in the `raft paper <https://raft.github.io/raft.pdf>`_.
+Leader selection is described in detail in the `Raft paper <https://raft.github.io/raft.pdf>`_.
 
-Scylla 5.0 uses Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
+ScyllaDB 5.x may use Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
 
-Following Scylla 5.x releases will use Raft to guarantee consistent topology updates similarly.
+Following ScyllaDB 5.x releases will use Raft to guarantee consistent topology updates similarly.
 
 .. _raft-quorum-requirement:
 
 Quorum Requirement
 -------------------
 
-Raft requires at least a quorum of nodes in a cluster to be available. If multiple nodes fail 
-and the quorum is lost, the cluster is unavailable for schema updates. See :ref:`Handling Failures <raft-handliing-failures>` 
+Raft requires at least a quorum of nodes in a cluster to be available. If multiple nodes fail
+and the quorum is lost, the cluster is unavailable for schema updates. See :ref:`Handling Failures <raft-handling-failures>`
 for information on how to handle failures.
 
 
 Upgrade Considerations for SyllaDB 5.0 and Later
 ==================================================
 
-Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one 
+Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one
 of the DCs is down.
 **We recommend configuring three DCs per cluster to ensure that the cluster remains available and operational when one DC is down.**
 
 Enabling Raft
 ---------------
 
-Enabling Raft in ScyllaDB 5.0
-===============================
+Enabling Raft in ScyllaDB 5.0 and 5.1
+=====================================
 
-.. note:: 
-  In ScyllaDB 5.0:
+.. warning::
+  In ScyllaDB 5.0 and 5.1, Raft is an experimental feature.
 
-  * Raft is an experimental feature.
-  * Raft implementation only covers safe schema changes. See :ref:`Safe Schema Changes with Raft <raft-schema-changes>`.
+It is not possible to enable Raft in an existing cluster in ScyllaDB 5.0 and 5.1.
+In order to have a Raft-enabled cluster in these versions, you must create a new cluster with Raft enabled from the start.
 
-If you are creating a new cluster, add ``raft`` to the list of experimental features in your ``scylla.yaml`` file:
+.. warning::
 
-.. code-block:: yaml
-    
-    experimental_features:
-     - raft
+   **Do not** use Raft in production clusters in ScyllaDB 5.0 and 5.1. Such clusters won't be able to correctly upgrade to ScyllaDB 5.2.
 
-If you upgrade to ScyllaDB 5.0 from an earlier version, perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` 
-updating the ``scylla.yaml`` file for **each node** in the cluster to enable the experimental Raft feature:
-
-.. code-block:: yaml
-    
-    experimental_features:
-      - raft
-
-
-When all the nodes in the cluster and updated and restarted, the cluster will begin to use Raft for schema changes.
+   Use Raft only for testing and experimentation in clusters which can be thrown away.
 
 .. warning::
     Once enabled, Raft cannot be disabled on your cluster. The cluster nodes will fail to restart if you remove the Raft feature.
 
-Verifying that Raft Is Enabled
+When creating a new cluster, add ``raft`` to the list of experimental features in your ``scylla.yaml`` file:
+
+.. code-block:: yaml
+
+    experimental_features:
+     - raft
+
+Verifying that Raft is enabled
 ===============================
 You can verify that Raft is enabled on your cluster in one of the following ways:
 
@@ -100,23 +95,23 @@ Safe Schema Changes with Raft
 -------------------------------
 In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) </cql/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
 
-Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum 
+Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum
 of nodes in the cluster is available. The following examples illustrate how Raft provides the solution to problems with schema changes.
 
 * A network partition may lead to a split-brain case, where each subset of nodes has a different version of the schema.
-     
+
      With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Data manipulation statements on the minority can continue unaffected, provided the :ref:`quorum requirement <raft-quorum-requirement>` is satisfied.
 
-* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost. 
+* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost.
 
-     With Raft, concurrent schema changes are safe. 
+     With Raft, concurrent schema changes are safe.
 
 
 
 In summary, Raft makes schema changes safe, but it requires that a quorum of nodes in the cluster is available.
 
 
-.. _raft-handliing-failures:
+.. _raft-handling-failures:
 
 Handling Failures
 ------------------
@@ -175,7 +170,7 @@ Examples
    * - 1-4 nodes
      - Schema updates are possible and safe.
      - Try restarting the nodes. If the nodes are dead, :doc:`replace them with new nodes </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`.
-   * - 1 DC 
+   * - 1 DC
      - Schema updates are possible and safe.
      - When the DC comes back online, try restarting the nodes in the cluster. If the nodes are dead, :doc:`add 3 new nodes in a new region </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`.
    * - 2 DCs
