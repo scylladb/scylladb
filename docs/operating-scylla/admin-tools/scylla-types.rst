@@ -6,7 +6,7 @@ Scylla Types
 Introduction
 -------------
 This tool allows you to examine raw values obtained from SStables, logs, coredumps, etc., by performing operations on them,
-such as ``print``, ``compare``, or ``validate``. See :ref:`Supported Operations <scylla-types-operations>` for details.
+such as ``deserialize``, ``compare``, or ``validate``. See :ref:`Supported Operations <scylla-types-operations>` for details.
 
 Run ``scylla types --help`` for additional information about the tool and the operations.
 
@@ -41,7 +41,7 @@ If you provide more than one value, all of the values must share the same type. 
 
 .. code-block:: console
 
-   scylla types print -t Int32Type b34b62d4 00783562
+   scylla types deserialize -t Int32Type b34b62d4 00783562
 
 .. _scylla-types-compound:
 
@@ -57,14 +57,14 @@ of the types on the command line must be the same as the order in the compound).
 
 .. code-block:: console
 
-   scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+   scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 
 
 .. _scylla-types-operations:
 
 Supported Operations
 ^^^^^^^^^^^^^^^^^^^^^^^
-* ``print`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
+* ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
 * ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
@@ -92,7 +92,7 @@ Examples
 
     .. code-block:: console
 
-       scylla types print -t Int32Type b34b62d4
+       scylla types deserialize -t Int32Type b34b62d4
 
     Output:
 
@@ -131,7 +131,7 @@ Examples
 
     .. code-block:: console
 
-       scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+       scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 
     Output:
 

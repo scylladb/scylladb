@@ -62,7 +62,7 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
     return std::visit(printing_visitor{value}, type);
 }
 
-void print_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void deserialize_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     for (const auto& value : values) {
         fmt::print("{}\n", to_printable_string(type, value));
     }
@@ -217,18 +217,18 @@ public:
 };
 
 const std::vector<action_handler> action_handlers = {
-    {"print", "print the value(s) in a human readable form", print_handler,
+    {"deserialize", "deserialize the value(s) and print them in a human readable form", deserialize_handler,
 R"(
-Deserialize and print the value(s) in a human-readable form.
+Deserialize the value(s) and print them in a human-readable form.
 
 Arguments: 1 or more serialized values.
 
 Examples:
 
-$ scylla types print -t Int32Type b34b62d4
+$ scylla types deserialize -t Int32Type b34b62d4
 -1286905132
 
-$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+$ scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )"},
     {"compare", "compare two values", compare_handler,
