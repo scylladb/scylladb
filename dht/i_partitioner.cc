@@ -374,19 +374,69 @@ future<dht::partition_range_vector> subtract_ranges(const schema& schema, const 
     auto cmp = dht::ring_position_comparator(schema);
     // optimize set of potentially overlapping ranges by deoverlapping them.
     auto ranges = dht::partition_range::deoverlap(source_ranges, cmp);
+    dht::partition_range_vector res;
+    res.reserve(ranges.size() * 2);
 
-    // subtract *each* owned range from the partition range of *each* sstable*,
-    // such that we'll be left only with a set of non-owned ranges.
-    for (auto& range_to_subtract : ranges_to_subtract) {
-        dht::partition_range_vector tmp;
-        for (auto& range : ranges) {
-            auto ret = range.subtract(range_to_subtract, cmp);
-            tmp.insert(tmp.end(), ret.begin(), ret.end());
-            co_await coroutine::maybe_yield();
+    auto range = ranges.begin();
+    auto range_end = ranges.end();
+    auto range_to_subtract = ranges_to_subtract.begin();
+    auto range_to_subtract_end = ranges_to_subtract.end();
+    while (range != range_end) {
+        if (range_to_subtract == range_to_subtract_end) {
+            // We're done with range_to_subtracts
+            res.emplace_back(std::move(*range));
+            ++range;
+            continue;
         }
-        ranges = std::move(tmp);
+
+        auto diff = range->subtract(*range_to_subtract, cmp);
+        auto size = diff.size();
+        switch (size) {
+        case 0:
+            // current range is fully covered by range_to_subtract, done with it
+            // range_to_subtrace.start <= range.start &&
+            //   range_to_subtrace.end >= range.end
+            ++range;
+            break;
+        case 1:
+            // Possible cases:
+            // a. range and range_to_subtract are disjoint (so diff == range)
+            //    a.i range_to_subtract.end < range.start
+            //    a.ii range_to_subtract.start > range.end
+            // b. range_to_subtrace.start > range.start, so it removes the range suffix
+            // c. range_to_subtrace.start < range.start, so it removes the range prefix
+
+            // Does range_to_subtract sort after range?
+            if (range_to_subtract->start() && (!range->start() || cmp(range_to_subtract->start()->value(), range->start()->value()) > 0)) {
+                // save range prefix in the result
+                // (note that diff[0] == range in the disjoint case)
+                res.emplace_back(std::move(diff[0]));
+                // done with current range
+                ++range;
+            } else {
+                // set the current range to the remaining suffix
+                *range = std::move(diff[0]);
+                // done with current range_to_subtract
+                ++range_to_subtract;
+            }
+            break;
+        case 2:
+            // range contains range_to_subtract
+
+            // save range prefix in the result
+            res.emplace_back(std::move(diff[0]));
+            // set the current range to the remaining suffix
+            *range = std::move(diff[1]);
+            // done with current range_to_subtract
+            ++range_to_subtract;
+            break;
+        default:
+            assert(size <= 2);
+        }
+        co_await coroutine::maybe_yield();
     }
-    co_return ranges;
+
+    co_return res;
 }
 
 }
