@@ -1122,6 +1122,7 @@ future<bool> table::perform_offstrategy_compaction() {
 }
 
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges) {
+    co_await flush();
     co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), as_table_state());
 }
 
