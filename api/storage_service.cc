@@ -593,6 +593,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+        apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, column_families);
         return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
             auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
@@ -617,6 +618,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, column_families);
         return ss.local().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
                 column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
             if (!is_cleanup_allowed) {
@@ -645,6 +647,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
+        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, tables);
         co_return co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
             bool needed = false;
             for (const auto& table : tables) {
@@ -658,6 +661,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
+        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, column_families, exclude_current_version);
         return ctx.db.invoke_on_all([=] (replica::database& db) {
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
@@ -672,6 +676,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
         auto &db = ctx.db.local();
         if (column_families.empty()) {
             co_await db.flush_on_all(keyspace);
@@ -683,6 +688,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
 
     ss::decommission.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("decommission");
         return ss.local().decommission().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -698,6 +704,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::remove_node.set(r, [&ss](std::unique_ptr<request> req) {
         auto host_id = req->get_query_param("host_id");
         std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
+        apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
         auto ignore_nodes = std::list<gms::inet_address>();
         for (std::string n : ignore_nodes_strs) {
             try {
@@ -770,6 +777,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::drain.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("drain");
         return ss.local().drain().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -802,12 +810,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::stop_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("stop_gossiping");
         return ss.local().stop_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
     ss::start_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("start_gossiping");
         return ss.local().start_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -904,6 +914,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::rebuild.set(r, [&ss](std::unique_ptr<request> req) {
         auto source_dc = req->get_query_param("source_dc");
+        apilog.info("rebuild: source_dc={}", source_dc);
         return ss.local().rebuild(std::move(source_dc)).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -940,6 +951,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         // FIXME: We should truncate schema tables if more than one node in the cluster.
         auto& sp = service::get_storage_proxy();
         auto& fs = sp.local().features();
+        apilog.info("reset_local_schema");
         return db::schema_tables::recalculate_schema_version(sp, fs).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -947,6 +959,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
         auto probability = req->get_query_param("probability");
+        apilog.info("set_trace_probability: probability={}", probability);
         return futurize_invoke([probability] {
             double real_prob = std::stod(probability.c_str());
             return tracing::tracing::tracing_instance().invoke_on_all([real_prob] (auto& local_tracing) {
@@ -984,6 +997,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto ttl = req->get_query_param("ttl");
         auto threshold = req->get_query_param("threshold");
         auto fast = req->get_query_param("fast");
+        apilog.info("set_slow_query: enable={} ttl={} threshold={} fast={}", enable, ttl, threshold, fast);
         try {
             return tracing::tracing::tracing_instance().invoke_on_all([enable, ttl, threshold, fast] (auto& local_tracing) {
                 if (threshold != "") {
@@ -1010,6 +1024,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
+        apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, true);
     });
 
@@ -1017,6 +1032,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
+        apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, false);
     });
 
