@@ -1138,6 +1138,7 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
 }
 
 future<> table::perform_cleanup_compaction(replica::database& db) {
+    co_await flush();
     co_await get_compaction_manager().perform_cleanup(db, this);
 }
 
