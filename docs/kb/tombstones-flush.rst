@@ -42,7 +42,7 @@ Steps:
 
 .. code-block:: sh
    
-   nodetool compact <keyspace>.<mytable>;
+   nodetool compact <keyspace> <mytable>;
 
 5. Alter the table and change the grace period back to the original ``gc_grace_seconds`` value.
 
