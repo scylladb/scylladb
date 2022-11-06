@@ -47,7 +47,7 @@ public:
         auto result_cell = cr.cell_at(0).as_atomic_cell(column_definition("v", int32_type, column_kind::regular_column));
         auto result = result_cell.serialize();
 
-        BOOST_REQUIRE(result[result.size() - 1] == 8);
+        BOOST_REQUIRE(result[result.size() - 1] == 7);
 
         BOOST_CHECK_THROW(set_cell(cr, "nonexistent_column", 20), std::runtime_error);
     }
