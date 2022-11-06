@@ -637,7 +637,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
-                    co_await cm.perform_cleanup(db, &t);
+                    co_await t.perform_cleanup_compaction(db);
                 }
                 co_return;
             }).then([]{
