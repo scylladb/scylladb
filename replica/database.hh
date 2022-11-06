@@ -909,6 +909,8 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
+    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges);
+
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
@@ -916,6 +918,14 @@ public:
 
     sstables::compaction_strategy& get_compaction_strategy() {
         return _compaction_strategy;
+    }
+
+    const compaction_manager& get_compaction_manager() const noexcept {
+        return _compaction_manager;
+    }
+
+    compaction_manager& get_compaction_manager() noexcept {
+        return _compaction_manager;
     }
 
     table_stats& get_stats() const {
