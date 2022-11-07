@@ -23,7 +23,7 @@ Scylla Best Practices
   * :doc:`Production Readiness Guidelines <production-readiness>`
   * :doc:`How to Avoid Node Mismanagement <avoid-node-mismanagement>`
   * :doc:`Maximizing Scylla Performance <benchmark-tips>`
-  * `Advanced Monitoring and how to Maximize Performance lesson <https://university.scylladb.com/courses/scylla-operations/lessons/advanced-monitoring-and-how-to-maximize-performance/>`_ on Scylla University
+  * `ScyllaDB Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on Scylla University
 
 
 
