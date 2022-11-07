@@ -60,7 +60,6 @@
   <div class="topics-grid topics-grid--products">
 
       <h2 class="topics-grid__title">Our Products</h2>
-      <p class="topics-grid__text">Choose a product from the list below to view its documentation.</p>
 
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
