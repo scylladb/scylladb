@@ -1094,7 +1094,12 @@ private:
         compaction::table_state& t = *_compacting_table;
         const auto& maintenance_sstables = t.maintenance_sstable_set();
 
-        const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*maintenance_sstables.all());
+        // Filter out sstables that require view building, to avoid a race between off-strategy
+        // and view building. Refs: #11882
+        const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*maintenance_sstables.all()
+                | boost::adaptors::filtered([] (const sstables::shared_sstable& sst) {
+            return !sst->requires_view_building();
+        }));
         std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
         std::vector<sstables::shared_sstable> sstables_to_remove;
         std::unordered_set<sstables::shared_sstable> new_unused_sstables;

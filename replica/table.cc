@@ -2346,6 +2346,11 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
     co_await coroutine::parallel_for_each(dirs_to_sync, [] (sstring dir) {
         return sync_directory(dir);
     });
+    // Off-strategy timer will be rearmed, so if there's more incoming data through repair / streaming,
+    // the timer can be updated once again. In practice, it allows off-strategy compaction to kick off
+    // at the end of the node operation on behalf of this table, which brings more efficiency in terms
+    // of write amplification.
+    do_update_off_strategy_trigger();
 }
 
 /**
