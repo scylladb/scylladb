@@ -2509,8 +2509,8 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
         try {
             sst->load().get();
         } catch (...) {
-            BOOST_REQUIRE_EXCEPTION(current_exception_as_future().get(), sstables::malformed_sstable_exception, exception_predicate::message_matches(
-                "Failed to read partition from SSTable .*"));
+            BOOST_REQUIRE_EXCEPTION(current_exception_as_future().get(), sstables::malformed_sstable_exception, exception_predicate::message_contains(
+                "Failed to read partition from SSTable "));
         }
 
         {
