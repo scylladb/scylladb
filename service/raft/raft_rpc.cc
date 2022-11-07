@@ -22,7 +22,7 @@ static seastar::logger rlogger("raft_rpc");
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
         raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
-        noncopyable_function<void(gms::inet_address, raft::server_id, bool)> on_server_update)
+        noncopyable_function<void(raft::server_id, bool)> on_server_update)
     : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms)
     , _address_map(address_map), _on_server_update(std::move(on_server_update))
 {}
@@ -163,13 +163,12 @@ void raft_rpc::add_server(raft::server_address addr) {
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
     _address_map.set(addr.id, inet_addr, false);
-    _on_server_update(inet_addr, addr.id, true);
+    _on_server_update(addr.id, true);
 }
 
 void raft_rpc::remove_server(raft::server_id id) {
-    if (auto inet_addr = _address_map.set_expiring_flag(id)) {
-        _on_server_update(*inet_addr, id, false);
-    }
+    _on_server_update(id, false);
+    _address_map.set_expiring_flag(id);
 }
 
 future<> raft_rpc::abort() {

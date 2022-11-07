@@ -631,11 +631,15 @@ public:
                 raft_address_map.stop().get();
             });
 
-            direct_fd_clock fd_clock;
+
+            static sharded<service::direct_fd_pinger> fd_pinger;
+            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper)), std::ref(raft_address_map)).get();
+            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
+
+            service::direct_fd_clock fd_clock;
             fd.start(
-                sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_direct_fd_pinger()); }, std::ref(gossiper)),
-                std::ref(fd_clock),
-                direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+                std::ref(fd_pinger), std::ref(fd_clock),
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
 
             auto stop_fd = defer([&fd] {
                 fd.stop().get();

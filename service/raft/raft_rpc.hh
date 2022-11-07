@@ -26,7 +26,7 @@ class raft_rpc : public raft::rpc {
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
     raft_address_map<>& _address_map;
-    noncopyable_function<void(gms::inet_address, raft::server_id, bool added)> _on_server_update;
+    noncopyable_function<void(raft::server_id, bool added)> _on_server_update;
     seastar::gate _shutdown_gate;
 
     raft_ticker_type::time_point timeout() {
@@ -37,7 +37,7 @@ public:
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
             raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
             // Called when a server is added or removed from the RPC configuration.
-            noncopyable_function<void(gms::inet_address, raft::server_id, bool added)> on_server_update);
+            noncopyable_function<void(raft::server_id, bool added)> on_server_update);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;

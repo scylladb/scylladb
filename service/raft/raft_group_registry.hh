@@ -18,7 +18,10 @@
 #include "gms/feature.hh"
 #include "direct_failure_detector/failure_detector.hh"
 
-namespace gms { class gossiper; }
+namespace gms {
+class gossiper;
+class echo_pinger;
+}
 
 namespace service {
 
@@ -41,6 +44,8 @@ struct raft_server_for_group {
     raft_sys_table_storage& persistence;
     std::optional<seastar::future<>> aborted;
 };
+
+class direct_fd_pinger;
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -113,6 +118,31 @@ public:
     // Is the RAFT local feature enabled?
     // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
     bool is_enabled() const { return _is_enabled; }
+};
+
+// Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
+// Translates `raft::server_id`s to `gms::inet_address`es before pinging.
+// The actual pinging is performed by `echo_pinger`.
+class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
+    gms::echo_pinger& _echo_pinger;
+    raft_address_map<>& _address_map;
+
+public:
+    direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map<>& address_map)
+            : _echo_pinger(pinger), _address_map(address_map) {}
+
+    direct_fd_pinger(const direct_fd_pinger&) = delete;
+    direct_fd_pinger(direct_fd_pinger&&) = delete;
+
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
+};
+
+// XXX: find a better place to put this?
+struct direct_fd_clock : public direct_failure_detector::clock {
+    using base = std::chrono::steady_clock;
+
+    direct_failure_detector::clock::timepoint_t now() noexcept override;
+    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
 };
 
 } // end of namespace service
