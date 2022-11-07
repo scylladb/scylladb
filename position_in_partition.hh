@@ -152,6 +152,14 @@ public:
         return {position_in_partition_view::range_tag_t(), bound_view::top()};
     }
 
+    static position_in_partition_view for_partition_start() {
+        return position_in_partition_view(partition_start_tag_t());
+    }
+
+    static position_in_partition_view for_partition_end() {
+        return position_in_partition_view(end_of_partition_tag_t());
+    }
+
     static position_in_partition_view for_static_row() {
         return position_in_partition_view(static_row_tag_t());
     }
@@ -321,6 +329,10 @@ public:
 
     static position_in_partition for_partition_start() {
         return position_in_partition{partition_start_tag_t()};
+    }
+
+    static position_in_partition for_partition_end() {
+        return position_in_partition(end_of_partition_tag_t());
     }
 
     static position_in_partition for_static_row() {
