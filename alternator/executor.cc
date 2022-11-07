@@ -3642,7 +3642,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     if (exclusive_start_key) {
         partition_key pk = pk_from_json(*exclusive_start_key, schema);
-        auto pos = position_in_partition(position_in_partition::partition_start_tag_t());
+        auto pos = position_in_partition::for_partition_start();
         if (schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, schema);
         }

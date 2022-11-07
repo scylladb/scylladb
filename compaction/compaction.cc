@@ -949,7 +949,7 @@ void compacted_fragments_writer::consume_new_partition(const dht::decorated_key&
         .dk = dk,
         .tombstone = tombstone(),
         .current_emitted_tombstone = tombstone(),
-        .last_pos = position_in_partition(position_in_partition::partition_start_tag_t()),
+        .last_pos = position_in_partition::for_partition_start(),
         .is_splitting_partition = false
     };
     do_consume_new_partition(dk);

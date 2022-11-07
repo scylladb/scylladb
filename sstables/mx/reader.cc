@@ -643,7 +643,7 @@ public:
         if (_is_mutation_end) {
             return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
         }
-        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+        return position_in_partition_view::for_partition_start();
     }
 
     // Under which priority class to place I/O coming from this consumer

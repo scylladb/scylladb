@@ -131,7 +131,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
         }
     public:
         reader(flat_mutation_reader_v2 r) : impl(r.schema(), r.permit()), _underlying(std::move(r)), _current({
-            position_in_partition(position_in_partition::partition_start_tag_t()),
+            position_in_partition::for_partition_start(),
             position_in_partition(position_in_partition::after_static_row_tag_t())
         }) { }
         virtual future<> fill_buffer() override {
@@ -178,7 +178,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
             }
             clear_buffer_to_next_partition();
             _current = {
-                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition::for_partition_start(),
                 position_in_partition(position_in_partition::after_static_row_tag_t())
             };
             _active_tombstone = {};
@@ -189,7 +189,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
             clear_buffer();
             _next = {};
             _current = {
-                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition::for_partition_start(),
                 position_in_partition(position_in_partition::after_static_row_tag_t())
             };
             _active_tombstone = {};

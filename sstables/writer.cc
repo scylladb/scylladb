@@ -30,7 +30,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
     _impl->_validator(dk);
-    _impl->_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{}), {});
+    _impl->_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view::for_partition_start(), {});
     _impl->_sst.get_stats().on_partition_write();
     return _impl->consume_new_partition(dk);
 }

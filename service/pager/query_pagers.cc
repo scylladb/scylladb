@@ -49,7 +49,7 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
                 : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                 , _max(cmd->get_row_limit())
                 , _per_partition_limit(cmd->slice.partition_row_limit())
-                , _last_pos(position_in_partition::partition_start_tag_t())
+                , _last_pos(position_in_partition::for_partition_start())
                 , _proxy(p.shared_from_this())
                 , _schema(std::move(s))
                 , _selection(selection)
@@ -371,7 +371,7 @@ void query_pager::handle_result(
 
     auto view = query::result_view(*results);
 
-    _last_pos = position_in_partition(position_in_partition::partition_start_tag_t());
+    _last_pos = position_in_partition::for_partition_start();
     uint64_t row_count;
     if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
         query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
