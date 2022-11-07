@@ -195,7 +195,7 @@ public:
         }
         auto p = *pit;
         auto rs = p.rows();
-        auto pos = position_in_partition(position_in_partition::partition_start_tag_t());
+        auto pos = position_in_partition::for_partition_start();
         if (!rs.empty()) {
             auto rit = rs.begin();
             auto rnext = rit;

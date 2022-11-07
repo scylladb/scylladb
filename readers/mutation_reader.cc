@@ -118,7 +118,7 @@ bool mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kin
     } else {
         switch (kind) {
             case mutation_fragment_v2::kind::partition_start:
-                _prev_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
+                _prev_pos = position_in_partition::for_partition_start();
                 break;
             case mutation_fragment_v2::kind::static_row:
                 _prev_pos = position_in_partition(position_in_partition::static_row_tag_t{});

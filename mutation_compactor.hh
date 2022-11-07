@@ -312,7 +312,7 @@ public:
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
         _last_static_row.reset();
-        _last_pos = position_in_partition(position_in_partition::partition_start_tag_t());
+        _last_pos = position_in_partition::for_partition_start();
         _effective_tombstone = {};
         _current_emitted_tombstone = {};
         _current_emitted_gc_tombstone = {};
