@@ -1149,6 +1149,11 @@ future<bool> table::perform_offstrategy_compaction() {
     return _compaction_manager.perform_offstrategy(as_table_state());
 }
 
+future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges) {
+    co_await flush();
+    co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), as_table_state());
+}
+
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
