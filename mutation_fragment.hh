@@ -522,7 +522,7 @@ inline position_in_partition_view partition_start::position() const
 
 inline position_in_partition_view partition_end::position() const
 {
-    return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t());
+    return position_in_partition_view::for_partition_end();
 }
 
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);

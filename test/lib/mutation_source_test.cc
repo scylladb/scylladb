@@ -188,7 +188,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                                 start_position = std::move(end_position);
                             }
                         }
-                        actual.may_produce_tombstones(position_range(start_position, position_in_partition(position_in_partition::end_of_partition_tag_t())));
+                        actual.may_produce_tombstones(position_range(start_position, position_in_partition::for_partition_end()));
                         actual.produces_partition_end();
                     }
                     actual.produces_end_of_stream();

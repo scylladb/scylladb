@@ -2694,8 +2694,8 @@ SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
     BOOST_REQUIRE(rev_cmp(p_i_p::for_partition_start().reversed(),
                           p_i_p::for_partition_start()) == 0);
 
-    BOOST_REQUIRE(rev_cmp(p_i_p(p_i_p::end_of_partition_tag_t()).reversed(),
-                          p_i_p(p_i_p::end_of_partition_tag_t())) == 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p(p_i_p::for_partition_end()).reversed(),
+                          p_i_p(p_i_p::for_partition_end())) == 0);
 
     BOOST_REQUIRE(rev_cmp(p_i_p::for_static_row().reversed(),
                           p_i_p::for_static_row()) == 0);
