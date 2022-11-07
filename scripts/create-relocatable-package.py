@@ -98,7 +98,7 @@ for exe in executables:
     libs.update(ldd(exe))
 
 # manually add libthread_db for debugging thread
-libs.update({'libthread_db.so.1': '/lib64/libthread_db-1.0.so'})
+libs.update({'libthread_db.so.1': os.path.realpath('/lib64/libthread_db.so')})
 
 ld_so = libs['ld.so']
 
