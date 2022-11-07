@@ -29,7 +29,7 @@ There are two types of compactions:
 * Major Compaction
    A user triggers (using nodetool) a compaction over all SSTables, merging the individual tables according to the selected compaction strategy.  
 
-.. caution:: It is always best to allow Scylla to automatically run minor compactions. Major compactions can exhaust resources, increase operational costs, and take up valuable disk space. This requires you to have 50% more disk space than your data unless you are using `Incremental compaction strategy (ICS)`_. 
+.. caution:: It is always best to allow Scylla to automatically run minor compactions. Major compactions can exhaust resources, increase operational costs, and take up valuable disk space. This requires you to have 50% more disk space than your data unless you are using :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>`. 
 
 View Compaction Statistics
 --------------------------
@@ -43,7 +43,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 
 * `Size-tiered compaction strategy (STCS)`_ - (default setting) triggered when the system has enough similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification. 
-* `Incremental compaction strategy (ICS)`_ - :label-tip:`ScyllaDB Enterprise` Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. If you are an Enterprise customer ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level. 
+* :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - :label-tip:`ScyllaDB Enterprise` Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. If you are an Enterprise customer ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level. 
 * `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. This strategy replaced Date-tiered compaction.  TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
 * `Date-tiered compaction strategy (DTCS)`_ - designed for time series data, but TWCS should be used instead.
 
