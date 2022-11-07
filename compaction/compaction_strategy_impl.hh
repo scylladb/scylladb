@@ -68,7 +68,7 @@ public:
     // droppable tombstone histogram and gc_before.
     bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const tombstone_gc_state& gc_state);
 
-    virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() = 0;
 
     virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
 

@@ -55,7 +55,7 @@ compaction_strategy_type sstable_run_based_compaction_strategy_for_tests::type()
     throw std::runtime_error("unimplemented");
 }
 
-compaction_backlog_tracker& sstable_run_based_compaction_strategy_for_tests::get_backlog_tracker() {
+std::unique_ptr<compaction_backlog_tracker::impl> sstable_run_based_compaction_strategy_for_tests::make_backlog_tracker() {
     throw std::runtime_error("unimplemented");
 }
 

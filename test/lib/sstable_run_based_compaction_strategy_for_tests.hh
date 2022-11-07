@@ -28,7 +28,7 @@ public:
 
     virtual compaction_strategy_type type() const override;
 
-    virtual compaction_backlog_tracker& get_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
 };
 
 }

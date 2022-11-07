@@ -82,7 +82,6 @@ public:
 
 class size_tiered_compaction_strategy : public compaction_strategy_impl {
     size_tiered_compaction_strategy_options _options;
-    compaction_backlog_tracker _backlog_tracker;
 
     // Return a list of pair of shared_sstable and its respective size.
     static std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
@@ -128,9 +127,7 @@ public:
     most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold,
         size_tiered_compaction_strategy_options options = {});
 
-    virtual compaction_backlog_tracker& get_backlog_tracker() override {
-        return _backlog_tracker;
-    }
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
 
     virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
 

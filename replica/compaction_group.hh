@@ -8,11 +8,11 @@
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
+#include "compaction/compaction_backlog_manager.hh"
 #include "sstables/sstable_set.hh"
 
 #pragma once
 
-class compaction_backlog_tracker;
 namespace compaction {
 class table_state;
 }

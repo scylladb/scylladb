@@ -1578,8 +1578,13 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }, can_purge_tombstones::no);
 }
 
+compaction_manager::compaction_state::compaction_state(table_state& t)
+    : backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
+{
+}
+
 void compaction_manager::add(compaction::table_state& t) {
-    auto [_, inserted] = _compaction_state.insert({&t, compaction_state{}});
+    auto [_, inserted] = _compaction_state.insert({&t, compaction_state(t)});
     if (!inserted) {
         auto s = t.schema();
         on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(&t)));
@@ -1597,6 +1602,8 @@ future<> compaction_manager::remove(compaction::table_state& t) noexcept {
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
     co_await seastar::when_all_succeed(stop_ongoing_compactions("table removal", &t), c_state.gate.close()).discard_result();
+
+    c_state.backlog_tracker.disable();
 
     _compaction_state.erase(&t);
 
@@ -1833,7 +1840,13 @@ compaction_backlog_manager::~compaction_backlog_manager() {
     }
 }
 
+void compaction_manager::register_backlog_tracker(compaction::table_state& t, compaction_backlog_tracker new_backlog_tracker) {
+    auto& cs = get_compaction_state(&t);
+    cs.backlog_tracker = std::move(new_backlog_tracker);
+    register_backlog_tracker(cs.backlog_tracker);
+}
+
 compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction::table_state& t) {
-    // FIXME: once tracker is decoupled from strategy, it will live in compaction_manager's per group state.
-    return t.get_compaction_strategy().get_backlog_tracker();
+    auto& cs = get_compaction_state(&t);
+    return cs.backlog_tracker;
 }

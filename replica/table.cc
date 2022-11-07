@@ -1157,38 +1157,38 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
-    // FIXME: decouple backlog_tracker from compaction_strategy, so each group can have its own tracker.
-
     struct compaction_group_sstable_set_updater {
         table& t;
         compaction_group& cg;
+        compaction_backlog_tracker new_bt;
         lw_shared_ptr<sstables::sstable_set> new_sstables;
 
-        compaction_group_sstable_set_updater(table& t, compaction_group& cg) : t(t), cg(cg) {}
+        compaction_group_sstable_set_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
+            : t(t), cg(cg), new_bt(new_cs.make_backlog_tracker()) {}
 
-        void prepare(sstables::compaction_strategy& new_cs, compaction_backlog_tracker& new_bt) {
+        void prepare(sstables::compaction_strategy& new_cs) {
             auto move_read_charges = new_cs.type() == t._compaction_strategy.type();
             cg.get_backlog_tracker().copy_ongoing_charges(new_bt, move_read_charges);
 
             new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(t._schema));
-            cg.main_sstables()->for_each_sstable([this, &new_bt] (const sstables::shared_sstable& s) {
+            cg.main_sstables()->for_each_sstable([this] (const sstables::shared_sstable& s) {
                 add_sstable_to_backlog_tracker(new_bt, s);
                 new_sstables->insert(s);
             });
         }
 
-        void execute(compaction_backlog_tracker& new_bt) noexcept {
-            t._compaction_manager.register_backlog_tracker(new_bt);
+        void execute() noexcept {
+            t._compaction_manager.register_backlog_tracker(cg.as_table_state(), std::move(new_bt));
             cg.set_main_sstables(std::move(new_sstables));
         }
     };
-    compaction_group_sstable_set_updater cg_set_updater(*this, *_compaction_group);
+    compaction_group_sstable_set_updater cg_set_updater(*this, *_compaction_group, new_cs);
 
-    cg_set_updater.prepare(new_cs, new_cs.get_backlog_tracker());
+    cg_set_updater.prepare(new_cs);
 
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
-    cg_set_updater.execute(_compaction_strategy.get_backlog_tracker());
+    cg_set_updater.execute();
     refresh_compound_sstable_set();
 }
 
@@ -1303,9 +1303,6 @@ future<> compaction_group::stop() noexcept {
         // FIXME: make memtable_list::flush() noexcept too.
         return _memtables->flush().finally([this] {
             return _t._compaction_manager.remove(as_table_state());
-        }).finally([this] {
-            // FIXME: will be moved to compaction_manager once managed by it.
-            get_backlog_tracker().disable();
         });
     } catch (...) {
         return current_exception_as_future<>();

@@ -83,7 +83,9 @@ private:
         // Signaled whenever a compaction task completes.
         condition_variable compaction_done;
 
-        compaction_state() = default;
+        compaction_backlog_tracker backlog_tracker;
+
+        explicit compaction_state(table_state& t);
         compaction_state(compaction_state&&) = default;
         ~compaction_state();
 
@@ -524,6 +526,7 @@ public:
     void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
+    void register_backlog_tracker(compaction::table_state& t, compaction_backlog_tracker new_backlog_tracker);
 
     compaction_backlog_tracker& get_backlog_tracker(compaction::table_state& t);
 
