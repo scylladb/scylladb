@@ -275,7 +275,7 @@ public:
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _tombstone_gc_state(nullptr)
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_pos(position_in_partition::end_of_partition_tag_t())
+        , _last_pos(position_in_partition::for_partition_end())
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -290,7 +290,7 @@ public:
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_pos(position_in_partition::end_of_partition_tag_t())
+        , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");

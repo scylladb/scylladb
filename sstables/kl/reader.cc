@@ -828,7 +828,7 @@ public:
             return _ready->position();
         }
         if (_is_mutation_end) {
-            return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
+            return position_in_partition_view::for_partition_end();
         }
         return position_in_partition_view::for_partition_start();
     }
