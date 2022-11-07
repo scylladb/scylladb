@@ -1785,6 +1785,19 @@ compaction_backlog_tracker::compaction_backlog_tracker(compaction_backlog_tracke
         , _manager(std::exchange(other._manager, nullptr)) {
 }
 
+compaction_backlog_tracker&
+compaction_backlog_tracker::operator=(compaction_backlog_tracker&& x) noexcept {
+    if (this != &x) {
+        if (auto manager = std::exchange(_manager, x._manager)) {
+            manager->remove_backlog_tracker(this);
+        }
+        _impl = std::move(x._impl);
+        _ongoing_writes = std::move(x._ongoing_writes);
+        _ongoing_compactions = std::move(x._ongoing_compactions);
+    }
+    return *this;
+}
+
 compaction_backlog_tracker::~compaction_backlog_tracker() {
     if (_manager) {
         _manager->remove_backlog_tracker(this);
