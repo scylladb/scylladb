@@ -26,28 +26,30 @@
   <div class="grid-x grid-margin-x hs">
 
 .. topic-box::
+  :title: New to ScyllaDB? Start here!
+  :link: https://cloud.docs.scylladb.com/stable/scylladb-basics/
+  :class: large-4
+  :anchor: ScyllaDB Basics
+
+  Learn the essentials of ScyllaDB.
+
+
+.. topic-box::
   :title: Let us manage your DB
   :link: https://cloud.docs.scylladb.com
   :class: large-4
-  :anchor: Get Started with Scylla Cloud
+  :anchor: ScyllaDB Cloud Documentation
 
-  Take advantage of Scylla Cloud, a fully-managed database-as-a-service.
+  Simplify application development with ScyllaDB Cloud - a fully managed database-as-a-service.
 
 .. topic-box::
   :title: Manage your own DB
   :link: getting-started
   :class: large-4
-  :anchor: Get Started with Scylla
+  :anchor: ScyllaDB Open Source and Enterprise Documentation
 
-  Provision and manage a Scylla cluster in your environment.
+  Deploy and manage your database in your own environment.
 
-.. topic-box::
-  :title: Connect your application to Scylla
-  :link: using-scylla/drivers
-  :class: large-4
-  :anchor: Choose a Driver
-
-  Use high performance Scylla drivers to connect your application to a Scylla cluster.
 
 .. raw:: html
 
@@ -57,14 +59,13 @@
 
   <div class="topics-grid topics-grid--products">
 
-      <h2 class="topics-grid__title">Our Product List</h2>
-      <p class="topics-grid__text">To begin choose a product from the list below</p>
+      <h2 class="topics-grid__title">Our Products</h2>
 
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
 
 .. topic-box::
-  :title: Scylla Enterprise
+  :title: ScyllaDB Enterprise
   :link: getting-started
   :image: /_static/img/mascots/scylla-enterprise.svg
   :class: topic-box--product,large-3,small-6
@@ -72,7 +73,7 @@
   ScyllaDB’s most stable high-performance enterprise-grade NoSQL database.
 
 .. topic-box::
-  :title: Scylla Open Source
+  :title: ScyllaDB Open Source
   :link: getting-started
   :image: /_static/img/mascots/scylla-opensource.svg
   :class: topic-box--product,large-3,small-6
@@ -80,15 +81,15 @@
   A high-performance NoSQL database with a close-to-the-hardware, shared-nothing approach.
 
 .. topic-box::
-  :title: Scylla Cloud
+  :title: ScyllaDB Cloud
   :link: https://cloud.docs.scylladb.com
   :image: /_static/img/mascots/scylla-cloud.svg
   :class: topic-box--product,large-3,small-6
 
-  A fully managed NoSQL database as a service powered by Scylla Enterprise.
+  A fully managed NoSQL database as a service powered by ScyllaDB Enterprise.
 
 .. topic-box::
-  :title: Scylla Alternator
+  :title: ScyllaDB Alternator
   :link: https://docs.scylladb.com/stable/alternator/alternator.html
   :image: /_static/img/mascots/scylla-alternator.svg
   :class: topic-box--product,large-3,small-6
@@ -96,23 +97,23 @@
   Open source Amazon DynamoDB-compatible API.
 
 .. topic-box::
-  :title: Scylla Monitoring Stack
+  :title: ScyllaDB Monitoring Stack
   :link: https://monitoring.docs.scylladb.com
   :image: /_static/img/mascots/scylla-monitor.svg
   :class: topic-box--product,large-3,small-6
 
-  Complete open source monitoring solution for your Scylla clusters.
+  Complete open source monitoring solution for your ScyllaDB clusters.
 
 .. topic-box::
-  :title: Scylla Manager
+  :title: ScyllaDB Manager
   :link: https://manager.docs.scylladb.com
   :image: /_static/img/mascots/scylla-manager.svg
   :class: topic-box--product,large-3,small-6
 
-  Hassle-free Scylla NoSQL database management for scale-out clusters.
+  Hassle-free ScyllaDB NoSQL database management for scale-out clusters.
 
 .. topic-box::
-  :title: Scylla Drivers
+  :title: ScyllaDB Drivers
   :link: https://docs.scylladb.com/stable/using-scylla/drivers/
   :image: /_static/img/mascots/scylla-drivers.svg
   :class: topic-box--product,large-3,small-6
@@ -120,12 +121,12 @@
   Shard-aware drivers for superior performance. 
 
 .. topic-box::
-  :title: Scylla Operator
+  :title: ScyllaDB Operator
   :link: https://operator.docs.scylladb.com
   :image: /_static/img/mascots/scylla-enterprise.svg
   :class: topic-box--product,large-3,small-6
 
-  Easily run and manage your Scylla Cluster on Kubernetes.
+  Easily run and manage your ScyllaDB cluster on Kubernetes.
 
 .. raw:: html
 
@@ -135,19 +136,19 @@
 
   <div class="topics-grid">
 
-      <h2 class="topics-grid__title">Learn More About Scylla</h2>
+      <h2 class="topics-grid__title">Learn More About ScyllaDB</h2>
       <p class="topics-grid__text"></p>
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
 
 .. topic-box::
-  :title: Attend Scylla University
+  :title: Attend ScyllaDB University
   :link: https://university.scylladb.com/
   :image: /_static/img/mascots/scylla-university.png
   :class: large-6,small-12
   :anchor: Find a Class
 
-  | Register to take a *free* class at Scylla University.
+  | Register to take a *free* class at ScyllaDB University.
   | There are several learning paths to choose from.
 
 .. topic-box::
@@ -178,9 +179,9 @@
   architecture/index
   troubleshooting/index
   kb/index
-  Scylla University <https://university.scylladb.com/>
+  ScyllaDB University <https://university.scylladb.com/>
   faq
-  Contribute to Scylla <contribute>
+  Contribute to ScyllaDB <contribute>
   glossary
   alternator/alternator
 
