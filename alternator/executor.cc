@@ -929,7 +929,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             }
             sstring where_clause = "\"" + view_hash_key + "\" IS NOT NULL";
             if (!view_range_key.empty()) {
-                where_clause = where_clause + " AND \"" + view_hash_key + "\" IS NOT NULL";
+                where_clause = where_clause + " AND \"" + view_range_key + "\" IS NOT NULL";
             }
             where_clauses.push_back(std::move(where_clause));
             view_builders.emplace_back(std::move(view_builder));
