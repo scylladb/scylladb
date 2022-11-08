@@ -70,6 +70,7 @@ upgrade=false
 supervisor=false
 supervisor_log_to_stdout=false
 without_systemd=false
+skip_systemd_check=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -99,6 +100,7 @@ while [ $# -gt 0 ]; do
             ;;
         "--packaging")
             packaging=true
+            skip_systemd_check=true
             shift 1
             ;;
         "--upgrade")
@@ -107,6 +109,7 @@ while [ $# -gt 0 ]; do
             ;;
         "--supervisor")
             supervisor=true
+            skip_systemd_check=true
             shift 1
             ;;
         "--supervisor-log-to-stdout")
@@ -115,6 +118,7 @@ while [ $# -gt 0 ]; do
             ;;
         "--without-systemd")
             without_systemd=true
+            skip_systemd_check=true
             shift 1
             ;;
         "--help")
@@ -246,7 +250,7 @@ supervisor_conf() {
     fi
 }
 
-if ! $packaging && [ ! -d /run/systemd/system/ ] && ! $supervisor; then
+if ! $skip_systemd_check && [ ! -d /run/systemd/system/ ]; then
     echo "systemd is not detected, unsupported distribution."
     exit 1
 fi
@@ -566,7 +570,7 @@ if $nonroot; then
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
-    if ! $supervisor && ! $packaging && ! $without_systemd && check_usermode_support; then
+    if ! $without_systemd_check && check_usermode_support; then
         systemctl --user daemon-reload
     fi
     echo "Scylla non-root install completed."
