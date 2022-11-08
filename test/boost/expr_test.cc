@@ -1366,3 +1366,92 @@ BOOST_AUTO_TEST_CASE(prepare_column_value) {
     expression prepared = prepare_expression(cval, db, "test_ks", table_schema.get(), nullptr);
     BOOST_REQUIRE_EQUAL(cval, prepared);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_list) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = subscript{.val = column_value(table_schema->get_column_definition("r")),
+                                    .sub = make_int_const(123),
+                                    .type = boolean_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_map) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+
+    expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = subscript{
+        .val = column_value(table_schema->get_column_definition("r")), .sub = make_bool_const(true), .type = utf8_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_set) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", set_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_list_checks_type) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
