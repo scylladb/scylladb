@@ -419,7 +419,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
             break;
         } catch (std::runtime_error& e) {
             // Retry
-            group0_log.error("failed to modify config at peer {}: {}", g0_info.id, e);
+            group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e);
         }
 
         // Try again after a pause
