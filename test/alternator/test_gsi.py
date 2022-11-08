@@ -1244,7 +1244,7 @@ def test_gsi_list_tables(dynamodb, test_table_gsi_random_name):
 # skipped while filling the GSI - even if Scylla actually capable of
 # representing such empty view keys (see issue #9375).
 # Reproduces issue #5022 and #9424.
-@pytest.mark.xfail(reason="issue #5022, #9424")
+@pytest.mark.xfail(reason="issue #11567, #9424")
 def test_gsi_backfill_empty_string(dynamodb):
     # First create, and fill, a table without GSI:
     with new_test_table(dynamodb,
