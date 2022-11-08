@@ -1304,3 +1304,55 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_maps_recurs
     constant map_with_empty_value2 = create_nested_map_with_value(make_int_const(1), make_empty_const(int32_type));
     check_bind_variable_evaluate(map_with_empty_value2, expected_valid);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_partition_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression pk_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("pk", true)};
+    expression prepared = prepare_expression(pk_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("pk"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_clustering_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression ck_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("ck", true)};
+    expression prepared = prepare_expression(ck_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("ck"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_regular_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression r_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)};
+    expression prepared = prepare_expression(r_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("r"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression s_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("s", true)};
+    expression prepared = prepare_expression(s_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("s"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
