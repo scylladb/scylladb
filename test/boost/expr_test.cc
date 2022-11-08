@@ -1356,3 +1356,13 @@ BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
+
+// prepare_expression for a column_value should do nothing
+BOOST_AUTO_TEST_CASE(prepare_column_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cval = column_value(table_schema->get_column_definition("pk"));
+    expression prepared = prepare_expression(cval, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(cval, prepared);
+}
