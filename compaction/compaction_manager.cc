@@ -1587,22 +1587,19 @@ void compaction_manager::add(compaction::table_state& t) {
 }
 
 future<> compaction_manager::remove(compaction::table_state& t) noexcept {
-    auto handle = _compaction_state.extract(&t);
+    auto& c_state = get_compaction_state(&t);
 
-    if (!handle.empty()) {
-        auto& c_state = handle.mapped();
+    // We need to guarantee that a task being stopped will not retry to compact
+    // a table being removed.
+    // The requirement above is provided by stop_ongoing_compactions().
+    _postponed.erase(&t);
 
-        // We need to guarantee that a task being stopped will not retry to compact
-        // a table being removed.
-        // The requirement above is provided by stop_ongoing_compactions().
-        _postponed.erase(&t);
+    // Wait for all compaction tasks running under gate to terminate
+    // and prevent new tasks from entering the gate.
+    co_await seastar::when_all_succeed(stop_ongoing_compactions("table removal", &t), c_state.gate.close()).discard_result();
 
-        // Wait for the termination of an ongoing compaction on table T, if any.
-        co_await stop_ongoing_compactions("table removal", &t);
+    _compaction_state.erase(&t);
 
-        // Wait for all functions running under gate to terminate.
-        co_await c_state.gate.close();
-    }
 #ifdef DEBUG
     auto found = false;
     sstring msg;
