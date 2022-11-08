@@ -969,13 +969,27 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     bool is_member = tmptr->is_member(endpoint);
-    // Update pending ranges after update of normal tokens immediately to avoid
-    // a race where natural endpoint was updated to contain node A, but A was
-    // not yet removed from pending endpoints
-    if (!is_member) {
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+    bool do_notify_joined = false;
+
+    if (endpoints_to_remove.contains(endpoint)) [[unlikely]] {
+        if (!owned_tokens.empty()) {
+            on_fatal_internal_error(slogger, format("endpoint={} is marked for removal but still owns {} tokens", endpoint, owned_tokens.size()));
+        }
+    } else {
+        if (owned_tokens.empty()) {
+            on_internal_error_noexcept(slogger, format("endpoint={} is not marked for removal but owns no tokens", endpoint));
+        }
+
+        // Update pending ranges after update of normal tokens immediately to avoid
+        // a race where natural endpoint was updated to contain node A, but A was
+        // not yet removed from pending endpoints
+        if (!is_member) {
+            tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+            do_notify_joined = true;
+        }
+        co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     }
-    co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
+
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
@@ -994,7 +1008,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     // Send joined notification only when this node was not a member prior to this
-    if (!is_member) {
+    if (do_notify_joined) {
         co_await notify_joined(endpoint);
     }
 
