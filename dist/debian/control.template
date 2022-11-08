@@ -54,6 +54,7 @@ Depends: %{product}-server (= ${binary:Version})
  , %{product}-tools-core (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
  , %{product}-node-exporter (= ${binary:Version})
+ , %{product}-cqlsh (= ${binary:Version})
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

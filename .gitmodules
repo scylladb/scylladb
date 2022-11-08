@@ -11,7 +11,10 @@
 	url = ../scylla-jmx
 [submodule "scylla-tools"]
 	path = tools/java
-	url = ../scylla-tools-java
+	url = https://github.com/fruch/scylla-tools-java.git
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3
+[submodule "tools/cqlsh"]
+	path = tools/cqlsh
+	url = ../scylla-cqlsh

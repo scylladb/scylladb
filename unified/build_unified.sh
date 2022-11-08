@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
 done
 
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
-PKGS="build/$MODE/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-$VERSION-$RELEASE.noarch.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz"
+PKGS="build/$MODE/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz build/$MODE/dist/tar/$PRODUCT-jmx-$VERSION-$RELEASE.noarch.tar.gz build/$MODE/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz build/$MODE/dist/tar/$PRODUCT-cqlsh-$VERSION-$RELEASE.noarch.tar.gz"
 BASEDIR="build/$MODE/unified/$PRODUCT-$VERSION"
 
 rm -rf build/"$MODE"/unified/
