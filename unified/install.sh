@@ -180,6 +180,8 @@ fi
 
 (cd $(readlink -f scylla-tools); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
 
+(cd $(readlink -f scylla-cqlsh); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
+
 install -m755 uninstall.sh -Dt "$rprefix"
 
 if $nonroot && ! $without_systemd_check && ! check_usermode_support; then
