@@ -1455,3 +1455,41 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
     BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_token) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok =
+        token({::make_shared<column_identifier_raw>("p1", true), ::make_shared<column_identifier_raw>("p2", true),
+               ::make_shared<column_identifier_raw>("p3", true)});
+
+    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = token({column_value(table_schema->get_column_definition("p1")),
+                                 column_value(table_schema->get_column_definition("p2")),
+                                 column_value(table_schema->get_column_definition("p3"))});
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// prepare_expression(token) doesn't validate its arguments,
+// validation is done in a different place
+BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token(std::vector<expression>());
+
+    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(tok, prepared);
+}
