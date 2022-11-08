@@ -25,11 +25,13 @@ namespace test_utils {
 
 raw_value make_empty_raw();
 raw_value make_bool_raw(bool val);
+raw_value make_smallint_raw(int16_t val);
 raw_value make_int_raw(int32_t val);
 raw_value make_text_raw(const sstring_view& text);
 
 constant make_empty_const(data_type type);
 constant make_bool_const(bool val);
+constant make_smallint_const(int16_t val);
 constant make_int_const(int32_t val);
 constant make_text_const(const sstring_view& text);
 
