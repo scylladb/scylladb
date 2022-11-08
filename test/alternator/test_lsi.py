@@ -242,7 +242,7 @@ def test_lsi_describe(test_table_lsi_4):
     assert(sorted([lsi['IndexName'] for lsi in lsis]) == ['hello_x1', 'hello_x2', 'hello_x3', 'hello_x4'])
     for lsi in lsis:
         assert lsi['IndexArn'] == desc['Table']['TableArn'] + '/index/' + lsi['IndexName']
-    assert lsi['Projection'] == {'ProjectionType': 'ALL'}
+        assert lsi['Projection'] == {'ProjectionType': 'ALL'}
 
 # In addition to the basic listing of an LSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each LSI's
