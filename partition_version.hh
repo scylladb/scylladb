@@ -295,7 +295,7 @@ private:
     mutation_cleaner* _cleaner;
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
-    std::optional<std::pair<version_number_type, apply_resume>> _version_merging_state;
+    std::optional<apply_resume> _version_merging_state;
     bool _locked = false;
     friend class partition_entry;
     friend class mutation_cleaner_impl;
