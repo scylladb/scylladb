@@ -492,10 +492,7 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable) {
                                                         },
                                                         {make_int_raw(123)});
 
-    expression bind_var = bind_variable{
-        .bind_index = 0,
-        .receiver = ::make_lw_shared<column_specification>(
-            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var_0", true), int32_type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var_0")};
 
     raw_value val = evaluate(bind_var, inputs);
     BOOST_REQUIRE_EQUAL(val, make_int_raw(123));
@@ -512,15 +509,9 @@ BOOST_AUTO_TEST_CASE(evaluate_two_bind_variables) {
                                                         },
                                                         {make_int_raw(123), make_int_raw(456)});
 
-    expression bind_variable0 =
-        bind_variable{.bind_index = 0,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_0", true), int32_type)};
+    expression bind_variable0 = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var_0")};
 
-    expression bind_variable1 =
-        bind_variable{.bind_index = 1,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_1", true), int32_type)};
+    expression bind_variable1 = bind_variable{.bind_index = 1, .receiver = make_receiver(int32_type, "bind_var_1")};
 
     raw_value val0 = evaluate(bind_variable0, inputs);
     BOOST_REQUIRE_EQUAL(val0, make_int_raw(123));
@@ -535,10 +526,7 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
 
     raw_value invalid_int_value = make_bool_raw(true);
 
-    expression bind_var =
-        bind_variable{.bind_index = 0,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), int32_type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var")};
 
     auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {{"pk", make_int_raw(123)}}, {invalid_int_value});
     BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
@@ -998,10 +986,7 @@ static void check_bind_variable_evaluate(constant check_value, expected_invalid_
                                  .with_column("r", check_value.type, column_kind::regular_column)
                                  .build();
 
-    expression bind_var = bind_variable{
-        .bind_index = 0,
-        .receiver = ::make_lw_shared<column_specification>(
-            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), check_value.type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(check_value.type, "bind_var")};
 
     auto [inputs, inputs_data] = make_evaluation_inputs(
         test_schema, {{"pk", make_int_raw(0)}, {"r", raw_value::make_null()}}, {check_value.value});

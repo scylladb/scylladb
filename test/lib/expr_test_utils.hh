@@ -86,6 +86,8 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
 tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
 usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_view, constant>> field_values);
 
+::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");
+
 struct evaluation_inputs_data {
     std::vector<bytes> partition_key;
     std::vector<bytes> clustering_key;

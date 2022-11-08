@@ -297,6 +297,11 @@ usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_vie
     return usertype_constructor{.elements = std::move(elements_map), .type = std::move(type)};
 }
 
+::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring receiver_name) {
+    return ::make_lw_shared<column_specification>(
+        "test_ks", "test_cf", ::make_shared<cql3::column_identifier>(receiver_name, true), receiver_type);
+}
+
 // Creates evaluation_inputs that can be used to evaluate columns and bind variables using evaluate()
 std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evaluation_inputs(
     const schema_ptr& table_schema,
