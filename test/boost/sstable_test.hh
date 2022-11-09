@@ -32,18 +32,14 @@ class column_family_test {
 public:
     column_family_test(lw_shared_ptr<replica::column_family> cf) : _cf(cf) {}
 
-    void add_sstable(sstables::shared_sstable sstable) {
-        _cf->_main_sstables->insert(std::move(sstable));
-        _cf->refresh_compound_sstable_set();
+    future<> add_sstable(sstables::shared_sstable sstable) {
+        auto new_sstables = { sstable };
+        return _cf->as_table_state().on_compaction_completion(sstables::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
-    // NOTE: must run in a thread
-    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+    future<> rebuild_sstable_list(compaction::table_state& table_s, const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        auto permit = seastar::get_units(_cf->_sstable_set_mutation_sem, 1).get0();
-        auto builder = replica::table::sstable_list_builder(std::move(permit));
-        _cf->_main_sstables = builder.build_new_list(*_cf->_main_sstables, _cf->_compaction_strategy.make_sstable_set(_cf->schema()), new_sstables, sstables_to_remove).get0();
-        _cf->refresh_compound_sstable_set();
+        return table_s.on_compaction_completion(sstables::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
     static void update_sstables_known_generation(replica::column_family& cf, unsigned generation) {
@@ -59,7 +55,8 @@ public:
     }
 
     auto try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
-        return _cf->try_flush_memtable_to_sstable(mt, sstable_write_permit::unconditional());
+        // FIXME: for multiple groups, rewrite this without directly referencing replica::table::_compaction_group.
+        return _cf->try_flush_memtable_to_sstable(*_cf->_compaction_group, mt, sstable_write_permit::unconditional());
     }
 };
 

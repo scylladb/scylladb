@@ -3,8 +3,6 @@
 Data Manipulation
 -----------------
 
-.. include:: /rst_include/cql-version-index.rst
-
 This section describes the statements supported by CQL to insert, update, delete, and query data.
 
 :ref:`SELECT <select-statement>`
@@ -99,11 +97,12 @@ alternatively, of the wildcard character (``*``) to select all the columns defin
 Selectors
 `````````
 
-A :token:`selector` can be one of:
+A :token:`selector` can be one of the following:
 
 - A column name of the table selected to retrieve the values for that column.
 - A casting, which allows you to convert a nested selector to a (compatible) type.
 - A function call, where the arguments are selector themselves.
+- A call to the :ref:`COUNT function <count-function>`, which counts all non-null results.
 
 Aliases
 ```````
@@ -143,7 +142,7 @@ You can read more about the ``TIMESTAMP`` retrieved by ``WRITETIME`` in the :ref
 
 - ``TTL`` retrieves the remaining time to live (in *seconds*) for the value of the column, if it set to expire, or ``null`` otherwise.
 
-You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`. 
+You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_. 
 
 .. _where-clause:
 
@@ -255,10 +254,14 @@ The following should be considered when using the ``GROUP BY`` option:
 Ordering results
 ~~~~~~~~~~~~~~~~
 
-The ``ORDER BY`` clause lets you select the order of the returned results. It takes as argument a list of column names
-along with the order for the column (``ASC`` for ascendant and ``DESC`` for descendant, omitting the order being
-equivalent to ``ASC``). Currently, the possible orderings are limited by the :ref:`clustering order <clustering-order>`
-defined on the table:
+The default order for a SELECT statement depends on the default clustering order of a table, which is defined when 
+the table is created - it is ``ASC`` (ascendant) by default, but can be changed using the ``WITH CLUSTERING ORDER BY``
+option. See :ref:`CREATE TABLE <create-table-statement>`.
+
+The ``ORDER BY`` clause allows you to configure a non-default order of the returned result. It takes a list of column names
+along with the order for the column as an argument  (``ASC`` for ascendant and ``DESC`` for descendant, omitting the default order). 
+
+Currently, the possible orderings are limited by the :ref:`clustering order <clustering-order>` defined on the table:
 
 - If the table has been defined without any specific ``CLUSTERING ORDER``, then allowed orderings are the order
   induced by the clustering columns and the reverse of that one.
@@ -771,7 +774,7 @@ parameters:
   the columns themselves. This means that any subsequent update of the column will also reset the TTL (to whatever TTL
   is specified in that update). By default, values never expire. A TTL of 0 is equivalent to no TTL. If the table has a
   default_time_to_live, a TTL of 0 will remove the TTL for the inserted or updated values. A TTL of ``null`` is equivalent
-  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`.
+  to inserting with a TTL of 0. You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this Scylla University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_.
 - ``TIMEOUT``: specifies a timeout duration for the specific request.
   Please refer to the :ref:`SELECT <using-timeout>` section for more information.
 
@@ -943,7 +946,7 @@ however, that operations are only isolated within a single partition).
 
 There is a performance penalty for batch atomicity when a batch spans multiple partitions. If you do not want to incur
 this penalty, you can tell Scylla to skip the batchlog with the ``UNLOGGED`` option. If the ``UNLOGGED`` option is
-used, a failed batch might leave the patch only partly applied.
+used, a failed batch might leave the batch only partly applied.
 
 ``COUNTER`` batches
 ~~~~~~~~~~~~~~~~~~~

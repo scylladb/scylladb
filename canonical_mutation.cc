@@ -15,14 +15,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "hashing_partition_visitor.hh"
 #include "utils/UUID.hh"
-#include "serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include <iostream>
 
@@ -44,7 +37,7 @@ canonical_mutation::canonical_mutation(const mutation& m)
                  }).end_canonical_mutation();
 }
 
-utils::UUID canonical_mutation::column_family_id() const {
+table_id canonical_mutation::column_family_id() const {
     auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
     return mv.table_id();
@@ -120,17 +113,19 @@ std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
             auto&& entry = _cm.static_column_at(id);
             fmt::print(_os, "static column {} {}", bytes_to_text(entry.name()), collection_mutation_view::printer(*entry.type(), cmv));
         }
-        virtual void accept_row_tombstone(range_tombstone rt) override {
+        virtual stop_iteration accept_row_tombstone(range_tombstone rt) override {
             print_separator();
             fmt::print(_os, "row tombstone {}", rt);
+            return stop_iteration::no;
         }
-        virtual void accept_row(position_in_partition_view pipv, row_tombstone rt, row_marker rm, is_dummy, is_continuous) override {
+        virtual stop_iteration accept_row(position_in_partition_view pipv, row_tombstone rt, row_marker rm, is_dummy, is_continuous) override {
             if (_in_row) {
                 fmt::print(_os, "}}, ");
             }
             fmt::print(_os, "{{row {} tombstone {} marker {}", pipv, rt, rm);
             _in_row = true;
             _first = false;
+            return stop_iteration::no;
         }
         virtual void accept_row_cell(column_id id, atomic_cell ac) override {
             print_separator();

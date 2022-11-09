@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/core/shared_ptr.hh>
+#include "cql3/cql3_type.hh"
 #include "exceptions/exceptions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "update_parameters.hh"
@@ -20,6 +21,10 @@
 #include <optional>
 
 namespace cql3 {
+
+namespace statements::broadcast_tables {
+    struct prepared_update;
+}
 
 class update_parameters;
 
@@ -85,6 +90,8 @@ public:
      * Execute the operation.
      */
     virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
+    
+    virtual void prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update&) const;
 
     /**
      * A parsed raw UPDATE operation.

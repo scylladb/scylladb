@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "gms/inet_address_serializer.hh"
+
 namespace gms {
 enum class application_state:int {
         STATUS = 0,

@@ -227,6 +227,47 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
+# The IS NOT NULL operator was first added to Cassandra and Scylla for use
+# just in key columns in materialized views. It was not supported in general
+# filters in SELECT (see issue #8517), and in particular cannot be used in
+# a materialized-view definition as a filter on non-key columns. However,
+# if this usage is not allowed, we expect to see a clear error and not silently
+# ignoring the IS NOT NULL condition as happens in issue #10365.
+#
+# NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
+# replace this test by a test that checks that the filter works as expected,
+# both in ordinary base-table SELECT and in materialized-view definition.
+@pytest.mark.xfail(reason="issue #10365")
+def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
+        # Check that "IS NOT NULL" is not supported in a regular (base table)
+        # SELECT filter. Cassandra reports an InvalidRequest: "Unsupported
+        # restriction: xyz IS NOT NULL". In Scylla the message is different:
+        # "restriction '(xyz) IS NOT { null }' is only supported in materialized
+        # view creation".
+        #
+        with pytest.raises(InvalidRequest, match="xyz"):
+            cql.execute(f'SELECT * FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING')
+        # Check that "xyz IS NOT NULL" is also not supported in a
+        # materialized-view definition (where xyz is not a key column)
+        # Reproduces #8517
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="xyz"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND xyz IS NOT NULL PRIMARY KEY (p)")
+                # There is no need to continue the test - if the CREATE
+                # MATERIALIZED VIEW above succeeded, it is already not what we
+                # expect without #8517. However, let's demonstrate that it's
+                # even worse - not only does the "xyz IS NOT NULL" not generate
+                # an error, it is outright ignored and not used in the filter.
+                # If it weren't ignored, it should filter out partition 124
+                # in the following example:
+                cql.execute(f"INSERT INTO {table} (p,xyz) VALUES (123, 456)")
+                cql.execute(f"INSERT INTO {table} (p) VALUES (124)")
+                assert sorted(list(cql.execute(f"SELECT p FROM {test_keyspace}.{mv}")))==[(123,)]
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
 # Test that a view can be altered with synchronous_updates property and that
 # the synchronous updates code path is then reached for such view.
 def test_mv_synchronous_updates(cql, test_keyspace):
@@ -259,3 +300,146 @@ def test_mv_synchronous_updates(cql, test_keyspace):
                 if wanted_trace2 in event.description:
                     wanted_traces_were_found[1] = True
             assert all(wanted_traces_were_found)
+
+# Reproduces #8627:
+# Whereas regular columns values are limited in size to 2GB, key columns are
+# limited to 64KB. This means that if a certain column is regular in the base
+# table but a key in one of its views, we cannot write to this regular column
+# an over-64KB value. Ideally, such a write should fail cleanly with an
+# InvalidQuery.
+# But today, neither Cassandra nor Scylla does this correctly. Both do not
+# detect the problem at the coordinator level, and both send the writes to the
+# replicas and fail the view update in each replica. The user's write may or
+# may not fail depending on whether the view update is done synchronously
+# (Scylla, sometimes) or asynchrhonously (Casandra). But even in the failure
+# case the failure does not explain why the replica writes failed - the only
+# message about a key being too long appears in the log.
+# Note that the same issue also applies to secondary indexes, and this is
+# tested in test_secondary_index.py.
+@pytest.mark.xfail(reason="issue #8627")
+def test_oversized_base_regular_view_key(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        with new_materialized_view(cql, table, select='*', pk='v,p', where='v is not null and p is not null') as mv:
+            big = 'x'*66536
+            with pytest.raises(InvalidRequest, match='size'):
+                cql.execute(f"INSERT INTO {table}(p,v) VALUES (1,'{big}')")
+            # Ideally, the entire write operation should be considered
+            # invalid, and no part of it will be done. In particular, the
+            # base write will also not happen.
+            assert [] == list(cql.execute(f"SELECT * FROM {table} WHERE p=1"))
+
+# Reproduces #8627:
+# Same as test_oversized_base_regular_view_key above, just check *view
+# building*- i.e., pre-existing data in the base table that needs to be
+# copied to the view. The view building cannot return an error to the user,
+# but we do expect it to skip the problematic row and continue to complete
+# the rest of the vew build.
+@pytest.mark.xfail(reason="issue #8627")
+# This test currently breaks the build (it repeats a failing build step,
+# and never complete) and we cannot quickly recognize this failure, so
+# to avoid a very slow failure, we currently "skip" this test.
+@pytest.mark.skip(reason="issue #8627, fails very slow")
+def test_oversized_base_regular_view_key_build(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        # No materialized view yet - a "big" value in v is perfectly fine:
+        stmt = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        for i in range(30):
+            cql.execute(stmt, [i, str(i)])
+        big = 'x'*66536
+        cql.execute(stmt, [30, big])
+        assert [(30,big)] == list(cql.execute(f'SELECT * FROM {table} WHERE p=30'))
+        # Add a materialized view with v as the new key. The view build,
+        # copying data from the base table to the view, should start promptly.
+        with new_materialized_view(cql, table, select='*', pk='v,p', where='v is not null and p is not null') as mv:
+            # If Scylla's view builder hangs or stops, there is no way to
+            # tell this state apart from a view build that simply hasn't
+            # completed yet (besides looking at the logs, which we don't).
+            # This means, unfortunately, that a failure of this test is slow -
+            # it needs to wait for a timeout.
+            start_time = time.time()
+            while time.time() < start_time + 30:
+                results = set(list(cql.execute(f'SELECT * from {mv}')))
+                # The oversized "big" cannot be a key in the view, so
+                # shouldn't be in results:
+                assert not (big, 30) in results
+                print(results)
+                # The rest of the items in the base table should be in
+                # the view:
+                if results == {(str(i), i) for i in range(30)}:
+                        break
+                time.sleep(0.1)
+            assert results == {(str(i), i) for i in range(30)}
+
+# Reproduces #11668
+# When the view builder resumes building a partition, it reuses the reader
+# used from the previous step but re-creates the compactor. This means that any
+# range tombstone changes active at the time of suspending the step, have to be
+# explicitly re-opened on when resuming. Without that, already deleted base rows
+# can be resurrected as demonstrated by this test.
+# The view-builder suspends processing a base-table after
+# `view_builder::batch_size` (that is 128) rows. So in this test we create a
+# table which has at least 2X that many rows and add a range tombstone so that
+# it covers half of the rows (even rows are covered why odd rows aren't).
+def test_view_builder_suspend_with_active_range_tombstone(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY(pk, ck)", "WITH compaction = {'class': 'NullCompactionStrategy'}") as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)')
+
+        # sstable 1 - even rows
+        for ck in range(0, 512, 2):
+            cql.execute(stmt, (0, ck, ck))
+        nodetool.flush(cql, table)
+
+        # sstable 2 - odd rows and a range tombstone covering even rows
+        # we need two sstables so memtable doesn't compact away the shadowed rows
+        cql.execute(f"DELETE FROM {table} WHERE pk = 0 AND ck >= 0 AND ck < 512")
+        for ck in range(1, 512, 2):
+            cql.execute(stmt, (0, ck, ck))
+        nodetool.flush(cql, table)
+
+        # we should not see any even rows here - they are covered by the range tombstone
+        res = [r.ck for r in cql.execute(f"SELECT ck FROM {table} WHERE pk = 0")]
+        assert res == list(range(1, 512, 2))
+
+        with new_materialized_view(cql, table, select='*', pk='v,pk,ck', where='v is not null and pk is not null and ck is not null') as mv:
+            start_time = time.time()
+            while time.time() < start_time + 30:
+                res = sorted([r.v for r in cql.execute(f"SELECT * FROM {mv}")])
+                if len(res) >= 512/2:
+                    break
+                time.sleep(0.1)
+            # again, we should not see any even rows in the materialized-view,
+            # they are covered with a range tombstone in the base-table
+            assert res == list(range(1, 512, 2))
+
+# A variant of the above using a partition-tombstone, which is also lost similar
+# to range tombstones.
+def test_view_builder_suspend_with_partition_tombstone(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY(pk, ck)", "WITH compaction = {'class': 'NullCompactionStrategy'}") as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)')
+
+        # sstable 1 - even rows
+        for ck in range(0, 512, 2):
+            cql.execute(stmt, (0, ck, ck))
+        nodetool.flush(cql, table)
+
+        # sstable 2 - odd rows and a partition covering even rows
+        # we need two sstables so memtable doesn't compact away the shadowed rows
+        cql.execute(f"DELETE FROM {table} WHERE pk = 0")
+        for ck in range(1, 512, 2):
+            cql.execute(stmt, (0, ck, ck))
+        nodetool.flush(cql, table)
+
+        # we should not see any even rows here - they are covered by the partition tombstone
+        res = [r.ck for r in cql.execute(f"SELECT ck FROM {table} WHERE pk = 0")]
+        assert res == list(range(1, 512, 2))
+
+        with new_materialized_view(cql, table, select='*', pk='v,pk,ck', where='v is not null and pk is not null and ck is not null') as mv:
+            start_time = time.time()
+            while time.time() < start_time + 30:
+                res = sorted([r.v for r in cql.execute(f"SELECT * FROM {mv}")])
+                if len(res) >= 512/2:
+                    break
+                time.sleep(0.1)
+            # again, we should not see any even rows in the materialized-view,
+            # they are covered with a partition tombstone in the base-table
+            assert res == list(range(1, 512, 2))

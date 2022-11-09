@@ -15,15 +15,7 @@
 #include "digest_algorithm.hh"
 #include "digester.hh"
 #include "full_position.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
-#include "idl/position_in_partition.dist.hh"
 #include "idl/query.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
-#include "idl/position_in_partition.dist.impl.hh"
 #include "idl/query.dist.impl.hh"
 
 namespace query {
@@ -120,13 +112,16 @@ class result::builder {
     short_read _short_read;
     digester _digest;
     result_memory_accounter _memory_accounter;
+    const uint64_t _tombstone_limit = query::max_tombstones;
+    uint64_t _tombstones = 0;
 public:
-    builder(const partition_slice& slice, result_options options, result_memory_accounter memory_accounter)
+    builder(const partition_slice& slice, result_options options, result_memory_accounter memory_accounter, uint64_t tombstone_limit)
         : _slice(slice)
         , _w(ser::writer_of_query_result<bytes_ostream>(_out).start_partitions())
         , _request(options.request)
         , _digest(digester(options.digest_algo))
         , _memory_accounter(std::move(memory_accounter))
+        , _tombstone_limit(tombstone_limit)
     { }
     builder(builder&&) = delete; // _out is captured by reference
 
@@ -134,6 +129,19 @@ public:
     short_read is_short_read() const { return _short_read; }
 
     result_memory_accounter& memory_accounter() { return _memory_accounter; }
+
+    stop_iteration bump_and_check_tombstone_limit() {
+        ++_tombstones;
+        if (_tombstones < _tombstone_limit) {
+            return stop_iteration::no;
+        }
+        if (!_slice.options.contains<partition_slice::option::allow_short_read>()) {
+            throw std::runtime_error(fmt::format(
+                    "Tombstones processed by unpaged query exceeds limit of {} (configured via query_tombstone_page_limit)",
+                    _tombstone_limit));
+        }
+        return stop_iteration::yes;
+    }
 
     const partition_slice& slice() const { return _slice; }
 
@@ -218,6 +226,7 @@ class query_result_builder {
     const schema& _schema;
     query::result::builder& _rb;
     std::optional<mutation_querier> _mutation_consumer;
+    // We need to remember that we requested stop, to mark the read as short in the end.
     stop_iteration _stop;
 public:
     query_result_builder(const schema& s, query::result::builder& rb) noexcept;

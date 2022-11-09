@@ -184,13 +184,8 @@ static const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-static void retain_local_endpoints(inet_address_vector_replica_set& eps) {
-    auto itend = boost::range::remove_if(
-        eps,
-        [](gms::inet_address ep) {
-            return !db::is_local(ep);
-        }
-    );
+static void retain_local_endpoints(const locator::topology& topo, inet_address_vector_replica_set& eps) {
+    auto itend = boost::range::remove_if(eps, std::not_fn(topo.get_local_dc_filter()));
     eps.erase(itend, eps.end());
 }
 
@@ -406,15 +401,16 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         std::vector<size_t>() // Represents empty GROUP BY indices.
     );
 
+    // We serve up to 256 ranges at a time to avoid allocating a huge vector for ranges
+    static constexpr size_t max_ranges = 256;
     dht::partition_range_vector ranges_owned_by_this_shard;
+    ranges_owned_by_this_shard.reserve(std::min(max_ranges, req.pr.size()));
     partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr));
 
     std::optional<dht::partition_range> current_range;
     do {
-        // We serve up to 256 ranges at a time to avoid allocating a huge vector for ranges
-        static constexpr size_t max_ranges = 256;
         while ((current_range = owned_iter.next(*schema))) {
-            ranges_owned_by_this_shard.push_back(*current_range);
+            ranges_owned_by_this_shard.push_back(std::move(*current_range));
             if (ranges_owned_by_this_shard.size() >= max_ranges) {
                 break;
             }
@@ -495,11 +491,13 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
     // Group vnodes by assigned endpoint.
     std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
+    const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
-        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(ks, end_token(*vnode));
+        auto erm = ks.get_effective_replication_map();
+        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
-            retain_local_endpoints(live_endpoints);
+            retain_local_endpoints(topo, live_endpoints);
         }
 
         if (live_endpoints.empty()) {

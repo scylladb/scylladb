@@ -14,7 +14,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
-#include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -37,12 +36,10 @@
 #include "schema_fwd.hh"
 #include "db/view/view.hh"
 #include "db/snapshot-ctl.hh"
-#include "gms/feature.hh"
 #include "memtable.hh"
 #include "row_cache.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
-#include "sstables/sstable_set.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
 #include "db/view/view_stats.hh"
@@ -54,22 +51,19 @@
 #include "reader_concurrency_semaphore.hh"
 #include "db/timeout_clock.hh"
 #include "querier.hh"
-#include "mutation_query.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
-#include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
 #include "db/rate_limiter.hh"
-#include "db/per_partition_rate_limit_info.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
+#include "compaction/compaction_manager.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -96,10 +90,9 @@ class compaction_descriptor;
 class compaction_completion_desc;
 class sstables_manager;
 class compaction_data;
+class sstable_set;
 
 }
-
-class compaction_manager;
 
 namespace compaction {
 class table_state;
@@ -124,7 +117,7 @@ class large_data_handler;
 class system_keyspace;
 class table_selector;
 
-future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
 
 }
 
@@ -281,6 +274,7 @@ using sstable_list = sstables::sstable_list;
 namespace replica {
 
 class distributed_loader;
+struct table_population_metadata;
 
 // The CF has a "stats" structure. But we don't want all fields here,
 // since some of them are fairly complex for exporting to collectd. Also,
@@ -320,6 +314,7 @@ struct table_stats;
 using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
+class compaction_group;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
@@ -383,6 +378,7 @@ public:
         utils::updateable_value<bool> enable_optimized_reversed_reads{true};
         // Can be updated by a schema change:
         bool enable_optimized_twcs_queries{true};
+        uint32_t tombstone_warn_threshold{0};
     };
     struct no_commitlog {};
 
@@ -404,27 +400,18 @@ private:
     uint64_t _failed_counter_applies_to_memtable = 0;
 
     template<typename... Args>
-    void do_apply(db::rp_handle&&, Args&&... args);
-
-    lw_shared_ptr<memtable_list> _memtables;
+    void do_apply(compaction_group& cg, db::rp_handle&&, Args&&... args);
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
-    lw_shared_ptr<memtable_list> make_memtable_list();
+    lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
+    compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    // SSTable set which contains all non-maintenance sstables
-    lw_shared_ptr<sstables::sstable_set> _main_sstables;
-    // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
-    lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
-    // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
+    // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
+    //  will be able to hold more than one group.
+    std::unique_ptr<compaction_group> _compaction_group;
+    // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
-    // sstables that have been compacted (so don't look up in query) but
-    // have not been deleted yet, so must not GC any tombstones in other sstables
-    // that may delete data in these sstables:
-    std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
-    // sstables that should not be compacted (e.g. because they need to be used
-    // to generate view updates later)
-    std::unordered_map<sstables::generation_type, sstables::shared_sstable> _sstables_staging;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // This semaphore ensures that an operation like snapshot won't have its selected
@@ -443,7 +430,6 @@ private:
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     bool _durable_writes;
-    compaction_manager& _compaction_manager;
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
@@ -496,9 +482,6 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
-
-    class table_state;
-    std::unique_ptr<table_state> _table_state;
 public:
     data_dictionary::table as_data_dictionary() const;
 
@@ -541,6 +524,15 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    // Return compaction group if table owns a single one. Otherwise, null is returned.
+    compaction_group* single_compaction_group_if_available() const noexcept;
+    // Select a compaction group from a given token.
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept;
+    // Select a compaction group from a given key.
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
+    // Select a compaction group from a given sstable based on its token range.
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
@@ -555,16 +547,17 @@ private:
     lw_shared_ptr<sstables::sstable_set>
     do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker);
-    void add_sstable(sstables::shared_sstable sstable);
-    void add_maintenance_sstable(sstables::shared_sstable sst);
+    // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
+    void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
+    void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
-    future<> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
+    future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
-    future<> update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
+    future<> update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -587,14 +580,6 @@ private:
     static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
         return sstables::generation_value(sstable_generation) % smp::count;
     }
-    // This will update sstable lists on behalf of off-strategy compaction, where
-    // input files will be removed from the maintenance set and output files will
-    // be inserted into the main set.
-    future<>
-    update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc);
-
-    // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
-    void on_compaction_completion(sstables::compaction_completion_desc desc);
 private:
     void rebuild_statistics();
 
@@ -734,7 +719,9 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    memtable& active_memtable() { return _memtables->active_memtable(); }
+    // FIXME: for supporting multiple compaction groups, this interface will need to return
+    // as many active sstables as there are groups.
+    memtable& active_memtable();
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;
@@ -782,10 +769,10 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m, m_schema);
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
-        do_apply(std::move(h), m);
+        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }
 
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
@@ -851,10 +838,16 @@ public:
     db::replay_position set_low_replay_position_mark();
 
 private:
-    future<> snapshot(database& db, sstring name);
+    using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-    friend class database;
+    future<snapshot_file_set> take_snapshot(database& db, sstring jsondir);
+    // Writes the table schema and the manifest of all files in the snapshot directory.
+    future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
+    static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
+
 public:
+    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
+
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
@@ -891,10 +884,8 @@ public:
     future<std::unordered_set<sstring>> get_sstables_by_partition_key(const sstring& key) const;
 
     const sstables::sstable_set& get_sstable_set() const;
-    const sstables::sstable_set& maintenance_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
-    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
@@ -909,6 +900,8 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
+    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges);
+
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
@@ -916,6 +909,14 @@ public:
 
     sstables::compaction_strategy& get_compaction_strategy() {
         return _compaction_strategy;
+    }
+
+    const compaction_manager& get_compaction_manager() const noexcept {
+        return _compaction_manager;
+    }
+
+    compaction_manager& get_compaction_manager() noexcept {
+        return _compaction_manager;
     }
 
     table_stats& get_stats() const {
@@ -1078,7 +1079,7 @@ private:
     //
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
-    future<> seal_active_memtable(flush_permit&&) noexcept;
+    future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 public:
@@ -1091,6 +1092,7 @@ public:
     friend class ::column_family_test;
 
     friend class distributed_loader;
+    friend class table_population_metadata;
 
 private:
     timer<> _off_strategy_trigger;
@@ -1101,6 +1103,8 @@ public:
     void enable_off_strategy_trigger();
 
     compaction::table_state& as_table_state() const noexcept;
+
+    friend class compaction_group;
 };
 
 using user_types_metadata = data_dictionary::user_types_metadata;
@@ -1182,7 +1186,7 @@ public:
     }
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
+    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
@@ -1199,8 +1203,8 @@ public:
         return _config.datadir;
     }
 
-    sstring column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const;
-    sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
+    sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
+    sstring column_family_directory(const sstring& name, table_id uuid) const;
 
     future<> ensure_populated() const;
     void mark_as_populated();
@@ -1318,13 +1322,13 @@ private:
             db::per_partition_rate_limit::info> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
     using ks_cf_to_uuid_t =
-        flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
+        flat_hash_map<std::pair<sstring, sstring>, table_id, utils::tuple_hash, string_pair_eq>;
     ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
-    utils::updateable_value_source<utils::UUID> _version;
+    utils::updateable_value_source<table_schema_version> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager& _compaction_manager;
@@ -1380,13 +1384,16 @@ public:
 
     future<> drain();
 
+    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    void unplug_system_keyspace() noexcept;
+
 private:
     future<> flush_non_system_column_families();
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
+    friend future<> db::system_keyspace_make(db::system_keyspace& sys_ks, distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1403,7 +1410,7 @@ private:
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
     void remove(const table&) noexcept;
 public:
-    static utils::UUID empty_version;
+    static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
         return _result_memory_limiter;
@@ -1439,10 +1446,10 @@ public:
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
     future<> drop_caches() const;
 
-    void update_version(const utils::UUID& version);
+    void update_version(const table_schema_version& version);
 
-    const utils::UUID& get_version() const;
-    utils::observable<utils::UUID>& observable_schema_version() const { return _version.as_observable(); }
+    const table_schema_version& get_version() const;
+    utils::observable<table_schema_version>& observable_schema_version() const { return _version.as_observable(); }
 
     db::commitlog* commitlog() const {
         return _commitlog.get();
@@ -1475,8 +1482,8 @@ public:
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */
-    const utils::UUID& find_uuid(std::string_view ks, std::string_view cf) const;
-    const utils::UUID& find_uuid(const schema_ptr&) const;
+    const table_id& find_uuid(std::string_view ks, std::string_view cf) const;
+    const table_id& find_uuid(const schema_ptr&) const;
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
@@ -1495,15 +1502,17 @@ public:
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
+    std::vector<sstring> get_non_local_strategy_keyspaces() const;
+    std::unordered_map<sstring, locator::effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
-    column_family& find_column_family(const utils::UUID&);
-    const column_family& find_column_family(const utils::UUID&) const;
+    column_family& find_column_family(const table_id&);
+    const column_family& find_column_family(const table_id&) const;
     column_family& find_column_family(const schema_ptr&);
     const column_family& find_column_family(const schema_ptr&) const;
-    bool column_family_exists(const utils::UUID& uuid) const;
+    bool column_family_exists(const table_id& uuid) const;
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
-    schema_ptr find_schema(const utils::UUID&) const;
+    schema_ptr find_schema(const table_id&) const;
     bool has_schema(std::string_view ks_name, std::string_view cf_name) const;
     std::set<sstring> existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude = sstring()) const;
     sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
@@ -1582,11 +1591,11 @@ public:
         return _keyspaces;
     }
 
-    const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
+    const std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
 
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() {
+    std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() {
         return _column_families;
     }
 
@@ -1624,31 +1633,42 @@ public:
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);
     // flush a table identified by the given id on all shards.
-    future<> flush_on_all(utils::UUID id);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, table_id id);
     // flush a single table in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::string_view table_name);
+    static future<> flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name);
     // flush a list of tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name, std::vector<sstring> table_names);
+    static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names);
     // flush all tables in a keyspace on all shards.
-    future<> flush_on_all(std::string_view ks_name);
+    static future<> flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
 
-    future<> snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush);
-    future<> snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush);
+    static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, db::snapshot_ctl::snap_views, bool skip_flush);
+    static future<> snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_ctl::snap_views, bool skip_flush);
+    static future<> snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush);
 
-    // See #937. Truncation now requires a callback to get a time stamp
-    // that must be guaranteed to be the same for all shards.
-    typedef std::function<future<db_clock::time_point>()> timestamp_func;
-
-    /** Truncates the given column family */
-    future<> truncate(sstring ksname, sstring cfname, timestamp_func);
-    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
-
+public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);
+    future<> detach_column_family(table& cf);
+
+    static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
+
+    struct table_truncate_state {
+        gate::holder holder;
+        db_clock::time_point low_mark_at;
+        db::replay_position low_mark;
+        std::vector<compaction_manager::compaction_reenabler> cres;
+        bool did_flush;
+    };
+
+    static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
+    /** Truncates the given column family */
+    // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
+
     // drops the table on all shards and removes the table directory if there are no snapshots
-    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, timestamp_func, bool with_snapshot = true);
+    static future<> drop_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name, bool with_snapshot = true);
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
@@ -1689,6 +1709,8 @@ public:
     // Convenience method to obtain an admitted permit. See reader_concurrency_semaphore::obtain_permit().
     future<reader_permit> obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout);
     future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout);
+
+    bool is_internal_query() const;
 
     sharded<semaphore>& get_sharded_sst_dir_semaphore() {
         return _sst_dir_semaphore;

@@ -13,7 +13,7 @@ import pytest
 import boto3
 import requests
 import re
-from alternator_util import create_test_table, is_aws
+from util import create_test_table, is_aws, scylla_log
 
 # When tests are run with HTTPS, the server often won't have its SSL
 # certificate signed by a known authority. So we will disable certificate
@@ -112,7 +112,8 @@ def dynamodbstreams(request):
 # that the server is still alive - and if not report the test which crashed
 # it and stop running any more tests.
 @pytest.fixture(scope="function", autouse=True)
-def dynamodb_test_connection(dynamodb, request):
+def dynamodb_test_connection(dynamodb, request, optional_rest_api):
+    scylla_log(optional_rest_api, f'test/alternator: Starting {request.node.parent.name}::{request.node.name}', 'info')
     yield
     try:
         # We want to run a do-nothing DynamoDB command. The health-check
@@ -122,6 +123,7 @@ def dynamodb_test_connection(dynamodb, request):
         assert response.ok
     except:
         pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
+    scylla_log(optional_rest_api, f'test/alternator: Ended {request.node.parent.name}::{request.node.name}', 'info')
 
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
@@ -275,9 +277,14 @@ def test_table_s_forbid_rmw(dynamodb, scylla_only):
 # the test using this fixture will be skipped with a message about the REST
 # API not being available.
 @pytest.fixture(scope="session")
-def rest_api(dynamodb):
+def rest_api(dynamodb, optional_rest_api):
+    if optional_rest_api is None:
+        pytest.skip('Cannot connect to Scylla REST API')
+    return optional_rest_api
+@pytest.fixture(scope="session")
+def optional_rest_api(dynamodb):
     if is_aws(dynamodb):
-        pytest.skip('Scylla-only REST API not supported by AWS')
+        return None
     url = dynamodb.meta.client._endpoint.host
     # The REST API is on port 10000, and always http, not https.
     url = re.sub(r':[0-9]+(/|$)', ':10000', url)
@@ -287,5 +294,5 @@ def rest_api(dynamodb):
     try:
         requests.get(f'{url}/column_family/name/keyspace', timeout=1).raise_for_status()
     except:
-        pytest.skip('Cannot connect to Scylla REST API')
+        return None
     return url

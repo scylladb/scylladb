@@ -29,7 +29,6 @@ class feature_service;
 struct feature_config {
 private:
     std::set<sstring> _disabled_features;
-    std::set<sstring> _masked_features;
     feature_config();
 
     friend class feature_service;
@@ -60,10 +59,8 @@ public:
     future<> stop();
     // Has to run inside seastar::async context
     void enable(const sstring& name);
-    future<> support(const std::string_view& name);
     void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
-    std::set<std::string_view> known_feature_set();
     std::set<std::string_view> supported_feature_set();
 
     // Key in the 'system.scylla_local' table, that is used to
@@ -103,8 +100,9 @@ public:
     // sure the whole cluster supports the new page_size field and we can safely
     // send it to replicas.
     gms::feature separate_page_size_and_safety_limit { *this, "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"sv };
+    // Replica is allowed to send back empty pages to coordinator on queries.
+    gms::feature empty_replica_pages { *this, "EMPTY_REPLICA_PAGES"sv };
     gms::feature supports_raft_cluster_mgmt { *this, "SUPPORTS_RAFT_CLUSTER_MANAGEMENT"sv };
-    gms::feature uses_raft_cluster_mgmt { *this, "USES_RAFT_CLUSTER_MANAGEMENT"sv };
     gms::feature tombstone_gc_options { *this, "TOMBSTONE_GC_OPTIONS"sv };
     gms::feature parallelized_aggregation { *this, "PARALLELIZED_AGGREGATION"sv };
     gms::feature keyspace_storage_options { *this, "KEYSPACE_STORAGE_OPTIONS"sv };
@@ -112,6 +110,8 @@ public:
     gms::feature schema_commitlog { *this, "SCHEMA_COMMITLOG"sv };
     gms::feature uda_native_parallelized_aggregation { *this, "UDA_NATIVE_PARALLELIZED_AGGREGATION"sv };
     gms::feature aggregate_storage_options { *this, "AGGREGATE_STORAGE_OPTIONS"sv };
+    gms::feature collection_indexing { *this, "COLLECTION_INDEXING"sv };
+    gms::feature large_collection_detection { *this, "LARGE_COLLECTION_DETECTION"sv };
 
 public:
 

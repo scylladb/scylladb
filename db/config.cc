@@ -374,14 +374,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "Related information: Configuring compaction")
-    , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", value_status::Used, 1000,
+    , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1000,
         "Log a warning when writing partitions larger than this value")
-    , compaction_large_row_warning_threshold_mb(this, "compaction_large_row_warning_threshold_mb", value_status::Used, 10,
+    , compaction_large_row_warning_threshold_mb(this, "compaction_large_row_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 10,
         "Log a warning when writing rows larger than this value")
-    , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", value_status::Used, 1,
+    , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1,
         "Log a warning when writing cells larger than this value")
-    , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", value_status::Used, 100000,
+    , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 100000,
         "Log a warning when writing a number of rows larger than this value")
+    , compaction_collection_elements_count_warning_threshold(this, "compaction_collection_elements_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 10000,
+        "Log a warning when writing a collection containing more elements than this value")
     /* Common memtable settings */
     , memtable_total_space_in_mb(this, "memtable_total_space_in_mb", value_status::Invalid, 0,
         "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb.")
@@ -557,10 +559,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Tombstone settings */
     /* When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean. */
     /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */
-    , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Unused, 1000,
+    , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Used, 1000,
         "The maximum number of tombstones a query can scan before warning.")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
+    , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
+        "The number of tombstones after which a query cuts a page, even if not full or even empty.")
     /* Network timeout settings */
     , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")
@@ -786,7 +790,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , load_ring_state(this, "load_ring_state", value_status::Used, true, "When set to true, load tokens and host_ids previously saved. Same as -Dcassandra.load_ring_state in cassandra.")
     , replace_address(this, "replace_address", value_status::Used, "", "The listen_address or broadcast_address of the dead node to replace. Same as -Dcassandra.replace_address.")
     , replace_address_first_boot(this, "replace_address_first_boot", value_status::Used, "", "Like replace_address option, but if the node has been bootstrapped successfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.")
-    , ignore_dead_nodes_for_replace(this, "ignore_dead_nodes_for_replace", value_status::Used, "", "List dead nodes to ingore for replace operation. E.g., scylla --ignore-dead-nodes-for-replace 127.0.0.1,127.0.0.2")
+    , ignore_dead_nodes_for_replace(this, "ignore_dead_nodes_for_replace", value_status::Used, "", "List dead nodes to ingore for replace operation using a comman-separated list of either host IDs or ip addresses. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e")
     , override_decommission(this, "override_decommission", value_status::Used, false, "Set true to force a decommissioned node to join the cluster")
     , enable_repair_based_node_ops(this, "enable_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, true, "Set true to use enable repair based node operations instead of streaming based")
     , allowed_repair_based_node_ops(this, "allowed_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, "replace", "A comma separated list of node operations which are allowed to enable repair based node operations. The operations can be bootstrap, replace, removenode, decommission and rebuild")
@@ -806,7 +810,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
     , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails")
     , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, 12, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters")
-    , virtual_dirty_soft_limit(this, "virtual_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of virtual dirty memory expressed as a portion of the hard limit")
+    , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit")
     , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default) "
         "bytes written to data file. Value must be between 0 and 1.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, size_t(1) << 20, "Warn about memory allocations above this size; set to zero to disable")
@@ -820,7 +824,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building")
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
-    , sstable_format(this, "sstable_format", value_status::Used, "me", "Default sstable file format", {"mc", "md", "me"})
+    , sstable_format(this, "sstable_format", value_status::Used, "me", "Default sstable file format", {"md", "me"})
     , enable_dangerous_direct_import_of_cassandra_counters(this, "enable_dangerous_direct_import_of_cassandra_counters", value_status::Used, false, "Only turn this option on if you want to import tables from Cassandra containing counters, and you are SURE that no counters in that table were created in a version earlier than Cassandra 2.1."
         " It is not enough to have ever since upgraded to newer versions of Cassandra. If you EVER used a version earlier than 2.1 in the cluster where these SSTables come from, DO NOT TURN ON THIS OPTION! You will corrupt your data. You have been warned.")
     , enable_shard_aware_drivers(this, "enable_shard_aware_drivers", value_status::Used, true, "Enable native transport drivers to use connection-per-shard for better performance")
@@ -838,6 +842,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , max_memory_for_unlimited_query_hard_limit(this, "max_memory_for_unlimited_query_hard_limit", "max_memory_for_unlimited_query", liveness::LiveUpdate, value_status::Used, (uint64_t(100) << 20),
             "Maximum amount of memory a query, whose memory consumption is not naturally limited, is allowed to consume, e.g. non-paged and reverse queries. "
             "This is the hard limit, queries violating this limit will be aborted.")
+    , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,
+            "The maximum number of compaction windows allowed when making use of TimeWindowCompactionStrategy. A setting of 0 effectively disables the restriction.")
     , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
             "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this")
     , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
@@ -894,11 +900,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , flush_schema_tables_after_modification(this, "flush_schema_tables_after_modification", liveness::LiveUpdate, value_status::Used, true,
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
     , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
-    , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::TRUE, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
     , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
         "Ignore truncation record stored in system tables as if tables were never truncated.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
+    , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 10, "Time for which information about finished task stays in memory.")
+    , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
+        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
@@ -1012,7 +1022,8 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 bool db::config::check_experimental(experimental_features_t::feature f) const {
     if (experimental()
         && f != experimental_features_t::feature::UNUSED
-        && f != experimental_features_t::feature::RAFT) {
+        && f != experimental_features_t::feature::RAFT
+        && f != experimental_features_t::feature::BROADCAST_TABLES) {
             return true;
     }
     const auto& optval = experimental_features();
@@ -1029,12 +1040,13 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
         return opt.get_value();
     };
 
-    return logging::settings{ value(logger_log_level, opts.logger_log_level)
-        , value(default_log_level, opts.default_log_level)
-        , value(log_to_stdout, opts.log_to_stdout)
-        , value(log_to_syslog, opts.log_to_syslog)
-        , opts.logger_stdout_timestamps.get_value()
-        , opts.logger_ostream_type.get_value()
+    return logging::settings{
+        .logger_levels = value(logger_log_level, opts.logger_log_level),
+        .default_level = value(default_log_level, opts.default_log_level),
+        .stdout_enabled = value(log_to_stdout, opts.log_to_stdout),
+        .syslog_enabled = value(log_to_syslog, opts.log_to_syslog),
+        .stdout_timestamp_style =  opts.logger_stdout_timestamps.get_value(),
+        .logger_ostream = opts.logger_ostream_type.get_value(),
     };
 }
 
@@ -1055,6 +1067,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"alternator-streams", feature::ALTERNATOR_STREAMS},
         {"alternator-ttl", feature::ALTERNATOR_TTL},
         {"raft", feature::RAFT},
+        {"broadcast-tables", feature::BROADCAST_TABLES},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
     };
 }

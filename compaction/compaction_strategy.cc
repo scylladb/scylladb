@@ -50,7 +50,7 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
     }));
 }
 
-bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time) {
+bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const tombstone_gc_state& gc_state) {
     if (_disable_tombstone_compaction) {
         return false;
     }
@@ -61,7 +61,7 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
         return false;
     }
-    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time);
+    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time, gc_state);
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
@@ -670,8 +670,8 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     }
 
     // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-    auto e = boost::range::remove_if(candidates, [this, compaction_time] (const sstables::shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, compaction_time);
+    auto e = boost::range::remove_if(candidates, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
+        return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
     });
     candidates.erase(e, candidates.end());
     if (candidates.empty()) {

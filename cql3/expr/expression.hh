@@ -666,6 +666,9 @@ inline auto find_clustering_order(const expression& e) {
 /// empty conjunction).
 std::vector<expression> boolean_factors(expression e);
 
+/// Run the given function for each element in the top level conjunction.
+void for_each_boolean_factor(const expression& e, const noncopyable_function<void (const expression&)>& for_each_func);
+
 /// True iff binary_operator involves a collection.
 extern bool is_on_collection(const binary_operator&);
 

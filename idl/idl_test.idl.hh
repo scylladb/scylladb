@@ -8,6 +8,8 @@
 
 // TODO: test final types more
 
+#include "idl/uuid.idl.hh"
+
 class simple_compound {
     uint32_t foo;
     uint32_t bar;
@@ -81,4 +83,8 @@ struct const_template_arg_wrapper {
 
 struct const_template_arg_test_object {
     std::vector<const_template_arg_wrapper<const simple_compound>> first;
+};
+
+struct frozen_object stub [[writable]] {
+    utils::UUID id;
 };

@@ -437,6 +437,10 @@ public:
         return _last_position;
     }
 
+    void set_last_position(std::optional<full_position> last_position) {
+        _last_position = std::move(last_position);
+    }
+
     // Return _last_position if replica filled it, otherwise calculate it based
     // on the content (by looking up the last row in the last partition).
     full_position get_or_calculate_last_position() const;

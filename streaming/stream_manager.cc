@@ -45,12 +45,38 @@ stream_manager::stream_manager(db::config& cfg,
         (void)_io_throughput_updater.trigger_later();
     }
 
+    _finished_percentage[streaming::stream_reason::bootstrap] = 1;
+    _finished_percentage[streaming::stream_reason::decommission] = 1;
+    _finished_percentage[streaming::stream_reason::removenode] = 1;
+    _finished_percentage[streaming::stream_reason::rebuild] = 1;
+    _finished_percentage[streaming::stream_reason::repair] = 1;
+    _finished_percentage[streaming::stream_reason::replace] = 1;
+
+    auto ops_label_type = sm::label("ops");
     _metrics.add_group("streaming", {
         sm::make_counter("total_incoming_bytes", [this] { return _total_incoming_bytes; },
                         sm::description("Total number of bytes received on this shard.")),
 
         sm::make_counter("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::bootstrap]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::decommission]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::removenode]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::rebuild]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::repair]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
     });
 }
 
@@ -109,7 +135,7 @@ void stream_manager::register_receiving(shared_ptr<stream_result_future> result)
     _receiving_streams[result->plan_id] = std::move(result);
 }
 
-shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id) const {
+shared_ptr<stream_result_future> stream_manager::get_sending_stream(streaming::plan_id plan_id) const {
     auto it = _initiated_streams.find(plan_id);
     if (it != _initiated_streams.end()) {
         return it->second;
@@ -117,7 +143,7 @@ shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id
     return {};
 }
 
-shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_id) const {
+shared_ptr<stream_result_future> stream_manager::get_receiving_stream(streaming::plan_id plan_id) const {
     auto it = _receiving_streams.find(plan_id);
     if (it != _receiving_streams.end()) {
         return it->second;
@@ -125,7 +151,7 @@ shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_
     return {};
 }
 
-void stream_manager::remove_stream(UUID plan_id) {
+void stream_manager::remove_stream(streaming::plan_id plan_id) {
     sslog.debug("stream_manager: removing plan_id={}", plan_id);
     _initiated_streams.erase(plan_id);
     _receiving_streams.erase(plan_id);
@@ -155,8 +181,8 @@ std::vector<shared_ptr<stream_result_future>> stream_manager::get_all_streams() 
     return result;
 }
 
-void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size) {
-    auto& sbytes = _stream_bytes[cf_id];
+void stream_manager::update_progress(streaming::plan_id plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size) {
+    auto& sbytes = _stream_bytes[plan_id];
     if (dir == progress_info::direction::OUT) {
         sbytes[peer].bytes_sent += fm_size;
         _total_outgoing_bytes += fm_size;
@@ -176,11 +202,11 @@ future<> stream_manager::update_all_progress_info() {
     });
 }
 
-void stream_manager::remove_progress(UUID plan_id) {
+void stream_manager::remove_progress(streaming::plan_id plan_id) {
     _stream_bytes.erase(plan_id);
 }
 
-stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) const {
+stream_bytes stream_manager::get_progress(streaming::plan_id plan_id, gms::inet_address peer) const {
     auto it = _stream_bytes.find(plan_id);
     if (it == _stream_bytes.end()) {
         return stream_bytes();
@@ -193,7 +219,7 @@ stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) 
     return i->second;
 }
 
-stream_bytes stream_manager::get_progress(UUID plan_id) const {
+stream_bytes stream_manager::get_progress(streaming::plan_id plan_id) const {
     auto it = _stream_bytes.find(plan_id);
     if (it == _stream_bytes.end()) {
         return stream_bytes();
@@ -205,13 +231,13 @@ stream_bytes stream_manager::get_progress(UUID plan_id) const {
     return ret;
 }
 
-future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
+future<> stream_manager::remove_progress_on_all_shards(streaming::plan_id plan_id) {
     return container().invoke_on_all([plan_id] (auto& sm) {
         sm.remove_progress(plan_id);
     });
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) const {
+future<stream_bytes> stream_manager::get_progress_on_all_shards(streaming::plan_id plan_id, gms::inet_address peer) const {
     return container().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
@@ -221,7 +247,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
     );
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) const {
+future<stream_bytes> stream_manager::get_progress_on_all_shards(streaming::plan_id plan_id) const {
     return container().map_reduce0(
         [plan_id] (auto& sm) {
             return sm.get_progress(plan_id);
@@ -341,7 +367,7 @@ future<> stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state)
     return make_ready_future();
 }
 
-shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id) {
+shared_ptr<stream_session> stream_manager::get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id) {
     if (cf_id) {
         sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
     } else {
@@ -363,6 +389,10 @@ shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms:
         throw std::runtime_error(err);
     }
     return coordinator->get_or_create_session(*this, from);
+}
+
+void stream_manager::update_finished_percentage(streaming::stream_reason reason, float percentage) {
+    _finished_percentage[reason] = percentage;
 }
 
 } // namespace streaming

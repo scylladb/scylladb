@@ -17,46 +17,40 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/enum.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/distributed.hh>
 #include <unordered_set>
 #include <unordered_map>
 #include <variant>
 #include "types.hh"
-#include "clustering_key_filter.hh"
-#include <seastar/core/enum.hh>
-#include "compress.hh"
-#include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
-#include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>
 #include "encoding_stats.hh"
 #include "filter.hh"
-#include "exceptions.hh"
-#include "query-request.hh"
-#include "compound_compat.hh"
 #include "utils/disk-error-handler.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
-#include "sstable_version.hh"
-#include "db/large_data_handler.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
-#include "sstables/open_info.hh"
 #include "sstables/generation_type.hh"
-#include "query-request.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
+#include "utils/updateable_value.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
 class sstable_assertions;
 class cached_file;
 
+namespace db {
+class large_data_handler;
+}
+
 namespace sstables {
+
+extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
 namespace mc {
 class writer;
@@ -74,6 +68,8 @@ class sstable_writer;
 class sstable_writer_v2;
 class sstables_manager;
 class metadata_collector;
+
+struct foreign_sstable_open_info;
 
 template<typename T>
 concept ConsumeRowsContext =
@@ -108,7 +104,7 @@ struct sstable_writer_config {
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
     write_monitor* monitor = &default_write_monitor();
-    utils::UUID run_identifier = utils::make_random_uuid();
+    run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
 
@@ -462,7 +458,7 @@ public:
      * The lower bound is inclusive: there might be a clustering row with position equal to min_position.
      */
     const position_in_partition& min_position() const {
-        return _position_range.start();
+        return _min_max_position_range.start();
     }
 
     /* Similar to min_position, but returns an upper-bound.
@@ -473,9 +469,16 @@ public:
      * occuring in the sstable (across all partitions).
      */
     const position_in_partition& max_position() const {
-        return _position_range.end();
+        return _min_max_position_range.end();
     }
 
+    const position_in_partition& first_partition_first_position() const noexcept {
+        return _first_partition_first_position;
+    }
+
+    const position_in_partition& last_partition_last_position() const noexcept {
+        return _last_partition_last_position;
+    }
 private:
     size_t sstable_buffer_size;
 
@@ -499,11 +502,13 @@ private:
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
-    position_range _position_range = position_range::all_clustered_rows();
+    position_range _min_max_position_range = position_range::all_clustered_rows();
+    position_in_partition _first_partition_first_position = position_in_partition::before_all_clustered_rows();
+    position_in_partition _last_partition_last_position = position_in_partition::after_all_clustered_rows();
     std::vector<unsigned> _shards;
     std::optional<dht::decorated_key> _first;
     std::optional<dht::decorated_key> _last;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     utils::observable<sstable&> _on_closed;
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
@@ -620,11 +625,22 @@ private:
     // Create a position range based on the min/max_column_names metadata of this sstable.
     // It does nothing if schema defines no clustering key, and it's supposed
     // to be called when loading an existing sstable or after writing a new one.
-    void set_position_range();
+    void set_min_max_position_range();
+
+    // Loads first position of the first partition, and last position of the last
+    // partition. Does nothing if schema defines no clustering key.
+    future<> load_first_and_last_position_in_partition();
 
     future<> create_data() noexcept;
 
 public:
+    // Finds first position_in_partition in a given partition.
+    // If reversed is false, then the first position is actually the first row (can be the static one).
+    // If reversed is true, then the first position is the last row (can be static if partition has a single static row).
+    future<std::optional<position_in_partition>>
+    find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed,
+            const io_priority_class& pc = default_priority_class());
+
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte
@@ -713,7 +729,7 @@ public:
         return _components->scylla_metadata ? &*_components->scylla_metadata : nullptr;
     }
 
-    utils::UUID run_identifier() const {
+    run_id run_identifier() const {
         return _run_identifier;
     }
 
@@ -812,7 +828,7 @@ public:
     void set_sstable_level(uint32_t);
 
     void generate_new_run_identifier() {
-        _run_identifier = utils::make_random_uuid();
+        _run_identifier = run_id::create_random_id();
     }
 
     double get_compression_ratio() const;
@@ -849,7 +865,7 @@ public:
     // false => there are no partition tombstones, true => we don't know
     bool may_have_partition_tombstones() const {
         return !has_correct_min_max_column_names()
-            || _position_range.is_all_clustered_rows(*_schema);
+            || _min_max_position_range.is_all_clustered_rows(*_schema);
     }
 
     // Return the large_data_stats_entry identified by large_data_type
@@ -887,8 +903,8 @@ public:
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
-    gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time) const;
-    gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time) const;
+    gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
+    gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
 };
 
 // When we compact sstables, we have to atomically instantiate the new

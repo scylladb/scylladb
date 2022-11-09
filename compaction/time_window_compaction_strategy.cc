@@ -43,6 +43,10 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
         }
     }
 
+    if (window_size <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} must be greater than 1 for compaction_window_size", window_size));
+    }
+
     sstable_window_size = window_size * window_unit;
 
     it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
@@ -270,8 +274,8 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
-    auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time] (const shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, compaction_time);
+    auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time, &table_s] (const shared_sstable& sst) -> bool {
+        return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
     });
     non_expiring_sstables.erase(e, non_expiring_sstables.end());
     if (non_expiring_sstables.empty()) {

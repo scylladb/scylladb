@@ -19,6 +19,7 @@
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/test_services.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 
@@ -41,14 +42,11 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 void run_sstable_resharding_test() {
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
-    cache_tracker tracker;
   for (const auto version : writable_sstable_versions) {
     auto tmp = tmpdir();
     auto s = get_schema();
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-    auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.semaphore()), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, tracker);
-    cf->mark_ready_for_writes();
+    table_for_tests cf(env.manager(), s);
+    auto close_cf = deferred_stop(cf);
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;
 
@@ -99,7 +97,7 @@ void run_sstable_resharding_test() {
             version, sstables::sstable::format_types::big);
     };
     auto cdata = compaction_manager::create_compaction_data();
-    auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf->as_table_state()).get0();
+    auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).get0();
     auto new_sstables = std::move(res.new_sstables);
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 

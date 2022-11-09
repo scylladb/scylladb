@@ -86,7 +86,7 @@ namespace replica {
 inline
 flush_controller
 make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
-    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -120,7 +120,7 @@ bool string_pair_eq::operator()(spair lhs, spair rhs) const {
     return lhs == rhs;
 }
 
-utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
+table_schema_version database::empty_version = table_schema_version(utils::UUID_gen::get_name_UUID(bytes{}));
 
 namespace {
 
@@ -141,7 +141,7 @@ public:
 };
 
 const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
-phased_barrier_top_10_counts(const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
+phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
     using table_list = boost::container::static_vector<table*, 16>;
     using count_and_tables = std::pair<size_t, table_list>;
     const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
@@ -191,7 +191,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
     memory::set_additional_diagnostics_producer([this] (memory::memory_diagnostics_writer wr) {
         auto writeln = memory_diagnostics_line_writer(std::move(wr));
 
-        const auto lsa_occupancy_stats = logalloc::lsa_global_occupancy_stats();
+        const auto lsa_occupancy_stats = logalloc::shard_tracker().global_occupancy();
         writeln("LSA\n");
         writeln("  allocated: {}\n", utils::to_hr_size(lsa_occupancy_stats.total_space()));
         writeln("  used:      {}\n", utils::to_hr_size(lsa_occupancy_stats.used_space()));
@@ -208,10 +208,10 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln(" Regular:\n");
         writeln("  real dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.real_dirty_memory()));
-        writeln("  virt dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.virtual_dirty_memory()));
+        writeln("  virt dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.unspooled_dirty_memory()));
         writeln(" System:\n");
         writeln("  real dirty: {}\n", utils::to_hr_size(_system_dirty_memory_manager.real_dirty_memory()));
-        writeln("  virt dirty: {}\n\n", utils::to_hr_size(_system_dirty_memory_manager.virtual_dirty_memory()));
+        writeln("  virt dirty: {}\n\n", utils::to_hr_size(_system_dirty_memory_manager.unspooled_dirty_memory()));
 
         writeln("Replica:\n");
 
@@ -313,12 +313,12 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
-    , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
+    , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
+    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
     , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
     , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
+        auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
         }
@@ -348,13 +348,15 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _version(empty_version)
     , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_large_cell_warning_threshold_mb()*1024*1024,
-              _cfg.compaction_rows_count_warning_threshold()))
+    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat,
+              _cfg.compaction_large_partition_warning_threshold_mb,
+              _cfg.compaction_large_row_warning_threshold_mb,
+              _cfg.compaction_large_cell_warning_threshold_mb,
+              _cfg.compaction_rows_count_warning_threshold,
+              _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -448,11 +450,13 @@ void backlog_controller::update_controller(float shares) {
 
 
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
-    : dirty_memory_manager_logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
-    , _real_dirty_reclaimer(threshold)
-    , _db(&db)
-    , _real_region_group("memtable", _real_dirty_reclaimer, deferred_work_sg)
-    , _virtual_region_group("memtable (virtual)", &_real_region_group, *this, deferred_work_sg)
+    : _db(&db)
+    , _region_group("memtable (unspooled)", dirty_memory_manager_logalloc::reclaim_config{
+            .unspooled_hard_limit = threshold / 2,
+            .unspooled_soft_limit = threshold * soft_limit / 2,
+            .real_hard_limit = threshold,
+            .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this)
+      }, deferred_work_sg)
     , _flush_serializer(1)
     , _waiting_flush(flush_when_needed()) {}
 
@@ -464,9 +468,9 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
         sm::make_gauge(namestr + "_dirty_bytes", [this] { return real_dirty_memory(); },
                        sm::description("Holds the current size of a all non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
                                        "Total memory size minus this value represents the amount of available memory. "
-                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+                                       "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge(namestr +"_virtual_dirty_bytes", [this] { return virtual_dirty_memory(); },
+        sm::make_gauge(namestr +"_unspooled_dirty_bytes", [this] { return unspooled_dirty_memory(); },
                        sm::description("Holds the size of used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 }
@@ -490,9 +494,9 @@ database::setup_metrics() {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
                        sm::description("Holds the current size of all (\"regular\", \"system\" and \"streaming\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
                                        "Total memory size minus this value represents the amount of available memory. "
-                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+                                       "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge("virtual_dirty_bytes", [this] { return _dirty_memory_manager.virtual_dirty_memory() + _system_dirty_memory_manager.virtual_dirty_memory(); },
+        sm::make_gauge("unspooled_dirty_bytes", [this] { return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory(); },
                        sm::description("Holds the size of all (\"regular\", \"system\" and \"streaming\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 
@@ -751,14 +755,14 @@ database::~database() {
     _user_types->deactivate();
 }
 
-void database::update_version(const utils::UUID& version) {
+void database::update_version(const table_schema_version& version) {
     if (_version.get() != version) {
         _schema_change_count++;
     }
     _version.set(version);
 }
 
-const utils::UUID& database::get_version() const {
+const table_schema_version& database::get_version() const {
     return _version.get();
 }
 
@@ -1003,35 +1007,54 @@ void database::remove(const table& cf) noexcept {
     }
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
-    auto& ks = find_keyspace(ks_name);
-    auto uuid = find_uuid(ks_name, cf_name);
-    lw_shared_ptr<table> cf;
-    try {
-        cf = _column_families.at(uuid);
-        drop_repair_history_map_for_table(uuid);
-    } catch (std::out_of_range&) {
-        on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
+future<> database::detach_column_family(table& cf) {
+    auto uuid = cf.schema()->id();
+    remove(cf);
+    cf.clear_views();
+    co_await cf.await_pending_ops();
+    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+        co_await sem->evict_inactive_reads_for_table(uuid);
     }
-    dblog.debug("Dropping {}.{}", ks_name, cf_name);
-    remove(*cf);
-    cf->clear_views();
-    co_await cf->await_pending_ops();
-    co_await _querier_cache.evict_all_for_table(cf->schema()->id());
-    auto f = co_await coroutine::as_future(truncate(ks, *cf, std::move(tsf), snapshot));
-    co_await cf->stop();
-    f.get(); // re-throw exception from truncate() if any
 }
 
-future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, timestamp_func tsf, bool with_snapshot) {
-    auto table_dir = fs::path(sharded_db.local().find_column_family(ks_name, cf_name).dir());
-    co_await sharded_db.invoke_on_all([&] (database& db) {
-        return db.drop_column_family(ks_name, cf_name, tsf, with_snapshot);
+future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
+    std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
+    table_shards.resize(smp::count);
+    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+        table_shards[shard] = co_await smp::submit_to(shard, [&] {
+            try {
+                return make_foreign(sharded_db.local()._column_families.at(uuid));
+            } catch (std::out_of_range&) {
+                on_internal_error(dblog, fmt::format("Table UUID={} not found", uuid));
+            }
+        });
     });
+    co_return table_shards;
+}
+
+future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, bool with_snapshot) {
+    auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
+    dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
+
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    auto table_dir = fs::path(table_shards[this_shard_id()]->dir());
+    std::optional<sstring> snapshot_name_opt;
+    if (with_snapshot) {
+        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
+    }
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        return db.detach_column_family(*table_shards[this_shard_id()]);
+    });
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, table_shards, db_clock::time_point::max(), with_snapshot, std::move(snapshot_name_opt)));
+    co_await smp::invoke_on_all([&] {
+        return table_shards[this_shard_id()]->stop();
+    });
+    f.get(); // re-throw exception from truncate() if any
     co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
 }
 
-const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
+const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
         return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
@@ -1039,7 +1062,7 @@ const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf)
     }
 }
 
-const utils::UUID& database::find_uuid(const schema_ptr& schema) const {
+const table_id& database::find_uuid(const schema_ptr& schema) const {
     return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
@@ -1092,6 +1115,28 @@ std::vector<sstring> database::get_all_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
+std::unordered_map<sstring, locator::effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
+    std::unordered_map<sstring, locator::effective_replication_map_ptr> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+            res.emplace(i.first, i.second.get_effective_replication_map());
+        }
+    }
+    return res;
+}
+
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
         get_column_families()
@@ -1119,7 +1164,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
     }
 }
 
-column_family& database::find_column_family(const utils::UUID& uuid) {
+column_family& database::find_column_family(const table_id& uuid) {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1127,7 +1172,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) {
     }
 }
 
-const column_family& database::find_column_family(const utils::UUID& uuid) const {
+const column_family& database::find_column_family(const table_id& uuid) const {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1135,7 +1180,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     }
 }
 
-bool database::column_family_exists(const utils::UUID& uuid) const {
+bool database::column_family_exists(const table_id& uuid) const {
     return _column_families.contains(uuid);
 }
 
@@ -1211,6 +1256,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.reversed_reads_auto_bypass_cache = db_config.reversed_reads_auto_bypass_cache;
     cfg.enable_optimized_reversed_reads = db_config.enable_optimized_reversed_reads;
+    cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
@@ -1219,19 +1265,19 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 sstring
-keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
+keyspace::column_family_directory(const sstring& name, table_id uuid) const {
     return column_family_directory(_config.datadir, name, uuid);
 }
 
 sstring
-keyspace::column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const {
+keyspace::column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const {
     auto uuid_sstring = uuid.to_sstring();
     boost::erase_all(uuid_sstring, "-");
     return format("{}/{}-{}", base_path, name, uuid_sstring);
 }
 
 future<>
-keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
+keyspace::make_directory_for_column_family(const sstring& name, table_id uuid) {
     std::vector<sstring> cfdirs;
     for (auto& extra : _config.all_datadirs) {
         cfdirs.push_back(column_family_directory(extra, name, uuid));
@@ -1276,7 +1322,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
     }
 }
 
-schema_ptr database::find_schema(const utils::UUID& uuid) const {
+schema_ptr database::find_schema(const table_id& uuid) const {
     return find_column_family(uuid).schema();
 }
 
@@ -1331,7 +1377,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> tables = get_column_families();
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_column_families();
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
@@ -1401,6 +1447,10 @@ bool database::can_apply_per_partition_rate_limit(const schema& s, db::operation
     return replica::can_apply_per_partition_rate_limit(s, _dbcfg, op_type);
 }
 
+bool database::is_internal_query() const {
+    return classify_request(_dbcfg) != request_class::user;
+}
+
 std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
         db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
         db::operation_type op_type) {
@@ -1462,7 +1512,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     lw_shared_ptr<query::result> result;
     std::exception_ptr ex;
 
-    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+    if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state, timeout);
     }
 
@@ -1486,7 +1536,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
         }
 
         if (!f.failed()) {
-            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            if (cmd.query_uuid && querier_opt) {
                 _querier_cache.insert_data_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {
@@ -1528,7 +1578,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     reconcilable_result result;
     std::exception_ptr ex;
 
-    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+    if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state, timeout);
     }
 
@@ -1552,7 +1602,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         }
 
         if (!f.failed()) {
-            if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            if (cmd.query_uuid && querier_opt) {
                 _querier_cache.insert_mutation_querier(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
             }
         } else {
@@ -1684,9 +1734,7 @@ future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
     return std::move(_waiting_flush).then([this] {
-        return _virtual_region_group.shutdown().then([this] {
-            return _real_region_group.shutdown();
-        });
+        return _region_group.shutdown();
     });
 }
 
@@ -1764,7 +1812,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // memtable. The advantage of doing this is that this is objectively the one that will
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
-                memtable& candidate_memtable = memtable::from_region(*(this->_virtual_region_group.get_largest_region()));
+                memtable& candidate_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
                 memtable_list& mtlist = *(candidate_memtable.get_memtable_list());
 
                 if (!candidate_memtable.region().evictable_occupancy()) {
@@ -2199,7 +2247,7 @@ future<> database::close_tables(table_kind kind_to_close) {
 }
 
 void database::revert_initial_system_read_concurrency_boost() {
-    _system_read_concurrency_sem.consume({database::max_count_concurrent_reads - database::max_count_system_concurrent_reads, 0});
+    _system_read_concurrency_sem.set_resources({database::max_count_system_concurrent_reads, max_memory_system_concurrent_reads()});
     dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
@@ -2238,10 +2286,14 @@ future<> database::stop() {
 
     // try to ensure that CL has done disk flushing
     if (_commitlog) {
+        dblog.info("Shutting down commitlog");
         co_await _commitlog->shutdown();
+        dblog.info("Shutting down commitlog complete");
     }
     if (_schema_commitlog) {
+        dblog.info("Shutting down schema commitlog");
         co_await _schema_commitlog->shutdown();
+        dblog.info("Shutting down schema commitlog complete");
     }
     co_await _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
     if (_commitlog) {
@@ -2274,111 +2326,162 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
     return cf.flush();
 }
 
-future<> database::flush_on_all(utils::UUID id) {
-    return container().invoke_on_all([id] (replica::database& db) {
+future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
+    return sharded_db.invoke_on_all([id] (replica::database& db) {
         return db.find_column_family(id).flush();
     });
 }
 
-future<> database::flush_on_all(std::string_view ks_name, std::string_view table_name) {
-    return flush_on_all(find_uuid(ks_name, table_name));
+future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name) {
+    return flush_table_on_all_shards(sharded_db, sharded_db.local().find_uuid(ks_name, table_name));
 }
 
-future<> database::flush_on_all(std::string_view ks_name, std::vector<sstring> table_names) {
-    return parallel_for_each(table_names, [this, ks_name] (const auto& table_name) {
-        return flush_on_all(ks_name, table_name);
+future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names) {
+    return parallel_for_each(table_names, [&, ks_name] (const auto& table_name) {
+        return flush_table_on_all_shards(sharded_db, ks_name, table_name);
     });
 }
 
-future<> database::flush_on_all(std::string_view ks_name) {
-    return parallel_for_each(find_keyspace(ks_name).metadata()->cf_meta_data(), [this] (auto& pair) {
-        return flush_on_all(pair.second->id());
+future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
+    auto& ks = sharded_db.local().find_keyspace(ks_name);
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
+        return flush_table_on_all_shards(sharded_db, pair.second->id());
     });
 }
 
-future<> database::snapshot_on_all(std::string_view ks_name, std::vector<sstring> table_names, sstring tag, bool skip_flush) {
-    co_await coroutine::parallel_for_each(table_names, [this, ks_name, tag = std::move(tag), skip_flush] (const auto& table_name) -> future<> {
-        if (!skip_flush) {
-            co_await flush_on_all(ks_name, table_name);
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring table_name, sstring tag, db::snapshot_ctl::snap_views snap_views, bool skip_flush) {
+    if (!skip_flush) {
+        co_await flush_table_on_all_shards(sharded_db, ks_name, table_name);
+    }
+    auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
+    if (snap_views) {
+        for (const auto& vp : table_shards[this_shard_id()]->views()) {
+            co_await snapshot_table_on_all_shards(sharded_db, ks_name, vp->cf_name(), tag, db::snapshot_ctl::snap_views::no, skip_flush);
         }
-        co_await container().invoke_on_all([ks_name, &table_name, tag, skip_flush] (replica::database& db) {
-            auto& t = db.find_column_family(ks_name, table_name);
-            return t.snapshot(db, tag);
-        });
+    }
+}
+
+future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_ctl::snap_views snap_views, bool skip_flush) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), snap_views, skip_flush] (auto& table_name) {
+        return snapshot_table_on_all_shards(sharded_db, ks_name, std::move(table_name), tag, snap_views, skip_flush);
     });
 }
 
-future<> database::snapshot_on_all(std::string_view ks_name, sstring tag, bool skip_flush) {
-    auto& ks = find_keyspace(ks_name);
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [this, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, bool skip_flush) {
+    auto& ks = sharded_db.local().find_keyspace(ks_name);
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), skip_flush] (const auto& pair) -> future<> {
+        auto uuid = pair.second->id();
         if (!skip_flush) {
-            co_await flush_on_all(pair.second->id());
+            co_await flush_table_on_all_shards(sharded_db, uuid);
         }
-        co_await container().invoke_on_all([id = pair.second, tag, skip_flush] (replica::database& db) {
-            auto& t = db.find_column_family(id);
-            return t.snapshot(db, tag);
-        });
+        auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, tag);
     });
 }
 
-future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
-    auto& ks = find_keyspace(ksname);
-    auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf, std::move(tsf));
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
+    co_return co_await truncate_table_on_all_shards(sharded_db, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
-    dblog.debug("Truncating {}.{}: with_snapshot={} auto_snapshot={}", cf.schema()->ks_name(), cf.schema()->cf_name(), with_snapshot, get_config().auto_snapshot());
-    auto holder = cf.async_gate().hold();
-
-    const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
-    const auto should_flush = auto_snapshot;
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+    auto& cf = *table_shards[this_shard_id()];
+    auto s = cf.schema();
 
     // Schema tables changed commitlog domain at some point and this node will refuse to boot with
     // truncation record present for schema tables to protect against misinterpreting of replay positions.
     // Also, the replay_position returned by discard_sstables() may refer to old commit log domain.
-    if (cf.schema()->ks_name() == db::schema_tables::NAME) {
-        throw std::runtime_error(format("Truncating of {}.{} is not allowed.", cf.schema()->ks_name(), cf.schema()->cf_name()));
+    if (s->ks_name() == db::schema_tables::NAME) {
+        throw std::runtime_error(format("Truncating of {}.{} is not allowed.", s->ks_name(), s->cf_name()));
     }
 
-    // Force mutations coming in to re-acquire higher rp:s
-    // This creates a "soft" ordering, in that we will guarantee that
-    // any sstable written _after_ we issue the flush below will
-    // only have higher rp:s than we will get from the discard_sstable
-    // call.
-    auto low_mark = cf.set_low_replay_position_mark();
+    auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
+    dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot && auto_snapshot ? "with auto-" : "without ");
+
+    std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
+    table_states.resize(smp::count);
+
+    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+        table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
+            auto& cf = *table_shards[this_shard_id()];
+            auto st = std::make_unique<table_truncate_state>();
+
+            st->holder = cf.async_gate().hold();
+
+            // Force mutations coming in to re-acquire higher rp:s
+            // This creates a "soft" ordering, in that we will guarantee that
+            // any sstable written _after_ we issue the flush below will
+            // only have higher rp:s than we will get from the discard_sstable
+            // call.
+            st->low_mark_at = db_clock::now();
+            st->low_mark = cf.set_low_replay_position_mark();
+
+            st->cres.reserve(1 + cf.views().size());
+            auto& db = sharded_db.local();
+            auto& cm = db.get_compaction_manager();
+            st->cres.emplace_back(co_await cm.stop_and_disable_compaction(cf.as_table_state()));
+            co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
+                auto& vcf = db.find_column_family(v);
+                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(vcf.as_table_state()));
+            });
+
+            co_return make_foreign(std::move(st));
+        });
+    });
+
+    const auto should_snapshot = with_snapshot && auto_snapshot;
+    const auto should_flush = should_snapshot && cf.can_flush();
+    dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
+    std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
+            [] (replica::table& cf) {
+                // TODO:
+                // this is not really a guarantee at all that we've actually
+                // gotten all things to disk. Again, need queue-ish or something.
+                return cf.flush();
+            } :
+            [] (replica::table& cf) {
+                return cf.clear();
+            };
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+        unsigned shard = this_shard_id();
+        auto& cf = *table_shards[shard];
+        auto& st = *table_states[shard];
+
+        co_await flush_or_clear(cf);
+        co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
+            auto& vcf = db.find_column_family(v);
+            co_await flush_or_clear(vcf);
+        });
+        st.did_flush = should_flush;
+    });
+
+    auto truncated_at = truncated_at_opt.value_or(db_clock::now());
+
+    if (should_snapshot) {
+        auto name = snapshot_name_opt.value_or(
+            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
+    }
+
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        auto shard = this_shard_id();
+        auto& cf = *table_shards[shard];
+        auto& st = *table_states[shard];
+
+        return db.truncate(cf, st, truncated_at);
+    });
+}
+
+future<> database::truncate(column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
+    dblog.trace("Truncating {}.{} on shard", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     const auto uuid = cf.schema()->id();
 
-    std::vector<compaction_manager::compaction_reenabler> cres;
-    cres.reserve(1 + cf.views().size());
-
-    cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(cf.as_table_state()));
-    co_await coroutine::parallel_for_each(cf.views(), [&, this] (view_ptr v) -> future<> {
-        auto& vcf = find_column_family(v);
-        cres.emplace_back(co_await _compaction_manager.stop_and_disable_compaction(vcf.as_table_state()));
-    });
-
-    bool did_flush = false;
-    if (should_flush && cf.can_flush()) {
-        // TODO:
-        // this is not really a guarantee at all that we've actually
-        // gotten all things to disk. Again, need queue-ish or something.
-        co_await cf.flush();
-        did_flush = true;
-    } else {
-        co_await cf.clear();
-    }
-
     dblog.debug("Discarding sstable data for truncated CF + indexes");
     // TODO: notify truncation
-
-    db_clock::time_point truncated_at = co_await tsf();
-
-    if (auto_snapshot) {
-        auto name = format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-        co_await cf.snapshot(*this, name);
-    }
 
     db::replay_position rp = co_await cf.discard_sstables(truncated_at);
     // TODO: indexes.
@@ -2388,15 +2491,15 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
     // the low_mark assertion does not hold, because we maybe/probably never got around to 
     // creating the sstables that would create them.
-    assert(!did_flush || low_mark <= rp || rp == db::replay_position());
-    rp = std::max(low_mark, rp);
-    co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at, should_flush] (view_ptr v) -> future<> {
+    // If truncated_at is earlier than the time low_mark was taken
+    // then the replay_position returned by discard_sstables may be
+    // smaller than low_mark.
+    assert(!st.did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
+    if (rp == db::replay_position()) {
+        rp = st.low_mark;
+    }
+    co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
-            if (should_flush) {
-                co_await vcf.flush();
-            } else {
-                co_await vcf.clear();
-            }
             db::replay_position rp = co_await vcf.discard_sstables(truncated_at);
             co_await db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
     });
@@ -2406,7 +2509,8 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     cf.cache_truncation_record(truncated_at);
     co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
 
-    drop_repair_history_map_for_table(uuid);
+    auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
+    gc_state.drop_repair_history_map_for_table(uuid);
 }
 
 const sstring& database::get_snitch_name() const {
@@ -2425,7 +2529,7 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
-static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& directory_name) {
+static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& directory_name) {
     // cf directory is of the form: 'cf_name-uuid'
     // uuid is assumed to be exactly 32 hex characters wide.
     constexpr size_t uuid_size = 32;
@@ -2433,7 +2537,7 @@ static std::pair<sstring, utils::UUID> extract_cf_name_and_uuid(const sstring& d
     if (pos <= 0 || directory_name[pos] != '-') {
         on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
-    return std::make_pair(directory_name.substr(0, pos), utils::UUID(directory_name.substr(pos + 1)));
+    return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
 }
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
@@ -2661,6 +2765,16 @@ database::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
+void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _compaction_manager.plug_system_keyspace(sys_ks);
+    _large_data_handler->plug_system_keyspace(sys_ks);
+}
+
+void database::unplug_system_keyspace() noexcept {
+    _compaction_manager.unplug_system_keyspace();
+    _large_data_handler->unplug_system_keyspace();
+}
+
 } // namespace replica
 
 template <typename T>
@@ -2677,10 +2791,10 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             reader_concurrency_semaphore* semaphore;
         };
         distributed<replica::database>& _db;
-        utils::UUID _table_id;
+        table_id _table_id;
         std::vector<reader_context> _contexts;
     public:
-        streaming_reader_lifecycle_policy(distributed<replica::database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
+        streaming_reader_lifecycle_policy(distributed<replica::database>& db, table_id table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
         }
         virtual flat_mutation_reader_v2 create_reader(
                 schema_ptr schema,

@@ -9,6 +9,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/amortized_reserve.hh"
 #include <seastar/util/variant_utils.hh>
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
@@ -375,15 +376,13 @@ range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::erase(range_tombstones_type::iterator it) {
-    _ops.reserve(_ops.size() + 1);
-    _ops.emplace_back(erase_undo_op(*it));
+    _ops.emplace_back(std::in_place_type<erase_undo_op>, *it);
     return _dst._tombstones.erase(it);
 }
 
 void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
-    _ops.reserve(_ops.size() + 1);
-    swap(it->tombstone(), new_rt);
-    _ops.emplace_back(update_undo_op(std::move(new_rt), *it));
+    _ops.emplace_back(std::in_place_type<update_undo_op>, std::move(it->tombstone()), *it);
+    it->tombstone() = std::move(new_rt);
 }
 
 void range_tombstone_list::reverter::revert() noexcept {

@@ -199,7 +199,13 @@ utils::config_type::to_json(const void* value) const {
 
 bool
 utils::config_file::config_src::matches(std::string_view name) const {
-    if (_name == name) {
+    // The below line provides support for option names in the "long_name,short_name" format,
+    // such as "workdir,W". We only want the long name ("workdir") to be used in the YAML.
+    // But since at some point (due to a bug) the YAML config parser expected the silly
+    // double form ("workdir,W") instead, we support both for backward compatibility.
+    std::string_view long_name = _name.substr(0, _name.find_first_of(','));
+
+    if (_name == name || long_name == name) {
         return true;
     }
     if (!_alias.empty() && _alias == name) {

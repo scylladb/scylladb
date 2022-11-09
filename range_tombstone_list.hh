@@ -12,6 +12,7 @@
 #include "range_tombstone.hh"
 #include "query-request.hh"
 #include "utils/preempt.hh"
+#include "utils/chunked_vector.hh"
 #include <iosfwd>
 #include <variant>
 
@@ -106,7 +107,7 @@ class range_tombstone_list final {
     class reverter {
     private:
         using op = std::variant<erase_undo_op, insert_undo_op, update_undo_op>;
-        std::vector<op> _ops;
+        utils::chunked_vector<op> _ops;
         const schema& _s;
     protected:
         range_tombstone_list& _dst;

@@ -269,7 +269,10 @@ struct commit_status_unknown : public error {
 };
 
 struct stopped_error : public error {
-    stopped_error() : error("Raft instance is stopped") {}
+    explicit stopped_error(const sstring& reason = "")
+            : error(!reason.empty()
+                    ? fmt::format("Raft instance is stopped, reason: \"{}\"", reason)
+                    : std::string("Raft instance is stopped")) {}
 };
 
 struct conf_change_in_progress : public error {
@@ -288,6 +291,22 @@ struct timeout_error : public error {
 struct state_machine_error: public error {
     state_machine_error(std::experimental::source_location l = std::experimental::source_location::current())
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
+};
+
+// Should be thrown by the rpc implementation to signal that the connection to the peer has been lost.
+// It's unspecified if any actions caused by rpc were actually performed on the target node.
+struct transport_error: public error {
+    using error::error;
+};
+
+struct command_is_too_big_error: public error {
+    size_t command_size;
+    size_t limit;
+
+    command_is_too_big_error(size_t command_size, size_t limit)
+        : error(fmt::format("Command size {} is greater than the configured limit {}", command_size, limit))
+        , command_size(command_size)
+        , limit(limit) {}
 };
 
 struct no_other_voting_member : public error {
@@ -454,8 +473,10 @@ using rpc_message = std::variant<append_request,
       read_quorum,
       read_quorum_reply>;
 
-// we need something that can be truncated form both sides.
+// we need something that can be truncated from both sides.
 // std::deque move constructor is not nothrow hence cannot be used
+// also, boost::deque deallocates blocks when items are removed,
+// we don't want to hold on to memory we don't use.
 using log_entries = boost::container::deque<log_entry_ptr>;
 
 // 3.4 Leader election
@@ -559,6 +580,9 @@ public:
     virtual void send_read_quorum_reply(server_id id, const read_quorum_reply& read_quorum_reply) = 0;
 
     // Forward a read barrier request to the leader.
+    // Should throw a raft::transport_error if the target host is unreachable.
+    // In this case, the call will be retried after some time,
+    // possibly with a different server_id if the leader has changed by then.
     virtual future<read_barrier_reply> execute_read_barrier_on_leader(server_id id) = 0;
 
     // Two-way RPC for adding an entry on the leader
@@ -570,6 +594,7 @@ public:
 
     // Send a configuration change request to the leader. Block until the
     // leader replies.
+    // Should throw a raft::transport_error if the target host is unreachable.
     virtual future<add_entry_reply> send_modify_config(server_id id,
         const std::vector<config_member>& add,
         const std::vector<server_id>& del) = 0;

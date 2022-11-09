@@ -16,7 +16,21 @@ provision that - Scylla requires you to provision your cluster. You need
 to reason about the number and size of your nodes - not the throughput.
 
 When creating a table, the BillingMode and ProvisionedThroughput options
-are ignored by Scylla.
+are ignored by Scylla. Tables default to a Billing mode of `PAY_PER_REQUEST`
+and `DescribeTable` API calls will return a value of 0 for the RCUs, WCUs
+and NumberOfDecreasesToday within the response.
+
+## Scan ordering
+
+In DynamoDB, the Hash key (or partition key) determines where the item will
+be stored within DynamoDB's internal storage. Another notable difference between
+DynamoDB and Scylla comes down to the underlying hashing algorithm.
+While DynamoDB uses a proprietary hashing function, ScyllaDB implements the well-known
+[Murmur3](https://docs.scylladb.com/stable/glossary.html#term-Partitioner) algorithm.
+
+Even though regular users should not typically care about the underlying
+implementation details, particularly such difference causes Scan operations
+to return results in a different order between DynamoDB and Alternator.
 
 ## Load balancing
 
@@ -26,7 +40,7 @@ request for this single URL to many different backend nodes. Such a
 load-balancing setup is *not* included inside Alternator. You should either
 set one up, or configure the client library to do the load balancing itself.
 Instructions for doing this can be found in:
-https://github.com/scylladb/alternator-load-balancing/
+<https://github.com/scylladb/alternator-load-balancing/>
 
 ## Write isolation policies
 
@@ -125,7 +139,7 @@ All of this is not yet implemented in Alternator.
 Scylla has an advanced and extensive monitoring framework for inspecting
 and graphing hundreds of different metrics of Scylla's usage and performance.
 Scylla's monitoring stack, based on Grafana and Prometheus, is described in
-https://docs.scylladb.com/operating-scylla/monitoring/.
+<https://docs.scylladb.com/operating-scylla/monitoring/>.
 This monitoring stack is different from DynamoDB's offering - but Scylla's
 is significantly more powerful and gives the user better insights on
 the internals of the database and its performance.
@@ -160,7 +174,7 @@ experimental:
   One thing that this implementation is still missing is that expiration
   events appear in the Streams API as normal deletions - without the
   distinctive marker on deletions which are really expirations.
-  https://github.com/scylladb/scylla/issues/5060
+  <https://github.com/scylladb/scylla/issues/5060>
 
 * The DynamoDB Streams API for capturing change is supported, but still
   considered experimental so needs to be enabled explicitly with the
@@ -172,12 +186,12 @@ experimental:
   * While in DynamoDB data usually appears in the stream less than a second
     after it was written, in Alternator Streams there is currently a 10
     second delay by default.
-    https://github.com/scylladb/scylla/issues/6929
+    <https://github.com/scylladb/scylla/issues/6929>
   * Some events are represented differently in Alternator Streams. For
     example, a single PutItem is represented by a REMOVE + MODIFY event,
     instead of just a single MODIFY or INSERT.
-    https://github.com/scylladb/scylla/issues/6930
-    https://github.com/scylladb/scylla/issues/6918
+    <https://github.com/scylladb/scylla/issues/6930>
+    <https://github.com/scylladb/scylla/issues/6918>
 
 ## Unimplemented API features
 
@@ -187,20 +201,21 @@ not implemented yet. Unimplemented features return an error when used, so
 they should be easy to detect. Here is a list of these unimplemented features:
 
 * Currently in Alternator, a GSI (Global Secondary Index) can only be added
-  to a table at table creation time. Unlike DynamoDB which also allows adding
-  a GSI (but not an LSI) to an existing table using an UpdateTable operation.
-  https://github.com/scylladb/scylla/issues/5022
+  to a table at table creation time. DynamoDB allows adding a GSI (but not an
+  LSI) to an existing table using an UpdateTable operation, and similarly it
+  allows removing a GSI from a table.
+  <https://github.com/scylladb/scylla/issues/11567>
 
 * GSI (Global Secondary Index) and LSI (Local Secondary Index) may be
   configured to project only a subset of the base-table attributes to the
   index. This option is not yet respected by Alternator - all attributes
   are projected. This wastes some disk space when it is not needed.
-  https://github.com/scylladb/scylla/issues/5036
+  <https://github.com/scylladb/scylla/issues/5036>
 
 * DynamoDB's new multi-item transaction feature (TransactWriteItems,
   TransactGetItems) is not supported. Note that the older single-item
   conditional updates feature are fully supported.
-  https://github.com/scylladb/scylla/issues/5064
+  <https://github.com/scylladb/scylla/issues/5064>
 
 * Alternator does not yet support the DynamoDB API calls that control which
   table is available in which data center (DC): CreateGlobalTable,
@@ -211,19 +226,19 @@ they should be easy to detect. Here is a list of these unimplemented features:
   If a DC is added after a table is created, the table won't be visible from
   the new DC and changing that requires a CQL "ALTER TABLE" statement to
   modify the table's replication strategy.
-  https://github.com/scylladb/scylla/issues/5062
+  <https://github.com/scylladb/scylla/issues/5062>
 
 * Recently DynamoDB added support, in addition to the DynamoDB Streams API,
   also for the similar Kinesis Streams. Alternator doesn't support this yet,
   and the related operations DescribeKinesisStreamingDestination,
   DisableKinesisStreamingDestination, and EnableKinesisStreamingDestination.
-  https://github.com/scylladb/scylla/issues/8786
+  <https://github.com/scylladb/scylla/issues/8786>
 
 * The on-demand backup APIs are not supported: CreateBackup, DescribeBackup,
   DeleteBackup, ListBackups, RestoreTableFromBackup.
   For now, users can use Scylla's existing backup solutions such as snapshots
   or Scylla Manager.
-  https://github.com/scylladb/scylla/issues/5063
+  <https://github.com/scylladb/scylla/issues/5063>
 
 * Continuous backup (the ability to restore any point in time) is also not
   supported: UpdateContinuousBackups, DescribeContinuousBackups,
@@ -237,28 +252,28 @@ they should be easy to detect. Here is a list of these unimplemented features:
   BillingMode option is ignored by Alternator, and if a provisioned throughput
   is specified, it is ignored. Requests which are asked to return the amount
   of provisioned throughput used by the request do not return it in Alternator.
-  https://github.com/scylladb/scylla/issues/5068
+  <https://github.com/scylladb/scylla/issues/5068>
 
 * DAX (DynamoDB Accelerator), an in-memory cache for DynamoDB, is not
   available in for Alternator. Anyway, it should not be necessary - Scylla's
   internal cache is already rather advanced and there is no need to place
   another cache in front of the it. We wrote more about this here:
-  https://www.scylladb.com/2017/07/31/database-caches-not-good/
+  <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
 
 * The DescribeTable is missing information about creation data and size
   estimates, and also part of the information about indexes enabled on 
   the table.
-  https://github.com/scylladb/scylla/issues/5013
-  https://github.com/scylladb/scylla/issues/5026
-  https://github.com/scylladb/scylla/issues/7550
-  https://github.com/scylladb/scylla/issues/7551 
+  <https://github.com/scylladb/scylla/issues/5013>
+  <https://github.com/scylladb/scylla/issues/5026>
+  <https://github.com/scylladb/scylla/issues/7550>
+  <https://github.com/scylladb/scylla/issues/7551>
 
 * The recently-added PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE
   expressions) and the new operations ExecuteStatement, BatchExecuteStatement
   and ExecuteTransaction is not yet supported.
   A user that is interested in an SQL-like syntax can consider using Scylla's
   CQL protocol instead.
-  https://github.com/scylladb/scylla/issues/8787
+  <https://github.com/scylladb/scylla/issues/8787>
 
 * As mentioned above, Alternator has its own powerful monitoring framework,
   which is different from AWS's. In particular, the operations
@@ -266,8 +281,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
   UpdateContributorInsights that configure Amazon's "CloudWatch Contributor
   Insights" are not yet supported. Scylla has different ways to retrieve the
   same information, such as which items were accessed most often.
-  https://github.com/scylladb/scylla/issues/8788
+  <https://github.com/scylladb/scylla/issues/8788>
 
 * Alternator does not support the new DynamoDB feature "export to S3",
   and its operations DescribeExport, ExportTableToPointInTime, ListExports.
-  https://github.com/scylladb/scylla/issues/8789
+  <https://github.com/scylladb/scylla/issues/8789>
+
+* Alternator does not support the new DynamoDB feature "import from S3",
+  and its operations ImportTable, DescribeImport, ListImports.
+  <https://github.com/scylladb/scylla/issues/11739>

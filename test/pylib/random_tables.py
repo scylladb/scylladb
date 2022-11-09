@@ -38,6 +38,7 @@ import uuid
 from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
+    from test.pylib.manager_client import ManagerClient
 
 
 logger = logging.getLogger('random_tables')
@@ -115,13 +116,13 @@ class RandomTable():
     # Sequential unique id
     newid = itertools.count(start=1).__next__
 
-    def __init__(self, cql: CassandraSession, keyspace: str, ncolumns: Optional[int]=None,
+    def __init__(self, manager: ManagerClient, keyspace: str, ncolumns: Optional[int]=None,
                  columns: Optional[List[Column]]=None, pks: int=2, name: str=None):
         """Set up a new table definition from column definitions.
            If column definitions not specified pick a random number of columns with random types.
            By default there will be 4 columns with first column as Primary Key"""
         self.id: int = RandomTable.newid()
-        self.cql: CassandraSession = cql
+        self.manager: ManagerClient = manager
         self.keyspace: str = keyspace
         self.name: str = name if name is not None else f"t_{self.id:02}"
         self.full_name: str = keyspace + "." + self.name
@@ -154,19 +155,22 @@ class RandomTable():
         """Get all column names comma separated for CQL query generation convenience"""
         return ", ".join([c.name for c in self.columns])
 
-    async def create(self) -> asyncio.Future:
+    async def create(self, if_not_exists: bool = False) -> asyncio.Future:
         """Create this table"""
         col_defs = ", ".join(f"{c.cql}" for c in self.columns)
         pk_names = ", ".join(c.name for c in self.columns[:self.pks])
-        cql_stmt = f"CREATE TABLE {self.full_name} ({col_defs}, , primary key({pk_names}))"
+        cql_stmt = f"CREATE TABLE {'IF NOT EXISTS ' if if_not_exists else ''} {self.full_name} "\
+                   f"({col_defs}, , primary key({pk_names}))"
         logger.debug(cql_stmt)
-        return await self.cql.run_async(cql_stmt)
+        assert self.manager.cql is not None
+        return await self.manager.cql.run_async(cql_stmt)
 
-    async def drop(self) -> asyncio.Future:
+    async def drop(self, if_exists: bool = False) -> asyncio.Future:
         """Drop this table"""
-        cql_stmt = f"DROP TABLE {self.full_name}"
+        cql_stmt = f"DROP TABLE {'IF EXISTS ' if if_exists else ''}{self.full_name}"
         logger.debug(cql_stmt)
-        return await self.cql.run_async(cql_stmt)
+        assert self.manager.cql is not None
+        return await self.manager.cql.run_async(cql_stmt)
 
     async def add_column(self, name: str = None, ctype: Type[ValueType] = None, column: Column = None):
         if column is not None:
@@ -176,7 +180,9 @@ class RandomTable():
             ctype = ctype if ctype is not None else TextType
             column = Column(name, ctype=ctype)
         self.columns.append(column)
-        await self.cql.run_async(f"ALTER TABLE {self.full_name} ADD {column.name} {column.ctype.name}")
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} "
+                                         f"ADD {column.name} {column.ctype.name}")
 
     async def drop_column(self, column: Union[Column, str] = None):
         if column is None:
@@ -196,14 +202,16 @@ class RandomTable():
         assert len(self.columns) - 1 > self.pks, f"Cannot remove last value column {col.name} from {self.name}"
         self.columns.remove(col)
         self.removed_columns.append(col)
-        await self.cql.run_async(f"ALTER TABLE {self.full_name} DROP {col.name}")
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"ALTER TABLE {self.full_name} DROP {col.name}")
 
     async def insert_seq(self) -> asyncio.Future:
         """Insert a row of next sequential values"""
         seed = self.next_seq()
-        return await self.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names}) " +
-                                        f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
-                                        parameters=[c.val(seed) for c in self.columns])
+        assert self.manager.cql is not None
+        return await self.manager.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names})"
+                                                f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
+                                                parameters=[c.val(seed) for c in self.columns])
 
     async def add_index(self, column: Union[Column, str], name: str = None) -> str:
         if isinstance(column, int):
@@ -219,13 +227,15 @@ class RandomTable():
             raise TypeError(f"Wrong column type {type(column)} given to add_column")
 
         name = name if name is not None else f"{self.name}_{col_name}_{self.next_idx_id():02}"
-        await self.cql.run_async(f"CREATE INDEX {name} on {self.full_name} ({col_name})")
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"CREATE INDEX {name} on {self.full_name} ({col_name})")
         self.indexes.add(name)
         return name
 
     async def drop_index(self, name: str) -> None:
         self.indexes.remove(name)
-        await self.cql.run_async(f"DROP INDEX {self.keyspace}.{name}")
+        assert self.manager.cql is not None
+        await self.manager.cql.run_async(f"DROP INDEX {self.keyspace}.{name}")
         self.removed_indexes.add(name)
 
     def __str__(self):
@@ -234,27 +244,31 @@ class RandomTable():
 
 class RandomTables():
     """A list of managed random tables"""
-    def __init__(self, test_name: str, cql: CassandraSession, keyspace: str):
+    def __init__(self, test_name: str, manager: ManagerClient, keyspace: str):
         self.test_name = test_name
-        self.cql = cql
+        self.manager = manager
         self.keyspace = keyspace
         self.tables: List[RandomTable] = []
         self.removed_tables: List[RandomTable] = []
+        assert self.manager.cql is not None
+        self.manager.cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
+                                 "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
-    async def add_tables(self, ntables: int = 1, ncolumns: int = 5) -> None:
+    async def add_tables(self, ntables: int = 1, ncolumns: int = 5, if_not_exists: bool = False) -> None:
         """Add random tables to the list.
         ntables specifies how many tables.
         ncolumns specifies how many random columns per table."""
-        tables = [RandomTable(self.cql, self.keyspace, ncolumns) for _ in range(ntables)]
-        await asyncio.gather(*(t.create() for t in tables))
+        tables = [RandomTable(self.manager, self.keyspace, ncolumns) for _ in range(ntables)]
+        await asyncio.gather(*(t.create(if_not_exists) for t in tables))
         self.tables.extend(tables)
 
     async def add_table(self, ncolumns: int = None, columns: List[Column] = None,
-                        pks: int = 2, name: str = None) -> RandomTable:
+                        pks: int = 2, name: str = None,
+                        if_not_exists: bool = False) -> RandomTable:
         """Add a random table. See random_tables.RandomTable()"""
-        table = RandomTable(self.cql, self.keyspace, ncolumns=ncolumns, columns=columns,
+        table = RandomTable(self.manager, self.keyspace, ncolumns=ncolumns, columns=columns,
                             pks=pks, name=name)
-        await table.create()
+        await table.create(if_not_exists)
         self.tables.append(table)
         return table
 
@@ -267,21 +281,21 @@ class RandomTables():
     def extend(self, tables: List[RandomTable]) -> None:
         self.tables.extend(tables)
 
-    async def drop_table(self, table: Union[str, RandomTable]) -> RandomTable:
+    async def drop_table(self, table: Union[str, RandomTable], if_exists: bool = False) -> RandomTable:
         """Drop managed RandomTable by name or by RandomTable instance"""
         if isinstance(table, str):
             table = next(t for t in self.tables if table in [t.name, t.full_name])
         else:
             assert isinstance(table, RandomTable), f"Invalid table type {type(table)}"
-        await table.drop()
+        await table.drop(if_exists)
         self.tables.remove(table)
         self.removed_tables.append(table)
         return table
 
-    async def drop_all_tables(self) -> None:
-        """Drop all active managed tables"""
-        await asyncio.gather(*(t.drop() for t in self.tables))
-        self.removed_tables.extend(self.tables)
+    def drop_all(self) -> None:
+        """Drop keyspace (and tables)"""
+        assert self.manager.cql is not None
+        self.manager.cql.execute(f"DROP KEYSPACE {self.keyspace}")
 
     async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
         """Verify schema of all active managed random tables"""
@@ -301,7 +315,8 @@ class RandomTables():
                         f"WHERE keyspace_name = '{self.keyspace}'"
 
         logger.debug(cql_stmt1)
-        res1 = {row.table_name for row in await self.cql.run_async(cql_stmt1)}
+        assert self.manager.cql is not None
+        res1 = {row.table_name for row in await self.manager.cql.run_async(cql_stmt1)}
         assert not tables - res1, f"Tables {tables - res1} not present"
 
         for table_name in tables:
@@ -311,7 +326,8 @@ class RandomTables():
             cql_stmt2 = f"SELECT column_name, position, kind, type FROM system_schema.columns " \
                         f"WHERE keyspace_name = '{self.keyspace}' AND table_name = '{table_name}'"
             logger.debug(cql_stmt2)
-            res2 = {row.column_name: row for row in await self.cql.run_async(cql_stmt2)}
+            assert self.manager.cql is not None
+            res2 = {row.column_name: row for row in await self.manager.cql.run_async(cql_stmt2)}
             assert res2.keys() == cols.keys(), f"Column names for {table_name} do not match " \
                                                f"expected ({', '.join(cols.keys())}) " \
                                                f"got ({', '.join(res2.keys())})"

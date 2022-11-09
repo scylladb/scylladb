@@ -80,14 +80,12 @@ struct write_stats {
     utils::timed_rate_moving_average write_rate_limited_by_replicas;
     utils::timed_rate_moving_average write_rate_limited_by_coordinator;
 
-    utils::timed_rate_moving_average_and_histogram write;
-    utils::time_estimated_histogram estimated_write;
+    utils::timed_rate_moving_average_summary_and_histogram write;
 
     utils::timed_rate_moving_average cas_write_unavailables;
     utils::timed_rate_moving_average cas_write_timeouts;
 
-    utils::timed_rate_moving_average_and_histogram cas_write;
-    utils::time_estimated_histogram estimated_cas_write;
+    utils::timed_rate_moving_average_summary_and_histogram cas_write;
 
     utils::estimated_histogram cas_write_contention;
 
@@ -161,14 +159,10 @@ struct stats : public write_stats {
 
     uint64_t replica_cross_shard_ops = 0;
 
-    utils::timed_rate_moving_average_and_histogram read;
-    utils::timed_rate_moving_average_and_histogram range;
-    utils::time_estimated_histogram estimated_read;
-    utils::time_estimated_histogram estimated_range;
+    utils::timed_rate_moving_average_summary_and_histogram read;
+    utils::timed_rate_moving_average_summary_and_histogram range;
 
-    utils::timed_rate_moving_average_and_histogram cas_read;
-    utils::time_estimated_histogram estimated_cas_read;
-
+    utils::timed_rate_moving_average_summary_and_histogram cas_read;
     uint64_t reads = 0;
     uint64_t foreground_reads = 0; // client still waits for the read
     uint64_t read_retries = 0; // read is retried with new limit

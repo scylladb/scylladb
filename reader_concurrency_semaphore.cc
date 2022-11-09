@@ -37,7 +37,7 @@ reader_permit::resource_units::resource_units(resource_units&& o) noexcept
 }
 
 reader_permit::resource_units::~resource_units() {
-    if (_resources) {
+    if (_resources.non_zero()) {
         reset();
     }
 }
@@ -59,7 +59,7 @@ void reader_permit::resource_units::add(resource_units&& o) {
 
 void reader_permit::resource_units::reset(reader_resources res) {
     _permit.consume(res);
-    if (_resources) {
+    if (_resources.non_zero()) {
         _permit.signal(_resources);
     }
     _resources = res;
@@ -143,7 +143,7 @@ public:
             signal(_base_resources);
         }
 
-        if (_resources) {
+        if (_resources.non_zero()) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
                         description(),
                         _resources.count,
@@ -749,6 +749,25 @@ void reader_concurrency_semaphore::clear_inactive_reads() {
     }
 }
 
+future<> reader_concurrency_semaphore::evict_inactive_reads_for_table(table_id id) noexcept {
+    inactive_reads_type evicted_readers;
+    auto it = _inactive_reads.begin();
+    while (it != _inactive_reads.end()) {
+        auto& ir = *it;
+        ++it;
+        if (ir.reader.schema()->id() == id) {
+            do_detach_inactive_reader(ir, evict_reason::manual);
+            ir.ttl_timer.cancel();
+            ir.unlink();
+            evicted_readers.push_back(ir);
+        }
+    }
+    while (!evicted_readers.empty()) {
+        std::unique_ptr<inactive_read> irp(&evicted_readers.front());
+        co_await irp->reader.close();
+    }
+}
+
 std::runtime_error reader_concurrency_semaphore::stopped_exception() {
     return std::runtime_error(format("{} was stopped", _name));
 }
@@ -771,11 +790,9 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     co_return;
 }
 
-flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
-    auto reader = std::move(ir.reader);
+void reader_concurrency_semaphore::do_detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
     ir.detach();
-    reader.permit()._impl->on_evicted();
-    std::unique_ptr<inactive_read> irp(&ir);
+    ir.reader.permit()._impl->on_evicted();
     try {
         if (ir.notify_handler) {
             ir.notify_handler(reason);
@@ -794,7 +811,12 @@ flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(ina
             break;
     }
     --_stats.inactive_reads;
-    return reader;
+}
+
+flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+    std::unique_ptr<inactive_read> irp(&ir);
+    do_detach_inactive_reader(ir, reason);
+    return std::move(irp->reader);
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
@@ -812,7 +834,7 @@ void reader_concurrency_semaphore::close_reader(flat_mutation_reader_v2 reader) 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
     // Special case: when there is no active reader (based on count) admit one
     // regardless of availability of memory.
-    return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
+    return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
 bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
@@ -842,33 +864,56 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, read
 }
 
 void reader_concurrency_semaphore::evict_readers_in_background() {
+    if (_evicting) {
+        return;
+    }
+    _evicting = true;
     // Evict inactive readers in the background while wait list isn't empty
     // This is safe since stop() closes _gate;
     (void)with_gate(_close_readers_gate, [this] {
         return do_until([this] { return _wait_list.empty() || _inactive_reads.empty(); }, [this] {
             return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close();
         });
-    });
- }
+    }).finally([this] { _evicting = false; });
+}
+
+reader_concurrency_semaphore::can_admit
+reader_concurrency_semaphore::can_admit_read(const reader_permit& permit, require_empty_waitlist wait_list_empty) const noexcept {
+    if (wait_list_empty && !_wait_list.empty()) {
+        return can_admit::no;
+    }
+
+    if (!_ready_list.empty()) {
+        return can_admit::no;
+    }
+
+    if (!all_used_permits_are_stalled()) {
+        return can_admit::no;
+    }
+
+    if (!has_available_units(permit.base_resources())) {
+        if (_inactive_reads.empty()) {
+            return can_admit::no;
+        } else {
+            return can_admit::maybe;
+        }
+    }
+
+    return can_admit::yes;
+}
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, read_func func) {
     if (!_execution_loop_future) {
         _execution_loop_future.emplace(execution_loop());
     }
-    if (!_wait_list.empty() || !_ready_list.empty()) {
-        return enqueue_waiter(std::move(permit), std::move(func));
-    }
 
-    if (!has_available_units(permit.base_resources())) {
+    const auto admit = can_admit_read(permit, require_empty_waitlist::yes);
+    if (admit != can_admit::yes) {
         auto fut = enqueue_waiter(std::move(permit), std::move(func));
-        if (!_inactive_reads.empty()) {
+        if (admit == can_admit::maybe) {
             evict_readers_in_background();
         }
         return fut;
-    }
-
-    if (!all_used_permits_are_stalled()) {
-        return enqueue_waiter(std::move(permit), std::move(func));
     }
 
     permit.on_admission();
@@ -880,7 +925,8 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
 }
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
-    while (!_wait_list.empty() && _ready_list.empty() && has_available_units(_wait_list.front().permit.base_resources()) && all_used_permits_are_stalled()) {
+    auto admit = can_admit::no;
+    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit, require_empty_waitlist::no)) == can_admit::yes) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
@@ -894,6 +940,10 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             x.pr.set_exception(std::current_exception());
         }
         _wait_list.pop_front();
+    }
+    if (admit == can_admit::maybe) {
+        // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
+        evict_readers_in_background();
     }
 }
 
@@ -969,6 +1019,13 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, r
     auto fut = pr.get_future();
     _ready_list.push(entry(std::move(pr), std::move(permit), std::move(func)));
     return fut;
+}
+
+void reader_concurrency_semaphore::set_resources(resources r) {
+    auto delta = r - _initial_resources;
+    _initial_resources = r;
+    _resources += delta;
+    maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {

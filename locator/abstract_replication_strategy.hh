@@ -18,6 +18,7 @@
 #include "snitch_base.hh"
 #include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
+#include "utils/sequenced_set.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -44,6 +45,8 @@ using replication_strategy_config_options = std::map<sstring, sstring>;
 
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
 
+using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
+
 class effective_replication_map;
 class effective_replication_map_factory;
 
@@ -51,7 +54,6 @@ class abstract_replication_strategy {
     friend class effective_replication_map;
 protected:
     replication_strategy_config_options _config_options;
-    snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
     template <typename... Args>
@@ -73,16 +75,19 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     abstract_replication_strategy(
-        snitch_ptr& snitch,
         const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
+
+    // Evaluates to true iff calculate_natural_endpoints
+    // returns different results for different tokens.
+    virtual bool natural_endpoints_depend_on_token() const noexcept { return true; }
 
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
     // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
+    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
     static ptr_type create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options);
@@ -118,9 +123,7 @@ public:
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
 
-    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const;
-
-    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
+    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
 };
 
 // Holds the full replication_map resulting from applying the
@@ -169,12 +172,24 @@ public:
     effective_replication_map(effective_replication_map&&) = default;
     ~effective_replication_map();
 
+    const token_metadata& get_token_metadata() const noexcept {
+        return *_tmptr;
+    }
+
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept {
         return _tmptr;
     }
 
+    const locator::abstract_replication_strategy& get_replication_strategy() const noexcept {
+        return *_rs;
+    }
+
     const replication_map& get_replication_map() const noexcept {
         return _replication_map;
+    }
+
+    const topology& get_topology() const noexcept {
+        return _tmptr->get_topology();
     }
 
     const size_t get_replication_factor() const noexcept {
@@ -213,7 +228,7 @@ public:
     // Note: must be called after token_metadata has been initialized.
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
     get_range_addresses() const;
 
 private:

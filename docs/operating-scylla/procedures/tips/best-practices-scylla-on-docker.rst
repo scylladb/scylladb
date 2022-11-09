@@ -1,9 +1,9 @@
 
-Best Practices for Running Scylla on Docker
-===========================================
+Best Practices for Running ScyllaDB on Docker
+===============================================
 
 
-This is an article on how to use the ScyllaDB Docker image to start up a Scylla node, access ``nodetool`` and ``cqlsh`` utilities, start a cluster of Scylla nodes, configure data volume for storage, configure resource limits of the Docker container, use additional command line flags and overwrite ``scylla.yaml`` settings. Finally, there is an additional section with some basic usage of Scylla within Docker.
+This is an article on how to use the ScyllaDB Docker image to start up a ScyllaDB node, access ``nodetool`` and ``cqlsh`` utilities, start a cluster of ScyllaDB nodes, configure data volume for storage, configure resource limits of the Docker container, use additional command line flags and overwrite ``scylla.yaml`` settings. Finally, there is an additional section with some basic usage of ScyllaDB within Docker.
 
 See also the image description on `Docker Hub <https://hub.docker.com/r/scylladb/scylla/>`_ or our `original blog <http://www.scylladb.com/2016/11/09/scylla-on-docker/>`_.
 
@@ -14,15 +14,15 @@ Please note that these instructions assume that you have configured Docker so th
 Basic Operations
 ^^^^^^^^^^^^^^^^
 
-Starting a Single Scylla Node
-+++++++++++++++++++++++++++++
-To start a single Scylla node instance in a Docker container, run:
+Starting a Single ScyllaDB Node
+++++++++++++++++++++++++++++++++++
+To start a single ScyllaDB node instance in a Docker container, run:
 
 .. code-block:: console
 
  docker run --name some-scylla -d scylladb/scylla
 
-The ``docker run`` command starts a new Docker instance in the background named some-scylla that runs the Scylla server:
+The ``docker run`` command starts a new Docker instance in the background named some-scylla that runs the ScyllaDB server:
 
 .. code-block:: console
 
@@ -34,10 +34,10 @@ The ``docker run`` command starts a new Docker instance in the background named 
 As seen from the ``docker ps`` output, the image exposes ports **7000-7001** (Inter-node RPC), **9042** (CQL), **9160** (Thrift), and **10000** (REST API).
 
 
-Viewing Scylla Server Logs
-++++++++++++++++++++++++++
+Viewing ScyllaDB Server Logs
+++++++++++++++++++++++++++++++
 
-To access Scylla server logs, you can use the ``docker logs`` command:
+To access ScyllaDB server logs, you can use the ``docker logs`` command:
 
 .. code-block:: console
 
@@ -50,7 +50,7 @@ To access Scylla server logs, you can use the ``docker logs`` command:
 
 Checking Server Status with Nodetool
 ++++++++++++++++++++++++++++++++++++
-The Docker image also has Scylla’s utilities installed. :doc:`Nodetool </../../operating-scylla/nodetool/>` is a command line tool for querying and managing a ScyllaDB cluster. The simplest ``nodetool`` command is ``nodetool status``, which displays information about the cluster state:
+The Docker image also has ScyllaDB’s utilities installed. :doc:`Nodetool </../../operating-scylla/nodetool/>` is a command line tool for querying and managing a ScyllaDB cluster. The simplest ``nodetool`` command is ``nodetool status``, which displays information about the cluster state:
 
 .. code-block:: console
 
@@ -64,7 +64,7 @@ The Docker image also has Scylla’s utilities installed. :doc:`Nodetool </../..
 
 Using cqlsh
 +++++++++++
-The ``cqlsh`` tool (CQL Shell) is an interactive Cassandra Query Language (CQL) shell for querying and manipulating data in the Scylla cluster.
+The ``cqlsh`` tool (CQL Shell) is an interactive Cassandra Query Language (CQL) shell for querying and manipulating data in the ScyllaDB cluster.
 
 To start an interactive session, run the following command:
 
@@ -108,9 +108,9 @@ To query when the node is up and running (and view the status of the entire clus
  UN  172.17.0.3  177.48 KB  256     100.0%            097caff5-892d-412f-af78-11d572795d6f  rack1
  UN  172.17.0.2  125 KB     256     100.0%            c1906b2b-ce0c-4890-a9d4-8c360f111ad0  rack1
 
-Restarting Scylla from within the Running Node 
-++++++++++++++++++++++++++++++++++++++++++++++
-The Docker image uses ``supervisord`` to manage Scylla processes. You can restart Scylla in a Docker container using:
+Restarting ScyllaDB from within the Running Node 
++++++++++++++++++++++++++++++++++++++++++++++++++++
+The Docker image uses ``supervisord`` to manage ScyllaDB processes. You can restart ScyllaDB in a Docker container using:
 
 .. code-block:: console
 
@@ -118,15 +118,15 @@ The Docker image uses ``supervisord`` to manage Scylla processes. You can restar
 
 Configuring a Data Volume for Storage
 +++++++++++++++++++++++++++++++++++++
-The default filesystem in Docker is inadequate for anything else than just testing out Scylla, but you can use Docker volumes for improving storage performance.
+The default filesystem in Docker is inadequate for anything else than just testing out ScyllaDB, but you can use Docker volumes for improving storage performance.
 
-To use data volumes, ensure first that it’s on a Scylla-supported filesystem like XFS, then create a Scylla data directory ``/var/lib/scylla`` on the host. This will be used by Scylla container to store all data:
+To use data volumes, ensure first that it’s on a ScyllaDB-supported filesystem like XFS, then create a ScyllaDB data directory ``/var/lib/scylla`` on the host. This will be used by ScyllaDB container to store all data:
 
 .. code-block:: console
 
  sudo mkdir -p /var/lib/scylla/data /var/lib/scylla/commitlog
 
-Then launch Scylla instances using Docker’s ``--volume`` command line option to mount the created host directory as a data volume in the container and disable Scylla’s developer mode to run I/O tuning before starting up the Scylla node.
+Then launch ScyllaDB instances using Docker’s ``--volume`` command line option to mount the created host directory as a data volume in the container and disable ScyllaDB’s developer mode to run I/O tuning before starting up the ScyllaDB node.
 
 .. code-block:: console
 
@@ -134,7 +134,7 @@ Then launch Scylla instances using Docker’s ``--volume`` command line option t
 
 Overriding scylla.yaml with a Master File
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Sometimes, it’s not possible to adjust Scylla-specific settings (including non-network properties, like ``cluster_name`` ) directly from the command line when Scylla is running within Docker.
+Sometimes, it’s not possible to adjust ScyllaDB-specific settings (including non-network properties, like ``cluster_name`` ) directly from the command line when ScyllaDB is running within Docker.
 
 Instead, it may be necessary to incrementally override ``scylla.yaml`` settings by passing an external, master Scylla.yaml file when starting the Docker container for the node.
 
@@ -143,7 +143,7 @@ To do this, you can use the ``--volume (-v)`` command as before to specify the o
 **NOTE**:  you can create a ``master_scylla.yaml`` in current host dir: just copy the file from ``https://github.com/scylladb/scylla/blob/master/conf/scylla.yaml``.
 
 1. On the host, create and edit ``master_scylla.yaml``, for example. Uncomment and change the "cluster_name" parameter.
-2. Start the Scylla node, with the command to override ``scylla.yaml`` with ``master_scylla.yaml`` :
+2. Start the ScyllaDB node, with the command to override ``scylla.yaml`` with ``master_scylla.yaml`` :
 
 .. code-block:: console
 
@@ -166,27 +166,27 @@ To do this, you can use the ``--volume (-v)`` command as before to specify the o
 
 Getting Performance out of your Docker Container
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-By default, our Docker image defaults to a mode where Scylla’s architectural optimizations are not enabled. With these command-line settings, you can introduce incremental changes that boost your Scylla performance on Docker even more.
+By default, our Docker image defaults to a mode where ScyllaDB’s architectural optimizations are not enabled. With these command-line settings, you can introduce incremental changes that boost your ScyllaDB performance on Docker even more.
 
 Configuring Resource Limits
 +++++++++++++++++++++++++++
-Scylla uses all CPUs and memory by default.   To configure resource limits for your Docker container, you can use the ``--smp``, ``--memory``, and ``--cpuset`` command line options documented in the section "Network and command-line settings" below.
+ScyllaDB uses all CPUs and memory by default.   To configure resource limits for your Docker container, you can use the ``--smp``, ``--memory``, and ``--cpuset`` command line options documented in the section "Network and command-line settings" below.
 
-The recommended way to run multiple Scylla instances on the same physical hardware is by statically partitioning all resources. For example, using the ``--cpuset`` option to assign cores ``0`` and ``1`` to one instance, and ``2`` and ``3`` to another.
+The recommended way to run multiple ScyllaDB instances on the same physical hardware is by statically partitioning all resources. For example, using the ``--cpuset`` option to assign cores ``0`` and ``1`` to one instance, and ``2`` and ``3`` to another.
 
-In scenarios in which static partitioning is not desired - like mostly-idle cluster without hard latency requirements, the ``--overprovisioned``  command-line option is recommended. This enables certain optimizations for Scylla to run efficiently in an overprovisioned environment.
+In scenarios in which static partitioning is not desired - like mostly-idle cluster without hard latency requirements, the ``--overprovisioned``  command-line option is recommended. This enables certain optimizations for ScyllaDB to run efficiently in an overprovisioned environment.
 
 **NOTE: You should allocate a minimum of 1.5 GB of RAM per container.**
 
 Network and Command-Line Settings
 +++++++++++++++++++++++++++++++++
-The Scylla image supports many command line options that are passed to the Docker run command.  Keep in mind that these command-line settings override the corresponding settings in your ``scylla.yaml``.
+The ScyllaDB image supports many command line options that are passed to the Docker run command.  Keep in mind that these command-line settings override the corresponding settings in your ``scylla.yaml``.
 
 --seeds SEEDS
 -------------
-The ``--seeds`` command line option configures Scylla's seed nodes. If no ``--seeds`` option is specified, Scylla uses its own IP address as the seed.
+The ``--seeds`` command line option configures ScyllaDB's seed nodes. If no ``--seeds`` option is specified, ScyllaDB uses its own IP address as the seed.
 
-For example, to configure Scylla to run with two seed nodes ``192.168.0.100`` and ``192.168.0.200``.
+For example, to configure ScyllaDB to run with two seed nodes ``192.168.0.100`` and ``192.168.0.200``.
 
 .. code-block:: console
 
@@ -194,9 +194,9 @@ For example, to configure Scylla to run with two seed nodes ``192.168.0.100`` an
 
 --listen-address ADDR
 ---------------------
-The ``--listen-address`` command line option configures the IP address the Scylla instance listens for client connections.
+The ``--listen-address`` command line option configures the IP address the ScyllaDB instance listens for client connections.
 
-For example, to configure Scylla to use listen address ``10.0.0.5``:
+For example, to configure ScyllaDB to use listen address ``10.0.0.5``:
 
 .. code-block:: console
 
@@ -204,9 +204,9 @@ For example, to configure Scylla to use listen address ``10.0.0.5``:
 
 --broadcast-address ADDR
 ------------------------
-The ``--broadcast-address`` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.
+The ``--broadcast-address`` command line option configures the IP address the ScyllaDB instance tells other ScyllaDB nodes in the cluster to connect to.
 
-For example, to configure Scylla to use broadcast address ``10.0.0.5``:
+For example, to configure ScyllaDB to use broadcast address ``10.0.0.5``:
 
 .. code-block:: console
 
@@ -214,9 +214,9 @@ For example, to configure Scylla to use broadcast address ``10.0.0.5``:
 
 --broadcast-rpc-address ADDR
 ----------------------------
-The ``--broadcast-rpc-address`` command line option configures the IP address the Scylla instance tells clients to connect to.
+The ``--broadcast-rpc-address`` command line option configures the IP address the ScyllaDB instance tells clients to connect to.
 
-For example, to configure Scylla to use broadcast RPC address ``10.0.0.5``:
+For example, to configure ScyllaDB to use broadcast RPC address ``10.0.0.5``:
 
 .. code-block:: console
 
@@ -224,9 +224,9 @@ For example, to configure Scylla to use broadcast RPC address ``10.0.0.5``:
 
 --smp COUNT
 -----------
-The ``--smp`` command line option restricts Scylla to ``COUNT`` number of CPUs. The option does not, however, mandate a specific placement of CPUs. See the ``--cpuset`` command line option if you need Scylla to run on specific CPUs.
+The ``--smp`` command line option restricts ScyllaDB to ``COUNT`` number of CPUs. The option does not, however, mandate a specific placement of CPUs. See the ``--cpuset`` command line option if you need ScyllaDB to run on specific CPUs.
 
-For example, to restrict Scylla to 2 CPUs:
+For example, to restrict ScyllaDB to 2 CPUs:
 
 .. code-block:: console
 
@@ -234,9 +234,9 @@ For example, to restrict Scylla to 2 CPUs:
 
 --memory AMOUNT
 ---------------
-The ``--memory`` command line option restricts Scylla to use up to ``AMOUNT`` of memory. The ``AMOUNT`` value supports both ``M`` unit for megabytes and ``G`` unit for gigabytes.
+The ``--memory`` command line option restricts ScyllaDB to use up to ``AMOUNT`` of memory. The ``AMOUNT`` value supports both ``M`` unit for megabytes and ``G`` unit for gigabytes.
 
-For example, to restrict Scylla to 4 GB of memory:
+For example, to restrict ScyllaDB to 4 GB of memory:
 
 .. code-block:: console
 
@@ -246,7 +246,7 @@ For example, to restrict Scylla to 4 GB of memory:
 
 --overprovisioned ENABLE
 ------------------------
-The ``--overprovisioned`` command line option enables or disables optimizations for running Scylla in an overprovisioned environment. If no ``--overprovisioned`` option is specified, Scylla defaults to running with optimizations disabled.
+The ``--overprovisioned`` command line option enables or disables optimizations for running ScyllaDB in an overprovisioned environment. If no ``--overprovisioned`` option is specified, ScyllaDB defaults to running with optimizations enabled.
 
 For example, to enable optimizations for running in an overprovisioned environment:
 
@@ -256,9 +256,9 @@ For example, to enable optimizations for running in an overprovisioned environme
 
 --cpuset CPUSET
 ---------------
-The ``--cpuset`` command line option restricts Scylla to run on only on CPUs specified by ``CPUSET``. The ``CPUSET`` value is either a single CPU (e.g. ``--cpuset 1``), a range (e.g. ``--cpuset 2-3``), or a list (e.g. ``--cpuset 1,2,5``), or a combination of the last two options (e.g. ``--cpuset 1-2,5``).
+The ``--cpuset`` command line option restricts ScyllaDB to run on only on CPUs specified by ``CPUSET``. The ``CPUSET`` value is either a single CPU (e.g. ``--cpuset 1``), a range (e.g. ``--cpuset 2-3``), or a list (e.g. ``--cpuset 1,2,5``), or a combination of the last two options (e.g. ``--cpuset 1-2,5``).
 
-For example, to restrict Scylla to run on physical CPUs 0 to 2 and 4:
+For example, to restrict ScyllaDB to run on physical CPUs 0 to 2 and 4:
 
 .. code-block:: console
 
@@ -266,9 +266,9 @@ For example, to restrict Scylla to run on physical CPUs 0 to 2 and 4:
 
 --developer-mode ENABLE
 -----------------------
-The ``--developer-mode`` command line option enables Scylla's developer mode, which relaxes checks for things like XFS and enables Scylla to run on unsupported configurations (which usually results in suboptimal performance). If no ``--developer-mode`` command line option is defined, Scylla defaults to running with developer mode enabled.
+The ``--developer-mode`` command line option enables ScyllaDB's developer mode, which relaxes checks for things like XFS and enables ScyllaDB to run on unsupported configurations (which usually results in suboptimal performance). If no ``--developer-mode`` command line option is defined, ScyllaDB defaults to running with developer mode enabled.
 
-**It is highly recommended to disable developer mode for production deployments** to ensure Scylla is able to run with maximum performance.
+**It is highly recommended to disable developer mode for production deployments** to ensure ScyllaDB is able to run with maximum performance.
 
 To disable developer mode:
 
@@ -278,7 +278,7 @@ To disable developer mode:
 
 --experimental ENABLE
 ---------------------
-The ``--experimental`` command line option enables Scylla's experimental mode. If no ``--experimental`` command line option is defined, Scylla defaults to running with experimental mode disabled.
+The ``--experimental`` command line option enables Scylla's experimental mode. If no ``--experimental`` command line option is defined, ScyllaDB defaults to running with experimental mode disabled.
 
 **It is highly recommended to disable experimental mode for production deployments.**
 
@@ -291,22 +291,22 @@ For example, to enable experimental mode:
 Other Useful Tips and Tricks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Checking the Current Version of Scylla on the Node
-++++++++++++++++++++++++++++++++++++++++++++++++++
+Checking the Current Version of ScyllaDB on the Node
+++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 .. code-block:: console
 
   docker exec -it some-scylla scylla --version
 
-Using a Local CSV File to Import Data into Scylla
-+++++++++++++++++++++++++++++++++++++++++++++++++
+Using a Local CSV File to Import Data into ScyllaDB
++++++++++++++++++++++++++++++++++++++++++++++++++++++
 First, download the file locally to the node:
 
 .. code-block:: console
 
   sudo docker exec -it some-scylla.2.0.1 curl -o file.csv https://<url>.com/<path>/<path>/<file>.csv
 
-Once you have the ``.csv`` downloaded, you can use the CQL ``COPY FROM`` command as explained here_ to load the data into Scylla.
+Once you have the ``.csv`` downloaded, you can use the CQL ``COPY FROM`` command as explained here_ to load the data into ScyllaDB.
 
 .. _here: /getting-started/cqlsh/
 

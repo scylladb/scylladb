@@ -10,8 +10,8 @@ import time
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index, scylla_inject_error
-from rest_util import new_test_snapshot
+from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
+from rest_util import new_test_snapshot, scylla_inject_error
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -142,8 +142,7 @@ def test_storage_service_keyspace_scrub(cql, this_dc, rest_api):
 def test_storage_service_keyspace_scrub_abort(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t0:
-            url = f"http://{rest_api.host}:{rest_api.port}"
-            with scylla_inject_error(url, "rest_api_keyspace_scrub_abort"):
+            with scylla_inject_error(rest_api, "rest_api_keyspace_scrub_abort"):
                 cql.execute(f"INSERT INTO {t0} (a) VALUES (42)")
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
                 resp.raise_for_status()

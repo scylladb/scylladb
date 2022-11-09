@@ -583,7 +583,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
         co_return;
     }
 
-    if (co_await db::system_keyspace::cdc_is_rewritten()) {
+    if (co_await _sys_ks.local().cdc_is_rewritten()) {
         co_return;
     }
 
@@ -607,13 +607,13 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
             continue;
         }
 
-        times_and_ttls.push_back(time_and_ttl{as_timepoint(s.id()), cdc_opts.ttl()});
+        times_and_ttls.push_back(time_and_ttl{as_timepoint(s.id().uuid()), cdc_opts.ttl()});
     }
 
     if (times_and_ttls.empty()) {
         // There's no point in rewriting old generations' streams (they don't contain any data).
         cdc_log.info("No CDC log tables present, not rewriting stream tables.");
-        co_return co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
+        co_return co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
     }
 
     auto get_num_token_owners = [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); };
@@ -631,7 +631,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
             std::move(get_num_token_owners),
             _abort_src);
 
-    co_await db::system_keyspace::cdc_set_rewritten(last_rewritten);
+    co_await _sys_ks.local().cdc_set_rewritten(last_rewritten);
 }
 
 static void assert_shard_zero(const sstring& where) {
@@ -875,7 +875,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
             { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(new_gen_id) },
             { gms::application_state::STATUS, *status }
     });
-    co_await db::system_keyspace::update_cdc_generation_id(new_gen_id);
+    co_await _sys_ks.local().update_cdc_generation_id(new_gen_id);
 }
 
 future<> generation_service::handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
@@ -1018,7 +1018,7 @@ future<bool> generation_service::do_handle_cdc_generation(cdc::generation_id gen
     // The assumption follows from the requirement of bootstrapping nodes sequentially.
     if (!_gen_id || get_ts(*_gen_id) < get_ts(gen_id)) {
         _gen_id = gen_id;
-        co_await db::system_keyspace::update_cdc_generation_id(gen_id);
+        co_await _sys_ks.local().update_cdc_generation_id(gen_id);
         co_await _gossiper.add_local_application_state(
                 gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(gen_id));
     }

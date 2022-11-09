@@ -9,6 +9,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
+#include "mutation_query.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
@@ -543,7 +544,7 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
 }
 
 future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noexcept {
-    if (_cmd.query_uuid == utils::UUID{} || _cmd.is_first_page) {
+    if (!_cmd.query_uuid || _cmd.is_first_page) {
         return make_ready_future<>();
     }
     try {
@@ -584,7 +585,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
 
 future<> read_context::save_readers(flat_mutation_reader_v2::tracked_buffer unconsumed_buffer, std::optional<detached_compaction_state> compaction_state,
             full_position last_pos) noexcept {
-    if (_cmd.query_uuid == utils::UUID{}) {
+    if (!_cmd.query_uuid) {
         co_return;
     }
 
@@ -831,9 +832,9 @@ private:
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
-            query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state)
+            query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state, uint64_t tombstone_limit)
         : _compaction_state(compaction_state)
-        , _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter)))
+        , _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
         , _builder(s, *_res_builder) { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -880,6 +881,6 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
             [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter, const compact_for_query_state_v2& compaction_state) {
-        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), compaction_state);
+        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter), compaction_state, cmd.tombstone_limit);
     });
 }

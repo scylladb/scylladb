@@ -10,6 +10,7 @@
 
 #include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/statements/strongly_consistent_modification_statement.hh"
 
 namespace cql3 {
 void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
@@ -21,5 +22,10 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
     } else {
         m.set_cell(prefix, column, params.make_dead_cell());
     }
+}
+
+void
+constants::setter::prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update& query) const {
+    query.new_value = *_e;
 }
 }

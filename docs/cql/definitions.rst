@@ -22,8 +22,6 @@
 Definitions
 -----------
 
-.. include:: /rst_include/cql-version-index.rst
-
 .. _conventions:
 
 Conventions

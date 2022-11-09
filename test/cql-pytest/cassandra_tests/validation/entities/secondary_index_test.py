@@ -286,7 +286,6 @@ def testIndexOnCountersInvalid(cql, test_keyspace):
         assert_invalid(cql, table, "CREATE INDEX ON %s(c)")
 
 # Migrated from cql_tests.py:TestCQL.collection_indexing_test()
-@pytest.mark.xfail(reason="issue #2962")
 def testIndexOnCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, v int, l list<int>, s set<text>, m map<text, int>, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s (l)")
@@ -318,7 +317,6 @@ def testIndexOnCollections(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE m CONTAINS 2"), [0, 1])
             assert_empty(execute(cql, table, "SELECT k, v FROM %s  WHERE m CONTAINS 4"))
 
-@pytest.mark.xfail(reason="issue #2962")
 def testSelectOnMultiIndexOnCollectionsWithNull(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, v int, x text, l list<int>, s set<text>, m map<text, int>, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s (x)")
@@ -353,7 +351,6 @@ def testSelectOnMultiIndexOnCollectionsWithNull(cql, test_keyspace):
             assert_empty(execute(cql, table, "SELECT k, v FROM %s  WHERE x = 'x' AND m CONTAINS 4 ALLOW FILTERING"))
 
 # Migrated from cql_tests.py:TestCQL.map_keys_indexing()
-@pytest.mark.xfail(reason="issue #2962")
 def testIndexOnMapKeys(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, v int, m map<text, int>, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s(keys(m))")
@@ -414,7 +411,6 @@ def createAndDropCollectionValuesIndex(cql, keyspace, table, columnName):
     execute(cql, table, f"CREATE INDEX {indexName} on %s(values({columnName}))")
     execute(cql, table, f"DROP INDEX {keyspace}.{indexName}")
 
-@pytest.mark.xfail(reason="issue #2962")
 def testSyntaxVariationsForIndexOnCollectionsValue(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, m map<int, int>, l list<int>, s set<int>, PRIMARY KEY (k))") as table:
         createAndDropCollectionValuesIndex(cql, test_keyspace, table, "m")
@@ -426,7 +422,6 @@ def createAndDropIndexWithQuotedColumnIdentifier(cql, keyspace, table, target):
     execute(cql, table, f"CREATE INDEX {indexName} ON %s({target})")
     execute(cql, table, f"DROP INDEX {keyspace}.{indexName}")
 
-@pytest.mark.xfail(reason="issue #2962")
 def testCreateIndexWithQuotedColumnNames(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(" +
                     " k int," +
@@ -985,7 +980,6 @@ def testIndexOnFrozenCollectionOfUDT(cql, test_keyspace):
             assert_invalid_message(cql, table, "ALLOW FILTERING",
                              "SELECT * FROM %s WHERE v CONTAINS ?", udt1)
 
-@pytest.mark.xfail(reason="issues #2962, #8745")
 def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as t:
         with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, v set<frozen<{t}>>)") as table:
@@ -993,9 +987,8 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             udt1 = a_tuple(1)
             udt2 = a_tuple(2)
             execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 1, {udt1})
-            # Reproduces #2962 - indexing of non-frozen collection is not
-            # yet supported in any form.
-            assert_invalid_message(cql, table, "Cannot create index on keys of column v with non-map type", "CREATE INDEX ON %s (keys(v))")
+
+            assert_invalid_message_re(cql, table, "Cannot create (secondary )?index on keys of column v with non-map type", "CREATE INDEX ON %s (keys(v))")
             assert_invalid_message(cql, table, "full() indexes can only be created on frozen collections", "CREATE INDEX ON %s (full(v))")
             index_name = unique_name()
             # Reproduces #8745:
@@ -1012,8 +1005,11 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v CONTAINS ?", udt2), [2, {udt2}])
 
             execute(cql, table, f"DROP INDEX {test_keyspace}.{index_name}")
-            assert_invalid_message(cql, table, f"Index '{test_keyspace}.{index_name}' doesn't exist",
-                             f"DROP INDEX {test_keyspace}.{index_name}")
+
+            scylla_message = re.escape(f"Index '{index_name}' could not be found in any of the tables of keyspace '{test_keyspace}'")
+            cassandra_message = re.escape(f"Index '{test_keyspace}.{index_name}' doesn't exist")
+            assert_invalid_message_re(cql, table, f'({scylla_message}|{cassandra_message})', f"DROP INDEX {test_keyspace}.{index_name}")
+
             assert_invalid_message(cql, table, "ALLOW FILTERING",
                              "SELECT * FROM %s WHERE v CONTAINS ?", udt1)
 

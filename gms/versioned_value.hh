@@ -12,7 +12,7 @@
 
 #include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
-#include "utils/UUID.hh"
+#include "locator/host_id.hh"
 #include "version_generator.hh"
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
@@ -126,7 +126,7 @@ public:
         return versioned_value(to_sstring(load));
     }
 
-    static versioned_value schema(const utils::UUID &new_version) {
+    static versioned_value schema(const table_schema_version& new_version) {
         return versioned_value(new_version.to_sstring());
     }
 
@@ -147,7 +147,7 @@ public:
                                                make_token_string(tokens)}));
     }
 
-    static versioned_value host_id(const utils::UUID& host_id) {
+    static versioned_value host_id(const locator::host_id& host_id) {
         return versioned_value(host_id.to_sstring());
     }
 
@@ -159,17 +159,17 @@ public:
         return versioned_value(make_cdc_generation_id_string(gen_id));
     }
 
-    static versioned_value removing_nonlocal(const utils::UUID& host_id) {
+    static versioned_value removing_nonlocal(const locator::host_id& host_id) {
         return versioned_value(sstring(REMOVING_TOKEN) +
             sstring(DELIMITER_STR) + host_id.to_sstring());
     }
 
-    static versioned_value removed_nonlocal(const utils::UUID& host_id, int64_t expire_time) {
+    static versioned_value removed_nonlocal(const locator::host_id& host_id, int64_t expire_time) {
         return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) +
             host_id.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expire_time));
     }
 
-    static versioned_value removal_coordinator(const utils::UUID& host_id) {
+    static versioned_value removal_coordinator(const locator::host_id& host_id) {
         return versioned_value(sstring(REMOVAL_COORDINATOR) +
             sstring(DELIMITER_STR) + host_id.to_sstring());
     }

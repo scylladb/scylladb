@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
+
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -33,8 +36,18 @@
 #include "backlog_controller.hh"
 #include "seastarx.hh"
 #include "sstables/exceptions.hh"
+#include "tombstone_gc.hh"
+
+namespace db {
+class system_keyspace;
+}
 
 class compacting_sstable_registration;
+
+class repair_history_map {
+public:
+    boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
+};
 
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
@@ -110,7 +123,7 @@ public:
         shared_future<compaction_stats_opt> _compaction_done = make_ready_future<compaction_stats_opt>();
         exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         sstables::compaction_type _type;
-        utils::UUID _output_run_identifier;
+        sstables::run_id _output_run_identifier;
         gate::holder _gate_holder;
         sstring _description;
 
@@ -134,7 +147,7 @@ public:
         // Return true if the task isn't stopped
         // and the compaction manager allows proceeding.
         inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
-        void setup_new_compaction(utils::UUID output_run_id = utils::null_uuid());
+        void setup_new_compaction(sstables::run_id output_run_id = sstables::run_id::create_null_id());
         void finish_compaction(state finish_state = state::done) noexcept;
 
         // Compaction manager stop itself if it finds an storage I/O error which results in
@@ -179,7 +192,7 @@ public:
         bool generating_output_run() const noexcept {
             return compaction_running() && _output_run_identifier;
         }
-        const utils::UUID& output_run_id() const noexcept {
+        const sstables::run_id& output_run_id() const noexcept {
             return _output_run_identifier;
         }
 
@@ -276,6 +289,8 @@ private:
     // being picked more than once.
     seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
 
+    seastar::shared_ptr<db::system_keyspace> _sys_ks;
+
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
@@ -294,6 +309,9 @@ private:
 
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
+
+    per_table_history_maps _repair_history_maps;
+    tombstone_gc_state _tombstone_gc_state;
 private:
     future<compaction_stats_opt> perform_task(shared_ptr<task>);
 
@@ -470,6 +488,9 @@ public:
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
 
+    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    void unplug_system_keyspace() noexcept;
+
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
@@ -477,7 +498,7 @@ public:
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
-    future<> remove(compaction::table_state& t);
+    future<> remove(compaction::table_state& t) noexcept;
 
     const stats& get_stats() const {
         return _stats;
@@ -494,7 +515,7 @@ public:
     future<> stop_compaction(sstring type, compaction::table_state* table = nullptr);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
+    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -507,6 +528,14 @@ public:
     static sstables::compaction_data create_compaction_data();
 
     compaction::strategy_control& get_strategy_control() const noexcept;
+
+    tombstone_gc_state& get_tombstone_gc_state() noexcept {
+        return _tombstone_gc_state;
+    };
+
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
+        return _tombstone_gc_state;
+    };
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

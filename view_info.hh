@@ -24,6 +24,7 @@ class view_info final {
     mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable std::optional<query::partition_slice> _partition_slice;
     db::view::base_info_ptr _base_info;
+    mutable bool _has_computed_column_depending_on_base_non_primary_key;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info);
 
@@ -31,7 +32,7 @@ public:
         return _raw;
     }
 
-    const utils::UUID& base_id() const {
+    const table_id& base_id() const {
         return _raw.base_id();
     }
 
@@ -52,6 +53,9 @@ public:
     const column_definition* view_column(const schema& base, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
     bool has_base_non_pk_columns_in_view_pk() const;
+    bool has_computed_column_depending_on_base_non_primary_key() const {
+        return _has_computed_column_depending_on_base_non_primary_key;
+    }
 
     /// Returns a pointer to the base_dependent_view_info which matches the current
     /// schema of the base table.

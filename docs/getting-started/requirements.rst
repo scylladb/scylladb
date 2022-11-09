@@ -1,7 +1,7 @@
 
-===================
-Scylla Requirements
-===================
+=====================
+ScyllaDB Requirements
+=====================
 
 .. toctree::
    :maxdepth: 2
@@ -22,9 +22,9 @@ Scylla Requirements
               </div>
               <div class="medium-9 columns">
 
-* :doc:`Scylla System Requirements Guide</getting-started/system-requirements/>`
+* :doc:`ScyllaDB System Requirements Guide</getting-started/system-requirements/>`
 * :doc:`OS Support by Platform and Version</getting-started/os-support/>`
-* :doc:`Running Scylla in a shared environment </getting-started/scylla-in-a-shared-environment>`
+* :doc:`Running ScyllaDB in a Shared Environment </getting-started/scylla-in-a-shared-environment>`
 
 .. raw:: html
 

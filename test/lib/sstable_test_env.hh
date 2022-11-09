@@ -22,32 +22,45 @@ namespace sstables {
 
 class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
+    std::optional<size_t> _promoted_index_block_size;
 public:
     virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
-        return sstables_manager::configure_writer(std::move(origin));
+        auto ret = sstables_manager::configure_writer(std::move(origin));
+        if (_promoted_index_block_size) {
+            ret.promoted_index_block_size = *_promoted_index_block_size;
+        }
+        return ret;
+    }
+
+    void set_promoted_index_block_size(size_t promoted_index_block_size) {
+        _promoted_index_block_size = promoted_index_block_size;
     }
 };
 
 class test_env {
-    std::unique_ptr<cache_tracker> _cache_tracker;
-    std::unique_ptr<test_env_sstables_manager> _mgr;
-    std::unique_ptr<reader_concurrency_semaphore> _semaphore;
+    struct impl {
+        cache_tracker cache_tracker;
+        test_env_sstables_manager mgr;
+        reader_concurrency_semaphore semaphore;
+
+        impl();
+        impl(impl&&) = delete;
+        impl(const impl&) = delete;
+    };
+    std::unique_ptr<impl> _impl;
 public:
-    explicit test_env()
-        : _cache_tracker(std::make_unique<cache_tracker>())
-        , _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service, *_cache_tracker))
-        , _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")) { }
+    explicit test_env() : _impl(std::make_unique<impl>()) { }
 
     future<> stop() {
-        return _mgr->close().finally([this] {
-            return _semaphore->stop();
+        return _impl->mgr.close().finally([this] {
+            return _impl->semaphore.stop();
         });
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        return _mgr->make_sstable(std::move(schema), dir, generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
+        return _impl->mgr.make_sstable(std::move(schema), dir, generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     struct sst_not_found : public std::runtime_error {
@@ -67,13 +80,17 @@ public:
     // looks up the sstable in the given dir
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
 
-    test_env_sstables_manager& manager() { return *_mgr; }
-    reader_concurrency_semaphore& semaphore() { return *_semaphore; }
+    test_env_sstables_manager& manager() { return _impl->mgr; }
+    reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
-        return _semaphore->make_tracking_only_permit(s, n, timeout);
+        return _impl->semaphore.make_tracking_only_permit(s, n, timeout);
     }
     reader_permit make_reader_permit(db::timeout_clock::time_point timeout = db::no_timeout) {
-        return _semaphore->make_tracking_only_permit(nullptr, "test", timeout);
+        return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout);
+    }
+
+    replica::table::config make_table_config() {
+        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
     }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {

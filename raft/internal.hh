@@ -61,41 +61,12 @@ public:
 };
 
 template<typename Tag>
-struct tagged_id {
-    utils::UUID id;
-    bool operator==(const tagged_id& o) const {
-        return id == o.id;
-    }
-    bool operator<(const tagged_id& o) const {
-        return id < o.id;
-    }
-    explicit operator bool() const {
-        // The default constructor sets the id to nil, which is
-        // guaranteed to not match any valid id.
-        return id != utils::UUID();
-    }
-    static tagged_id create_random_id() { return tagged_id{utils::make_random_uuid()}; }
-    explicit tagged_id(const utils::UUID& uuid) : id(uuid) {}
-    tagged_id() = default;
-};
-
-template<typename Tag>
-std::ostream& operator<<(std::ostream& os, const tagged_id<Tag>& id) {
-    os << id.id;
-    return os;
-}
+using tagged_id = utils::tagged_uuid<Tag>;
 
 } // end of namespace internal
 } // end of namespace raft
 
 namespace std {
-
-template<typename Tag>
-struct hash<raft::internal::tagged_id<Tag>> {
-    size_t operator()(const raft::internal::tagged_id<Tag>& id) const {
-        return hash<utils::UUID>()(id.id);
-    }
-};
 
 template<typename Tag>
 struct hash<raft::internal::tagged_uint64<Tag>> {

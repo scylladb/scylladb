@@ -120,10 +120,6 @@ You can clean snapshots by using :doc:`nodetool clearsnapshot </operating-scylla
   
 Features
 --------
-Will Scylla have a certain feature in an upcoming release?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Check the `Roadmap <http://www.scylladb.com/technology/status/>`_ page for features scheduled for our GA release.
-
 I want to try out new features.  How do I enable experimental mode?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 You need to add the line :code:`experimental: true`  to your :code:`scylla.yaml` file.

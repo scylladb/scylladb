@@ -52,6 +52,7 @@
 #include "readers/filtering.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
+#include "keys.hh"
 
 namespace sstables {
 
@@ -277,6 +278,18 @@ class compacted_fragments_writer {
     stop_func_t _stop_compaction_writer;
     std::optional<utils::observer<>> _stop_request_observer;
     bool _unclosed_partition = false;
+    struct partition_state {
+        dht::decorated_key_opt dk;
+        // Partition tombstone is saved for the purpose of replicating it to every fragment storing a partition pL.
+        // Then when reading from the SSTable run, we won't unnecessarily have to open >= 2 fragments, the one which
+        // contains the tombstone and another one(s) that has the partition slice being queried.
+        ::tombstone tombstone;
+        // Used to determine whether any active tombstones need closing at EOS.
+        ::tombstone current_emitted_tombstone;
+        // Track last emitted clustering row, which will be used to close active tombstone if splitting partition
+        position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
+        bool is_splitting_partition = false;
+    } _current_partition;
 private:
     inline void maybe_abort_compaction();
 
@@ -286,6 +299,13 @@ private:
             consume_end_of_stream();
         });
     }
+
+    void stop_current_writer();
+    bool can_split_large_partition() const;
+    void track_last_position(position_in_partition_view pos);
+    void split_large_partition();
+    void do_consume_new_partition(const dht::decorated_key& dk);
+    stop_iteration do_consume_end_of_partition();
 public:
     explicit compacted_fragments_writer(compaction& c, creator_func_t cpw, stop_func_t scw)
             : _c(c)
@@ -304,7 +324,7 @@ public:
 
     void consume_new_partition(const dht::decorated_key& dk);
 
-    void consume(tombstone t) { _compaction_writer->writer.consume(t); }
+    void consume(tombstone t);
     stop_iteration consume(static_row&& sr, tombstone, bool) {
         maybe_abort_compaction();
         return _compaction_writer->writer.consume(std::move(sr));
@@ -312,17 +332,11 @@ public:
     stop_iteration consume(static_row&& sr) {
         return consume(std::move(sr), tombstone{}, bool{});
     }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
-        maybe_abort_compaction();
-        return _compaction_writer->writer.consume(std::move(cr));
-    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool);
     stop_iteration consume(clustering_row&& cr) {
         return consume(std::move(cr), row_tombstone{}, bool{});
     }
-    stop_iteration consume(range_tombstone_change&& rtc) {
-        maybe_abort_compaction();
-        return _compaction_writer->writer.consume(std::move(rtc));
-    }
+    stop_iteration consume(range_tombstone_change&& rtc);
 
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
@@ -448,10 +462,11 @@ protected:
     uint64_t _estimated_partitions = 0;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
+    bool _can_split_large_partition = false;
     bool _contains_multi_fragment_runs = false;
     mutation_source_metadata _ms_metadata = {};
     compaction_sstable_replacer_fn _replacer;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     ::io_priority_class _io_priority;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstable_set> _sstable_set;
@@ -479,6 +494,7 @@ protected:
         , _type(descriptor.options.type())
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
+        , _can_split_large_partition(descriptor.can_split_large_partition)
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
         , _io_priority(descriptor.io_priority)
@@ -489,7 +505,7 @@ protected:
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
-        std::unordered_set<utils::UUID> ssts_run_ids;
+        std::unordered_set<run_id> ssts_run_ids;
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
@@ -684,7 +700,8 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func()));
+        const auto& gc_state = _table_s.get_tombstone_gc_state();
+        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
     }
 
     future<> consume() {
@@ -704,6 +721,7 @@ private:
                     using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
+                        _table_s.get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
                         get_gc_compacted_fragments_writer());
 
@@ -713,6 +731,7 @@ private:
                 using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
+                    _table_s.get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));
@@ -864,7 +883,51 @@ void compacted_fragments_writer::maybe_abort_compaction() {
     }
 }
 
-void compacted_fragments_writer::consume_new_partition(const dht::decorated_key& dk) {
+void compacted_fragments_writer::stop_current_writer() {
+    // stop sstable writer being currently used.
+    _stop_compaction_writer(&*_compaction_writer);
+    _compaction_writer = std::nullopt;
+}
+
+bool compacted_fragments_writer::can_split_large_partition() const {
+    return _c._can_split_large_partition;
+}
+
+void compacted_fragments_writer::track_last_position(position_in_partition_view pos) {
+    if (can_split_large_partition()) {
+        _current_partition.last_pos = pos;
+    }
+}
+
+void compacted_fragments_writer::split_large_partition() {
+    // Closes the active range tombstone if needed, before emitting partition end.
+    // after_key(last_pos) is used for both closing and re-opening the active tombstone, which
+    // will result in current fragment storing an inclusive end bound for last pos, and the
+    // next fragment storing an exclusive start bound for last pos. This is very important
+    // for not losing information on the range tombstone.
+    auto after_last_pos = position_in_partition::after_key(_current_partition.last_pos.key());
+    if (_current_partition.current_emitted_tombstone) {
+        auto rtc = range_tombstone_change(after_last_pos, tombstone{});
+        _c.log_debug("Closing active tombstone {} with {} for partition {}", _current_partition.current_emitted_tombstone, rtc, *_current_partition.dk);
+        _compaction_writer->writer.consume(std::move(rtc));
+    }
+    _c.log_debug("Splitting large partition {} in order to respect SSTable size limit of {}", *_current_partition.dk, pretty_printed_data_size(_c._max_sstable_size));
+    // Close partition in current writer, and open it again in a new writer.
+    do_consume_end_of_partition();
+    stop_current_writer();
+    do_consume_new_partition(*_current_partition.dk);
+    // Replicate partition tombstone to every fragment, allowing the SSTable run reader
+    // to open a single fragment during the read.
+    if (_current_partition.tombstone) {
+        consume(_current_partition.tombstone);
+    }
+    if (_current_partition.current_emitted_tombstone) {
+        _compaction_writer->writer.consume(range_tombstone_change(after_last_pos, _current_partition.current_emitted_tombstone));
+    }
+    _current_partition.is_splitting_partition = false;
+}
+
+void compacted_fragments_writer::do_consume_new_partition(const dht::decorated_key& dk) {
     maybe_abort_compaction();
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
@@ -872,17 +935,55 @@ void compacted_fragments_writer::consume_new_partition(const dht::decorated_key&
 
     _c.on_new_partition();
     _compaction_writer->writer.consume_new_partition(dk);
-    _c._cdata.total_keys_written++;
     _unclosed_partition = true;
 }
 
-stop_iteration compacted_fragments_writer::consume_end_of_partition() {
-    auto ret = _compaction_writer->writer.consume_end_of_partition();
+stop_iteration compacted_fragments_writer::do_consume_end_of_partition() {
     _unclosed_partition = false;
+    return _compaction_writer->writer.consume_end_of_partition();
+}
+
+void compacted_fragments_writer::consume_new_partition(const dht::decorated_key& dk) {
+    _current_partition = {
+        .dk = dk,
+        .tombstone = tombstone(),
+        .current_emitted_tombstone = tombstone(),
+        .last_pos = position_in_partition(position_in_partition::partition_start_tag_t()),
+        .is_splitting_partition = false
+    };
+    do_consume_new_partition(dk);
+    _c._cdata.total_keys_written++;
+}
+
+void compacted_fragments_writer::consume(tombstone t) {
+    _current_partition.tombstone = t;
+    _compaction_writer->writer.consume(t);
+}
+
+stop_iteration compacted_fragments_writer::consume(clustering_row&& cr, row_tombstone, bool) {
+    maybe_abort_compaction();
+    if (_current_partition.is_splitting_partition) [[unlikely]] {
+        split_large_partition();
+    }
+    track_last_position(cr.position());
+    auto ret = _compaction_writer->writer.consume(std::move(cr));
+    if (can_split_large_partition() && ret == stop_iteration::yes) [[unlikely]] {
+        _current_partition.is_splitting_partition = true;
+    }
+    return stop_iteration::no;
+}
+
+stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc) {
+    maybe_abort_compaction();
+    _current_partition.current_emitted_tombstone = rtc.tombstone();
+    track_last_position(rtc.position());
+    return _compaction_writer->writer.consume(std::move(rtc));
+}
+
+stop_iteration compacted_fragments_writer::consume_end_of_partition() {
+    auto ret = do_consume_end_of_partition();
     if (ret == stop_iteration::yes) {
-        // stop sstable writer being currently used.
-        _stop_compaction_writer(&*_compaction_writer);
-        _compaction_writer = std::nullopt;
+        stop_current_writer();
     }
     return ret;
 }
@@ -1183,9 +1284,9 @@ public:
                 type,
                 schema.ks_name(),
                 schema.cf_name(),
-                partition_key_to_string(new_key.key(), schema),
+                new_key.key().with_schema(schema),
                 new_key,
-                partition_key_to_string(current_key.key(), schema),
+                current_key.key().with_schema(schema),
                 current_key,
                 action.empty() ? "" : "; ",
                 action);
@@ -1198,9 +1299,9 @@ public:
                 type,
                 schema.ks_name(),
                 schema.cf_name(),
-                partition_key_to_string(new_key.key(), schema),
+                new_key.key().with_schema(schema),
                 new_key,
-                partition_key_to_string(current_key.key(), schema),
+                current_key.key().with_schema(schema),
                 current_key,
                 action.empty() ? "" : "; ",
                 action);
@@ -1218,7 +1319,7 @@ public:
                 mf.mutation_fragment_kind(),
                 mf.has_key() ? format(" with key {}", mf.key().with_schema(schema)) : "",
                 mf.position(),
-                partition_key_to_string(key.key(), schema),
+                key.key().with_schema(schema),
                 key,
                 prev_pos.region(),
                 prev_pos.has_key() ? format(" with key {}", prev_pos.key().with_schema(schema)) : "",
@@ -1230,14 +1331,10 @@ public:
         const auto& schema = validator.schema();
         const auto& key = validator.previous_partition_key();
         clogger.error("[{} compaction {}.{}] Invalid end-of-stream, last partition {} ({}) didn't end with a partition-end fragment{}{}",
-                type, schema.ks_name(), schema.cf_name(), partition_key_to_string(key.key(), schema), key, action.empty() ? "" : "; ", action);
+                type, schema.ks_name(), schema.cf_name(), key.key().with_schema(schema), key, action.empty() ? "" : "; ", action);
     }
 
 private:
-    static sstring partition_key_to_string(const partition_key& key, const ::schema& s) {
-        sstring ret = format("{}", key.with_schema(s));
-        return utils::utf8::validate((const uint8_t*)ret.data(), ret.size()) ? ret : "<non-utf8-key>";
-    }
 
     class reader : public flat_mutation_reader_v2::impl {
         using skip = bool_class<class skip_tag>;
@@ -1249,17 +1346,20 @@ private:
         uint64_t& _validation_errors;
 
     private:
-        void maybe_abort_scrub() {
+        void maybe_abort_scrub(std::function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
+                report_error();
                 throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
             ++_validation_errors;
         }
 
         void on_unexpected_partition_start(const mutation_fragment_v2& ps) {
-            maybe_abort_scrub();
-            report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
-                    "Rectifying by adding assumed missing partition-end");
+            auto report_fn = [this, &ps] (std::string_view action = "") {
+                report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(), action);
+            };
+            maybe_abort_scrub(report_fn);
+            report_fn("Rectifying by adding assumed missing partition-end");
 
             auto pe = mutation_fragment_v2(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
@@ -1279,20 +1379,26 @@ private:
         }
 
         skip on_invalid_partition(const dht::decorated_key& new_key) {
-            maybe_abort_scrub();
+            auto report_fn = [this, &new_key] (std::string_view action = "") {
+                report_invalid_partition(compaction_type::Scrub, _validator, new_key, action);
+            };
+            maybe_abort_scrub(report_fn);
             if (_scrub_mode == compaction_type_options::scrub::mode::segregate) {
-                report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Detected");
+                report_fn("Detected");
                 _validator.reset(new_key);
                 // Let the segregating interposer consumer handle this.
                 return skip::no;
             }
-            report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Skipping");
+            report_fn("Skipping");
             _skip_to_next_partition = true;
             return skip::yes;
         }
 
         skip on_invalid_mutation_fragment(const mutation_fragment_v2& mf) {
-            maybe_abort_scrub();
+            auto report_fn = [this, &mf] (std::string_view action = "") {
+                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "");
+            };
+            maybe_abort_scrub(report_fn);
 
             const auto& key = _validator.previous_partition_key();
 
@@ -1307,8 +1413,7 @@ private:
             // The only case a partition end is invalid is when it comes after
             // another partition end, and we can just drop it in that case.
             if (!mf.is_end_of_partition() && _scrub_mode == compaction_type_options::scrub::mode::segregate) {
-                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf,
-                        "Injecting partition start/end to segregate out-of-order fragment");
+                report_fn("Injecting partition start/end to segregate out-of-order fragment");
                 push_mutation_fragment(*_schema, _permit, partition_end{});
 
                 // We loose the partition tombstone if any, but it will be
@@ -1321,16 +1426,19 @@ private:
                 return skip::no;
             }
 
-            report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "Skipping");
+            report_fn("Skipping");
 
             return skip::yes;
         }
 
         void on_invalid_end_of_stream() {
-            maybe_abort_scrub();
+            auto report_fn = [this] (std::string_view action = "") {
+                report_invalid_end_of_stream(compaction_type::Scrub, _validator, action);
+            };
+            maybe_abort_scrub(report_fn);
             // Handle missing partition_end
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
-            report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
+            report_fn("Rectifying by adding missing partition-end to the end of the stream");
         }
 
         void fill_buffer_from_underlying() {
@@ -1509,7 +1617,7 @@ class resharding_compaction final : public compaction {
         uint64_t estimated_partitions = 0;
     };
     std::vector<estimated_values> _estimation_per_shard;
-    std::vector<utils::UUID> _run_identifiers;
+    std::vector<run_id> _run_identifiers;
 private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
@@ -1533,7 +1641,7 @@ public:
             }
         }
         for (auto i : boost::irange(0u, smp::count)) {
-            _run_identifiers[i] = utils::make_random_uuid();
+            _run_identifiers[i] = run_id::create_random_id();
         }
     }
 
@@ -1766,7 +1874,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
 
     for (auto& sstable : overlapping) {
-        auto gc_before = sstable->get_gc_before_for_fully_expire(compaction_time);
+        auto gc_before = sstable->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_state());
         if (sstable->get_max_local_deletion_time() >= gc_before) {
             min_timestamp = std::min(min_timestamp, sstable->get_stats_metadata().min_timestamp);
         }
@@ -1785,7 +1893,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 
     // SStables that do not contain live data is added to list of possibly expired sstables.
     for (auto& candidate : compacting) {
-        auto gc_before = candidate->get_gc_before_for_fully_expire(compaction_time);
+        auto gc_before = candidate->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_state());
         clogger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
                     candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
         // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
@@ -1816,7 +1924,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 }
 
 unsigned compaction_descriptor::fan_in() const {
-    return boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
+    return boost::copy_range<std::unordered_set<run_id>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
 }
 
 uint64_t compaction_descriptor::sstables_size() const {

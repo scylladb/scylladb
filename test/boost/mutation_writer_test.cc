@@ -373,12 +373,12 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     const auto now = gc_clock::now();
     for (auto& m : muts) {
-        m.partition().compact_for_compaction(*random_schema.schema(), always_gc, m.decorated_key(), now);
+        m.partition().compact_for_compaction(*random_schema.schema(), always_gc, m.decorated_key(), now, tombstone_gc_state(nullptr));
     }
 
     std::vector<mutation> combined_mutations;
     while (auto m = read_mutation_from_flat_mutation_reader(reader).get0()) {
-        m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now);
+        m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now, tombstone_gc_state(nullptr));
         combined_mutations.emplace_back(std::move(*m));
     }
 

@@ -12,10 +12,6 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-std::ostream& operator<<(std::ostream& os, const counter_id& id) {
-    return os << id.to_uuid();
-}
-
 std::ostream& operator<<(std::ostream& os, counter_shard_view csv) {
     return os << "{global_shard id: " << csv.id() << " value: " << csv.value()
               << " clock: " << csv.logical_clock() << "}";
@@ -174,8 +170,10 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
 }
 
 
-void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, utils::UUID local_id) {
+void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, locator::host_id local_host_id) {
     // FIXME: allow current_state to be frozen_mutation
+
+    utils::UUID local_id = local_host_id.uuid();
 
     auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& cells) {
         cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {

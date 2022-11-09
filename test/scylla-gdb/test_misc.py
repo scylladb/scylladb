@@ -27,8 +27,8 @@ def test_compaction_tasks(gdb):
 def test_databases(gdb):
     scylla(gdb, 'databases')
 
-def test_column_families(gdb):
-    scylla(gdb, 'column_families')
+def test_tables(gdb):
+    scylla(gdb, 'tables')
 
 def test_keyspaces(gdb):
     scylla(gdb, 'keyspaces')
@@ -155,5 +155,8 @@ def test_sstable_summary(gdb, sstable):
 
 def test_sstable_summary(gdb, sstable):
     scylla(gdb, f'sstable-index-cache {sstable}')
+
+def test_read_stats(gdb, sstable):
+    scylla(gdb, f'read-stats')
 
 # FIXME: need a simple test for lsa-segment

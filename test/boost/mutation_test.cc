@@ -53,6 +53,8 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "mutation_rebuilder.hh"
+#include "mutation_partition.hh"
+#include "clustering_key_filter.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 
@@ -426,7 +428,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         const bytes blob(blob_size, 'a');
 
         const auto stats_before = memory::stats();
-        const memory::scoped_large_allocation_warning_threshold _{128 * 1024};
+        const memory::scoped_large_allocation_warning_threshold _{128 * 1024 + 1};
 
         const api::timestamp_type ts1 = 1;
         const api::timestamp_type ts2 = 2;
@@ -488,7 +490,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -540,7 +542,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
@@ -622,7 +624,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -1238,7 +1240,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now);
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state(nullptr));
     return result;
 }
 
@@ -1632,7 +1634,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now());
+    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
@@ -1824,8 +1826,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             if (s != m2.schema()) {
                 return;
             }
-            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now);
-            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now);
+            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, tombstone_gc_state(nullptr));
+            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, tombstone_gc_state(nullptr));
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
@@ -1850,6 +1852,49 @@ SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
     assert_that(m3).is_continuous(position_range::all_clustered_rows(), is_continuous::yes);
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_commutativity_and_associativity) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    gen.set_key_cardinality(7);
+
+    for (int i = 0; i < 10; ++i) {
+        mutation m1 = gen();
+        m1.partition().make_fully_continuous();
+        mutation m2 = gen();
+        m2.partition().make_fully_continuous();
+        mutation m3 = gen();
+        m3.partition().make_fully_continuous();
+
+        assert_that(m1 + m2 + m3)
+            .is_equal_to(m1 + m3 + m2)
+            .is_equal_to(m2 + m1 + m3)
+            .is_equal_to(m2 + m3 + m1)
+            .is_equal_to(m3 + m1 + m2)
+            .is_equal_to(m3 + m2 + m1);
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_merging) {
+    simple_schema table;
+    auto&& s = *table.schema();
+
+    row r1;
+    table.set_cell(r1, "v1");
+
+    row r2;
+    table.set_cell(r2, "v2");
+
+    row r3;
+    table.set_cell(r3, "v3");
+
+    r2.apply_monotonically(s, column_kind::regular_column, std::move(r1));
+
+    auto r3_backup = row(s, column_kind::regular_column, r3);
+    r1.apply_monotonically(s, column_kind::regular_column, std::move(r3));
+    BOOST_REQUIRE(r1.equal(column_kind::regular_column, s, r3_backup, s));
 }
 
 SEASTAR_TEST_CASE(test_continuity_merging) {
@@ -2292,7 +2337,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         std::vector<mutation> mutations) {
     auto never_gc = std::function<bool(tombstone)>([] (tombstone) { return false; });
     for (auto& mut : mutations) {
-        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time);
+        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }
 
     auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
@@ -2305,6 +2350,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             schema,
             query_time,
             get_max_purgeable,
+            tombstone_gc_state(nullptr),
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
@@ -2564,6 +2610,19 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
         auto mut = muts.front();
         validating_consumer consumer(*reverse_schema);
         std::move(mut).consume(consumer, consume_in_reverse::yes);
+    }
+
+    BOOST_TEST_MESSAGE("Forward gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*forward_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::no).get();
+    }
+    BOOST_TEST_MESSAGE("Reverse gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*reverse_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::yes).get();
     }
 }
 

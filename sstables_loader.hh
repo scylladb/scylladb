@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 
 using namespace seastar;
@@ -45,7 +45,7 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
     bool _loading_new_sstables = false;
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
-            utils::UUID table_id, std::vector<sstables::shared_sstable> sstables,
+            table_id, std::vector<sstables::shared_sstable> sstables,
             bool primary_replica_only);
 
 public:

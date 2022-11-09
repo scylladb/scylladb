@@ -138,6 +138,15 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         std::vector<managed_ref<int>> allocated1;
         std::vector<managed_ref<int>> allocated2;
 
+        auto clear_vectors = defer([&] {
+            with_allocator(reg1.allocator(), [&] {
+                allocated1.clear();
+            });
+            with_allocator(reg2.allocator(), [&] {
+                allocated2.clear();
+            });
+        });
+
         int count = 32 * 1024 * 4 * 2;
         
         with_allocator(reg1.allocator(), [&] {
@@ -189,14 +198,6 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) >= quarter);
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) < quarter);
-
-        with_allocator(reg2.allocator(), [&] () mutable {
-            allocated2.clear();
-        });
-
-        with_allocator(reg1.allocator(), [&] () mutable {
-            allocated1.clear();
-        });
     });
 }
 
@@ -748,10 +749,10 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     std::vector<managed_bytes> std_allocs;
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
-        auto compacted_pre = logalloc::memory_compacted();
+        auto compacted_pre = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (pre)\n", compacted_pre, evictable_allocs.size());
         std_allocs.emplace_back(managed_bytes::initialized_later(), std_alloc_size);
-        auto compacted_post = logalloc::memory_compacted();
+        auto compacted_post = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
         BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
     

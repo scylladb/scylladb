@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include "utils/UUID.hh"
+
 #include <seastar/core/sharded.hh>
 
 using namespace seastar;
@@ -21,7 +23,7 @@ class pinger {
 public:
     // Opaque endpoint ID.
     // A specific implementation of `pinger` maps those IDs to 'real' addresses.
-    using endpoint_id = unsigned;
+    using endpoint_id = utils::UUID;
 
     // Send a message to `ep` and wait until it responds.
     // The wait can be aborted using `as`.

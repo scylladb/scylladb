@@ -953,7 +953,7 @@ void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& sem
     for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
-        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time);
+        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time, tombstone_gc_state(nullptr));
         assert_that(ms.make_reader_v2(m.schema(), semaphore.make_permit())).produces_compacted(copy, query_time);
     });
 }
@@ -1444,6 +1444,21 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
                                   mutation_reader::forwarding::no))
             .produces_partition_start(pkey)
             .produces_end_of_stream()
+            .fast_forward_to(position_range(
+                    position_in_partition::after_key(s.make_ckey(0)),
+                    position_in_partition::for_key(s.make_ckey(2))))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(2)), {}))
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
 
             .fast_forward_to(position_range(
                     position_in_partition::before_key(s.make_ckey(0)),
@@ -1584,7 +1599,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         const auto query_time = gc_clock::now();
 
         mutation m_compacted(m);
-        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time);
+        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time, tombstone_gc_state(nullptr));
 
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
@@ -1941,13 +1956,19 @@ class random_mutation_generator::impl {
     };
 
 private:
+    // Set to true in order to produce mutations which are easier to work with during debugging.
+    static const bool debuggable = false;
+
+    // The "333" prefix is so that it's easily distinguishable from other numbers in the printout.
+    static const api::timestamp_type min_timestamp = debuggable ? 3330000 : ::api::min_timestamp;
+
     friend class random_mutation_generator;
     generate_counters _generate_counters;
     local_shard_only _local_shard_only;
     generate_uncompactable _uncompactable;
-    const size_t _external_blob_size = 128; // Should be enough to force use of external bytes storage
-    const size_t n_blobs = 1024;
-    const column_id column_count = 64;
+    const size_t _external_blob_size = debuggable ? 4 : 128; // Should be enough to force use of external bytes storage
+    const size_t n_blobs = debuggable ? 32 : 1024;
+    const column_id column_count = debuggable ? 3 : 64;
     std::mt19937 _gen;
     schema_ptr _schema;
     std::vector<bytes> _blobs;
@@ -1955,7 +1976,13 @@ private:
     std::uniform_int_distribution<int> _bool_dist{0, 1};
     std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
     std::uniform_int_distribution<int> _range_tombstone_dist{0, 29};
-    std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{::api::min_timestamp, ::api::min_timestamp + 2};
+    std::uniform_int_distribution<api::timestamp_type> _timestamp_dist{min_timestamp, min_timestamp + 2};
+
+    // Sequence number for mutation elements.
+    // Intended to be put as "deletion time".
+    // The "777" prefix is so that it's easily distinguishable from other numbers in the printout.
+    // Also makes it easy to grep for a particular element.
+    uint64_t _seq = 777000000;
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -1996,8 +2023,13 @@ private:
         return ts;
     }
 
+    gc_clock::time_point new_expiry() {
+        return debuggable ? gc_clock::time_point(gc_clock::time_point::duration(_seq++))
+                          : expiry_dist(_gen);
+    }
+
     tombstone random_tombstone(timestamp_level l) {
-        return tombstone(gen_timestamp(l), expiry_dist(_gen));
+        return tombstone(gen_timestamp(l), new_expiry());
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
@@ -2011,6 +2043,11 @@ public:
 
         auto keys = _local_shard_only ? make_local_keys(n_blobs, _schema, _external_blob_size) : make_keys(n_blobs, _schema, _external_blob_size);
         _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (sstring& k) { return to_bytes(k); }));
+    }
+
+    void set_key_cardinality(size_t n_keys) {
+        assert(n_keys <= n_blobs);
+        _ck_index_dist = std::uniform_int_distribution<size_t>{0, n_keys - 1};
     }
 
     bytes random_blob() {
@@ -2134,7 +2171,7 @@ public:
 
         std::map<counter_id, std::set<int64_t>> counter_used_clock_values;
         std::vector<counter_id> counter_ids;
-        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::generate_random);
+        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::create_random_id);
 
         auto random_counter_cell = [&] {
             std::uniform_int_distribution<size_t> shard_count_dist(1, counter_ids.size());
@@ -2197,10 +2234,10 @@ public:
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {
-                        return atomic_cell::make_dead(gen_timestamp(timestamp_level::cell_tombstone), expiry_dist(_gen));
+                        return atomic_cell::make_dead(gen_timestamp(timestamp_level::cell_tombstone), new_expiry());
                     }
                     collection_mutation_description m;
-                    m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), expiry_dist(_gen));
+                    m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), new_expiry());
                     return m.serialize(*col.type);
 
                 };
@@ -2216,7 +2253,7 @@ public:
                 case 0: return row_marker();
                 case 1: return row_marker(random_tombstone(timestamp_level::row_marker_tombstone));
                 case 2: return row_marker(gen_timestamp(timestamp_level::data));
-                case 3: return row_marker(gen_timestamp(timestamp_level::data), std::chrono::seconds(1), expiry_dist(_gen));
+                case 3: return row_marker(gen_timestamp(timestamp_level::data), std::chrono::seconds(1), new_expiry());
                 default: assert(0);
             }
             abort();
@@ -2236,12 +2273,23 @@ public:
         };
 
         size_t row_count = row_count_dist(_gen);
-        for (size_t i = 0; i < row_count; ++i) {
-            auto ckey = make_random_key();
+
+        std::unordered_set<clustering_key, clustering_key::hashing, clustering_key::equality> keys(
+                0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema));
+        while (keys.size() < row_count) {
+            keys.emplace(make_random_key());
+        }
+
+        for (auto&& ckey : keys) {
             is_continuous continuous = is_continuous(_bool_dist(_gen));
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
                 row.apply(random_row_marker());
+                if (!row.marker().is_missing() && !row.marker().is_live()) {
+                    // Mutations are not associative if dead marker is not matched with a dead row
+                    // due to shadowable tombstone merging rules. See #11307.
+                    row.apply(tombstone(row.marker().timestamp(), row.marker().deletion_time()));
+                }
                 if (_bool_dist(_gen)) {
                     set_random_cells(row.cells(), column_kind::regular_column);
                 } else {
@@ -2330,6 +2378,10 @@ clustering_key random_mutation_generator::make_random_key() {
 
 std::vector<query::clustering_range> random_mutation_generator::make_random_ranges(unsigned n_ranges) {
     return _impl->make_random_ranges(n_ranges);
+}
+
+void random_mutation_generator::set_key_cardinality(size_t n_keys) {
+    _impl->set_key_cardinality(n_keys);
 }
 
 void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,

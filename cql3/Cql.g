@@ -44,7 +44,7 @@ options {
 #include "cql3/statements/drop_aggregate_statement.hh"
 #include "cql3/statements/drop_service_level_statement.hh"
 #include "cql3/statements/detach_service_level_statement.hh"
-#include "cql3/statements/truncate_statement.hh"
+#include "cql3/statements/raw/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
@@ -371,7 +371,8 @@ useStatement returns [std::unique_ptr<raw::use_statement> stmt]
  * SELECT [JSON] <expression>
  * FROM <CF>
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
- * LIMIT <NUMBER>;
+ * LIMIT <NUMBER>
+ * [USING TIMEOUT <duration>];
  */
 selectStatement returns [std::unique_ptr<raw::select_statement> expr]
     @init {
@@ -398,7 +399,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingClause[attrs] )?
+      ( usingTimeoutClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -518,6 +519,19 @@ usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     | K_TIMEOUT to=term { attrs->timeout = to; }
     ;
 
+usingTimestampTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING usingTimestampTimeoutClauseObjective[attrs] ( K_AND usingTimestampTimeoutClauseObjective[attrs] )*
+    ;
+
+usingTimestampTimeoutClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
+    | K_TIMEOUT to=term { attrs->timeout = to; }
+    ;
+
+usingTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING K_TIMEOUT to=term { attrs->timeout = to; }
+    ;
+
 /**
  * UPDATE <CF>
  * USING TIMESTAMP <long>
@@ -552,7 +566,7 @@ updateConditions returns [conditions_type conditions]
 /**
  * DELETE name1, name2
  * FROM <CF>
- * USING TIMESTAMP <long>
+ * [USING (TIMESTAMP <long> | TIMEOUT <duration>) [AND ...]]
  * WHERE KEY = keyname
    [IF (EXISTS | name = value, ...)];
  */
@@ -564,7 +578,7 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
-      ( usingClause[attrs] )?
+      ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
       {
@@ -857,7 +871,8 @@ indexIdent returns [::shared_ptr<index_target::raw> id]
     @init {
         std::vector<::shared_ptr<cql3::column_identifier::raw>> columns;
     }
-    : c=cident                   { $id = index_target::raw::values_of(c); }
+    : c=cident                   { $id = index_target::raw::regular_values_of(c); }
+    | K_VALUES '(' c=cident ')'  { $id = index_target::raw::collection_values_of(c); }
     | K_KEYS '(' c=cident ')'    { $id = index_target::raw::keys_of(c); }
     | K_ENTRIES '(' c=cident ')' { $id = index_target::raw::keys_and_values_of(c); }
     | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }
@@ -1057,10 +1072,18 @@ dropIndexStatement returns [std::unique_ptr<drop_index_statement> expr]
     ;
 
 /**
-  * TRUNCATE <CF>;
+  * TRUNCATE [TABLE] <CF>
+  * [USING TIMEOUT <duration>];
   */
-truncateStatement returns [std::unique_ptr<truncate_statement> stmt]
-    : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName { $stmt = std::make_unique<truncate_statement>(cf); }
+truncateStatement returns [std::unique_ptr<raw::truncate_statement> stmt]
+    @init {
+        auto attrs = std::make_unique<cql3::attributes::raw>();
+    }
+    : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName
+      ( usingTimeoutClause[attrs] )?
+      {
+        $stmt = std::make_unique<raw::truncate_statement>(std::move(cf), std::move(attrs));
+      }
     ;
 
 /**

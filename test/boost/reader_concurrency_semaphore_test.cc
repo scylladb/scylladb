@@ -10,6 +10,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/random_schema.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/testing/test_case.hh>
@@ -914,4 +915,161 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
             }
         }
     }
+}
+
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_for_table) {
+    auto spec = tests::make_random_schema_specification(get_name());
+
+    std::list<tests::random_schema> schemas;
+    std::unordered_map<tests::random_schema*, std::vector<reader_concurrency_semaphore::inactive_read_handle>> schema_handles;
+    for (unsigned i = 0; i < 4; ++i) {
+        auto& s = schemas.emplace_back(tests::random_schema(i, *spec));
+        schema_handles.emplace(&s, std::vector<reader_concurrency_semaphore::inactive_read_handle>{});
+    }
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        for (int i = 0; i < 10; ++i) {
+            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout))));
+        }
+    }
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+    }
+
+    for (auto& s : schemas) {
+        auto& handles = schema_handles[&s];
+        BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+        semaphore.evict_inactive_reads_for_table(s.schema()->id()).get();
+        for (const auto& [k, v] : schema_handles) {
+            if (k == &s) {
+                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return !bool(handle); }));
+            } else if (!v.empty()) {
+                BOOST_REQUIRE(std::all_of(v.begin(), v.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+            }
+        }
+        handles.clear();
+    }
+}
+
+// Reproduces https://github.com/scylladb/scylladb/issues/11770
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_when_all_is_blocked) {
+    simple_schema ss;
+    const auto& s = *ss.schema();
+
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 32 * 1024};
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
+    auto stop_sem = deferred_stop(semaphore);
+
+    class read {
+        reader_permit _permit;
+        promise<> _read_started_pr;
+        future<> _read_started_fut;
+        promise<> _read_done_pr;
+        reader_permit::used_guard _ug;
+        std::optional<reader_permit::blocked_guard> _bg;
+
+    public:
+        explicit read(reader_permit p) : _permit(std::move(p)), _read_started_fut(_read_started_pr.get_future()), _ug(_permit) { }
+        future<> wait_read_started() { return std::move(_read_started_fut); }
+        void set_read_done() { _read_done_pr.set_value(); }
+        void mark_as_blocked() { _bg.emplace(_permit); }
+        void mark_as_unblocked() { _bg.reset(); }
+        reader_concurrency_semaphore::read_func get_read_func() {
+            return [this] (reader_permit permit) -> future<> {
+                _read_started_pr.set_value();
+                co_await _read_done_pr.get_future();
+            };
+        }
+    };
+
+    auto p1 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout).get();
+    auto irh1 = semaphore.register_inactive_read(make_empty_flat_reader_v2(ss.schema(), p1));
+
+    auto p2 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout).get();
+    read rd2(p2);
+    auto fut2 = semaphore.with_ready_permit(p2, rd2.get_read_func());
+
+    // At this point we expect to have:
+    // * 1 inactive read (not evicted)
+    // * 1 used (but not blocked) read on the ready list
+    // * 1 waiter
+    // * no more count resources left
+    auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
+    BOOST_REQUIRE(irh1);
+
+    // Start the read emptying the ready list, this should not be enough to admit p3
+    rd2.wait_read_started().get();
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
+    BOOST_REQUIRE(irh1);
+
+    // Marking p2 as blocked should now allow p3 to be admitted by evicting p1
+    rd2.mark_as_blocked();
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
+    BOOST_REQUIRE(!irh1);
+
+    p3_fut.get();
+    rd2.mark_as_unblocked();
+    rd2.set_read_done();
+    fut2.get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{4, 4 * 1024};
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(2, 2 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
+
+    semaphore.set_resources({8, 8 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(6, 6 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(8, 8 * 1024));
+
+    semaphore.set_resources({2, 2 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(0, 0));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(2, 2 * 1024));
+
+    semaphore.set_resources({3, 128});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 128 - 2 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(3, 128));
+
+    semaphore.set_resources({1, 3 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(-1, 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(1, 3 * 1024));
+
+    auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+
+    semaphore.set_resources({4, 4 * 1024});
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
+    permit3_fut.get();
 }

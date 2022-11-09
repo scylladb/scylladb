@@ -29,6 +29,8 @@
 #include "stream_manager.hh"
 #include "system.hh"
 #include "api/config.hh"
+#include "task_manager.hh"
+#include "task_manager_test.hh"
 
 logging::logger apilog("api");
 
@@ -146,8 +148,14 @@ future<> unset_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
 }
 
-future<> set_server_snitch(http_context& ctx) {
-    return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", set_endpoint_snitch);
+future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch) {
+    return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", [&snitch] (http_context& ctx, routes& r) {
+        set_endpoint_snitch(ctx, r, snitch);
+    });
+}
+
+future<> unset_server_snitch(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_endpoint_snitch(ctx, r); });
 }
 
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
@@ -244,6 +252,30 @@ future<> set_server_done(http_context& ctx) {
         set_error_injection(ctx, r);
     });
 }
+
+future<> set_server_task_manager(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        rb->register_function(r, "task_manager",
+                "The task manager API");
+        set_task_manager(ctx, r);
+    });
+}
+
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+
+future<> set_server_task_manager_test(http_context& ctx, lw_shared_ptr<db::config> cfg) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx, &cfg = *cfg](routes& r) mutable {
+        rb->register_function(r, "task_manager_test",
+                "The task manager test API");
+        set_task_manager_test(ctx, r, cfg);
+    });
+}
+
+#endif
 
 void req_params::process(const request& req) {
     // Process mandatory parameters

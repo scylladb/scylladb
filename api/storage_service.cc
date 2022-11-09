@@ -69,6 +69,11 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
 }
 
+locator::host_id validate_host_id(const sstring& param) {
+    auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
+    return hoep.id;
+}
+
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
@@ -548,7 +553,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
         // Find an arbitrary non-system keyspace.
-        auto keyspaces = ctx.db.local().get_non_system_keyspaces();
+        auto keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
         if (keyspaces.empty()) {
             throw std::runtime_error("No keyspace provided and no non system kespace exist");
         }
@@ -610,12 +615,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+        apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, column_families);
         return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-            auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
+            auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
             // major compact smaller tables first, to increase chances of success if low on space.
-            std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+            std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                 return db.find_column_family(id).get_stats().live_disk_space_used;
             });
             // as a table can be dropped during loop below, let's find it before issuing major compaction request.
@@ -634,6 +640,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, column_families);
         return ss.local().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
                 column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
             if (!is_cleanup_allowed) {
@@ -641,11 +648,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
             return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-                auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
+                auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
                 // cleanup smaller tables first, to increase chances of success if low on space.
-                std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+                std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
                 auto& cm = db.get_compaction_manager();
@@ -653,7 +660,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
-                    co_await cm.perform_cleanup(owned_ranges_ptr, t.as_table_state());
+                    co_await t.perform_cleanup_compaction(owned_ranges_ptr);
                 }
                 co_return;
             }).then([]{
@@ -663,6 +670,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
+        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, tables);
         co_return co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
             bool needed = false;
             for (const auto& table : tables) {
@@ -676,6 +684,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
+        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, column_families, exclude_current_version);
         return ctx.db.invoke_on_all([=] (replica::database& db) {
             auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
             return do_for_each(column_families, [=, &db](sstring cfname) {
@@ -691,17 +700,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        auto &db = ctx.db.local();
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
+        auto& db = ctx.db;
         if (column_families.empty()) {
-            co_await db.flush_on_all(keyspace);
+            co_await replica::database::flush_keyspace_on_all_shards(db, keyspace);
         } else {
-            co_await db.flush_on_all(keyspace, std::move(column_families));
+            co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
         }
         co_return json_void();
     });
 
 
     ss::decommission.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("decommission");
         return ss.local().decommission().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -715,20 +726,24 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::remove_node.set(r, [&ss](std::unique_ptr<request> req) {
-        auto host_id = req->get_query_param("host_id");
+        auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
-        auto ignore_nodes = std::list<gms::inet_address>();
+        apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
+        auto ignore_nodes = std::list<locator::host_id_or_endpoint>();
         for (std::string n : ignore_nodes_strs) {
             try {
                 std::replace(n.begin(), n.end(), '\"', ' ');
                 std::replace(n.begin(), n.end(), '\'', ' ');
                 boost::trim_all(n);
                 if (!n.empty()) {
-                    auto node = gms::inet_address(n);
-                    ignore_nodes.push_back(node);
+                    auto hoep = locator::host_id_or_endpoint(n);
+                    if (!ignore_nodes.empty() && hoep.has_host_id() != ignore_nodes.front().has_host_id()) {
+                        throw std::runtime_error("All nodes should be identified using the same method: either Host IDs or ip addresses.");
+                    }
+                    ignore_nodes.push_back(std::move(hoep));
                 }
             } catch (...) {
-                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}", ignore_nodes_strs, n));
+                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
         return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
@@ -789,6 +804,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::drain.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("drain");
         return ss.local().drain().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -806,28 +822,20 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (type == "user") {
             return ctx.db.local().get_user_keyspaces();
         } else if (type == "non_local_strategy") {
-            return map_keys(ctx.db.local().get_keyspaces() | boost::adaptors::filtered([](const auto& p) {
-                return p.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local;
-            }));
+            return ctx.db.local().get_non_local_strategy_keyspaces();
         }
         return map_keys(ctx.db.local().get_keyspaces());
     });
 
-    ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
-        locator::snitch_config cfg;
-        cfg.name = req->get_query_param("ep_snitch_class_name");
-        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
     ss::stop_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("stop_gossiping");
         return ss.local().stop_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
     ss::start_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+        apilog.info("start_gossiping");
         return ss.local().start_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -930,6 +938,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::rebuild.set(r, [&ss](std::unique_ptr<request> req) {
         auto source_dc = req->get_query_param("source_dc");
+        apilog.info("rebuild: source_dc={}", source_dc);
         return ss.local().rebuild(std::move(source_dc)).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -966,6 +975,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         // FIXME: We should truncate schema tables if more than one node in the cluster.
         auto& sp = service::get_storage_proxy();
         auto& fs = sp.local().features();
+        apilog.info("reset_local_schema");
         return db::schema_tables::recalculate_schema_version(sys_ks, sp, fs).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -973,6 +983,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
         auto probability = req->get_query_param("probability");
+        apilog.info("set_trace_probability: probability={}", probability);
         return futurize_invoke([probability] {
             double real_prob = std::stod(probability.c_str());
             return tracing::tracing::tracing_instance().invoke_on_all([real_prob] (auto& local_tracing) {
@@ -1010,6 +1021,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto ttl = req->get_query_param("ttl");
         auto threshold = req->get_query_param("threshold");
         auto fast = req->get_query_param("fast");
+        apilog.info("set_slow_query: enable={} ttl={} threshold={} fast={}", enable, ttl, threshold, fast);
         try {
             return tracing::tracing::tracing_instance().invoke_on_all([enable, ttl, threshold, fast] (auto& local_tracing) {
                 if (threshold != "") {
@@ -1036,6 +1048,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
+        apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, keyspace, tables, true);
     });
 
@@ -1043,6 +1056,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
+        apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, keyspace, tables, false);
     });
 
@@ -1314,7 +1328,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::take_snapshot.set(r, [&ctx, &snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
         apilog.info("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
@@ -1332,7 +1346,13 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 if (keynames.size() > 1) {
                     throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
                 }
-                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
+                for (const auto& table_name : column_families) {
+                    auto& t = ctx.db.local().find_column_family(keynames[0], table_name);
+                    if (t.schema()->is_view()) {
+                        throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
+                    }
+                }
+                co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, db::snapshot_ctl::snap_views::yes, sf);
             }
             co_return json_void();
         } catch (...) {
@@ -1402,7 +1422,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
             f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
-                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::skip_flush::no, db::snapshot_ctl::allow_view_snapshots::yes);
+                // We always pass here db::snapshot_ctl::snap_views::no since:
+                // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
+                // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
+                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::snap_views::no, db::snapshot_ctl::skip_flush::no);
             });
         }
 

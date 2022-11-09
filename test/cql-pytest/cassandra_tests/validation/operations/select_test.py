@@ -216,7 +216,7 @@ def testSelectKeyIn(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT firstname, lastname FROM %s WHERE userid IN (?, ?)", id1, id2), 2)
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testSetContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories set<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -235,8 +235,10 @@ def testSetContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, "lmn"),
                        ["test", 5, {"lmn"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
@@ -245,7 +247,7 @@ def testSetContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ?", "xyz", "lmn", "notPresent")
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ? ALLOW FILTERING", "xyz", "lmn", "notPresent"))
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testListContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories list<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -263,8 +265,10 @@ def testListContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?;", "test", 5, "lmn"),
                        ["test", 5, ["lmn"]])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
@@ -275,7 +279,6 @@ def testListContainsWithIndex(cql, test_keyspace):
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ? AND categories CONTAINS ? ALLOW FILTERING",
                                 "test", 5, "lmn", "notPresent"))
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testListContainsWithIndexAndFiltering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(e int PRIMARY KEY, f list<text>, s int)") as table:
         execute(cql, table, "CREATE INDEX ON %s(f)")
@@ -289,7 +292,7 @@ def testListContainsWithIndexAndFiltering(cql, test_keyspace):
                        [4, ["Dubai"], 3],
                        [3, ["Dubai"], 3])
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapKeyContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(keys(categories))")
@@ -307,8 +310,10 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, "lmn"),
                        ["test", 5, {"lmn": "foo"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, UNSET_VALUE)
@@ -323,7 +328,7 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ? AND categories CONTAINS ?",
                                  "test", 5, "lmn", "foo")
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
+@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapValueContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -342,8 +347,10 @@ def testMapValueContainsWithIndex(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, "foo"),
                        ["test", 5, {"lmn": "foo"}])
 
-            assert_invalid_message(cql, table, "Unsupported null value for column categories",
-                                 "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
+            # Scylla does not consider "= null" an error, it just matches nothing.
+            # See issue #4776.
+            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "Unsupported unset value for column categories",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
@@ -356,7 +363,6 @@ def testMapValueContainsWithIndex(cql, test_keyspace):
                                 "test", 5, "foo", "notPresent"))
 
 # See CASSANDRA-7525
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testQueryMultipleIndexTypes(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         # create an index on
@@ -392,7 +398,6 @@ def testFilterWithIndexForContains(cql, test_keyspace):
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE k2 = ? AND v CONTAINS ? ALLOW FILTERING", 1, 7))
 
 # See CASSANDRA-8073
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testIndexLookupWithClusteringPrefix(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d set<int>, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "CREATE INDEX ON %s(d)")
@@ -412,7 +417,6 @@ def testIndexLookupWithClusteringPrefix(cql, test_keyspace):
             assert_rows(execute(cql, table,"SELECT * FROM %s WHERE a=? AND b=? AND d CONTAINS ?", 0, 1, 5),
                        [0, 1, 1, {3, 4, 5}])
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testContainsKeyAndContainsWithIndexOnMapKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(keys(categories))")
@@ -433,7 +437,6 @@ def testContainsKeyAndContainsWithIndexOnMapKey(cql, test_keyspace):
                                "test", "foo", "lmn"),
                        ["test", 5, {"lmn": "foo"}])
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testContainsKeyAndContainsWithIndexOnMapValue(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -2544,7 +2547,6 @@ def testFilteringOnUdtContainingDurations(cql, test_keyspace):
                 assert_invalid_message(cql, table, "Slice restrictions are not supported on UDTs containing durations",
                     "SELECT * FROM %s WHERE u < {i: 1, d:3s} ALLOW FILTERING")
 
-@pytest.mark.xfail(reason="#2962 - we don't support index on collection column")
 def testFilteringOnCollectionsWithNull(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int, v int, l list<int>, s set<text>, m map<text, int>, PRIMARY KEY (k, v))") as table:
         execute(cql, table, "CREATE INDEX ON %s (v)")

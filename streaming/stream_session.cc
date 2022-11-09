@@ -52,7 +52,7 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
 void stream_manager::init_messaging_service_handler() {
     auto& ms = _ms.local();
 
-    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
+    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
@@ -66,7 +66,7 @@ void stream_manager::init_messaging_service_handler() {
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
-    ms.register_prepare_done_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
+    ms.register_prepare_done_message([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
@@ -74,7 +74,7 @@ void stream_manager::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms.register_stream_mutation_fragments([this] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+    ms.register_stream_mutation_fragments([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
@@ -163,14 +163,14 @@ void stream_manager::init_messaging_service_handler() {
         });
       });
     });
-    ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
-    ms.register_complete_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
+    ms.register_complete_message([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         if (failed && *failed) {
             return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
@@ -336,14 +336,14 @@ session_info stream_session::make_session_info() {
     return session_info(peer, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
-void stream_session::receive_task_completed(UUID cf_id) {
+void stream_session::receive_task_completed(table_id cf_id) {
     _receivers.erase(cf_id);
     sslog.debug("[Stream #{}] receive  task_completed: cf_id={} done, stream_receive_task.size={} stream_transfer_task.size={}",
         plan_id(), cf_id, _receivers.size(), _transfers.size());
     maybe_completed();
 }
 
-void stream_session::transfer_task_completed(UUID cf_id) {
+void stream_session::transfer_task_completed(table_id cf_id) {
     _transfers.erase(cf_id);
     sslog.debug("[Stream #{}] transfer task_completed: cf_id={} done, stream_receive_task.size={} stream_transfer_task.size={}",
         plan_id(), cf_id, _receivers.size(), _transfers.size());
@@ -460,7 +460,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, dht::token_range_vect
     }
 }
 
-future<> stream_session::receiving_failed(UUID cf_id)
+future<> stream_session::receiving_failed(table_id cf_id)
 {
     return make_ready_future<>();
 }
@@ -524,8 +524,8 @@ void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
     _stream_result = stream_result_;
 }
 
-utils::UUID stream_session::plan_id() const {
-    return _stream_result ? _stream_result->plan_id : UUID();
+streaming::plan_id stream_session::plan_id() const {
+    return _stream_result ? _stream_result->plan_id : streaming::plan_id::create_null_id();
 }
 
 sstring stream_session::description() const {

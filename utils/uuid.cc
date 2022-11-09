@@ -20,7 +20,7 @@
 namespace utils {
 
 UUID
-make_random_uuid() {
+make_random_uuid() noexcept {
     static thread_local std::mt19937_64 engine(std::random_device().operator()());
     static thread_local std::uniform_int_distribution<uint64_t> dist;
     uint64_t msb, lsb;

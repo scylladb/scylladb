@@ -47,6 +47,9 @@ struct snitch_config {
     unsigned io_cpu_id = 0;
     bool broadcast_rpc_address_specified_by_user = false;
 
+    // Gossiping-property-file specific
+    gms::inet_address listen_address;
+
     // GCE-specific
     sstring gce_meta_server_url = "";
 };
@@ -55,53 +58,22 @@ struct i_endpoint_snitch {
 public:
     using ptr_type = std::unique_ptr<i_endpoint_snitch>;
 
-    static future<> reset_snitch(snitch_config cfg);
+    static future<> reset_snitch(sharded<snitch_ptr>& snitch, snitch_config cfg);
 
     /**
-     * returns a String representing the rack this endpoint belongs to
+     * returns a String representing the rack local node belongs to
      */
-    virtual sstring get_rack(inet_address endpoint) = 0;
+    virtual sstring get_rack() const = 0;
 
     /**
-     * returns a String representing the datacenter this endpoint belongs to
+     * returns a String representing the datacenter local node belongs to
      */
-    virtual sstring get_datacenter(inet_address endpoint) = 0;
-
-    /**
-     * returns a new <tt>List</tt> sorted by proximity to the given endpoint
-     */
-    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
-        inet_address address,
-        inet_address_vector_replica_set& unsorted_address) = 0;
-
-    /**
-     * This method will sort the <tt>List</tt> by proximity to the given
-     * address.
-     */
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) = 0;
-
-    /**
-     * compares two endpoints in relation to the target endpoint, returning as
-     * Comparator.compare would
-     */
-    virtual int compare_endpoints(
-        inet_address& target, inet_address& a1, inet_address& a2) = 0;
+    virtual sstring get_datacenter() const = 0;
 
     /**
      * returns whatever info snitch wants to gossip
      */
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
-
-    /**
-     * Returns whether for a range query doing a query against merged is likely
-     * to be faster than 2 sequential queries, one against l1 followed by one
-     * against l2.
-     */
-    virtual bool is_worth_merging_for_range_query(
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) = 0;
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
@@ -132,21 +104,6 @@ public:
     virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& enw_rack) {};
     virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
-
-    // DEPRECATED, DON'T USE!
-    // Pass references to services through constructor/function parameters. Don't use globals.
-    static distributed<snitch_ptr>& snitch_instance() {
-        // FIXME: leaked intentionally to avoid shutdown problems, see #293
-        static distributed<snitch_ptr>* snitch_inst = new distributed<snitch_ptr>();
-
-        return *snitch_inst;
-    }
-
-    // DEPRECATED, DON'T USE!
-    // Pass references to services through constructor/function parameters. Don't use globals.
-    static snitch_ptr& get_local_snitch_ptr() {
-        return snitch_instance().local();
-    }
 
     void set_snitch_ready() {
         _state = snitch_state::running;
@@ -217,6 +174,9 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
     i_endpoint_snitch* operator->() {
         return _ptr.get();
     }
+    const i_endpoint_snitch* operator->() const {
+        return _ptr.get();
+    }
 
     snitch_ptr& operator=(ptr_type&& new_val) {
         _ptr = std::move(new_val);
@@ -234,17 +194,10 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
         return _ptr ? true : false;
     }
 
-    snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>&);
-
-    gms::gossiper& get_local_gossiper() noexcept { return _gossiper.local(); }
-    const gms::gossiper& get_local_gossiper() const noexcept { return _gossiper.local(); }
-
-    sharded<gms::gossiper>& get_gossiper() noexcept { return _gossiper; }
-    const sharded<gms::gossiper>& get_gossiper() const noexcept { return _gossiper; }
+    snitch_ptr(const snitch_config cfg);
 
 private:
     ptr_type _ptr;
-    sharded<gms::gossiper>& _gossiper;
 };
 
 /**
@@ -269,12 +222,12 @@ private:
  *  6) Start the new snitches.
  *  7) Stop() the temporary distributed<snitch_ptr> from (1).
  */
-inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
-    return seastar::async([cfg = std::move(cfg)] {
+inline future<> i_endpoint_snitch::reset_snitch(sharded<snitch_ptr>& snitch, snitch_config cfg) {
+    return seastar::async([cfg = std::move(cfg), &snitch] {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            tmp_snitch.start(cfg, std::ref(get_local_snitch_ptr().get_gossiper())).get();
+            tmp_snitch.start(cfg).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
@@ -288,7 +241,7 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // If we've got here then we may not fail
 
         // (3) stop the current snitch instances on all CPUs
-        snitch_instance().invoke_on_all([] (snitch_ptr& s) {
+        snitch.invoke_on_all([] (snitch_ptr& s) {
             return s->stop();
         }).get();
 
@@ -305,15 +258,15 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // (5) move the pointers - this would ensure the atomicity on a
         // per-shard level (since users are holding snitch_ptr objects only)
         //
-        tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
-            local_inst->set_backreference(snitch_instance().local());
-            snitch_instance().local() = std::move(local_inst);
+        tmp_snitch.invoke_on_all([&snitch] (snitch_ptr& local_inst) {
+            local_inst->set_backreference(snitch.local());
+            snitch.local() = std::move(local_inst);
 
             return make_ready_future<>();
         }).get();
 
         // (6) re-start I/O on the new snitches
-        snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+        snitch.invoke_on_all([] (snitch_ptr& local_inst) {
             local_inst->resume_io();
         }).get();
 
@@ -326,29 +279,11 @@ class snitch_base : public i_endpoint_snitch {
 public:
     //
     // Sons have to implement:
-    // virtual sstring get_rack(inet_address endpoint)        = 0;
-    // virtual sstring get_datacenter(inet_address endpoint)  = 0;
+    // virtual sstring get_rack()        = 0;
+    // virtual sstring get_datacenter()  = 0;
     //
 
-    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
-        inet_address address,
-        inet_address_vector_replica_set& unsorted_address) override;
-
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) override;
-
-    virtual int compare_endpoints(
-        inet_address& address, inet_address& a1, inet_address& a2) override;
-
-    virtual bool is_worth_merging_for_range_query(
-        inet_address_vector_replica_set& merged,
-        inet_address_vector_replica_set& l1,
-        inet_address_vector_replica_set& l2) override;
-
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
-
-private:
-    bool has_remote_node(inet_address_vector_replica_set& l);
 
 protected:
     sstring _my_dc;

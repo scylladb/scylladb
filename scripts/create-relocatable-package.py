@@ -14,6 +14,7 @@ import os
 import subprocess
 import tarfile
 import pathlib
+import shutil
 
 
 RELOC_PREFIX='scylla'
@@ -68,21 +69,27 @@ ap.add_argument('dest',
                 help='Destination file (tar format)')
 ap.add_argument('--mode', dest='mode', default='release',
                 help='Build mode (debug/release) to use')
+ap.add_argument('--stripped', action='store_true',
+                help='use stripped binaries')
 
 args = ap.parse_args()
 
-executables = ['build/{}/scylla'.format(args.mode),
-               'build/{}/iotune'.format(args.mode),
-               '/usr/bin/patchelf',
-               '/usr/bin/lscpu',
-               '/usr/bin/gawk',
-               '/usr/bin/gzip',
-               '/usr/sbin/ifconfig',
-               '/usr/sbin/ethtool',
-               '/usr/bin/netstat',
-               '/usr/bin/hwloc-distrib',
-               '/usr/bin/hwloc-calc',
-               '/usr/bin/lsblk']
+executables_scylla = [
+                'build/{}/scylla'.format(args.mode),
+                'build/{}/iotune'.format(args.mode)]
+executables_distrocmd = [
+                '/usr/bin/patchelf',
+                '/usr/bin/lscpu',
+                '/usr/bin/gawk',
+                '/usr/bin/gzip',
+                '/usr/sbin/ifconfig',
+                '/usr/sbin/ethtool',
+                '/usr/bin/netstat',
+                '/usr/bin/hwloc-distrib',
+                '/usr/bin/hwloc-calc',
+                '/usr/bin/lsblk']
+
+executables = executables_scylla + executables_distrocmd
 
 output = args.dest
 
@@ -91,7 +98,7 @@ for exe in executables:
     libs.update(ldd(exe))
 
 # manually add libthread_db for debugging thread
-libs.update({'libthread_db.so.1': '/lib64/libthread_db-1.0.so'})
+libs.update({'libthread_db.so.1': os.path.realpath('/lib64/libthread_db.so')})
 
 ld_so = libs['ld.so']
 
@@ -107,14 +114,23 @@ have_gnutls = any([lib.startswith('libgnutls.so')
 gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.PIPE)
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
-# relocatable package format version = 2.1
-with open('build/.relocatable_package_version', 'w') as f:
-    f.write('2.1\n')
-ar.add('build/.relocatable_package_version', arcname='.relocatable_package_version')
+# relocatable package format version = 3.0
+shutil.rmtree(f'build/{SCYLLA_DIR}', ignore_errors=True)
+os.makedirs(f'build/{SCYLLA_DIR}')
+with open(f'build/{SCYLLA_DIR}/.relocatable_package_version', 'w') as f:
+    f.write('3.0\n')
+ar.add(f'build/{SCYLLA_DIR}/.relocatable_package_version', arcname='.relocatable_package_version')
 
-for exe in executables:
+for exe in executables_scylla:
     basename = os.path.basename(exe)
-    ar.reloc_add(exe, arcname='libexec/' + basename)
+    if not args.stripped:
+        ar.reloc_add(exe, arcname=f'libexec/{basename}')
+    else:
+        ar.reloc_add(f'{exe}.stripped', arcname=f'libexec/{basename}')
+for exe in executables_distrocmd:
+    basename = os.path.basename(exe)
+    ar.reloc_add(exe, arcname=f'libexec/{basename}')
+
 for lib, libfile in libs.items():
     ar.reloc_add(libfile, arcname='libreloc/' + lib)
 if have_gnutls:
@@ -150,6 +166,12 @@ ar.reloc_add('tools', filter=exclude_submodules)
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('build/debian/debian', arcname='debian')
 ar.reloc_add('build/node_exporter', arcname='node_exporter')
+if not args.stripped:
+    ar.reloc_add('build/node_exporter/node_exporter', arcname='node_exporter/node_exporter')
+else:
+    ar.reloc_add('build/node_exporter/node_exporter.stripped', arcname='node_exporter/node_exporter')
+ar.reloc_add('build/node_exporter/LICENSE', arcname='node_exporter/LICENSE')
+ar.reloc_add('build/node_exporter/NOTICE', arcname='node_exporter/NOTICE')
 ar.reloc_add('ubsan-suppressions.supp')
 ar.reloc_add('fix_system_distributed_tables.py')
 

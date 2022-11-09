@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <boost/range/adaptor/transformed.hpp>
 #include <deque>
 #include <functional>
 #include <optional>
@@ -46,6 +47,7 @@
 #include "mutation_partition.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "utils/small_vector.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
 #include "types/user.hh"
@@ -58,6 +60,8 @@
 #include "readers/from_fragments_v2.hh"
 #include "readers/evictable.hh"
 #include "delete_ghost_rows_visitor.hh"
+#include "locator/host_id.hh"
+#include "cartesian_product.hh"
 
 using namespace std::chrono_literals;
 
@@ -71,6 +75,7 @@ static inline void inject_failure(std::string_view operation) {
 view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
         : _schema(schema)
         , _raw(raw_view_info)
+        , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
 cql3::statements::select_statement& view_info::select_statement() const {
@@ -166,6 +171,9 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
+            if (view_col.get_computation().depends_on_non_primary_key_column()) {
+                _has_computed_column_depending_on_base_non_primary_key = true;
+            }
             continue;
         }
         const bytes& view_col_name = view_col.name();
@@ -389,7 +397,7 @@ private:
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice)
-        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size})
+        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, query::max_tombstones)
         , _builder(s, _res_builder) { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -466,7 +474,6 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
      *      will all unselected columns.
      */
 
-    auto marker = base_row.marker();
     // WARNING: The code assumes that if multiple regular base columns are present in the view key,
     // they share liveness information. It's true especially in the only case currently allowed by CQL,
     // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
@@ -479,44 +486,189 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
-    return marker;
+    return base_row.marker();
 }
 
-deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
-    std::vector<bytes> linearized_values;
-    auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) -> managed_bytes_view {
-        auto* base_col = _base->get_column_definition(cdef.name());
+
+namespace {
+// The following struct is identical to view_key_with_action, except the key
+// is stored as a managed_bytes_view instead of bytes.
+struct view_managed_key_view_and_action {
+    managed_bytes_view _key_view;
+    view_key_and_action::action _action;
+    view_managed_key_view_and_action(managed_bytes_view key_view, view_key_and_action::action action)
+        : _key_view(key_view)
+        , _action(action)
+    {}
+    view_managed_key_view_and_action(managed_bytes_view key_view)
+        : _key_view(key_view)
+    {}
+    view_managed_key_view_and_action(view_key_and_action&& bwa, std::deque<bytes>& linearized_values)
+        : view_managed_key_view_and_action(managed_bytes_view(linearized_values.emplace_back(std::move(bwa._key_bytes))), bwa._action)
+    {}
+    static managed_bytes_view get_key_view(const view_managed_key_view_and_action& bvwa) {
+        return bvwa._key_view;
+    }
+};
+
+// value_getter is used to extract values for specific columns during view update.
+struct value_getter {
+    // linearized_values hold bytes for values of computed columns, for which we later store references in the form of managed_bytes_view.
+    // deque doesn't invalidate references at emplace_back.
+    std::deque<bytes> linearized_values;
+
+    // Index of column being currently processed.
+    size_t column_position = 0;
+    // Discovered index of collection computed column.
+    std::optional<size_t> collection_column_position;
+private:
+    // Schemas of base table and view.
+    const schema& _base;
+    const view_ptr& _view;
+
+    const partition_key& _base_key;
+    const clustering_row& _update;
+    const std::optional<clustering_row>& _existing;
+
+public:
+    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing)
+        : _base(base)
+        , _view(view)
+        , _base_key(base_key)
+        , _update(update)
+        , _existing(existing)
+    {}
+
+    using vector_type = utils::small_vector<view_managed_key_view_and_action, 1>;
+    vector_type operator()(const column_definition& cdef) {
+        column_position++;
+
+        auto* base_col = _base.get_column_definition(cdef.name());
         if (!base_col) {
-            bytes_opt computed_value;
-            if (!cdef.is_computed()) {
-                //FIXME(sarna): this legacy code is here for backward compatibility and should be removed
-                // once "computed_columns feature" is supported by every node
-                if (!service::get_local_storage_proxy().local_db().find_column_family(_base->id()).get_index_manager().is_index(*_view)) {
-                    throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
-                }
-                computed_value = legacy_token_column_computation().compute_value(*_base, base_key, update);
-            } else {
-                computed_value = cdef.get_computation().compute_value(*_base, base_key, update);
-            }
-            if (!computed_value) {
-                throw std::logic_error(format("No value computed for primary key column {}", cdef.name()));
-            }
-            return managed_bytes_view(linearized_values.emplace_back(*computed_value));
+            return handle_computed_column(cdef);
         }
         switch (base_col->kind) {
         case column_kind::partition_key:
-            return base_key.get_component(*_base, base_col->position());
+            return {_base_key.get_component(_base, base_col->position())};
         case column_kind::clustering_key:
-            return update.key().get_component(*_base, base_col->position());
+            return {_update.key().get_component(_base, base_col->position())};
         default:
-            auto& c = update.cells().cell_at(base_col->id);
+            auto& c = _update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
-            return value_view;
+            return {managed_bytes_view{value_view}};
         }
-    });
-    auto& partition = partition_for(partition_key::from_range(_view->partition_key_columns() | get_value));
-    auto ckey = clustering_key::from_range(_view->clustering_key_columns() | get_value);
-    return partition.clustered_row(*_view, std::move(ckey));
+    }
+
+private:
+    vector_type handle_computed_column(const column_definition& cdef) {
+        bytes computed_value;
+        if (!cdef.is_computed()) {
+            //FIXME(sarna): this legacy code is here for backward compatibility and should be removed
+            // once "computed_columns feature" is supported by every node
+            if (!service::get_local_storage_proxy().local_db().find_column_family(_base.id()).get_index_manager().is_index(*_view)) {
+                throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
+            }
+            computed_value = legacy_token_column_computation().compute_value(_base, _base_key);
+        } else {
+            auto& computation = cdef.get_computation();
+            if (auto* collection_computation = dynamic_cast<const collection_column_computation*>(&computation)) {
+                return handle_collection_column_computation(collection_computation);
+            }
+            computed_value = computation.compute_value(_base, _base_key);
+        }
+
+        return {managed_bytes_view(linearized_values.emplace_back(std::move(computed_value)))};
+    }
+
+    vector_type handle_collection_column_computation(const collection_column_computation* collection_computation) {
+        vector_type ret;
+        if (collection_column_position.has_value()) {
+            on_internal_error(vlogger, format("Multiple columns in view (either pk or ck) are collection computed columns. Current is {}, the previous one found was {}", column_position - 1, *collection_column_position));
+        }
+        collection_column_position = column_position - 1;
+
+        for (auto& bwa : collection_computation->compute_values_with_action(_base, _base_key, _update, _existing)) {
+            ret.push_back({std::move(bwa), linearized_values});
+        }
+        return ret;
+    }
+};
+}
+
+
+std::vector<view_updates::view_row_entry>
+view_updates::get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing) {
+    value_getter getter(*_base, _view, base_key, update, existing);
+    auto get_value = boost::adaptors::transformed(std::ref(getter));
+
+
+    std::vector<value_getter::vector_type> pk_elems, ck_elems;
+    boost::copy(_view->partition_key_columns() | get_value, std::back_inserter(pk_elems));
+    // If no collection column was found, each of the actions will contain no_action,
+    // in particular, it does not harm to use column 0.
+    const bool had_multiple_values_in_pk = bool(getter.collection_column_position);
+    const size_t action_column = getter.collection_column_position.value_or(0);
+    // Allow for at most one collection computed column in pk and in ck.
+    getter.collection_column_position.reset();
+    boost::copy(_view->clustering_key_columns() | get_value, std::back_inserter(ck_elems));
+    const bool had_multiple_values_in_ck = bool(getter.collection_column_position);
+
+
+    std::vector<view_updates::view_row_entry> ret;
+    auto compute_row = [&]<typename Range>(Range&& pk, Range&& ck) {
+        partition_key pkey = partition_key::from_range(boost::adaptors::transform(pk, view_managed_key_view_and_action::get_key_view));
+        clustering_key ckey = clustering_key::from_range(boost::adaptors::transform(ck, view_managed_key_view_and_action::get_key_view));
+        auto action = (action_column < pk.size() ? pk[action_column] : ck[action_column - pk.size()])._action;
+        mutation_partition& partition = partition_for(std::move(pkey));
+        ret.push_back({&partition.clustered_row(*_view, std::move(ckey)), action});
+    };
+
+    if (had_multiple_values_in_pk) {
+        // cartesian_product expects std::vector<std::vector<>>, while we have std::vector<small_vector>.
+        std::vector<std::vector<view_managed_key_view_and_action>> pk_elems_, ck_elems_;
+        auto std_vector_from_small_vector = boost::adaptors::transformed([](const auto& vector) {
+            return std::vector<view_managed_key_view_and_action>{vector.begin(), vector.end()};
+        });
+        boost::copy(pk_elems | std_vector_from_small_vector, std::back_inserter(pk_elems_));
+        boost::copy(ck_elems | std_vector_from_small_vector, std::back_inserter(ck_elems_));
+
+        auto cartesian_product_pk = cartesian_product(pk_elems_),
+             cartesian_product_ck = cartesian_product(ck_elems_);
+        auto ck_it = cartesian_product_ck.begin();
+
+        if (had_multiple_values_in_ck) {
+            // The computed collection column in clustering key was associated with the computed collection column from the partition key.
+            // This is a case for indexes over collection values.
+
+            auto throw_length_error = [&] {
+                size_t pk_size = cartesian_product_size(pk_elems_),
+                       ck_size = cartesian_product_size(ck_elems_);
+                on_internal_error(vlogger, format("Computed sizes of possible partition keys and clustering keys don't match: {} != {}", pk_size, ck_size));
+            };
+            for (std::vector<view_managed_key_view_and_action>& pk : cartesian_product_pk) {
+                if (ck_it == cartesian_product_ck.end()) {
+                    throw_length_error();
+                }
+                compute_row(pk, *ck_it);
+                ++ck_it;
+            }
+            if (ck_it != cartesian_product_ck.end()) {
+                throw_length_error();
+            }
+        } else {
+            for (std::vector<view_managed_key_view_and_action>& pk : cartesian_product_pk) {
+                for (std::vector<view_managed_key_view_and_action>& ck : cartesian_product_ck) {
+                    compute_row(pk, ck);
+                }
+            }
+        }
+    } else {
+        // Here it's the old regular index over regular values. Each vector has just one element.
+        auto get_front = boost::adaptors::transformed([](const auto& v) { return v.front(); });
+        compute_row(pk_elems | get_front, ck_elems | get_front);
+    }
+
+    return ret;
 }
 
 static const column_definition* view_column(const schema& base, const schema& view, column_id base_id) {
@@ -678,12 +830,19 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
     if (!matches_view_filter(*_base, _view_info, base_key, update, now)) {
         return;
     }
-    deletable_row& r = get_view_row(base_key, update);
-    auto marker = compute_row_marker(update);
-    r.apply(marker);
-    r.apply(update.tomb());
-    add_cells_to_view(*_base, *_view, row(*_base, column_kind::regular_column, update.cells()), r.cells());
-    _op_count++;
+
+    auto view_rows = get_view_rows(base_key, update, std::nullopt);
+    auto update_marker = compute_row_marker(update);
+    for (const auto& [r, action]: view_rows) {
+        if (auto rm = std::get_if<row_marker>(&action)) {
+            r->apply(*rm);
+        } else {
+            r->apply(update_marker);
+        }
+        r->apply(update.tomb());
+        add_cells_to_view(*_base, *_view, row(*_base, column_kind::regular_column, update.cells()), r->cells());
+    }
+    _op_count += view_rows.size();
 }
 
 /**
@@ -699,27 +858,33 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
 }
 
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
-    auto& r = get_view_row(base_key, existing);
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
-    if (!col_ids.empty()) {
-        // We delete the old row using a shadowable row tombstone, making sure that
-        // the tombstone deletes everything in the row (or it might still show up).
-        // Note: multi-cell columns can't be part of the primary key.
-        auto& def = _base->regular_column_at(col_ids[0]);
-        auto cell = existing.cells().cell_at(col_ids[0]).as_atomic_cell(def);
-        if (cell.is_live()) {
-            r.apply(shadowable_tombstone(cell.timestamp(), now));
+    auto view_rows = get_view_rows(base_key, existing, std::nullopt);
+    for (const auto& [r, action] : view_rows) {
+        const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+        if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
+            if (auto ts_tag = std::get_if<view_key_and_action::shadowable_tombstone_tag>(&action)) {
+                r->apply(ts_tag->into_shadowable_tombstone(now));
+            }
+        } else if (!col_ids.empty()) {
+            // We delete the old row using a shadowable row tombstone, making sure that
+            // the tombstone deletes everything in the row (or it might still show up).
+            // Note: multi-cell columns can't be part of the primary key.
+            auto& def = _base->regular_column_at(col_ids[0]);
+            auto cell = existing.cells().cell_at(col_ids[0]).as_atomic_cell(def);
+            if (cell.is_live()) {
+                r->apply(shadowable_tombstone(cell.timestamp(), now));
+            }
+        } else {
+            // "update" caused the base row to have been deleted, and !col_id
+            // means view row is the same - so it needs to be deleted as well
+            // using the same deletion timestamps for the individual cells.
+            r->apply(update.marker());
+            auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
+            add_cells_to_view(*_base, *_view, std::move(diff), r->cells());
         }
-    } else {
-        // "update" caused the base row to have been deleted, and !col_id
-        // means view row is the same - so it needs to be deleted as well
-        // using the same deletion timestamps for the individual cells.
-        r.apply(update.marker());
-        auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-        add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
+        r->apply(update.tomb());
     }
-    r.apply(update.tomb());
-    _op_count++;
+    _op_count += view_rows.size();
 }
 
 /*
@@ -817,14 +982,42 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
         return;
     }
 
-    deletable_row& r = get_view_row(base_key, update);
-    auto marker = compute_row_marker(update);
-    r.apply(marker);
-    r.apply(update.tomb());
+    auto view_rows = get_view_rows(base_key, update, std::nullopt);
+    auto update_marker = compute_row_marker(update);
+    for (const auto& [r, action] : view_rows) {
+        if (auto rm = std::get_if<row_marker>(&action)) {
+            r->apply(*rm);
+        } else {
+            r->apply(update_marker);
+        }
+        r->apply(update.tomb());
 
-    auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-    add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
-    _op_count++;
+        auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
+        add_cells_to_view(*_base, *_view, std::move(diff), r->cells());
+    }
+    _op_count += view_rows.size();
+}
+
+void view_updates::update_entry_for_computed_column(
+        const partition_key& base_key,
+        const clustering_row& update,
+        const std::optional<clustering_row>& existing,
+        gc_clock::time_point now) {
+    auto view_rows = get_view_rows(base_key, update, existing);
+    for (const auto& [r, action] : view_rows) {
+        struct visitor {
+            deletable_row* row;
+            gc_clock::time_point now;
+            void operator()(view_key_and_action::no_action) {}
+            void operator()(view_key_and_action::shadowable_tombstone_tag t) {
+                row->apply(t.into_shadowable_tombstone(now));
+            }
+            void operator()(row_marker rm) {
+                row->apply(rm);
+            }
+        };
+        std::visit(visitor{r, now}, action);
+    }
 }
 
 void view_updates::generate_update(
@@ -844,6 +1037,9 @@ void view_updates::generate_update(
     }
 
     const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+    if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
+        return update_entry_for_computed_column(base_key, update, existing, now);
+    }
     if (col_ids.empty()) {
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
@@ -868,13 +1064,18 @@ void view_updates::generate_update(
     bool same_row = true;
     for (auto col_id : col_ids) {
         auto* after = update.cells().find_cell(col_id);
-        // Note: multi-cell columns can't be part of the primary key.
         auto& cdef = _base->regular_column_at(col_id);
         if (existing) {
             auto* before = existing->cells().find_cell(col_id);
+            // Note that this cell is necessarily atomic, because col_ids are
+            // view key columns, and keys must be atomic.
             if (before && before->as_atomic_cell(cdef).is_live()) {
                 if (after && after->as_atomic_cell(cdef).is_live()) {
-                    auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
+                    // We need to compare just the values of the keys, not
+                    // metadata like the timestamp. This is because below,
+                    // if the old and new view row have the same key, we need
+                    // to be sure to reach the update_entry() case.
+                    auto cmp = compare_unsigned(before->as_atomic_cell(cdef).value(), after->as_atomic_cell(cdef).value());
                     if (cmp != 0) {
                         same_row = false;
                     }
@@ -894,7 +1095,13 @@ void view_updates::generate_update(
             if (same_row) {
                 update_entry(base_key, update, *existing, now);
             } else {
-                replace_entry(base_key, update, *existing, now);
+                // This code doesn't work if the old and new view row have the
+                // same key, because if they do we get both data and tombstone
+                // for the same timestamp (now) and the tombstone wins. This
+                // is why we need the "same_row" case above - it's not just a
+                // performance optimization.
+                delete_old_entry(base_key, *existing, update, now);
+                create_entry(base_key, update, now);
             }
         } else {
             delete_old_entry(base_key, *existing, update, now);
@@ -973,7 +1180,8 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    auto gc_before = ::get_gc_before_for_key(_schema, dk, _now);
+    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
@@ -1081,6 +1289,7 @@ future<stop_iteration> view_update_builder::on_results() {
 }
 
 view_update_builder make_view_update_builder(
+        const replica::table& base_table,
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader_v2&& updates,
@@ -1094,7 +1303,7 @@ view_update_builder make_view_update_builder(
         }
         return view_updates(std::move(v));
     }));
-    return view_update_builder(base, std::move(vs), std::move(updates), std::move(existings), now);
+    return view_update_builder(base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,
@@ -1486,7 +1695,7 @@ future<> view_builder::drain() {
         }).handle_exception_type([] (const semaphore_timed_out&) {
             // ignored
         }).finally([this] {
-            return parallel_for_each(_base_to_build_step, [] (std::pair<const utils::UUID, build_step>& p) {
+            return parallel_for_each(_base_to_build_step, [] (std::pair<const table_id, build_step>& p) {
                 return p.second.reader.close();
             });
         });
@@ -1498,7 +1707,7 @@ future<> view_builder::stop() {
     return drain();
 }
 
-view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID base_id) {
+view_builder::build_step& view_builder::get_or_create_build_step(table_id base_id) {
     auto it = _base_to_build_step.find(base_id);
     if (it == _base_to_build_step.end()) {
         auto base = _db.find_column_family(base_id).shared_from_this();
@@ -1526,7 +1735,7 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
   });
 }
 
-void view_builder::load_view_status(view_builder::view_build_status status, std::unordered_set<utils::UUID>& loaded_views) {
+void view_builder::load_view_status(view_builder::view_build_status status, std::unordered_set<table_id>& loaded_views) {
     if (!status.next_token) {
         // No progress was made on this view, so we'll treat it as new.
         return;
@@ -1544,14 +1753,14 @@ void view_builder::load_view_status(view_builder::view_build_status status, std:
 
 void view_builder::reshard(
         std::vector<std::vector<view_builder::view_build_status>> view_build_status_per_shard,
-        std::unordered_set<utils::UUID>& loaded_views) {
+        std::unordered_set<table_id>& loaded_views) {
     // We must reshard. We aim for a simple algorithm, a step above not starting from scratch.
     // Shards build entries at different paces, so both first and last tokens will differ. We
     // want to be conservative when selecting the range that has been built. To do that, we
     // select the intersection of all the previous shard's ranges for each view.
     struct view_ptr_hash {
         std::size_t operator()(const view_ptr& v) const noexcept {
-            return std::hash<utils::UUID>()(v->id());
+            return std::hash<table_id>()(v->id());
         }
     };
     struct view_ptr_equals {
@@ -1646,7 +1855,7 @@ void view_builder::setup_shard_build_step(
         return view_ptr(nullptr);
     };
 
-    vbi.built_views = boost::copy_range<std::unordered_set<utils::UUID>>(built
+    vbi.built_views = boost::copy_range<std::unordered_set<table_id>>(built
             | boost::adaptors::transformed(maybe_fetch_view)
             | boost::adaptors::filtered([] (const view_ptr& v) { return bool(v); })
             | boost::adaptors::transformed([] (const view_ptr& v) { return v->id(); }));
@@ -1683,7 +1892,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
             return false;
         }
     };
-    std::unordered_set<utils::UUID> loaded_views;
+    std::unordered_set<table_id> loaded_views;
     if (vbi.status_per_shard.size() != smp::count) {
         reshard(std::move(vbi.status_per_shard), loaded_views);
     } else if (!vbi.status_per_shard.empty()) {
@@ -1721,10 +1930,10 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
 future<std::unordered_map<sstring, sstring>>
 view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
-    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<utils::UUID, sstring> status) {
+    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<locator::host_id, sstring> status) {
         auto& endpoint_to_host_id = service::get_local_storage_proxy().get_token_metadata_ptr()->get_endpoint_to_host_id_map_for_reading();
         return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
-                | boost::adaptors::transformed([&status] (const std::pair<gms::inet_address, utils::UUID>& p) {
+                | boost::adaptors::transformed([&status] (const std::pair<gms::inet_address, locator::host_id>& p) {
                     auto it = status.find(p.second);
                     auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
                     return std::pair(p.first.to_sstring(), std::move(s));
@@ -2056,15 +2265,20 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto consumer = compact_for_query_v2<view_builder::consumer>(
+    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
             *step.reader.schema(),
             now,
             step.pslice,
             batch_size,
-            query::max_partitions,
-            view_builder::consumer{*this, step, now});
-    consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
+            query::max_partitions);
+    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
+    if (auto ds = std::move(*compaction_state).detach_state()) {
+        if (ds->current_tombstone) {
+            step.reader.unpop_mutation_fragment(mutation_fragment_v2(*step.reader.schema(), step.reader.permit(), std::move(*ds->current_tombstone)));
+        }
+        step.reader.unpop_mutation_fragment(mutation_fragment_v2(*step.reader.schema(), step.reader.permit(), std::move(ds->partition_start)));
+    }
 
     _as.check();
 
@@ -2147,7 +2361,7 @@ update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog bac
 }
 
 future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name) {
-    return sys_dist_ks.view_status(ks_name, cf_name).then([] (std::unordered_map<utils::UUID, sstring>&& view_statuses) {
+    return sys_dist_ks.view_status(ks_name, cf_name).then([] (std::unordered_map<locator::host_id, sstring>&& view_statuses) {
         return boost::algorithm::any_of(view_statuses | boost::adaptors::map_values, [] (const sstring& view_status) {
             return view_status == "STARTED";
         });
@@ -2265,7 +2479,8 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
 
     std::vector<query::clustering_range> bounds{query::clustering_range::make_singular(base_ck)};
     query::partition_slice partition_slice(std::move(bounds), {},  {}, selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice,
+            _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
     auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();

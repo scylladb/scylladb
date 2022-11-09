@@ -10,10 +10,13 @@
 
 #include "cql3/statements/select_statement.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/statements/index_target.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
+#include "cql3/statements/strongly_consistent_select_statement.hh"
 
+#include "service/broadcast_tables/experimental/lang.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -353,11 +356,12 @@ select_statement::do_execute(query_processor& qp,
             _schema->version(),
             std::move(slice),
             max_result_size,
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
             query::row_limit(limit),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -524,11 +528,12 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             _schema->version(),
             std::move(slice),
             qp.proxy().get_max_result_size(slice),
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
             query::row_limit(get_limit(options)),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
     cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -564,12 +569,14 @@ indexed_table_select_statement::do_execute_base_query(
 
     const bool is_paged = bool(paging_state);
     base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
-    return do_with(std::move(query_state), [this, is_paged, &qp, &state, &options, cmd, timeout] (auto&& query_state) {
+    {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
         auto& concurrency = query_state.concurrency;
         auto& previous_result_size = query_state.previous_result_size;
-        return utils::result_repeat([this, is_paged, &previous_result_size, &ranges_to_vnodes, &merger, &qp, &state, &options, &concurrency, cmd, timeout]() {
+        query::short_read is_short_read = query::short_read::no;
+        bool page_limit_reached = false;
+        while (!is_short_read && !ranges_to_vnodes.empty() && !page_limit_reached) {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
             dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
@@ -606,19 +613,19 @@ indexed_table_select_statement::do_execute_base_query(
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
-            return qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-            .then(utils::result_wrap([is_paged, &previous_result_size, &ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) -> coordinator_result<stop_iteration> {
-                auto is_short_read = qr.query_result->is_short_read();
-                // Results larger than 1MB should be shipped to the client immediately
-                const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
-                previous_result_size = qr.query_result->buf().size();
-                merger(std::move(qr.query_result));
-                return stop_iteration(is_short_read || ranges_to_vnodes.empty() || page_limit_reached);
-            }));
-        }).then(utils::result_wrap([&merger, cmd]() mutable {
-            return make_ready_future<coordinator_result<value_type>>(value_type(merger.get(), std::move(cmd)));
-        }));
-    });
+            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            if (!rqr.has_value()) {
+                co_return std::move(rqr).as_failure();
+            }
+            auto& qr = rqr.value();
+            is_short_read = qr.query_result->is_short_read();
+            // Results larger than 1MB should be shipped to the client immediately
+            page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
+            previous_result_size = qr.query_result->buf().size();
+            merger(std::move(qr.query_result));
+        }
+        co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd)));
+    }
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
@@ -963,18 +970,15 @@ static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& explode
 bytes indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
     const column_definition& cdef = *_view_schema->clustering_key_columns().begin();
     clustering_row empty_row(clustering_key_prefix::make_empty());
-    bytes_opt computed_value;
+    bytes computed_value;
     if (!cdef.is_computed()) {
         // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
         // once "computed_columns feature" is supported by every node
-        computed_value = legacy_token_column_computation().compute_value(*_schema, key, empty_row);
+        computed_value = legacy_token_column_computation().compute_value(*_schema, key);
     } else {
-        computed_value = cdef.get_computation().compute_value(*_schema, key, empty_row);
+        computed_value = cdef.get_computation().compute_value(*_schema, key);
     }
-    if (!computed_value) {
-        throw std::logic_error(format("No value computed for idx_token column {}", cdef.name()));
-    }
-    return *computed_value;
+    return computed_value;
 }
 
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
@@ -1237,11 +1241,12 @@ indexed_table_select_statement::read_posting_list(query_processor& qp,
             _view_schema->version(),
             partition_slice,
             qp.proxy().get_max_result_size(partition_slice),
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
             query::row_limit(limit),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            utils::UUID(),
+            query_id::create_null_id(),
             query::is_first_page::no,
             options.get_timestamp(state));
 
@@ -1299,6 +1304,12 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
+        if (options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            last_dk = dht::decorate_key(*_schema, base_pk);
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
@@ -1335,6 +1346,24 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
         auto rs = cql3::untyped_result_set(rows);
         std::vector<primary_key> primary_keys;
         primary_keys.reserve(rs.size());
+
+        std::optional<std::reference_wrapper<primary_key>> last_primary_key;
+        // Set last_primary_key if indexing map values and not in the first
+        // query page. See comment below why last_primary_key is needed for
+        // indexing map values. We have a test for this with paging:
+        // test_secondary_index.py::test_index_map_values_paging.
+        std::optional<primary_key> page_start_primary_key;
+        if (_index.target_type() == cql3::statements::index_target::target_type::collection_values &&
+            options.get_paging_state()) {
+            auto paging_state = options.get_paging_state();
+            auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            auto base_dk = dht::decorate_key(*_schema, base_pk);
+            auto base_ck = generate_base_key_from_index_pk<clustering_key>(paging_state->get_partition_key(),
+                paging_state->get_clustering_key(), *_schema, *_view_schema);
+            page_start_primary_key = primary_key{std::move(base_dk), std::move(base_ck)};
+            last_primary_key = *page_start_primary_key;
+        }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
@@ -1346,7 +1375,24 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
                 return row.get_blob(cdef.name_as_text());
             });
             auto ck = clustering_key::from_range(ck_columns);
+
+            if (_index.target_type() == cql3::statements::index_target::target_type::collection_values) {
+                // The index on collection values is special in a way, as its' clustering key contains not only the
+                // base primary key, but also a column that holds the keys of the cells in the collection, which
+                // allows to distinguish cells with different keys but the same value.
+                // This has an unwanted consequence, that it's possible to receive two identical base table primary
+                // keys. Thankfully, they are guaranteed to occur consequently.
+                if (last_primary_key) {
+                    const auto& [last_dk, last_ck] = last_primary_key->get();
+                    if (last_dk.equal(*_schema, dk) && last_ck.equal(*_schema, ck)) {
+                        continue;
+                    }
+                }
+            }
+
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
+            // Last use of this reference will be before next .emplace_back to the vector.
+            last_primary_key = primary_keys.back();
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
         return make_ready_future<coordinator_result<value_type>>(value_type(std::move(primary_keys), std::move(paging_state)));
@@ -1481,11 +1527,12 @@ parallelized_select_statement::do_execute(
         _schema->version(),
         std::move(slice),
         qp.proxy().get_max_result_size(slice),
+        query::tombstone_limit(qp.proxy().get_tombstone_limit()),
         query::row_limit(query::max_rows),
         query::partition_limit(query::max_partitions),
         now,
         tracing::make_trace_info(state.get_trace_state()),
-        utils::UUID(),
+        query_id::create_null_id(),
         query::is_first_page::no,
         options.get_timestamp(state)
     );
@@ -1526,12 +1573,8 @@ parallelized_select_statement::do_execute(
 namespace raw {
 
 static void validate_attrs(const cql3::attributes::raw& attrs) {
-    if (attrs.timestamp) {
-        throw exceptions::invalid_request_exception("Specifying TIMESTAMP is not legal for SELECT statement");
-    }
-    if (attrs.time_to_live) {
-        throw exceptions::invalid_request_exception("Specifying TTL is not legal for SELECT statement");
-    }
+    assert(!attrs.timestamp.has_value());
+    assert(!attrs.time_to_live.has_value());
 }
 
 select_statement::select_statement(cf_name cf_name,
@@ -1689,6 +1732,20 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             stats,
             std::move(prepared_attrs)
         );
+    } else if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+        stmt = ::make_shared<cql3::statements::strongly_consistent_select_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,
@@ -2126,7 +2183,10 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         out << join(", ", cols);
     }
     // Note that cf_name may need to be quoted, just like column names above.
-    out << " FROM " << util::maybe_quote(sstring(cf_name)) << " WHERE " << where_clause << " ALLOW FILTERING";
+    out << " FROM " << util::maybe_quote(sstring(cf_name));
+    if (!where_clause.empty()) {
+        out << " WHERE " << where_clause << " ALLOW FILTERING";
+    }
     return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 

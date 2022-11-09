@@ -73,6 +73,14 @@ public:
             std::move(in_values), nullptr, expr::oper_t::IN);
     }
 
+    const std::optional<expr::expression>& get_value() const {
+        return _value;
+    }
+
+    expr::oper_t get_operation() const {
+        return _op;
+    }
+
     class raw final {
     private:
         std::optional<cql3::expr::expression> _value;

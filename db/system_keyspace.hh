@@ -24,6 +24,9 @@
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
+#include "locator/host_id.hh"
+#include "service/raft/group0_fwd.hh"
+#include "tasks/task_manager.hh"
 
 namespace service {
 
@@ -53,6 +56,7 @@ namespace gms {
 
 namespace locator {
     class endpoint_dc_rack;
+    class snitch_ptr;
 } // namespace locator
 
 namespace gms {
@@ -84,7 +88,7 @@ public:
     virtual bool contains_keyspace(std::string_view) = 0;
 };
 
-class system_keyspace : public seastar::peering_sharded_service<system_keyspace> {
+class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     sharded<cql3::query_processor>& _qp;
     sharded<replica::database>& _db;
     std::unique_ptr<local_cache> _cache;
@@ -104,7 +108,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     future<> setup_version(sharded<netw::messaging_service>& ms);
     future<> check_health();
     static future<> force_blocking_flush(sstring cfname);
-    future<> build_dc_rack_info();
     future<> build_bootstrap_info();
     future<> cache_truncation_record();
     template <typename Value>
@@ -136,6 +139,7 @@ public:
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
+    static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -194,7 +198,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG, DISCOVERY };
+    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG, DISCOVERY, BROADCAST_KV_STORE };
 
     static bool is_extra_durable(const sstring& name);
 
@@ -219,11 +223,12 @@ public:
     static schema_ptr repair_history();
     static schema_ptr group0_history();
     static schema_ptr discovery();
+    static schema_ptr broadcast_kv_store();
 
-    static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
+    static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
-    future<> setup(sharded<netw::messaging_service>& ms);
-    future<> update_schema_version(utils::UUID version);
+    future<> setup(sharded<locator::snitch_ptr>& snitch, sharded<netw::messaging_service>& ms);
+    future<> update_schema_version(table_schema_version version);
 
     /*
     * Save tokens used by this node in the LOCAL table.
@@ -248,7 +253,7 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    static future<> make(distributed<replica::database>& db,
+    future<> make(distributed<replica::database>& db,
                          distributed<service::storage_service>& ss,
                          sharded<gms::gossiper>& g,
                          db::config& cfg,
@@ -280,7 +285,8 @@ public:
     /**
      * Return a map of IP addresses containing a map of dc and rack info
      */
-    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> load_dc_rack_info();
+    future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> load_dc_rack_info();
+    locator::endpoint_dc_rack local_dc_rack() const;
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,
@@ -301,14 +307,14 @@ public:
         std::unordered_map<int32_t, int64_t> rows_merged;
     };
 
-    static future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
+    future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                        std::unordered_map<int32_t, int64_t> rows_merged);
     using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
     static future<> get_compaction_history(compaction_history_consumer&& f);
 
     struct repair_history_entry {
-        utils::UUID id;
-        utils::UUID table_uuid;
+        tasks::task_id id;
+        table_id table_uuid;
         db_clock::time_point ts;
         sstring ks;
         sstring cf;
@@ -318,16 +324,16 @@ public:
 
     future<> update_repair_history(repair_history_entry);
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
-    future<> get_repair_history(utils::UUID table_id, repair_history_consumer f);
+    future<> get_repair_history(table_id, repair_history_consumer f);
 
     typedef std::vector<db::replay_position> replay_positions;
 
-    static future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
+    static future<> save_truncation_record(table_id, db_clock::time_point truncated_at, db::replay_position);
     static future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
-    static future<replay_positions> get_truncated_position(utils::UUID);
-    static future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
-    static future<db_clock::time_point> get_truncated_at(utils::UUID);
-    static future<truncation_record> get_truncation_record(utils::UUID cf_id);
+    static future<replay_positions> get_truncated_position(table_id);
+    static future<db::replay_position> get_truncated_position(table_id, uint32_t shard);
+    static future<db_clock::time_point> get_truncated_at(table_id);
+    static future<truncation_record> get_truncation_record(table_id cf_id);
 
     /**
      * Return a map of stored tokens to IP addresses
@@ -339,19 +345,21 @@ public:
      * Return a map of store host_ids to IP addresses
      *
      */
-    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
+    future<std::unordered_map<gms::inet_address, locator::host_id>> load_host_ids();
+
+    future<std::vector<gms::inet_address>> load_peers();
 
     /*
      * Read this node's tokens stored in the LOCAL table.
      * Used to initialize a restarting node.
      */
-    static future<std::unordered_set<dht::token>> get_saved_tokens();
+    future<std::unordered_set<dht::token>> get_saved_tokens();
 
     /*
      * Gets this node's non-empty set of tokens.
      * TODO: maybe get this data from token_metadata instance?
      */
-    static future<std::unordered_set<dht::token>> get_local_tokens();
+    future<std::unordered_set<dht::token>> get_local_tokens();
 
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
@@ -367,12 +375,12 @@ public:
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    future<utils::UUID> load_local_host_id();
+    future<locator::host_id> load_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    future<utils::UUID> set_local_host_id(utils::UUID host_id);
+    future<locator::host_id> set_local_host_id(locator::host_id host_id);
 
     static api::timestamp_type schema_creation_timestamp();
 
@@ -403,16 +411,16 @@ public:
     /*
     * Save the CDC generation ID announced by this node in persistent storage.
     */
-    static future<> update_cdc_generation_id(cdc::generation_id);
+    future<> update_cdc_generation_id(cdc::generation_id);
 
     /*
     * Read the CDC generation ID announced by this node from persistent storage.
     * Used to initialize a restarting node.
     */
-    static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
+    future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
-    static future<bool> cdc_is_rewritten();
-    static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+    future<bool> cdc_is_rewritten();
+    future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
 
@@ -454,20 +462,23 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
 
+    future<service::group0_upgrade_state> load_group0_upgrade_state();
+    future<> save_group0_upgrade_state(service::group0_upgrade_state);
+
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
     ~system_keyspace();
-    future<> start();
+    future<> start(const locator::snitch_ptr&);
     future<> stop();
+    future<> shutdown();
 
 private:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
 
+public:
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
         return execute_cql(req, { data_value(std::forward<Args>(args))... });
     }
 }; // class system_keyspace
-
-future<> system_keyspace_make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, table_selector&);
 
 } // namespace db

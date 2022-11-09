@@ -16,7 +16,7 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "inet_address_vectors.hh"
-#include "utils/UUID.hh"
+#include "locator/host_id.hh"
 #include <optional>
 #include <memory>
 #include <boost/range/iterator_range.hpp>
@@ -45,15 +45,21 @@ struct endpoint_dc_rack {
 
 class topology {
 public:
-    topology() {}
+    struct config {
+        endpoint_dc_rack local_dc_rack;
+        bool disable_proximity_sorting = false;
+    };
+    topology(config cfg);
     topology(const topology& other);
 
     future<> clear_gently() noexcept;
 
+    using pending = bool_class<struct pending_tag>;
+
     /**
      * Stores current DC/rack assignment for ep
      */
-    void add_endpoint(const inet_address& ep);
+    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend);
 
     /**
      * Removes current DC/rack assignment for ep
@@ -61,33 +67,14 @@ public:
     void remove_endpoint(inet_address ep);
 
     /**
-     * Re-reads the DC/rack info for the given endpoint
-     * @param ep endpoint in question
-     */
-    void update_endpoint(inet_address ep);
-
-    /**
      * Returns true iff contains given endpoint
      */
-    bool has_endpoint(inet_address) const;
-
-    std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>&
-    get_datacenter_endpoints() {
-        return _dc_endpoints;
-    }
+    bool has_endpoint(inet_address, pending with_pending = pending::no) const;
 
     const std::unordered_map<sstring,
                            std::unordered_set<inet_address>>&
     get_datacenter_endpoints() const {
         return _dc_endpoints;
-    }
-
-    std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
-    get_datacenter_racks() {
-        return _dc_racks;
     }
 
     const std::unordered_map<sstring,
@@ -103,7 +90,31 @@ public:
     sstring get_datacenter() const;
     sstring get_datacenter(inet_address ep) const;
 
+    auto get_local_dc_filter() const noexcept {
+        return [ this, local_dc = get_datacenter() ] (inet_address ep) {
+            return get_datacenter(ep) == local_dc;
+        };
+    };
+
+    template <std::ranges::range Range>
+    inline size_t count_local_endpoints(const Range& endpoints) const {
+        return std::count_if(endpoints.begin(), endpoints.end(), get_local_dc_filter());
+    }
+
+    /**
+     * This method will sort the <tt>List</tt> by proximity to the given
+     * address.
+     */
+    void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
+
 private:
+    /**
+     * compares two endpoints in relation to the target endpoint, returning as
+     * Comparator.compare would
+     */
+    int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    void remove_pending_location(const inet_address& ep);
+
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
                        std::unordered_set<inet_address>>
@@ -117,14 +128,47 @@ private:
 
     /** reverse-lookup map: endpoint -> current known dc/rack assignment */
     std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
+    std::unordered_map<inet_address, endpoint_dc_rack> _pending_locations;
+
+    bool _sort_by_proximity = true;
 };
 
+class token_metadata;
+
+struct host_id_or_endpoint {
+    host_id id;
+    gms::inet_address endpoint;
+
+    enum class param_type {
+        host_id,
+        endpoint,
+        auto_detect
+    };
+
+    host_id_or_endpoint(const sstring& s, param_type restrict = param_type::auto_detect);
+
+    bool has_host_id() const noexcept {
+        return bool(id);
+    }
+
+    bool has_endpoint() const noexcept {
+        return endpoint != gms::inet_address();
+    }
+
+    // Map the host_id to endpoint based on whichever of them is set,
+    // using the token_metadata
+    void resolve(const token_metadata& tm);
+};
+
+using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;
 class token_metadata_impl;
 
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 public:
-    using UUID = utils::UUID;
+    struct config {
+        topology::config topo_cfg;
+    };
     using inet_address = gms::inet_address;
 private:
     class tokens_iterator {
@@ -147,8 +191,9 @@ private:
 
         friend class token_metadata_impl;
     };
+
 public:
-    token_metadata();
+    token_metadata(config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
@@ -160,12 +205,6 @@ public:
     // Note: the function is not exception safe!
     // It must be called only on a temporary copy of the token_metadata
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    // Batch update token->endpoint mappings for the given endpoints.
-    // The \c endpoint_tokens map contains the set of tokens currently owned by each respective endpoint.
-    //
-    // Note: the function is not exception safe!
-    // It must be called only on a temporary copy of the token_metadata
-    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -173,7 +212,7 @@ public:
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
-    void update_topology(inet_address ep);
+    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend = topology::pending::no);
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
@@ -197,19 +236,23 @@ public:
      * @param hostId
      * @param endpoint
      */
-    void update_host_id(const UUID& host_id, inet_address endpoint);
+    void update_host_id(const locator::host_id& host_id, inet_address endpoint);
 
     /** Return the unique host ID for an end-point. */
-    UUID get_host_id(inet_address endpoint) const;
+    host_id get_host_id(inet_address endpoint) const;
 
     /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
+    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
 
     /** Return the end-point for a unique host ID */
-    std::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
+    std::optional<inet_address> get_endpoint_for_host_id(locator::host_id host_id) const;
+
+    /// Parses the \c host_id_string either as a host uuid or as an ip address and returns the mapping.
+    /// Throws std::invalid_argument on parse error or std::runtime_error if the host_id wasn't found.
+    host_id_or_endpoint parse_host_id_and_endpoint(const sstring& host_id_string) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
+    const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
@@ -302,7 +345,7 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
 
     token get_predecessor(token t) const;
 
@@ -346,8 +389,8 @@ class shared_token_metadata {
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
-    explicit shared_token_metadata(token_metadata_lock_func lock_func)
-        : _shared(make_token_metadata_ptr())
+    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
+        : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
     { }
 

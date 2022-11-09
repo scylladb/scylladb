@@ -21,6 +21,8 @@
 
 namespace query {
 
+extern logging::logger qrlogger;
+
 /// Consume a page worth of data from the reader.
 ///
 /// Uses `compaction_state` for compacting the fragments and `consumer` for
@@ -51,6 +53,14 @@ auto consume_page(flat_mutation_reader_v2& reader,
 class querier_base {
     friend class querier_utils;
 
+public:
+    struct querier_config {
+        uint32_t tombstone_warn_threshold {0}; // 0 disabled
+        querier_config() = default;
+        explicit querier_config(uint32_t warn)
+            : tombstone_warn_threshold(warn) {}
+    };
+
 protected:
     schema_ptr _schema;
     reader_permit _permit;
@@ -58,6 +68,7 @@ protected:
     std::unique_ptr<const query::partition_slice> _slice;
     std::variant<flat_mutation_reader_v2, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
+    querier_config _qr_config;
 
 public:
     querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
@@ -71,13 +82,15 @@ public:
     { }
 
     querier_base(schema_ptr schema, reader_permit permit, dht::partition_range range,
-            query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr)
+            query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr,
+            querier_config config)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, pc, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _query_ranges(*_range)
+        , _qr_config(std::move(config))
     { }
 
     querier_base(querier_base&&) = default;
@@ -141,8 +154,9 @@ public:
             dht::partition_range range,
             query::partition_slice slice,
             const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr)
-        : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr))
+            tracing::trace_state_ptr trace_ptr,
+            querier_config config = {})
+        : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr), std::move(config))
         , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
@@ -169,6 +183,17 @@ public:
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
                     cstats.range_tombstones);
+            auto dead = cstats.static_rows.dead + cstats.clustering_rows.dead + cstats.range_tombstones;
+            if (_qr_config.tombstone_warn_threshold > 0 && dead >= _qr_config.tombstone_warn_threshold) {
+                auto live = cstats.static_rows.live + cstats.clustering_rows.live;
+                if (_range->is_singular()) {
+                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
+                } else {
+                    qrlogger.warn("Read {} live rows and {} tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
+                                  live, dead, _schema->ks_name(), _schema->cf_name(), (*_range));
+                }
+            }
             return std::move(fut);
         });
     }
@@ -286,7 +311,7 @@ public:
         uint64_t population = 0;
     };
 
-    using index = std::unordered_multimap<utils::UUID, std::unique_ptr<querier_base>>;
+    using index = std::unordered_multimap<query_id, std::unique_ptr<querier_base>>;
 
 private:
     index _data_querier_index;
@@ -299,7 +324,7 @@ private:
 private:
     template <typename Querier>
     void insert_querier(
-            utils::UUID key,
+            query_id key,
             querier_cache::index& index,
             querier_cache::stats& stats,
             Querier&& q,
@@ -309,7 +334,7 @@ private:
     template <typename Querier>
     std::optional<Querier> lookup_querier(
         querier_cache::index& index,
-        utils::UUID key,
+        query_id key,
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
@@ -326,11 +351,11 @@ public:
     querier_cache(querier_cache&&) = delete;
     querier_cache& operator=(querier_cache&&) = delete;
 
-    void insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_data_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_mutation_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state);
 
-    void insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert_shard_querier(query_id key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
     /// Lookup a data querier in the cache.
     ///
@@ -345,7 +370,7 @@ public:
     /// The found querier is checked for a matching position and schema version.
     /// The start position of the querier is checked against the start position
     /// of the page using the `range' and `slice'.
-    std::optional<querier> lookup_data_querier(utils::UUID key,
+    std::optional<querier> lookup_data_querier(query_id key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -355,7 +380,7 @@ public:
     /// Lookup a mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<querier> lookup_mutation_querier(utils::UUID key,
+    std::optional<querier> lookup_mutation_querier(query_id key,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -365,7 +390,7 @@ public:
     /// Lookup a shard mutation querier in the cache.
     ///
     /// See \ref lookup_data_querier().
-    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(utils::UUID key,
+    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(query_id key,
             const schema& s,
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
@@ -382,11 +407,6 @@ public:
     /// Return true if a querier was evicted and false otherwise (if the cache
     /// is empty).
     future<bool> evict_one() noexcept;
-
-    /// Evict all queriers that belong to a table.
-    ///
-    /// Should be used when dropping a table.
-    future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
 
     /// Close all queriers and wait on background work.
     ///

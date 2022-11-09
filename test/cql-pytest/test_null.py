@@ -52,21 +52,17 @@ def test_insert_null_key(cql, table1):
 
 # Tests handling of "key_column in ?" where ? is bound to null.
 # Reproduces issue #8265.
-def test_primary_key_in_null(cql, table1):
-    with pytest.raises(InvalidRequest, match='null value'):
-        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p IN ?"), [None])
-    with pytest.raises(InvalidRequest, match='null value'):
-        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p='' AND c IN ?"), [None])
-    with pytest.raises(InvalidRequest, match='Invalid null value for IN restriction'):
-        cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p='' AND (c) IN ?"), [None])
+def test_primary_key_in_null(scylla_only, cql, table1):
+    assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p IN ?"), [None])) == []
+    assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p='' AND c IN ?"), [None])) == []
+    assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE p='' AND (c) IN ?"), [None])) == []
 
 # Cassandra says "IN predicates on non-primary-key columns (v) is not yet supported".
 def test_regular_column_in_null(scylla_only, cql, table1):
     '''Tests handling of "regular_column in ?" where ? is bound to null.'''
     # Without any rows in the table, SELECT will shortcircuit before evaluating the WHERE clause.
     cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('p', 'c')")
-    with pytest.raises(InvalidRequest, match='null value'):
-        cql.execute(cql.prepare(f"SELECT v FROM {table1} WHERE v IN ? ALLOW FILTERING"), [None])
+    assert list(cql.execute(cql.prepare(f"SELECT v FROM {table1} WHERE v IN ? ALLOW FILTERING"), [None])) == []
 
 # Though nonsensical, this operation is allowed by Cassandra.  Ensure we allow it, too.
 def test_delete_impossible_clustering_range(cql, table1):
@@ -120,7 +116,6 @@ def test_filtering_inequality_null(cassandra_bug, cql, table1):
 
 # Similarly, CONTAINS restriction with NULL should also match nothing.
 # Reproduces #10359.
-@pytest.mark.xfail(reason="Issue #10359")
 def test_filtering_contains_null(cassandra_bug, cql, table1):
     p = unique_key_string()
     cql.execute(f"INSERT INTO {table1} (p,c,s) VALUES ('{p}', '1', {{1, 2}})")
@@ -130,7 +125,6 @@ def test_filtering_contains_null(cassandra_bug, cql, table1):
 
 # Similarly, CONTAINS KEY restriction with NULL should also match nothing.
 # Reproduces #10359.
-@pytest.mark.xfail(reason="Issue #10359")
 def test_filtering_contains_key_null(cassandra_bug, cql, table1):
     p = unique_key_string()
     cql.execute(f"INSERT INTO {table1} (p,c,m) VALUES ('{p}', '1', {{1: 2}})")

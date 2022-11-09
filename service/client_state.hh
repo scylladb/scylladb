@@ -196,6 +196,15 @@ public:
             , _timeout_config(config)
     {}
 
+    client_state(internal_tag, auth::service& auth_service, qos::service_level_controller& sl_controller, sstring username)
+        : _user(auth::authenticated_user(username))
+        , _auth_state(auth_state::READY)
+        , _is_internal(true)
+        , _is_thrift(false)
+        , _auth_service(&auth_service)
+        , _sl_controller(&sl_controller)
+    {}
+
     client_state(const client_state&) = delete;
     client_state(client_state&&) = default;
 

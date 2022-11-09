@@ -12,46 +12,35 @@
 
 #include <variant>
 #include "replica/database_fwd.hh"
-#include "data_dictionary/data_dictionary.hh"
 #include "message/messaging_service_fwd.hh"
-#include "query-request.hh"
-#include "query-result.hh"
-#include "query-result-set.hh"
-#include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
-#include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
-#include "db/view/view_update_backlog.hh"
 #include "db/view/node_view_update_backlog.hh"
-#include "utils/histogram.hh"
-#include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
-#include "cache_temperature.hh"
 #include "service_permit.hh"
-#include "service/client_state.hh"
 #include "cdc/stats.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
-#include "query_ranges_to_vnodes.hh"
-#include "partition_range_compat.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
-#include "db/per_partition_rate_limit_info.hh"
+#include "locator/host_id.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
 class frozen_mutation;
+class cache_temperature;
+class query_ranges_to_vnodes_generator;
 
 namespace seastar::rpc {
 
@@ -89,9 +78,11 @@ class paxos_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 class view_update_write_response_handler;
+class client_state;
+class migration_manager;
 struct hint_wrapper;
 
-using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
+using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
@@ -225,7 +216,8 @@ public:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
-    inet_address_vector_replica_set get_live_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    query::tombstone_limit get_tombstone_limit() const;
+    inet_address_vector_replica_set get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
 
 private:
     distributed<replica::database>& _db;
@@ -312,7 +304,7 @@ private:
     result<response_id_type> create_write_response_handler_helper(schema_ptr s, const dht::token& token,
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit, db::allow_per_partition_rate_limit allow_limit);
-    result<response_id_type> create_write_response_handler(replica::keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
+    result<response_id_type> create_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
@@ -330,11 +322,12 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
-    inet_address_vector_replica_set get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const;
+    void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const;
+    inet_address_vector_replica_set get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
+            locator::effective_replication_map_ptr ermp,
             schema_ptr schema,
             dht::partition_range pr,
             db::consistency_level cl,
@@ -348,17 +341,21 @@ private:
                                                                            tracing::trace_state_ptr trace_state,
                                                                            clock_type::time_point timeout,
                                                                            db::per_partition_rate_limit::info rate_limit_info);
-    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
-                                                                                                   tracing::trace_state_ptr trace_state,
-                                                                                                   clock_type::time_point timeout,
-                                                                                                   query::digest_algorithm da,
-                                                                                                   db::per_partition_rate_limit::info rate_limit_info);
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> query_result_local_digest(
+            schema_ptr,
+            lw_shared_ptr<query::read_command> cmd,
+            const dht::partition_range& pr,
+            tracing::trace_state_ptr trace_state,
+            clock_type::time_point timeout,
+            query::digest_algorithm da,
+            db::per_partition_rate_limit::info rate_limit_info);
     future<result<coordinator_query_result>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
     static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
     future<result<query_partition_key_range_concurrent_result>> query_partition_key_range_concurrent(clock_type::time_point timeout,
+            locator::effective_replication_map_ptr erm,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
@@ -404,7 +401,7 @@ private:
     future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
                                                     tracing::trace_state_ptr trace_state, service_permit permit);
 
-    gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
+    gms::inet_address find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
 
     future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
@@ -427,6 +424,16 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+
+    /**
+     * Returns whether for a range query doing a query against merged is likely
+     * to be faster than 2 sequential queries, one against l1 followed by one
+     * against l2.
+     */
+    bool is_worth_merging_for_range_query(
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) const;
 
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
@@ -521,7 +528,7 @@ public:
     future<result<>> mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
 
     paxos_participants
-    get_paxos_participants(const sstring& ks_name, const dht::token& token, db::consistency_level consistency_for_paxos);
+    get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token, db::consistency_level consistency_for_paxos);
 
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
@@ -570,8 +577,9 @@ public:
      * the column family cfname
      * @param keyspace
      * @param cfname
+     * @param timeout (default: use truncate_request_timeout_in_ms config)
      */
-    future<> truncate_blocking(sstring keyspace, sstring cfname);
+    future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
 
     /*
      * Executes data query on the whole cluster.
@@ -673,118 +681,6 @@ public:
     friend class shared_mutation;
     friend class hint_mutation;
     friend class cas_mutation;
-};
-
-// A Paxos (AKA Compare And Swap, CAS) protocol involves multiple roundtrips between the coordinator
-// and endpoint participants. Some endpoints may be unavailable or slow, and this does not stop the
-// protocol progress. paxos_response_handler stores the shared state of the storage proxy associated
-// with all the futures associated with a Paxos protocol step (prepare, accept, learn), including
-// those outstanding by the time the step ends.
-//
-class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
-private:
-    shared_ptr<storage_proxy> _proxy;
-    // The schema for the table the operation works upon.
-    schema_ptr _schema;
-    // Read command used by this CAS request.
-    lw_shared_ptr<query::read_command> _cmd;
-    // SERIAL or LOCAL SERIAL - influences what endpoints become Paxos protocol participants,
-    // as well as Paxos quorum size. Is either set explicitly in the query or derived from
-    // the value set by SERIAL CONSISTENCY [SERIAL|LOCAL SERIAL] control statement.
-    db::consistency_level _cl_for_paxos;
-    // QUORUM, LOCAL_QUORUM, etc - defines how many replicas to wait for in LEARN step.
-    // Is either set explicitly or derived from the consistency level set in keyspace options.
-    db::consistency_level _cl_for_learn;
-    // Live endpoints, as per get_paxos_participants()
-    inet_address_vector_replica_set _live_endpoints;
-    // How many endpoints need to respond favourably for the protocol to progress to the next step.
-    size_t _required_participants;
-    // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
-    storage_proxy::clock_type::time_point _timeout;
-    // A deadline when the CAS operation gives up due to contention, derived from cas_contention_timeout_in_ms
-    storage_proxy::clock_type::time_point _cas_timeout;
-    // The key this request is working on.
-    dht::decorated_key _key;
-    // service permit from admission control
-    service_permit _permit;
-    // how many replicas replied to learn
-    uint64_t _learned = 0;
-
-    // Unique request id generator.
-    static thread_local uint64_t next_id;
-
-    // Unique request id for logging purposes.
-    const uint64_t _id = next_id++;
-
-    // max pruning operations to run in parralel
-    static constexpr uint16_t pruning_limit = 1000;
-
-public:
-    tracing::trace_state_ptr tr_state;
-
-public:
-    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
-        service_permit permit_arg,
-        dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
-        db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
-        storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
-
-        : _proxy(proxy_arg)
-        , _schema(std::move(schema_arg))
-        , _cmd(cmd_arg)
-        , _cl_for_paxos(cl_for_paxos_arg)
-        , _cl_for_learn(cl_for_learn_arg)
-        , _timeout(timeout_arg)
-        , _cas_timeout(cas_timeout_arg)
-        , _key(std::move(key_arg))
-        , _permit(std::move(permit_arg))
-        , tr_state(tr_state_arg) {
-        storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
-        _live_endpoints = std::move(pp.endpoints);
-        _required_participants = pp.required_participants;
-        tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
-                _key.token(), _live_endpoints, _required_participants);
-        _proxy->get_stats().cas_foreground++;
-        _proxy->get_stats().cas_total_running++;
-        _proxy->get_stats().cas_total_operations++;
-    }
-
-    ~paxos_response_handler() {
-        _proxy->get_stats().cas_total_running--;
-    }
-
-    // Result of PREPARE step, i.e. begin_and_repair_paxos().
-    struct ballot_and_data {
-        // Accepted ballot.
-        utils::UUID ballot;
-        // Current value of the requested key or none.
-        foreign_ptr<lw_shared_ptr<query::result>> data;
-    };
-
-    // Steps of the Paxos protocol
-    future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
-    future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
-    future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted = true);
-    future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false);
-    void prune(utils::UUID ballot);
-    uint64_t id() const {
-        return _id;
-    }
-    size_t block_for() const {
-        return _required_participants;
-    }
-    schema_ptr schema() const {
-        return _schema;
-    }
-    const partition_key& key() const {
-        return _key.key();
-    }
-    void set_cl_for_learn(db::consistency_level cl) {
-        _cl_for_learn = cl;
-    }
-    // this is called with an id of a replica that replied to learn request
-    // adn returns true when quorum of such requests are accumulated
-    bool learned(gms::inet_address ep);
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

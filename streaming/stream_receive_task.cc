@@ -13,7 +13,7 @@
 
 namespace streaming {
 
-stream_receive_task::stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size)
+stream_receive_task::stream_receive_task(shared_ptr<stream_session> _session, table_id _cf_id, int _total_files, long _total_size)
         : stream_task(_session, _cf_id)
         , total_files(_total_files)
         , total_size(_total_size) {

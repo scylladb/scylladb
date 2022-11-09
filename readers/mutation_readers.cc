@@ -28,6 +28,7 @@
 #include "readers/queue.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/upgrading_consumer.hh"
+#include "tombstone_gc.hh"
 #include <seastar/core/coroutine.hh>
 #include <stack>
 
@@ -125,7 +126,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
         }
         void maybe_emit_end_tombstone() {
             if (_active_tombstone) {
-                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::after_key(_current.end()), {}));
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::before_key(_current.end()), {}));
             }
         }
     public:
@@ -1408,6 +1409,7 @@ private:
         if (_last_uncompacted_kind != mutation_fragment_v2::kind::partition_end) {
             _ignore_partition_end = true;
             _compactor.consume_end_of_partition(*this, _gc_consumer);
+            _last_uncompacted_kind = mutation_fragment_v2::kind::partition_end;
             _ignore_partition_end = false;
         }
     }
@@ -1456,10 +1458,11 @@ private:
 public:
     compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            const tombstone_gc_state& gc_state,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : impl(source.schema(), source.permit())
         , _reader(std::move(source))
-        , _compactor(*_schema, compaction_time, get_max_purgeable)
+        , _compactor(*_schema, compaction_time, get_max_purgeable, gc_state)
         , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{})
         , _fwd(fwd) {
     }
@@ -1541,6 +1544,7 @@ public:
 } // anonymous namespace
 
 flat_mutation_reader_v2 make_compacting_reader(flat_mutation_reader_v2 source, gc_clock::time_point compaction_time,
-        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader_v2<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, fwd);
+        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+        const tombstone_gc_state& gc_state, streamed_mutation::forwarding fwd) {
+    return make_flat_mutation_reader_v2<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, gc_state, fwd);
 }

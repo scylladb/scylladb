@@ -62,6 +62,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/exception_utils.hh"
 
 namespace fs = std::filesystem;
 
@@ -546,7 +547,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
             mutation m(s, key);
 
             std::vector<counter_id> ids;
-            std::generate_n(std::back_inserter(ids), 3, counter_id::generate_random);
+            std::generate_n(std::back_inserter(ids), 3, counter_id::create_random_id);
             boost::range::sort(ids);
 
             counter_cell_builder b1;
@@ -2505,7 +2506,12 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
                 .build(schema_builder::compact_storage::yes);
 
         auto sst = env.make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
-        sst->load().get0();
+        try {
+            sst->load().get();
+        } catch (...) {
+            BOOST_REQUIRE_EXCEPTION(current_exception_as_future().get(), sstables::malformed_sstable_exception, exception_predicate::message_contains(
+                "Failed to read partition from SSTable "));
+        }
 
         {
             assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
@@ -2700,10 +2706,104 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 
         auto tmp = tmpdir();
         sstable_writer_config cfg = env.manager().configure_writer();
-        cfg.run_identifier = utils::make_random_uuid();
+        cfg.run_identifier = sstables::run_id::create_random_id();
         auto sst = make_sstable_easy(env, tmp.path(),  make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
+    return test_env::do_with([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto key_and_token_pair = token_generation_for_current_shard(6);
+        auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
+
+        sstables::sstable_run run;
+
+        auto insert = [&] (int first_key_idx, int last_key_idx) {
+            auto sst = sstable_for_overlapping_test(env, s, next_gen(),
+                                                    key_and_token_pair[first_key_idx].first, key_and_token_pair[last_key_idx].first);
+            return run.insert(sst);
+        };
+
+        // insert ranges [0, 0], [1, 1], [3, 4]
+        BOOST_REQUIRE(insert(0, 0) == true);
+        BOOST_REQUIRE(insert(1, 1) == true);
+        BOOST_REQUIRE(insert(3, 4) == true);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check overlapping candidates won't be inserted
+        BOOST_REQUIRE(insert(0, 4) == false);
+        BOOST_REQUIRE(insert(4, 5) == false);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check non-overlapping candidates will be inserted
+        BOOST_REQUIRE(insert(2, 2) == true);
+        BOOST_REQUIRE(insert(5, 5) == true);
+        BOOST_REQUIRE(run.all().size() == 5);
+
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_run_clustering_disjoint_invariant_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(1);
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto make_sstable = [&] (int first_ckey_idx, int last_ckey_idx) {
+            std::vector<mutation> muts;
+            auto mut = mutation(s, pks[0]);
+
+            auto first_ckey_prefix = ss.make_ckey(first_ckey_idx);
+            mut.partition().apply_insert(*s, first_ckey_prefix, ss.new_timestamp());
+            auto last_ckey_prefix = ss.make_ckey(last_ckey_idx);
+            if (first_ckey_prefix != last_ckey_prefix) {
+                mut.partition().apply_insert(*s, last_ckey_prefix, ss.new_timestamp());
+            }
+            muts.push_back(std::move(mut));
+
+            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+
+            BOOST_REQUIRE(sst->min_position().key() == first_ckey_prefix);
+            BOOST_REQUIRE(sst->max_position().key() == last_ckey_prefix);
+            testlog.info("sstable: {} {} -> {} {}", first_ckey_idx, last_ckey_idx, sst->first_partition_first_position(), sst->last_partition_last_position());
+
+            return sst;
+        };
+
+        sstables::sstable_run run;
+
+        auto insert = [&] (int first_ckey_idx, int last_ckey_idx) {
+            auto sst = make_sstable(first_ckey_idx, last_ckey_idx);
+            return run.insert(sst);
+        };
+
+        // insert sstables with disjoint clustering ranges [0, 1], [4, 5], [6, 7]
+        BOOST_REQUIRE(insert(0, 1) == true);
+        BOOST_REQUIRE(insert(4, 5) == true);
+        BOOST_REQUIRE(insert(6, 7) == true);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check overlapping candidates won't be inserted
+        BOOST_REQUIRE(insert(0, 4) == false);
+        BOOST_REQUIRE(insert(1, 3) == false);
+        BOOST_REQUIRE(insert(5, 6) == false);
+        BOOST_REQUIRE(insert(7, 8) == false);
+        BOOST_REQUIRE(run.all().size() == 3);
+
+        // check non-overlapping candidates will be inserted
+        BOOST_REQUIRE(insert(2, 3) == true);
+        BOOST_REQUIRE(insert(8, 9) == true);
+        BOOST_REQUIRE(run.all().size() == 5);
     });
 }
 
@@ -2740,7 +2840,7 @@ static dht::token token_from_long(int64_t value) {
 
 SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
     using value_set = std::unordered_set<int64_t>;
-    using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position_or_view, value_set>;
     using interval_type = interval_map_type::interval_type;
 
     interval_map_type map;
@@ -2750,8 +2850,8 @@ SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-    auto make_pos = [&] (int64_t token) -> compatible_ring_position {
-        return compatible_ring_position(s, dht::ring_position::starting_at(token_from_long(token)));
+    auto make_pos = [&] (int64_t token) -> compatible_ring_position_or_view {
+        return compatible_ring_position_or_view(s, dht::ring_position::starting_at(token_from_long(token)));
     };
 
     auto add = [&] (int64_t start, int64_t end, int gen) {
@@ -2948,6 +3048,11 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
             size_t compound_size = compound->all()->size();
             BOOST_REQUIRE(compound_size == 3);
             BOOST_REQUIRE(compound_size == found);
+        }
+
+        {
+            auto cloned_compound = *compound;
+            BOOST_REQUIRE(cloned_compound.all()->size() == 3);
         }
 
         set2 = make_lw_shared(cs.make_sstable_set(s));
@@ -3147,5 +3252,147 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
         }
 
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_crawling_reader_out_of_range_last_range_tombstone_change) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema table;
+
+        auto mut = table.new_mutation("pk0");
+        auto ckeys = table.make_ckeys(4);
+        table.add_row(mut, ckeys[0], "v0");
+        table.add_row(mut, ckeys[1], "v1");
+        table.add_row(mut, ckeys[2], "v2");
+        using bound = query::clustering_range::bound;
+        table.delete_range(mut, query::clustering_range::make(bound{ckeys[3], true}, bound{clustering_key::make_empty(), true}), tombstone(1, gc_clock::now()));
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, &table, &tmp] () {
+            return env.make_sstable(table.schema(), tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+        };
+        auto sst = make_sstable_containing(sst_gen, {mut});
+
+        assert_that(sst->make_crawling_reader(table.schema(), env.make_reader_permit())).has_monotonic_positions();
+    });
+}
+
+SEASTAR_TEST_CASE(test_crawling_reader_random_schema_random_mutations) {
+    return test_env::do_with_async([this] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, schema, &tmp] () {
+            return env.make_sstable(schema, tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+        };
+        auto sst = make_sstable_containing(sst_gen, muts);
+
+        {
+            auto rd = assert_that(sst->make_crawling_reader(schema, env.make_reader_permit()));
+
+            for (const auto& mut : muts) {
+                rd.produces(mut);
+            }
+        }
+
+        assert_that(sst->make_crawling_reader(schema, env.make_reader_permit())).has_monotonic_positions();
+    });
+}
+
+SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        class with_range_tombstone_tag;
+        using with_range_tombstone = bool_class<with_range_tombstone_tag>;
+        class with_static_row_tag;
+        using with_static_row = bool_class<with_static_row_tag>;
+
+        auto check_sstable_first_and_last_positions = [&env] (size_t partitions, with_range_tombstone with_range_tombstone, with_static_row with_static_row) {
+            testlog.info("check_sstable_first_and_last_positions: partitions={}, with_range_tombstone={}, with_static_row={}",
+                partitions, bool(with_range_tombstone), bool(with_static_row));
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pks = ss.make_pkeys(partitions);
+            auto tmp = tmpdir();
+            auto sst_gen = [&env, s, &tmp]() {
+                return env.make_sstable(s, tmp.path().string(), 1, sstables::get_highest_sstable_version(), big);
+            };
+
+            std::vector<mutation> muts;
+            std::optional<position_in_partition> first_position, last_position;
+
+            static constexpr size_t ckeys_per_partition = 10;
+
+            size_t ck_idx = 0;
+            for (size_t pr = 0; pr < partitions; pr++) {
+                auto mut1 = mutation(s, pks[pr]);
+
+                if (with_static_row) {
+                    ss.add_static_row(mut1, "svalue");
+                    if (!first_position) {
+                        first_position = position_in_partition::for_static_row();
+                    }
+                }
+
+                for (size_t ck = 0; ck < ckeys_per_partition; ck++) {
+                    auto ckey = ss.make_ckey(ck_idx + ck);
+                    if (!first_position) {
+                        first_position = position_in_partition::for_key(ckey);
+                    }
+                    last_position = position_in_partition::for_key(ckey);
+                    if (with_range_tombstone && ck % 2 == 0) {
+                        tombstone tomb(ss.new_timestamp(), gc_clock::now());
+                        range_tombstone rt(
+                            bound_view(ckey, bound_kind::incl_start),
+                            bound_view(ckey, bound_kind::incl_end),
+                            tomb);
+                        mut1.partition().apply_delete(*s, std::move(rt));
+                    } else {
+                        mut1.partition().apply_insert(*s, ckey, ss.new_timestamp());
+                    }
+                }
+                muts.push_back(std::move(mut1));
+            }
+            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+            position_in_partition::equal_compare eq(*s);
+            if (!with_static_row) {
+                BOOST_REQUIRE(sst->min_position().key() == first_position->key());
+                BOOST_REQUIRE(sst->max_position().key() == last_position->key());
+            }
+
+            auto first_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_first_decorated_key(), false).get0();
+            BOOST_REQUIRE(first_position_opt);
+
+            auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get0();
+            BOOST_REQUIRE(last_position_opt);
+
+            BOOST_REQUIRE(eq(*first_position_opt, *first_position));
+            BOOST_REQUIRE(eq(*last_position_opt, *last_position));
+
+            BOOST_REQUIRE(eq(sst->first_partition_first_position(), *first_position));
+            BOOST_REQUIRE(eq(sst->last_partition_last_position(), *last_position));
+        };
+
+        std::array<size_t, 2> partitions_options = { 1, 5 };
+        std::array<with_range_tombstone, 2> range_tombstone_options = { with_range_tombstone::no, with_range_tombstone::yes };
+        std::array<with_static_row, 2> static_row_options = { with_static_row::no, with_static_row::yes };
+
+        for (size_t partitions : partitions_options) {
+            for (with_range_tombstone range_tombstone_opt : range_tombstone_options) {
+                for (with_static_row static_row_opt : static_row_options) {
+                    check_sstable_first_and_last_positions(partitions, range_tombstone_opt, static_row_opt);
+                }
+            }
+        }
     });
 }

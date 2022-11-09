@@ -182,7 +182,7 @@ public:
         return ret;
     }
     template <typename Range> // range of managed_bytes_opt or managed_bytes_view_opt
-    requires requires (Range it) { {it.begin()->value()} -> std::convertible_to<managed_bytes_view>; }
+    requires requires (Range it) { {std::begin(it)->value()} -> std::convertible_to<managed_bytes_view>; }
     static managed_bytes build_value_fragmented(Range&& range) {
         size_t size = 0;
         for (auto&& v : range) {

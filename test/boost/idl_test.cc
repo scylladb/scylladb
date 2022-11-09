@@ -18,7 +18,6 @@
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
-#include "serializer.hh"
 
 struct simple_compound {
     // TODO: change this to test for #905
@@ -153,9 +152,7 @@ struct const_template_arg_test_object {
     }
 };
 
-#include "serialization_visitors.hh"
 #include "idl/idl_test.dist.hh"
-#include "serializer_impl.hh"
 #include "idl/idl_test.dist.impl.hh"
 
 BOOST_AUTO_TEST_CASE(test_simple_compound)

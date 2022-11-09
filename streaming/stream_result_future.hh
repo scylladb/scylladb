@@ -11,7 +11,6 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
@@ -20,7 +19,6 @@
 #include <vector>
 
 namespace streaming {
-    using UUID = utils::UUID;
     using inet_address = gms::inet_address;
 /**
  * A future on the result ({@link StreamState}) of a streaming plan.
@@ -37,8 +35,7 @@ namespace streaming {
  */
 class stream_result_future {
 public:
-    using UUID = utils::UUID;
-    UUID plan_id;
+    streaming::plan_id plan_id;
     sstring description;
 private:
     stream_manager& _mgr;
@@ -47,7 +44,7 @@ private:
     promise<stream_state> _done;
     lowres_clock::time_point _start_time;
 public:
-    stream_result_future(stream_manager& mgr, UUID plan_id_, sstring description_, bool is_receiving)
+    stream_result_future(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_, bool is_receiving)
         : stream_result_future(mgr, plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
         // Note: Origin sets connections_per_host = 0 on receiving side, We set 1 to
         // refelct the fact that we actaully create one conncetion to the initiator.
@@ -61,7 +58,7 @@ public:
      * @param planId Stream plan ID
      * @param description Stream description
      */
-    stream_result_future(stream_manager& mgr, UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
+    stream_result_future(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
         : plan_id(std::move(plan_id_))
         , description(std::move(description_))
         , _mgr(mgr)
@@ -77,8 +74,8 @@ public:
     shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
-    static future<stream_state> init_sending_side(stream_manager& mgr, UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
-    static shared_ptr<stream_result_future> init_receiving_side(stream_manager& mgr, UUID plan_id, sstring description, inet_address from);
+    static future<stream_state> init_sending_side(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
+    static shared_ptr<stream_result_future> init_receiving_side(stream_manager& mgr, streaming::plan_id plan_id, sstring description, inet_address from);
 
 public:
     void add_event_listener(stream_event_handler* listener) {

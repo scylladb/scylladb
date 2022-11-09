@@ -18,6 +18,7 @@
 namespace query {
 
 logging::logger qlogger("querier_cache");
+logging::logger qrlogger("querier");
 
 enum class can_use {
     yes,
@@ -174,7 +175,7 @@ static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht
 // The time-to-live of a cache-entry.
 const std::chrono::seconds querier_cache::default_entry_ttl{10};
 
-static std::unique_ptr<querier_base> find_querier(querier_cache::index& index, utils::UUID key,
+static std::unique_ptr<querier_base> find_querier(querier_cache::index& index, query_id key,
         dht::partition_ranges_view ranges, tracing::trace_state_ptr trace_state) {
     const auto queriers = index.equal_range(key);
 
@@ -218,7 +219,7 @@ struct querier_utils {
 
 template <typename Querier>
 void querier_cache::insert_querier(
-        utils::UUID key,
+        query_id key,
         querier_cache::index& index,
         querier_cache::stats& stats,
         Querier&& q,
@@ -287,22 +288,22 @@ void querier_cache::insert_querier(
   }
 }
 
-void querier_cache::insert_data_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_data_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _data_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
-void querier_cache::insert_mutation_querier(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_mutation_querier(query_id key, querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _mutation_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
-void querier_cache::insert_shard_querier(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache::insert_shard_querier(query_id key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
     insert_querier(key, _shard_mutation_querier_index, _stats, std::move(q), _entry_ttl, std::move(trace_state));
 }
 
 template <typename Querier>
 std::optional<Querier> querier_cache::lookup_querier(
         querier_cache::index& index,
-        utils::UUID key,
+        query_id key,
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
@@ -348,7 +349,7 @@ std::optional<Querier> querier_cache::lookup_querier(
     return std::nullopt;
 }
 
-std::optional<querier> querier_cache::lookup_data_querier(utils::UUID key,
+std::optional<querier> querier_cache::lookup_data_querier(query_id key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
@@ -357,7 +358,7 @@ std::optional<querier> querier_cache::lookup_data_querier(utils::UUID key,
     return lookup_querier<querier>(_data_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
-std::optional<querier> querier_cache::lookup_mutation_querier(utils::UUID key,
+std::optional<querier> querier_cache::lookup_mutation_querier(query_id key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
@@ -366,7 +367,7 @@ std::optional<querier> querier_cache::lookup_mutation_querier(utils::UUID key,
     return lookup_querier<querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
-std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
+std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(query_id key,
         const schema& s,
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
@@ -411,25 +412,6 @@ future<bool> querier_cache::evict_one() noexcept {
         co_return true;
     }
     co_return false;
-}
-
-future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
-    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
-        auto& idx = *ip;
-        for (auto it = idx.begin(); it != idx.end();) {
-            if (it->second->schema().id() == schema_id) {
-                auto reader_opt = it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
-                it = idx.erase(it);
-                --_stats.population;
-                if (reader_opt) {
-                    co_await reader_opt->close();
-                }
-            } else {
-                ++it;
-            }
-        }
-    }
-    co_return;
 }
 
 future<> querier_cache::stop() noexcept {

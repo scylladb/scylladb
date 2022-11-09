@@ -51,9 +51,9 @@ def cql(request):
 def cql_test_connection(cql, request):
     yield
     try:
-        # We want to run a do-nothing CQL command. "use system" is the
-        # closest to do-nothing I could find...
-        cql.execute("use system")
+        # We want to run a do-nothing CQL command. 
+        # "BEGIN BATCH APPLY BATCH" is the closest to do-nothing I could find...
+        cql.execute("BEGIN BATCH APPLY BATCH")
     except:
         pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
 

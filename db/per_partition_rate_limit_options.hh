@@ -9,10 +9,13 @@
 #pragma once
 
 #include <optional>
+#include <map>
+
+#include <seastar/core/sstring.hh>
 
 #include "operation_type.hh"
-#include "serializer.hh"
-#include "log.hh"
+
+using namespace seastar;
 
 namespace db {
 

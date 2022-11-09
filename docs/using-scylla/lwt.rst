@@ -34,6 +34,96 @@ If any part evaluates to false the transaction does not complete.
 
 The IF condition can be created from any of the following CQL components: ``IF EXISTS``, ``IF NOT EXISTS``, or one or more predicates on the existing row.
 
+What row does IF clause apply to?
+=================================
+
+Conditional statements which evaluate or assign non-static columns
+must specify both the clustering key and the partition key.
+Such statements are said to apply to regular rows; statements
+which only restrict the partition key must use only static columns
+and are said to apply to the static row of the partition.
+
+A regular row exists if at least one regular cell **or** the
+clustering key is assigned. For example, consider the following
+table:
+
+.. code-block:: cql
+
+        CREATE TABLE t (
+            p INT,
+            c INT,
+            r INT,
+            s INT STATIC,
+            PRIMARY KEY(p, c));
+
+It has a partition key ``p``, a clustering key ``c``, a regular
+cell ``r`` and a static cell ``s``.
+
+To materialize a regular row, it's sufficient to assign any of
+``c`` or ``r``:
+
+.. code-block:: cql
+
+		> INSERT INTO t (p, c, r) VALUES (1,1,NULL) IF NOT EXISTS;
+		+-------------+------+------+------+------+
+		| [applied]   | p    | c    | s    | r    |
+		|-------------+------+------+------+------|
+		| True        | null | null | null | null |
+		+-------------+------+------+------+------+
+		> INSERT INTO t (p, c, r) VALUES (1,1,NULL) IF NOT EXISTS;
+		+-------------+-----+-----+------+------+
+		| [applied]   |   p |   c | s    | r    |
+		|-------------+-----+-----+------+------|
+		| False       |   1 |   1 | null | null |
+		+-------------+-----+-----+------+------+
+
+To materialize a static row, one must explicitly assign
+at least one static cell: otherwise the static row is not
+considered present:
+
+.. code-block:: cql
+
+		> INSERT INTO t (p, s) VALUES (1,NULL) IF NOT EXISTS;
+		+-------------+-----+------+------+------+
+		| [applied]   |   p | c    | s    | r    |
+		|-------------+-----+------+------+------|
+		| True        |   1 | null | null | null |
+		+-------------+-----+------+------+------+
+		> INSERT INTO t (p, s) VALUES (1,NULL) IF NOT EXISTS;
+		+-------------+-----+------+------+------+
+		| [applied]   |   p | c    | s    | r    |
+		|-------------+-----+------+------+------|
+		| True        |   1 | null | null | null |
+		+-------------+-----+------+------+------+
+
+It is OK to us a comparison with ``NULL`` in a condition.
+But since ``NULL`` value and missing value in Scylla are
+indistinguishable, conditions which compare with ``NULL``
+will return the same result when applied to both
+missing rows or existing rows with ``NULL`` cells:
+
+.. code-block:: cql
+
+		> UPDATE t SET s=2 WHERE p=1 IF s = NULL;
+		+-------------+------+
+		| [applied]   | s    |
+		|-------------+------|
+		| True        | null |
+		+-------------+------+
+
+If a regular row is missing, but the static row cells are
+assigned, the static cells will be present in the row used to
+evaluate the condition of the "missing" regular row:
+
+.. code-block:: cql
+
+		> UPDATE t SET r=2 WHERE p=1 AND c=2 IF s = 2;
+		+-------------+-----+
+		| [applied]   |   s |
+		|-------------+-----|
+		| True        |   2 |
+		+-------------+-----+
+
 Scylla Paxos
 ============
 
@@ -77,7 +167,7 @@ table with the new row. This is done in "Learn" round.
 
 If the base table update is successful, the coordinator responds
 to the client. It's also safe to prune the state of the protocol
-from system.paxos. 
+from system.paxos.
 
 The size of the quorum impacts how many acknowledgements the
 coordinator must get before proceeding to the next round or

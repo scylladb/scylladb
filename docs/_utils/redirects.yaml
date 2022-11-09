@@ -1,6 +1,11 @@
 ### a dictionary of redirections
 #old path: new path
 
+# unifying the Ubunut upgrade guide for different Ubuntu versions: from 5.0 to 2022.1
+
+/stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-18-04.html: /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu.html
+/stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-20-04.html: /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu.html
+
 # removing the old Monitoring Stack documentation from the ScyllaDB docs
 
 /stable/operating-scylla/monitoring/index.html: https://monitoring.docs.scylladb.com/stable/
@@ -252,7 +257,6 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 /operating-scylla/admin-tools/perftune/index.html: /stable/operating-scylla/admin-tools/perftune
 /operating-scylla/admin-tools/scylla-sstable/index.html: /stable/operating-scylla/admin-tools/scylla-sstable
 /operating-scylla/admin-tools/scylla-types/index.html: /stable/operating-scylla/admin-tools/scylla-types
-/operating-scylla/admin-tools/sstable-index/index.html: /stable/operating-scylla/admin-tools/sstable-index
 /operating-scylla/admin-tools/sstable2json/index.html: /stable/operating-scylla/admin-tools/sstable2json
 /operating-scylla/admin-tools/sstabledump/index.html: /stable/operating-scylla/admin-tools/sstabledump
 /operating-scylla/admin-tools/sstableloader/index.html: /stable/operating-scylla/admin-tools/sstableloader

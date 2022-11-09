@@ -79,7 +79,9 @@ private:
         // because it will not be linked in the LRU.
         ptr_type share() noexcept {
             if (_use_count++ == 0) {
-                unlink_from_lru();
+                if (is_linked()) {
+                    parent->_lru.remove(*this);
+                }
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
         }
@@ -332,6 +334,7 @@ public:
         while (start != end) {
             if (start->is_linked()) {
                 ++count;
+                _lru.remove(*start);
                 on_evicted(*start);
                 start = start.erase_and_dispose(disposer, page_idx_less_comparator());
             } else {
@@ -449,6 +452,7 @@ public:
         auto i = _cache.begin();
         while (i != _cache.end()) {
             if (i->is_linked()) {
+                _lru.remove(*i);
                 on_evicted(*i);
                 i = i.erase(page_idx_less_comparator());
             } else {

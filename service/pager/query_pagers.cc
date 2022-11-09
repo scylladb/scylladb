@@ -81,7 +81,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
     _cmd->is_first_page = query::is_first_page(!_query_uuid);
     if (!_query_uuid) {
-        _query_uuid = utils::make_random_uuid();
+        _query_uuid = query_id::create_random_id();
     }
     _cmd->query_uuid = *_query_uuid;
 
@@ -392,16 +392,22 @@ void query_pager::handle_result(
                 _rows_fetched_for_last_partition = v.last_partition_row_count;
             }
         }
-        _last_pkey = v.last_pkey;
-        if (v.last_ckey) {
-            _last_pos = position_in_partition::for_key(*v.last_ckey);
+        const auto& last_pos = results->last_position();
+        if (last_pos && !v.dropped_rows) {
+            _last_pkey = last_pos->partition;
+            _last_pos = last_pos->position;
+        } else {
+            _last_pkey = v.last_pkey;
+            if (v.last_ckey) {
+                _last_pos = position_in_partition::for_key(*v.last_ckey);
+            }
         }
     } else {
         row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
         _max = _max - row_count;
         _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 
-        if (!_exhausted && row_count > 0) {
+        if (!_exhausted) {
             if (_last_pkey) {
                 update_slice(*_last_pkey);
             }

@@ -26,41 +26,38 @@ namespace gms {
 class gossiper;
 };
 
+namespace locator {
+class effective_replication_map;
+}
+
 namespace db {
 
 extern logging::logger cl_logger;
 
-size_t quorum_for(const replica::keyspace& ks);
+size_t quorum_for(const locator::effective_replication_map& erm);
 
-size_t local_quorum_for(const replica::keyspace& ks, const sstring& dc);
+size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc);
 
-size_t block_for_local_serial(replica::keyspace& ks);
+size_t block_for_local_serial(const locator::effective_replication_map& erm);
 
-size_t block_for_each_quorum(replica::keyspace& ks);
+size_t block_for_each_quorum(const locator::effective_replication_map& erm);
 
-size_t block_for(replica::keyspace& ks, consistency_level cl);
+size_t block_for(const locator::effective_replication_map& erm, consistency_level cl);
 
 bool is_datacenter_local(consistency_level l);
 
-bool is_local(gms::inet_address endpoint);
-
-template<typename Range>
-inline size_t count_local_endpoints(const Range& live_endpoints) {
-    return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
-}
-
 inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
-                 replica::keyspace& ks,
+                 const locator::effective_replication_map& erm,
                  inet_address_vector_replica_set live_endpoints,
                  const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  const gms::gossiper& g,
-                 gms::inet_address* extra,
+                 std::optional<gms::inet_address>* extra,
                  replica::column_family* cf);
 
 inet_address_vector_replica_set filter_for_query(consistency_level cl,
-        replica::keyspace& ks,
+        const locator::effective_replication_map& erm,
         inet_address_vector_replica_set& live_endpoints,
         const inet_address_vector_replica_set& preferred_endpoints,
         const gms::gossiper& g,
@@ -73,17 +70,17 @@ struct dc_node_count {
 
 bool
 is_sufficient_live_nodes(consistency_level cl,
-                         replica::keyspace& ks,
+                         const locator::effective_replication_map& erm,
                          const inet_address_vector_replica_set& live_endpoints);
 
 template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 void assure_sufficient_live_nodes(
         consistency_level cl,
-        replica::keyspace& ks,
+        const locator::effective_replication_map& erm,
         const Range& live_endpoints,
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>());
 
-extern template void assure_sufficient_live_nodes(consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-extern template void assure_sufficient_live_nodes(db::consistency_level, replica::keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
+extern template void assure_sufficient_live_nodes(consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
+extern template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
 
 }

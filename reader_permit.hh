@@ -32,10 +32,6 @@ struct reader_resources {
         , memory(memory) {
     }
 
-    bool operator>=(const reader_resources& other) const {
-        return count >= other.count && memory >= other.memory;
-    }
-
     reader_resources operator-(const reader_resources& other) const {
         return reader_resources{count - other.count, memory - other.memory};
     }
@@ -56,7 +52,7 @@ struct reader_resources {
         return *this;
     }
 
-    explicit operator bool() const {
+    bool non_zero() const {
         return count > 0 || memory > 0;
     }
 };

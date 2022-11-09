@@ -9,7 +9,9 @@ from cassandra.protocol import InvalidRequest                            # type:
 
 # Simple test of schema helper
 @pytest.mark.asyncio
-async def test_new_table(cql, random_tables):
+async def test_new_table(manager, random_tables):
+    cql = manager.cql
+    assert cql is not None
     table = await random_tables.add_table(ncolumns=5)
     await cql.run_async(f"INSERT INTO {table} ({','.join(c.name for c in table.columns)})" \
                         f"VALUES ({', '.join(['%s'] * len(table.columns))})",
@@ -29,8 +31,10 @@ async def test_new_table(cql, random_tables):
 
 # Simple test of schema helper with alter
 @pytest.mark.asyncio
-async def test_alter_verify_schema(cql, random_tables):
+async def test_alter_verify_schema(manager, random_tables):
     """Verify table schema"""
+    cql = manager.cql
+    assert cql is not None
     await random_tables.add_tables(ntables=4, ncolumns=5)
     await random_tables.verify_schema()
     # Manually remove a column
@@ -41,7 +45,9 @@ async def test_alter_verify_schema(cql, random_tables):
 
 
 @pytest.mark.asyncio
-async def test_new_table_insert_one(cql, random_tables):
+async def test_new_table_insert_one(manager, random_tables):
+    cql = manager.cql
+    assert cql is not None
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
     pk_col = table.columns[0]
@@ -54,8 +60,10 @@ async def test_new_table_insert_one(cql, random_tables):
 
 
 @pytest.mark.asyncio
-async def test_drop_column(cql, random_tables):
+async def test_drop_column(manager, random_tables):
     """Drop a random column from a table"""
+    cql = manager.cql
+    assert cql is not None
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
     await table.drop_column()
@@ -70,7 +78,7 @@ async def test_drop_column(cql, random_tables):
 
 
 @pytest.mark.asyncio
-async def test_add_index(cql, random_tables):
+async def test_add_index(random_tables):
     """Add and drop an index"""
     table = await random_tables.add_table(ncolumns=5)
     with pytest.raises(AssertionError, match='partition key'):

@@ -703,7 +703,7 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         //
 
         auto f = loading_cache.get_ptr(0, [&](auto key) {
-            return yield().then([&] {
+            return yield().then([&load_v1, key] {
                 return load_v1(key);
             });
         });
@@ -740,7 +740,7 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         // Test remove_if() concurrent with loading
         //
         auto f = loading_cache.get_ptr(0, [&](auto key) {
-            return yield().then([&] {
+            return yield().then([&load_v1, key] {
                 return load_v1(key);
             });
         });

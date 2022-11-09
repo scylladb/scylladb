@@ -335,7 +335,8 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expre
 /// True iff collection (list, set, or map) contains value.
 bool contains(const data_value& collection, const raw_value_view& value) {
     if (!value) {
-        return true; // Compatible with old code, which skips null terms in value comparisons.
+        // CONTAINS NULL should evaluate to NULL/false
+        return false;
     }
     auto col_type = static_pointer_cast<const collection_type_impl>(collection.type());
     auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
@@ -373,7 +374,8 @@ bool contains(const column_value& col, const raw_value_view& value, const evalua
 /// True iff a column is a map containing \p key.
 bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
     if (!key) {
-        return true; // Compatible with old code, which skips null terms in key comparisons.
+        // CONTAINS_KEY NULL should evaluate to NULL/false
+        return false;
     }
     auto type = col.col->type;
     const auto collection = get_value(col, inputs);
@@ -458,8 +460,9 @@ bool like(const column_value& cv, const raw_value_view& pattern, const evaluatio
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
     const cql3::raw_value in_list = evaluate(rhs, inputs);
-    statements::request_validations::check_false(
-            in_list.is_null(), "Invalid null value for column {}", col);
+    if (in_list.is_null()) {
+        return false;
+    }
 
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
         return equal(col, b, inputs);
@@ -695,7 +698,9 @@ value_list get_IN_values(
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
-    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
+    if (in_list.is_null()) {
+        return value_list();
+    }
     utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
@@ -741,23 +746,23 @@ expression make_conjunction(expression a, expression b) {
     return conjunction{std::move(children)};
 }
 
-static
-void
-do_factorize(std::vector<expression>& factors, expression e) {
-    if (auto c = expr::as_if<conjunction>(&e)) {
-        for (auto&& element : c->children) {
-            do_factorize(factors, std::move(element));
-        }
-    } else {
-        factors.push_back(std::move(e));
-    }
-}
-
 std::vector<expression>
 boolean_factors(expression e) {
     std::vector<expression> ret;
-    do_factorize(ret, std::move(e));
+    for_each_boolean_factor(e, [&](const expression& boolean_factor) {
+        ret.push_back(boolean_factor);
+    });
     return ret;
+}
+
+void for_each_boolean_factor(const expression& e, const noncopyable_function<void (const expression&)>& for_each_func) {
+    if (auto conj = as_if<conjunction>(&e)) {
+        for (const expression& child : conj->children) {
+            for_each_boolean_factor(child, for_each_func);
+        }
+    } else {
+        for_each_func(e);
+    }
 }
 
 template<typename T>
@@ -818,11 +823,37 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                         : to_range(oper.op, std::move(*val));
                             } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
+                            } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
+                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                if (!val) {
+                                    return empty_value_set; // All NULL comparisons fail; no column values match.
+                                }
+                                return value_set(value_list{*val});
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const subscript& s) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: subscripts are not supported as the LHS of a binary expression");
+                            const column_value& col = get_subscripted_column(s);
+
+                            if (!cdef || cdef != col.col) {
+                                return unbounded_value_set;
+                            }
+
+                            managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
+                            if (!sval) {
+                                return empty_value_set; // NULL can't be a map key
+                            }
+
+                            if (oper.op == oper_t::EQ) {
+                                managed_bytes_opt rval = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                if (!rval) {
+                                    return empty_value_set; // All NULL comparisons fail; no column values match.
+                                }
+                                managed_bytes_opt elements[] = {sval, rval};
+                                managed_bytes val = tuple_type_impl::build_value_fragmented(elements);
+                                return value_set(value_list{val});
+                            }
+                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const tuple_constructor& tuple) -> value_set {
                             if (!cdef) {
@@ -979,11 +1010,26 @@ nonwrapping_range<managed_bytes> to_range(const value_set& s) {
         }, s);
 }
 
-bool is_supported_by(const expression& expr, const secondary_index::index& idx) {
-    using std::placeholders::_1;
+namespace {
+constexpr inline secondary_index::index::supports_expression_v operator&&(secondary_index::index::supports_expression_v v1, secondary_index::index::supports_expression_v v2) {
+    using namespace secondary_index;
+    auto True = index::supports_expression_v::from_bool(true);
+    return v1 == True && v2 == True ? True : index::supports_expression_v::from_bool(false);
+}
+
+secondary_index::index::supports_expression_v is_supported_by_helper(const expression& expr, const secondary_index::index& idx) {
+    using ret_t = secondary_index::index::supports_expression_v;
+    using namespace secondary_index;
     return expr::visit(overloaded_functor{
-            [&] (const conjunction& conj) {
-                return boost::algorithm::all_of(conj.children, std::bind(is_supported_by, _1, idx));
+            [&] (const conjunction& conj) -> ret_t {
+                if (conj.children.empty()) {
+                    return index::supports_expression_v::from_bool(true);
+                }
+                auto init = is_supported_by_helper(conj.children[0], idx);
+                return std::accumulate(std::begin(conj.children) + 1, std::end(conj.children), init, 
+                        [&] (ret_t acc, const expression& child) -> ret_t {
+                            return acc && is_supported_by_helper(child, idx);
+                });
             },
             [&] (const binary_operator& oper) {
                 return expr::visit(overloaded_functor{
@@ -997,57 +1043,64 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                                 }
                             }
                             // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
-                            return false;
+                            return index::supports_expression_v::from_bool(false);
                         },
-                        [&] (const token&) { return false; },
-                        [&] (const subscript& s) -> bool {
-                            // We don't support indexes on map entries yet.
-                            return false;
+                        [&] (const token&) { return index::supports_expression_v::from_bool(false); },
+                        [&] (const subscript& s) -> ret_t {
+                            const column_value& col = get_subscripted_column(s);
+                            return idx.supports_subscript_expression(*col.col, oper.op);
                         },
-                        [&] (const binary_operator&) -> bool {
+                        [&] (const binary_operator&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: nested binary operators are not supported");
                         },
-                        [&] (const conjunction&) -> bool {
+                        [&] (const conjunction&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [] (const constant&) -> bool {
+                        [] (const constant&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
                         },
-                        [] (const unresolved_identifier&) -> bool {
+                        [] (const unresolved_identifier&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: an unresolved identifier is not supported as the LHS of a binary expression");
                         },
-                        [&] (const column_mutation_attribute&) -> bool {
+                        [&] (const column_mutation_attribute&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: writetime/ttl are not supported as the LHS of a binary expression");
                         },
-                        [&] (const function_call&) -> bool {
+                        [&] (const function_call&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: function calls are not supported as the LHS of a binary expression");
                         },
-                        [&] (const cast&) -> bool {
+                        [&] (const cast&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: typecasts are not supported as the LHS of a binary expression");
                         },
-                        [&] (const field_selection&) -> bool {
+                        [&] (const field_selection&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: field selections are not supported as the LHS of a binary expression");
                         },
-                        [&] (const null&) -> bool {
+                        [&] (const null&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: nulls are not supported as the LHS of a binary expression");
                         },
-                        [&] (const bind_variable&) -> bool {
+                        [&] (const bind_variable&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: bind variables are not supported as the LHS of a binary expression");
                         },
-                        [&] (const untyped_constant&) -> bool {
+                        [&] (const untyped_constant&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: untyped constants are not supported as the LHS of a binary expression");
                         },
-                        [&] (const collection_constructor&) -> bool {
+                        [&] (const collection_constructor&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: collection constructors are not supported as the LHS of a binary expression");
                         },
-                        [&] (const usertype_constructor&) -> bool {
+                        [&] (const usertype_constructor&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
                         },
                     }, oper.lhs);
             },
-            [] (const auto& default_case) { return false; }
+            [] (const auto& default_case) { return index::supports_expression_v::from_bool(false); }
         }, expr);
 }
+}
+
+bool is_supported_by(const expression& expr, const secondary_index::index& idx) {
+    auto s = is_supported_by_helper(expr, idx);
+    return s != secondary_index::index::supports_expression_v::from_bool(false);
+}
+
 
 bool has_supporting_index(
         const expression& expr,

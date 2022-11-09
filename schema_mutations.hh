@@ -129,6 +129,7 @@ public:
 
     bool operator==(const schema_mutations&) const;
     bool operator!=(const schema_mutations&) const;
+    schema_mutations& operator+=(schema_mutations&&);
 
     // Returns true iff any mutations contain any live cells
     bool live() const;

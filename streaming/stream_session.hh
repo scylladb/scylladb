@@ -13,7 +13,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/distributed.hh>
 #include "message/messaging_service_fwd.hh"
-#include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
@@ -119,7 +118,6 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
-    using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
 
@@ -139,9 +137,9 @@ private:
     // stream requests to send to the peer
     std::vector<stream_request> _requests;
     // streaming tasks are created and managed per ColumnFamily ID
-    std::map<UUID, stream_transfer_task> _transfers;
+    std::map<table_id, stream_transfer_task> _transfers;
     // data receivers, filled after receiving prepare message
-    std::map<UUID, stream_receive_task> _receivers;
+    std::map<table_id, stream_receive_task> _receivers;
     //private final StreamingMetrics metrics;
     /* can be null when session is created in remote */
     //private final StreamConnectionFactory factory;
@@ -193,7 +191,7 @@ public:
     stream_session(stream_manager& mgr, inet_address peer_);
     ~stream_session();
 
-    UUID plan_id() const;
+    streaming::plan_id plan_id() const;
 
     sstring description() const;
 
@@ -312,15 +310,15 @@ public:
 
     future<> update_progress();
 
-    void receive_task_completed(UUID cf_id);
-    void transfer_task_completed(UUID cf_id);
+    void receive_task_completed(table_id cf_id);
+    void transfer_task_completed(table_id cf_id);
     void transfer_task_completed_all();
 private:
     void send_failed_complete_message();
     bool maybe_completed();
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();
-    future<> receiving_failed(UUID cf_id);
+    future<> receiving_failed(table_id cf_id);
 };
 
 } // namespace streaming

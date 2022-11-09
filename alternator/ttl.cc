@@ -136,7 +136,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLeave request.
+// Alternator tables with TTL configured via a UpdateTimeToLive request.
 //
 // Here is a brief overview of how the expiration service works:
 //
@@ -150,22 +150,21 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // To avoid scanning the same items RF times in RF replicas, only one node is
 // responsible for scanning a token range at a time. Normally, this is the
 // node owning this range as a "primary range" (the first node in the ring
-// with this range), but when this node is down, other nodes may take over
-// (FIXME: this is not implemented yet).
+// with this range), but when this node is down, the secondary owner (the
+// second in the ring) may take over.
 // An expiration thread is reponsible for all tables which need expiration
-// scans. FIXME: explain how this is done with multiple tables - parallel,
-// staggered, or what?
+// scans. Currently, the different tables are scanned sequentially (not in
+// parallel).
 // The expiration thread scans item using CL=QUORUM to ensures that it reads
 // a consistent expiration-time attribute. This means that the items are read
 // locally and in addition QUORUM-1 additional nodes (one additional node
 // when RF=3) need to read the data and send digests.
-// FIXME: explain if we can read the exact attribute or the entire map.
 // When the expiration thread decides that an item has expired and wants
 // to delete it, it does it using a CL=QUORUM write. This allows this
 // deletion to be visible for consistent (quorum) reads. The deletion,
 // like user deletions, will also appear on the CDC log and therefore
-// Alternator Streams if enabled (FIXME: explain how we mark the
-// deletion different from user deletes. We don't do it yet.).
+// Alternator Streams if enabled - currently as ordinary deletes (the
+// userIdentity flag is currently missing this is issue #11523).
 expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy, gms::gossiper& g)
         : _db(db)
         , _proxy(proxy)
@@ -283,7 +282,9 @@ static future<> expire_item(service::storage_proxy& proxy,
         auto ck = clustering_key::from_exploded(exploded_ck);
         m.partition().clustered_row(*schema, ck).apply(tombstone(ts, gc_clock::now()));
     }
-    return proxy.mutate(std::vector<mutation>{std::move(m)},
+    std::vector<mutation> mutations;
+    mutations.push_back(std::move(m));
+    return proxy.mutate(std::move(mutations),
         db::consistency_level::LOCAL_QUORUM,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
@@ -366,7 +367,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 // 2. The primary replica for this token is currently marked down.
 // 3. In this node, this shard is responsible for this token.
 // We use the <secondary> case to handle the possibility that some of the
-// nodes in the system are down. A dead node will not be expiring expiring
+// nodes in the system are down. A dead node will not be expiring
 // the tokens owned by it, so we want the secondary owner to take over its
 // primary ranges.
 //
@@ -512,7 +513,7 @@ struct scan_ranges_context {
         opts.set<query::partition_slice::option::bypass_cache>();
         std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
         auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
-        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
         executor::client_state client_state{executor::client_state::internal_tag()};
         tracing::trace_state_ptr trace_state;
         // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
@@ -769,13 +770,15 @@ future<> expiration_service::run() {
         // in the next iteration by reducing the scanner's scheduling-group
         // share (if using a separate scheduling group), or introduce
         // finer-grain sleeps into the scanning code.
-        std::chrono::seconds scan_duration(std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start));
-        std::chrono::seconds period(_db.get_config().alternator_ttl_period_in_seconds());
+        std::chrono::milliseconds scan_duration(std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start));
+        std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
         if (scan_duration < period) {
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count());
+                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
                 co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
             } catch(seastar::sleep_aborted&) {}
+        } else {
+                tlogger.warn("scan took {} seconds, longer than period - not sleeping", scan_duration.count()/1000.0);
         }
     }
 }

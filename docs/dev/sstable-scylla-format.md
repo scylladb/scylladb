@@ -124,11 +124,12 @@ guaranteed to be disjoint (non-overlapping) in their partition keys.
     large_data_stats = large_data_count large_data_pair*
     large_data_count = be32
     large_data_pair = large_data_type large_data_stats_entry
-    large_data_type = partition_size | row_size | cell_size | rows_in_partition
+    large_data_type = partition_size | row_size | cell_size | rows_in_partition | elements_in_collection
         partition_size = be32(1)    // partition size, in bytes
         row_size = be32(2)          // row size, in bytes
         cell_size = be32(3)         // cell size, in bytes
         rows_in_partition = be32(4) // number of rows in a partition
+        elements_in_collection = be32(5) // number of elements in a collection
     large_data_stats_entry = max_value threshold above_threshold
         max_value = be64
         threshold = be64

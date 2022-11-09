@@ -11,71 +11,67 @@
 #include "gms/gossiper.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
-#include "gms/gossiper.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/sleep.hh>
 
 namespace service {
 
 logging::logger rslog("raft_group_registry");
 
 class raft_group_registry::direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
-    gms::gossiper::direct_fd_pinger _fd_pinger;
-    raft_address_map<>& _address_map;
-
-    std::unordered_set<gms::inet_address> _alive_set;
+    std::unordered_set<raft::server_id> _alive_set;
 
 public:
-    direct_fd_proxy(gms::gossiper::direct_fd_pinger fd_pinger, raft_address_map<>& address_map)
-            : _fd_pinger(fd_pinger), _address_map(address_map) {
+    direct_fd_proxy() {
     }
 
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
-        static const auto msg = "marking address {} as alive for raft groups";
+        static const auto msg = "marking Raft server {} as alive for raft groups";
 
-        auto addr = co_await _fd_pinger.get_address(id);
-        _alive_set.insert(addr);
+        auto raft_id = raft::server_id{id};
+        _alive_set.insert(raft_id);
 
         // The listener should be registered on every shard.
         // Write the message on INFO level only on shard 0 so we don't spam the logs.
         if (this_shard_id() == 0) {
-            rslog.info(msg, addr);
+            rslog.info(msg, raft_id);
         } else {
-            rslog.debug(msg, addr);
+            rslog.debug(msg, raft_id);
         }
-    }
-    future<> mark_dead(direct_failure_detector::pinger::endpoint_id id) override {
-        static const auto msg = "marking address {} as dead for raft groups";
 
-        auto addr = co_await _fd_pinger.get_address(id);
-        _alive_set.erase(addr);
+        co_return;
+    }
+
+    future<> mark_dead(direct_failure_detector::pinger::endpoint_id id) override {
+        static const auto msg = "marking Raft server {} as dead for raft groups";
+
+        auto raft_id = raft::server_id{id};
+        _alive_set.erase(raft_id);
 
         // As above.
         if (this_shard_id() == 0) {
-            rslog.info(msg, addr);
+            rslog.info(msg, raft_id);
         } else {
-            rslog.debug(msg, addr);
+            rslog.debug(msg, raft_id);
         }
+
+        co_return;
     }
 
     bool is_alive(raft::server_id srv) override {
-        // We could yield between updating the list of servers in raft/fsm
-        // and updating the raft_address_map, e.g. in case of a set_configuration.
-        // If tick_leader happens before the raft_address_map is updated,
-        // is_alive will be called with server_id that is not in the map yet.
-
-        const auto address = _address_map.find(srv);
-        return address && _alive_set.contains(*address);
+        return _alive_set.contains(srv);
     }
 };
 
-raft_group_registry::raft_group_registry(bool is_enabled, netw::messaging_service& ms,
-        gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
+raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map<>& address_map,
+        netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
+    , _srv_address_mappings{address_map}
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>(gossiper.get_direct_fd_pinger(), _srv_address_mappings))
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>())
 {
 }
 
@@ -200,14 +196,22 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
+static void ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
+    if (!server_for_group.aborted) {
+        server_for_group.aborted = server_for_group.server->abort(std::move(reason))
+            .handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
+                rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
+            });
+    }
+}
+
 future<> raft_group_registry::stop_servers() noexcept {
     gate g;
     for (auto it = _servers.begin(); it != _servers.end(); it = _servers.erase(it)) {
-        auto abort_server = it->second.server->abort();
+        ensure_aborted(it->second, "raft group registry is stopped");
+        auto aborted = std::move(it->second.aborted);
         // discarded future is waited via g.close()
-        (void)std::move(abort_server).handle_exception([rsfg = std::move(it->second), gh = g.hold()] (std::exception_ptr ex) {
-            rslog.warn("Failed to abort raft group server {}: {}", rsfg.gid, ex);
-        });
+        (void)std::move(aborted)->finally([rsfg = std::move(it->second), gh = g.hold()]{});
     }
     co_await g.close();
 }
@@ -301,6 +305,15 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     }
 }
 
+void raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
+    // abort_server could be called from on_background_error for group0
+    // when the server has not yet been added to _servers.
+    // In this case we won't find gid in the if below.
+    if (const auto it = _servers.find(gid); it != _servers.end()) {
+        ensure_aborted(it->second, std::move(reason));
+    }
+}
+
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
     return 0; // schema raft server is always owned by shard 0
 }
@@ -310,5 +323,33 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 }
 
 raft_group_registry::~raft_group_registry() = default;
+
+future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
+    auto addr = _address_map.find(raft::server_id{id});
+    if (!addr) {
+        co_return false;
+    }
+
+    try {
+        co_await _echo_pinger.ping(*addr, as);
+    } catch (seastar::rpc::closed_error&) {
+        co_return false;
+    }
+    co_return true;
+}
+
+direct_failure_detector::clock::timepoint_t direct_fd_clock::now() noexcept {
+    return base::now().time_since_epoch().count();
+}
+
+future<> direct_fd_clock::sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) {
+    auto t = base::time_point{base::duration{tp}};
+    auto n = base::now();
+    if (t <= n) {
+        return make_ready_future<>();
+    }
+
+    return sleep_abortable(t - n, as);
+}
 
 } // end of namespace service

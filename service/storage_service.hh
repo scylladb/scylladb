@@ -89,10 +89,6 @@ class raft_group0;
 
 enum class disk_error { regular, commit };
 
-struct storage_service_config {
-    size_t available_memory;
-};
-
 class node_ops_meta_data {
     utils::UUID _ops_uuid;
     gms::inet_address _coordinator;
@@ -102,14 +98,15 @@ class node_ops_meta_data {
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
     std::chrono::seconds _watchdog_interval{120};
-    bool _aborted = false;
 public:
     explicit node_ops_meta_data(
             utils::UUID ops_uuid,
             gms::inet_address coordinator,
-            shared_ptr<node_ops_info> ops,
+            std::list<gms::inet_address> ignore_nodes,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
+    future<> start();
+    future<> stop() noexcept;
     shared_ptr<node_ops_info> get_ops_info();
     shared_ptr<abort_source> get_abort_source();
     future<> abort();
@@ -147,6 +144,7 @@ private:
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
+    sharded<locator::snitch_ptr>& _snitch;
 
     // Engaged on shard 0 after `join_cluster`.
     service::raft_group0* _group0;
@@ -173,7 +171,6 @@ public:
         gms::gossiper& gossiper,
         sharded<db::system_keyspace>&,
         gms::feature_service& feature_service,
-        storage_service_config config,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
         locator::effective_replication_map_factory& erm_factory,
@@ -181,7 +178,8 @@ public:
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
         endpoint_lifecycle_notifier& elc_notif,
-        sharded<db::batchlog_manager>& bm);
+        sharded<db::batchlog_manager>& bm,
+        sharded<locator::snitch_ptr>& snitch);
 
     // Needed by distributed<>
     future<> stop();
@@ -217,7 +215,6 @@ private:
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
-    future<> update_topology(inet_address endpoint);
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return get_token_metadata_ptr()->clone_async().then([] (token_metadata tm) {
@@ -293,14 +290,17 @@ private:
     future<> shutdown_protocol_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::unordered_set<token>;
+    struct replacement_info {
+        std::unordered_set<token> tokens;
+        locator::endpoint_dc_rack dc_rack;
+    };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
-    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
+    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
@@ -491,6 +491,7 @@ private:
     future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
+    locator::endpoint_dc_rack get_dc_rack_for(inet_address endpoint);
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
@@ -570,11 +571,11 @@ private:
     /**
      * Finds living endpoints responsible for the given ranges
      *
-     * @param keyspaceName the keyspace ranges belong to
+     * @param erm the keyspace effective_replication_map ranges belong to
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
+    future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
@@ -598,7 +599,7 @@ private:
     future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
-    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
+    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 public:
@@ -611,12 +612,12 @@ public:
 
 
     /**
-     * Get all ranges an endpoint is responsible for (by keyspace)
+     * Get all ranges an endpoint is responsible for (by keyspace effective_replication_map)
      * Replication strategy's get_ranges() guarantees that no wrap-around range is returned.
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    dht::token_range_vector get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
@@ -705,7 +706,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
+    future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);

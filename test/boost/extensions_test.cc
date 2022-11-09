@@ -89,7 +89,7 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
             // minimal data
             return e.execute_cql("insert into ks.cf (id, value) values (1, 100);").discard_result().then([&e] {
                 // flush all shards
-                return e.db().local().flush_on_all("ks", "cf").then([] {
+                return replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").then([] {
                     BOOST_REQUIRE(counter > 1);
                 });
             });

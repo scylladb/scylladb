@@ -25,6 +25,8 @@
 #include "version.hh"
 #include "encoding_stats.hh"
 #include "utils/UUID.hh"
+#include "locator/host_id.hh"
+#include "types_fwd.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -313,7 +315,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     int64_t rows_count; // 3_x only
     db::replay_position commitlog_lower_bound; // 3_x only
     disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
-    std::optional<utils::UUID> originating_host_id; // 3_11_11 and later (me format)
+    std::optional<locator::host_id> originating_host_id; // 3_11_11 and later (me format)
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
@@ -529,10 +531,12 @@ enum class scylla_metadata_type : uint32_t {
     ScyllaVersion = 8,
 };
 
+// UUID is used for uniqueness across nodes, such that an imported sstable
+// will not have its run identifier conflicted with the one of a local sstable.
 struct run_identifier {
     // UUID is used for uniqueness across nodes, such that an imported sstable
     // will not have its run identifier conflicted with the one of a local sstable.
-    utils::UUID id;
+    run_id id;
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(id); }
@@ -547,6 +551,7 @@ enum class large_data_type : uint32_t {
     row_size = 2,           // row size, in bytes
     cell_size = 3,          // cell size, in bytes
     rows_in_partition = 4,  // number of rows in a partition
+    elements_in_collection = 5,// number of elements in a collection
 };
 
 struct large_data_stats_entry {
@@ -597,7 +602,7 @@ struct scylla_metadata {
         }
         return *ext;
     }
-    std::optional<utils::UUID> get_optional_run_identifier() const {
+    std::optional<run_id> get_optional_run_identifier() const {
         auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
         return m ? std::make_optional(m->id) : std::nullopt;
     }

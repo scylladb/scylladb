@@ -65,6 +65,44 @@ public:
         scheduling_group background_reclaim_sched_group;
     };
 
+    struct stats {
+        size_t segments_compacted;
+        size_t lsa_buffer_segments;
+        uint64_t memory_allocated;
+        uint64_t memory_freed;
+        uint64_t memory_compacted;
+        uint64_t memory_evicted;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            segments_compacted += other.segments_compacted;
+            lsa_buffer_segments += other.lsa_buffer_segments;
+            memory_allocated += other.memory_allocated;
+            memory_freed += other.memory_freed;
+            memory_compacted += other.memory_compacted;
+            memory_evicted += other.memory_evicted;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            segments_compacted -= other.segments_compacted;
+            lsa_buffer_segments -= other.lsa_buffer_segments;
+            memory_allocated -= other.memory_allocated;
+            memory_freed -= other.memory_freed;
+            memory_compacted -= other.memory_compacted;
+            memory_evicted -= other.memory_evicted;
+            return *this;
+        }
+    };
+
     void configure(const config& cfg);
     future<> stop();
 
@@ -78,6 +116,8 @@ private:
 public:
     tracker();
     ~tracker();
+
+    stats statistics() const;
 
     //
     // Tries to reclaim given amount of bytes in total using all compactible
@@ -95,6 +135,8 @@ public:
     void full_compaction();
 
     void reclaim_all_free_segments();
+
+    occupancy_stats global_occupancy() const noexcept;
 
     // Returns aggregate statistics for all pools.
     occupancy_stats region_occupancy() const noexcept;
@@ -116,7 +158,8 @@ public:
 class tracker_reclaimer_lock {
     tracker::impl& _tracker_impl;
 public:
-    tracker_reclaimer_lock() noexcept;
+    tracker_reclaimer_lock(tracker::impl& impl) noexcept;
+    tracker_reclaimer_lock(tracker& t) noexcept : tracker_reclaimer_lock(t.get_impl()) { }
     ~tracker_reclaimer_lock();
 };
 
@@ -249,9 +292,15 @@ public:
 
 class basic_region_impl : public allocation_strategy {
 protected:
+    tracker& _tracker;
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
+    basic_region_impl(tracker& tracker) : _tracker(tracker)
+    { }
+
+    tracker& get_tracker() { return _tracker; }
+
     void set_reclaiming_enabled(bool enabled) noexcept {
         assert(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
@@ -296,6 +345,10 @@ public:
     void unlisten();
 
     occupancy_stats occupancy() const noexcept;
+
+    tracker& get_tracker() const {
+        return _impl->get_tracker();
+    }
 
     allocation_strategy& allocator() noexcept {
         return *_impl;
@@ -387,11 +440,12 @@ class allocating_section {
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
 private:
     struct guard {
+        tracker::impl& _tracker;
         size_t _prev;
-        guard() noexcept;
+        explicit guard(tracker::impl& tracker) noexcept;
         ~guard();
     };
-    void reserve();
+    void reserve(tracker::impl& tracker);
     void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
@@ -406,13 +460,13 @@ public:
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
-    decltype(auto) with_reserve(Func&& fn) {
+    decltype(auto) with_reserve(region& r, Func&& fn) {
         auto prev_lsa_reserve = _lsa_reserve;
         auto prev_std_reserve = _std_reserve;
         try {
-            guard g;
+            guard g(r.get_tracker().get_impl());
             _minimum_lsa_emergency_reserve = g._prev;
-            reserve();
+            reserve(r.get_tracker().get_impl());
             return fn();
         } catch (const std::bad_alloc&) {
             // roll-back limits to protect against pathological requests
@@ -463,7 +517,7 @@ public:
     //
     template<typename Func>
     decltype(auto) operator()(logalloc::region& r, Func&& func) {
-        return with_reserve([this, &r, &func] {
+        return with_reserve(r, [this, &r, &func] {
             return with_reclaiming_disabled(r, func);
         });
     }
@@ -471,11 +525,10 @@ public:
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
-uint64_t memory_allocated() noexcept;
-uint64_t memory_freed() noexcept;
-uint64_t memory_compacted() noexcept;
-uint64_t memory_evicted() noexcept;
-
-occupancy_stats lsa_global_occupancy_stats() noexcept;
+// Use the segment pool appropriate for the standard allocator.
+//
+// In debug mode, this will use the release standard allocator store.
+// Call once, when initializing the application, before any LSA allocation takes place.
+future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }

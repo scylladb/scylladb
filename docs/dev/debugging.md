@@ -327,8 +327,11 @@ Or from the executable like this:
 
     $ eu-unstrip -n --exec $executable
 
-With the build-id you can find the relocatable using the
-http://backtrace.scylladb.com/index.html search form.
+You can find the relocatable using the
+http://backtrace.scylladb.com/index.html search form
+using either the scylla Build ID or the Release number (e.g. 5.0.0 or 2022.1)
+to search the packages.
+
 The form can also be used to decode backtraces generated
 by the corresponding scylla binary.
 
@@ -696,13 +699,13 @@ determining where the memory is. Lets look at a concrete example:
      total:          1067319296
      Regular:
       real dirty:    1064566784
-      virt dirty:     811568656
+      unspooled:      811568656
      System:
       real dirty:        393216
-      virt dirty:        393216
+      unspooled:         393216
      Streaming:
       real dirty:             0
-      virt dirty:             0
+      unspooled:              0
 
     Coordinator:
       bg write bytes:         42133 B

@@ -12,8 +12,7 @@ import time
 import socket
 import os
 import collections
-import requests
-import pytest
+import ssl
 from contextlib import contextmanager
 
 from cassandra.auth import PlainTextAuthProvider
@@ -147,7 +146,7 @@ def new_secondary_index(cql, table, column, name='', extra=''):
 
 # Helper function for establishing a connection with given username and password
 @contextmanager
-def cql_session(host, port, ssl, username, password):
+def cql_session(host, port, is_ssl, username, password):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -158,7 +157,7 @@ def cql_session(host, port, ssl, username, password):
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout = 120)
-    if ssl:
+    if is_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -173,6 +172,13 @@ def cql_session(host, port, ssl, username, password):
         protocol_version=4,
         auth_provider=PlainTextAuthProvider(username=username, password=password),
         ssl_context=ssl_context,
+        # The default timeout for new connections is 5 seconds, and for
+        # requests made by the control connection is 2 seconds. These should
+        # have been more than enough, but in some extreme cases with a very
+        # slow debug build running on a very busy machine, they may not be.
+        # so let's increase them to 60 seconds. See issue #11289.
+        connect_timeout = 60,
+        control_connection_timeout = 60,
     )
     yield cluster.connect()
     cluster.shutdown()
@@ -190,8 +196,21 @@ def new_user(cql, username=''):
 @contextmanager
 def new_session(cql, username):
     endpoint = cql.hosts[0].endpoint
-    with cql_session(host=endpoint.address, port=endpoint.port, ssl=False, username=username, password=username) as session:
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=(cql.cluster.ssl_context is not None), username=username, password=username) as session:
         yield session
+        session.shutdown()
+
+# new_cql() returns a new object similar to the given cql fixture,
+# connected to the same endpoint but with a separate connection.
+# This can be useful for tests which require a separate connection -
+# for example for testing the "USE" statement (which, after used once
+# on a connection, cannot be undone).
+@contextmanager
+def new_cql(cql):
+    session = cql.cluster.connect()
+    try:
+        yield session
+    finally:
         session.shutdown()
 
 def project(column_name_string, rows):
@@ -251,18 +270,20 @@ def local_process_id(cql):
 def user_type(*args):
     return collections.namedtuple('user_type', args[::2])(*args[1::2])
 
-# Tries to inject an error via Scylla REST API. It only works on Scylla,
-# and only in specific build modes (dev, debug, sanitize), so this function
-# will trigger a test to be skipped if it cannot be executed.
-@contextmanager
-def scylla_inject_error(rest_api, err, one_shot=False):
-    response = requests.post(f'{rest_api}/v2/error_injection/injection/{err}?one_shot={one_shot}')
-    response = requests.get(f'{rest_api}/v2/error_injection/injection')
-    print("Enabled error injections:", response.content.decode('utf-8'))
-    if response.content.decode('utf-8') == "[]":
-        pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
-    try:
-        yield
-    finally:
-        print("Disabling error injection", err)
-        response = requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
+class config_value_context:
+    """Change the value of a config item while the context is active.
+
+    The config item has to be live-updatable.
+    """
+    def __init__(self, cql, key, value):
+        self._cql = cql
+        self._key = key
+        self._value = value
+        self._original_value = None
+
+    def __enter__(self):
+        self._original_value = self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value
+        self._cql.execute(f"UPDATE system.config SET value='{self._value}' WHERE name='{self._key}'")
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self._cql.execute(f"UPDATE system.config SET value='{self._original_value}' WHERE name='{self._key}'")

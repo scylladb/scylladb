@@ -75,9 +75,11 @@ to see if you forgot to push a previously applied patch.
 
 Save the patch(es) to some directory, and use the command
 
-    git am -im3 /path/to/patches/*.eml
+    ./scripts/apply-mail.py /path/to/patches/*.eml
 
-to apply the patches. `-i` makes the process interactive and
+to apply the patches. This fixes up From: headers corrupted
+by Google Groups and calls `git am -3mi` on the result.
+`-i` makes the process interactive and
 lets you edit the commit message, `-m` sets the Message-Id
 tag (which is used by Commit Bot to set the Reply-To header,
 so that the commit acknowledgement appears as a response to

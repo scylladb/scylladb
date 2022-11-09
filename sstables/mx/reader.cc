@@ -1319,7 +1319,7 @@ private:
     }
     index_reader& get_index_reader() {
         if (!_index_reader) {
-            auto caching = use_caching(!_slice.options.contains(query::partition_slice::option::bypass_cache));
+            auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(), _consumer.io_priority(),
                                                            _consumer.trace_state(), caching, _single_partition_read);
         }
@@ -1754,9 +1754,7 @@ public:
         _monitor.on_read_started(_context->reader_position());
     }
 public:
-    void on_out_of_clustering_range() override {
-        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end()));
-    }
+    void on_out_of_clustering_range() override { }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         on_internal_error(sstlog, "mx_crawling_sstable_mutation_reader: doesn't support fast_forward_to(const dht::partition_range&)");
     }

@@ -22,7 +22,7 @@ static seastar::logger rlogger("raft_rpc");
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
         raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id,
-        noncopyable_function<void(gms::inet_address, raft::server_id, bool)> on_server_update)
+        noncopyable_function<void(raft::server_id, bool)> on_server_update)
     : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms)
     , _address_map(address_map), _on_server_update(std::move(on_server_update))
 {}
@@ -44,6 +44,7 @@ void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send append reply to {}: {}", id, std::current_exception());
                 }
@@ -58,6 +59,7 @@ void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& v
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send vote request {}: {}", id, ex);
                 }
@@ -72,6 +74,7 @@ void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send vote reply {}: {}", id, ex);
                 }
@@ -86,6 +89,7 @@ void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& tim
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send timeout now {}: {}", id, ex);
                 }
@@ -100,6 +104,7 @@ void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& rea
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send read barrier {}: {}", id, ex);
                 }
@@ -114,6 +119,7 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
                 try {
                     std::rethrow_exception(ex);
                 } catch (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
                     rlogger.error("Failed to send read barrier reply {}: {}", id, ex);
                 }
@@ -123,18 +129,33 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
     return ser::raft_rpc_verbs::send_raft_add_entry(&_messaging,
-        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd);
+        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            const auto message = format("Failed to execute add entry on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::add_entry_reply>(raft::transport_error(message));
+        });
 }
 
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
     const std::vector<raft::config_member>& add,
     const std::vector<raft::server_id>& del) {
-   return ser::raft_rpc_verbs::send_raft_modify_config(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)),
-       db::no_timeout, _group_id, _server_id, id, add, del);
+    return ser::raft_rpc_verbs::send_raft_modify_config(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)),
+        db::no_timeout, _group_id, _server_id, id, add, del)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            const auto message = format("Failed to execute modify config on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::add_entry_reply>(raft::transport_error(message));
+        });
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
-   return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
+    return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(&_messaging, netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id)
+        .handle_exception_type([id] (const seastar::rpc::closed_error& e) {
+            const auto message = format("Failed to execute read barrier on leader {}: {}", id, e);
+            rlogger.trace(std::string_view(message));
+            return make_exception_future<raft::read_barrier_reply>(raft::transport_error(message));
+        });
 }
 
 void raft_rpc::add_server(raft::server_address addr) {
@@ -142,13 +163,12 @@ void raft_rpc::add_server(raft::server_address addr) {
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
     _address_map.set(addr.id, inet_addr, false);
-    _on_server_update(inet_addr, addr.id, true);
+    _on_server_update(addr.id, true);
 }
 
 void raft_rpc::remove_server(raft::server_id id) {
-    if (auto inet_addr = _address_map.erase(id)) {
-        _on_server_update(*inet_addr, id, false);
-    }
+    _on_server_update(id, false);
+    _address_map.set_expiring_flag(id);
 }
 
 future<> raft_rpc::abort() {

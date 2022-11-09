@@ -82,6 +82,23 @@ struct gossip_config {
     uint32_t skip_wait_for_gossip_to_settle = -1;
 };
 
+class gossiper;
+
+// Caches the gossiper's generation number, which is required for sending gossip echo messages.
+// Call `ping` to send a gossip echo message to the given address using the last known generation number.
+// The generation number is updated by gossiper's loop and replicated to every shard.
+class echo_pinger {
+    friend class gossiper;
+    gossiper& _gossiper;
+    int64_t _generation_number{0};
+
+    future<> update_generation_number(int64_t n);
+    echo_pinger(gossiper& g) : _gossiper(g) {}
+
+public:
+    future<> ping(const gms::inet_address&, abort_source&);
+};
+
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -95,6 +112,7 @@ struct gossip_config {
  * the Failure Detector.
  */
 class gossiper : public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
+    friend class echo_pinger;
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
@@ -147,8 +165,6 @@ public:
     }
     const std::set<inet_address>& get_seeds() const noexcept;
 
-    netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
-    sharded<db::system_keyspace>& get_system_keyspace() const noexcept { return _sys_ks; }
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
@@ -239,8 +255,6 @@ private:
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
-
-    void check_seen_seeds();
 
     /**
      * Register for interesting state changes.
@@ -333,7 +347,7 @@ public:
      * @param host_id      - the ID of the host being removed
      * @param local_host_id - my own host ID for replication coordination
      */
-    future<> advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
+    future<> advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id);
 
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
@@ -342,7 +356,7 @@ public:
      * @param endpoint
      * @param host_id
      */
-    future<> advertise_token_removed(inet_address endpoint, utils::UUID host_id);
+    future<> advertise_token_removed(inet_address endpoint, locator::host_id host_id);
 
     future<> unsafe_assassinate_endpoint(sstring address);
 
@@ -362,6 +376,7 @@ public:
 
     bool is_gossip_only_member(inet_address endpoint);
     bool is_safe_for_bootstrap(inet_address endpoint);
+    bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -398,7 +413,9 @@ public:
 
     bool uses_host_id(inet_address endpoint) const;
 
-    utils::UUID get_host_id(inet_address endpoint) const;
+    locator::host_id get_host_id(inet_address endpoint) const;
+
+    std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 
@@ -509,9 +526,6 @@ private:
     void build_seeds_list();
 
 public:
-    // initialize local HB state if needed, i.e., if gossiper has never been started before.
-    void maybe_initialize_local_state(int generation_nbr);
-
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */
@@ -600,7 +614,7 @@ private:
 public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
-    void check_snitch_name_matches() const;
+    void check_snitch_name_matches(sstring local_snitch_name) const;
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
 private:
@@ -609,49 +623,12 @@ private:
     future<> update_live_endpoints_version();
 
 public:
-    // Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
-    // The gossip echo message must be provided this node's gossip generation number.
-    // It's an integer incremented when the node restarts or when the gossip subsystem restarts.
-    // We cache the generation number inside `direct_fd_pinger` on every shard and update it in the `gossiper` main loop.
-    //
-    // We also store a mapping between `direct_failure_detector::pinger::endpoint_id`s and `inet_address`es.
-    class direct_fd_pinger : public direct_failure_detector::pinger {
-        friend class gossiper;
-        gossiper& _gossiper;
-
-        // Only used on shard 0 by `allocate_id`.
-        direct_failure_detector::pinger::endpoint_id _next_allocated_id{0};
-
-        // The mappings are created on shard 0 and lazily replicated to other shards:
-        // when `ping` or `get_address` is called with an unknown ID on a different shard, it will fetch the ID from shard 0.
-        std::unordered_map<direct_failure_detector::pinger::endpoint_id, inet_address> _id_to_addr;
-
-        // Used to quickly check if given address already has an assigned ID.
-        // Used only on shard 0, not replicated.
-        std::unordered_map<inet_address, direct_failure_detector::pinger::endpoint_id> _addr_to_id;
-
-        // This node's gossip generation number, updated by gossiper's loop and replicated to every shard.
-        int64_t _generation_number{0};
-
-        future<> update_generation_number(int64_t n);
-
-        direct_fd_pinger(gossiper& g) : _gossiper(g) {}
-    public:
-        // Allocate a new endpoint_id for `addr`, or if one already exists, return it.
-        // Call only on shard 0.
-        direct_failure_detector::pinger::endpoint_id allocate_id(gms::inet_address addr);
-
-        // Precondition: `id` was returned from `allocate_id` on shard 0 earlier.
-        future<gms::inet_address> get_address(direct_failure_detector::pinger::endpoint_id id);
-
-        future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
-    };
-
-    direct_fd_pinger& get_direct_fd_pinger() { return _direct_fd_pinger; }
+    echo_pinger& get_echo_pinger() { return _echo_pinger; }
 
 private:
-    direct_fd_pinger _direct_fd_pinger;
+    echo_pinger _echo_pinger;
 };
+
 
 struct gossip_get_endpoint_states_request {
     // Application states the sender requested
@@ -663,11 +640,3 @@ struct gossip_get_endpoint_states_response {
 };
 
 } // namespace gms
-
-// XXX: find a better place to put this?
-struct direct_fd_clock : public direct_failure_detector::clock {
-    using base = std::chrono::steady_clock;
-
-    direct_failure_detector::clock::timepoint_t now() noexcept override;
-    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
-};

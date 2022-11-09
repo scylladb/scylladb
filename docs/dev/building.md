@@ -19,6 +19,7 @@ To build everything, run:
 
 ```console
 git clone https://github.com/scylladb/scylla
+cd ./scylla
 git submodule update --init --force --recursive
 ./tools/toolchain/dbuild ./configure.py --mode=<mode>
 ./tools/toolchain/dbuild ninja

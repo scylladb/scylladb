@@ -9,6 +9,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include "utils/small_vector.hh"
 #include "raft.hh"
 #include "tracker.hh"
 #include "log.hh"
@@ -20,7 +21,6 @@ struct fsm_output {
     struct applied_snapshot {
         snapshot_descriptor snp;
         bool is_local;
-        snapshot_id prev_snp_id;
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
@@ -28,6 +28,8 @@ struct fsm_output {
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<applied_snapshot> snp;
+    // In a typical scenario contains only one item, occasionally more.
+    utils::small_vector<snapshot_id, 1> snps_to_drop;
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
     std::optional<config_member_set> configuration;
@@ -39,7 +41,7 @@ struct fsm_output {
     bool empty() const {
         return !term_and_vote &&
             log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp &&
+            committed.size() == 0 && !snp && snps_to_drop.empty() &&
             !configuration;
     }
 };
@@ -47,11 +49,10 @@ struct fsm_output {
 struct fsm_config {
     // max size of appended entries in bytes
     size_t append_request_threshold;
-    // Max number of entries of in-memory part of the log after
+    // Limit in bytes on the size of in-memory part of the log after
     // which requests are stopped to be admitted until the log
     // is shrunk back by a snapshot. Should be greater than
-    // whatever the default number of trailing log entries
-    // is configured by the snapshot, otherwise the state
+    // the sum of sizes of trailing log entries, otherwise the state
     // machine will deadlock.
     size_t max_log_size;
     // If set to true will enable prevoting stage during election
@@ -84,7 +85,7 @@ struct candidate {
 struct leader {
     // A state for each follower
     raft::tracker tracker;
-    // Used to acces new leader to set semaphore exception
+    // Used to access new leader to set semaphore exception
     const raft::fsm& fsm;
     // Used to limit log size
     std::unique_ptr<seastar::semaphore> log_limiter_semaphore;
@@ -369,6 +370,9 @@ public:
     index_t log_last_snapshot_idx() const {
         return _log.get_snapshot().idx;
     }
+    index_t log_last_conf_idx() const {
+        return _log.last_conf_idx();
+    }
 
     // Return the last configuration entry with index smaller than or equal to `idx`.
     // Precondition: `log_last_idx()` >= `idx` >= `log_last_snapshot_idx()`.
@@ -392,10 +396,11 @@ public:
         _ping_leader = true;
     }
 
-    // Call this function to wait for the number of log entries to
-    // go below  max_log_size.
+    // Call this function to wait for the total size in bytes of log entries to
+    // go below max_log_size.
+    // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
-    future<> wait_max_log_size(seastar::abort_source* as);
+    future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
 
     // Return current configuration.
     const configuration& get_configuration() const;
@@ -455,14 +460,20 @@ public:
     }
 
     // This call will update the log to point to the new snapshot
-    // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry. Returns false if the snapshot is older than existing one.
-    bool apply_snapshot(snapshot_descriptor snp, size_t traling, bool local);
+    // and will truncate the log prefix so that the number of
+    // remaining applied entries is <= max_trailing_entries and their total size is <= max_trailing_bytes.
+    // Returns false if the snapshot is older than existing one,
+    // the passed snapshot will be dropped in this case.
+    bool apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, size_t max_trailing_bytes, bool local);
 
     std::optional<std::pair<read_id, index_t>> start_read_barrier(server_id requester);
 
     size_t in_memory_log_size() const {
         return _log.in_memory_size();
+    }
+
+    size_t log_memory_usage() const {
+        return _log.memory_usage();
     };
 
     server_id id() const { return _my_id; }
@@ -511,7 +522,7 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         request_vote(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
-                    .success = apply_snapshot(std::move(msg.snp), 0, false)});
+                    .success = apply_snapshot(std::move(msg.snp), 0, 0, false)});
     } else if constexpr (std::is_same_v<Message, timeout_now>) {
         // Leadership transfers never use pre-vote; we know we are not
         // recovering from a partition so there is no need for the

@@ -24,7 +24,7 @@ SEASTAR_TEST_CASE(test_column_mapping_persistence) {
         // column mapping into the history table
         cquery_nofail(e, "create table test (pk int PRIMARY KEY, v int)");
         auto schema = e.local_db().find_schema("ks", "test");
-        const utils::UUID table_id = schema->id();
+        const auto table_id = schema->id();
         const table_schema_version v1 = schema->version();
         const column_mapping orig_cm = schema->get_column_mapping();
 
@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_column_mapping_ttl_check) {
         // column mapping into the history table
         cquery_nofail(e, "create table test (pk int PRIMARY KEY, v int)");
         auto schema = e.local_db().find_schema("ks", "test");
-        const utils::UUID table_id = schema->id();
+        const auto table_id = schema->id();
         const table_schema_version v1 = schema->version();
 
         const sstring select_ttl_query = format(

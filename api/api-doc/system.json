@@ -53,6 +53,45 @@
          ]
       },
       {
+         "path":"/system/log",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Write a message to the Scylla log",
+               "type":"void",
+               "nickname":"write_log_message",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"message",
+                     "description":"The message to write to the log",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"level",
+                     "description":"The logging level to use",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":[
+                        "error",
+                        "warn",
+                        "info",
+                        "debug",
+                        "trace"
+                     ],
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/system/drop_sstable_caches",
          "operations":[
             {

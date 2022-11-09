@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from alternator_util import random_string, new_test_table, full_query
+from util import random_string, new_test_table, full_query
 from botocore.exceptions import ClientError
 from test_gsi import assert_index_query
 

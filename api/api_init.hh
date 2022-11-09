@@ -11,6 +11,7 @@
 #include <seastar/core/future.hh>
 
 #include "replica/database_fwd.hh"
+#include "tasks/task_manager.hh"
 #include "seastarx.hh"
 
 namespace service {
@@ -31,6 +32,7 @@ namespace locator {
 
 class token_metadata;
 class shared_token_metadata;
+class snitch_ptr;
 
 } // namespace locator
 
@@ -66,11 +68,12 @@ struct http_context {
     distributed<service::storage_proxy>& sp;
     service::load_meter& lmeter;
     const sharded<locator::shared_token_metadata>& shared_token_metadata;
+    sharded<tasks::task_manager>& tm;
 
     http_context(distributed<replica::database>& _db,
             distributed<service::storage_proxy>& _sp,
-            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm)
-            : db(_db), sp(_sp), lmeter(_lm), shared_token_metadata(_stm) {
+            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm, sharded<tasks::task_manager>& _tm)
+            : db(_db), sp(_sp), lmeter(_lm), shared_token_metadata(_stm), tm(_tm) {
     }
 
     const locator::token_metadata& get_token_metadata();
@@ -78,7 +81,8 @@ struct http_context {
 
 future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx, const db::config& cfg);
-future<> set_server_snitch(http_context& ctx);
+future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch);
+future<> unset_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
 future<> unset_server_sstables_loader(http_context& ctx);
@@ -107,5 +111,7 @@ future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
+future<> set_server_task_manager(http_context& ctx);
+future<> set_server_task_manager_test(http_context& ctx, lw_shared_ptr<db::config> cfg);
 
 }

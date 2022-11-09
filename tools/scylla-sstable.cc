@@ -9,7 +9,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
-#include <source_location>
+#include <experimental/source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
@@ -25,12 +25,14 @@
 #include "schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/open_info.hh"
 #include "types/user.hh"
 #include "types/set.hh"
 #include "types/map.hh"
 #include "tools/schema_loader.hh"
 #include "tools/utils.hh"
 #include "utils/rjson.hh"
+#include "locator/host_id.hh"
 
 // has to be below the utils/rjson.hh include
 #include <rapidjson/ostreamwrapper.h>
@@ -1160,6 +1162,11 @@ private:
         _writer.String(uuid.to_sstring());
     }
 
+    template <typename Tag>
+    void visit(const utils::tagged_uuid<Tag>& id) {
+        visit(id.uuid());
+    }
+
     template <typename Integer>
     void visit(const sstables::vint<Integer>& val) {
         visit(val.value);
@@ -1338,6 +1345,7 @@ const char* to_string(sstables::large_data_type t) {
         case sstables::large_data_type::row_size: return "row_size";
         case sstables::large_data_type::cell_size: return "cell_size";
         case sstables::large_data_type::rows_in_partition: return "rows_in_partition";
+        case sstables::large_data_type::elements_in_collection: return "elements_in_collection";
     }
     std::abort();
 }
@@ -1404,7 +1412,7 @@ public:
         _writer.EndObject();
     }
     void operator()(const sstables::run_identifier& val) const {
-        _writer.AsString(val.id);
+        _writer.AsString(val.id.uuid());
     }
     void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
         _writer.StartObject();
@@ -3169,6 +3177,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
     return app.run(argc, argv, [&app, found_op] {
         return async([&app, found_op] {
+            logalloc::use_standard_allocator_segment_pool_backend(100 * 1024 * 1024).get();
+
             auto& app_config = app.configuration();
 
             const auto& operation = *found_op;
@@ -3193,8 +3203,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
-            dbcfg.host_id = ::utils::make_random_uuid();
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
+            dbcfg.host_id = locator::host_id::create_random_id();
+            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory());
             auto close_sst_man = deferred_close(sst_man);
 
             std::vector<sstables::shared_sstable> sstables;

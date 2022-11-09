@@ -178,6 +178,10 @@ fi
 
 tmpdir=$(mktemp -d)
 
+if [ -e ~/.gdbinit ]; then
+    docker_common_args+=(-v "$HOME/.gdbinit:$HOME/.gdbinit:ro")
+fi
+
 docker_common_args+=(
        --security-opt seccomp=unconfined \
        --security-opt label=disable \

@@ -12,6 +12,9 @@
 
 #include "mutation.hh"
 #include "mutation_fragment_stream_validator.hh"
+#include "log.hh"
+
+extern logging::logger testlog;
 
 class mutation_partition_assertion {
     schema_ptr _schema;
@@ -20,7 +23,7 @@ private:
     static mutation_partition compacted(const schema& s, const mutation_partition& m) {
         mutation_partition res(s, m);
         auto key = dht::decorate_key(s, partition_key::make_empty());
-        res.compact_for_compaction(s, always_gc, key, gc_clock::time_point::min());
+        res.compact_for_compaction(s, always_gc, key, gc_clock::time_point::min(), tombstone_gc_state(nullptr));
         return res;
     }
 public:
@@ -200,27 +203,33 @@ class validating_consumer {
 public:
     explicit validating_consumer(const schema& s) : _validator(s) { }
 
-    void consume_new_partition(const dht::decorated_key&) {
-        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
+    void consume_new_partition(const dht::decorated_key& dk) {
+        testlog.debug("consume new partition: {}", dk);
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{}), {}));
     }
     void consume(tombstone) { }
     stop_iteration consume(static_row&& sr) {
-        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::static_row, sr.position()));
+        testlog.debug("consume static_row");
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::static_row, sr.position(), {}));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr) {
-        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::clustering_row, cr.position()));
+        testlog.debug("consume clustering_row: {}", cr.key());
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::clustering_row, cr.position(), {}));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone_change&& rtc) {
-        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position()));
+        testlog.debug("consume range_tombstone_change: {} {}", rtc.position(), rtc.tombstone());
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone()));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
-        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
+        testlog.debug("consume end of partition");
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{}), {}));
         return stop_iteration::no;
     }
     void consume_end_of_stream() {
+        testlog.debug("consume end of stream");
         BOOST_REQUIRE(_validator.on_end_of_stream());
     }
 };

@@ -20,15 +20,18 @@ enum class mutation_fragment_stream_validation_level {
 /// Low level fragment stream validator.
 ///
 /// Tracks and validates the monotonicity of the passed in fragment kinds,
-/// position in partition, token or partition keys. Any subset of these
-/// can be used, but what is used have to be consistent across the entire
-/// stream.
+/// position in partition, token or partition keys.
 class mutation_fragment_stream_validator {
     const ::schema& _schema;
     mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
     tombstone _current_tombstone;
+
+private:
+    bool validate(dht::token t, const partition_key* pkey);
+    bool validate(mutation_fragment_v2::kind kind, std::optional<position_in_partition_view> pos,
+        std::optional<tombstone> new_current_tombstone);
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
 
@@ -41,9 +44,11 @@ public:
     /// `operator()(const mutation_fragment&)` is not desired.
     /// Using both overloads for the same stream is not supported.
     /// Advances the previous fragment kind, but only if the validation passes.
+    /// `new_current_tombstone` should be engaged only when the fragment changes
+    /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind);
+    bool operator()(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind);
 
     /// Validates the monotonicity of the mutation fragment kind and position.
@@ -54,9 +59,11 @@ public:
     /// Using both overloads for the same stream is not supported.
     /// Advances the previous fragment kind and position-in-partition, but only
     /// if the validation passes.
+    /// `new_current_tombstone` should be engaged only when the fragment changes
+    /// the current tombstone (range tombstone change fragments).
     ///
     /// \returns true if the mutation fragment kind is valid.
-    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
 
     /// Validates the monotonicity of the mutation fragment.
@@ -104,6 +111,7 @@ public:
     /// normally invalid and hence wouldn't advance the internal state. This
     /// can be used by users that can correct such invalid streams and wish to
     /// continue validating it.
+    void reset(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     void reset(const mutation_fragment&);
     void reset(const mutation_fragment_v2&);
 
@@ -119,26 +127,27 @@ public:
     }
     /// The previous valid position.
     ///
-    /// Not meaningful, when operator()(position_in_partition_view) is not used.
+    /// Call only if operator()(position_in_partition_view) was used.
     const position_in_partition& previous_position() const {
         return _prev_pos;
     }
     /// Get the current effective tombstone
     ///
-    /// Not meaningful, when operator()(mutation_fragment_v2) is not used.
+    /// Call only if operator()(mutation_fragment_v2) or
+    /// operator()(mutation_fragment_v2::kind, position_in_partition_view, std::optional<tombstone>)
+    /// was not used.
     tombstone current_tombstone() const {
         return _current_tombstone;
     }
     /// The previous valid partition key.
     ///
-    /// Only valid if `operator()(const dht::decorated_key&)` or
-    /// `operator()(dht::token)` was used.
+    /// Call only if operator()(dht::token) or operator()(const dht::decorated_key&) was used.
     dht::token previous_token() const {
         return _prev_partition_key.token();
     }
     /// The previous valid partition key.
     ///
-    /// Only valid if `operator()(const dht::decorated_key&)` was used.
+    /// Call only if operator()(const dht::decorated_key&) was used.
     const dht::decorated_key& previous_partition_key() const {
         return _prev_partition_key;
     }
@@ -158,7 +167,6 @@ class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validator _validator;
     sstring _name;
     mutation_fragment_stream_validation_level _validation_level;
-    tombstone _current_tombstone;
 
 public:
     /// Constructor.
@@ -169,11 +177,13 @@ public:
     mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, mutation_fragment_stream_validation_level level);
 
     bool operator()(const dht::decorated_key& dk);
-    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos);
+    bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
     /// Equivalent to `operator()(mf.kind(), mf.position())`
     bool operator()(const mutation_fragment_v2& mv);
     bool operator()(const mutation_fragment& mv);
+    void reset(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
+    void reset(const mutation_fragment_v2& mf);
     /// Equivalent to `operator()(partition_end{})`
     bool on_end_of_partition();
     void on_end_of_stream();

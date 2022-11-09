@@ -34,6 +34,14 @@ class gossiper;
 
 }
 
+namespace auth {
+class service;
+}
+
+namespace qos {
+class service_level_controller;
+}
+
 namespace alternator {
 
 // This is the official DynamoDB API version.
@@ -53,6 +61,8 @@ class controller : public protocol_server {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<cdc::generation_service>& _cdc_gen_svc;
     sharded<service::memory_limiter>& _memory_limiter;
+    sharded<auth::service>& _auth_service;
+    sharded<qos::service_level_controller>& _sl_controller;
     const db::config& _config;
 
     std::vector<socket_address> _listen_addresses;
@@ -68,6 +78,8 @@ public:
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
         sharded<service::memory_limiter>& memory_limiter,
+        sharded<auth::service>& auth_service,
+        sharded<qos::service_level_controller>& sl_controller,
         const db::config& config);
 
     virtual sstring name() const override;

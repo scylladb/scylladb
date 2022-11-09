@@ -170,11 +170,11 @@ arch_packages=(
     thrift
 )
 
-NODE_EXPORTER_VERSION=1.3.1
+NODE_EXPORTER_VERSION=1.4.0
 declare -A NODE_EXPORTER_CHECKSUM=(
-    ["x86_64"]=68f3802c2dd3980667e4ba65ea2e1fb03f4a4ba026cca375f15a0390ff850949
-    ["aarch64"]=f19f35175f87d41545fa7d4657e834e3a37c1fe69f3bf56bc031a256117764e7
-    ["s390x"]=a12802101a5ee1c74c91bdaa5403c00011ebdf36b83b617c903dbd356a978d03
+    ["x86_64"]=e77ff1b0a824a4e13f82a35d98595fe526849c09e3480d0789a56b72242d2abc
+    ["aarch64"]=0b20aa75385a42857a67ee5f6c7f67b229039a22a49c5c61c33f071356415b59
+    ["s390x"]=a98e2aa5f9e557441190d233ba752c0cae28f3130c6a6742b038f3997d034065
 )
 declare -A NODE_EXPORTER_ARCH=(
     ["x86_64"]=amd64
@@ -308,11 +308,11 @@ elif [ "$ID" = "fedora" ]; then
         exit 1
     fi
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
-    pip3 install "geomet<0.3,>=0.1"
-    # Disable C extensions
-    pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
-    pip3 install traceback-with-variables
-    pip3 install scylla-api-client
+    PIP_DEFAULT_ARGS="--only-binary=:all: -v"
+    pip3 install "$PIP_DEFAULT_ARGS" "geomet<0.3,>=0.1"
+    pip3 install "$PIP_DEFAULT_ARGS" scylla-driver
+    pip3 install "$PIP_DEFAULT_ARGS" traceback-with-variables
+    pip3 install "$PIP_DEFAULT_ARGS" scylla-api-client
 
     cargo install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then

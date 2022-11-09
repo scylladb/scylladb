@@ -31,17 +31,36 @@ extern logging::logger sstlog;
 
 bool
 sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const shared_sstable& s2) const {
-    return s1->compare_by_first_key(*s2) < 0;
+    auto r = s1->compare_by_first_key(*s2);
+    if (r == 0) {
+        position_in_partition::less_compare less_cmp(*s1->get_schema());
+        return less_cmp(s1->first_partition_first_position(), s2->first_partition_first_position());
+    }
+    return r < 0;
 }
 
 bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     // checks if s1 is *all* before s2, meaning their bounds don't overlap.
     auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
-        auto less_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
-            return k1.less_compare(*s, k2);
+        auto pkey_tri_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
+            return k1.tri_compare(*s, k2);
         };
-        return less_cmp(s1->get_first_decorated_key(), s2->get_first_decorated_key()) &&
-               less_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        auto r = pkey_tri_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        if (r == 0) {
+            position_in_partition::tri_compare ckey_tri_cmp(*s1->get_schema());
+            const auto& s1_last_position = s1->last_partition_last_position();
+            const auto& s2_first_position = s2->first_partition_first_position();
+            auto r2 = ckey_tri_cmp(s1_last_position, s2_first_position);
+            // Forgive overlapping if s1's last position and s2's first position are both after key.
+            // That still produces correct results because the writer translates after_all_prefixed
+            // for s1's end bound into bound_kind::incl_end, and s2's start bound into bound_kind::excl_start,
+            // meaning they don't actually overlap.
+            if (r2 == 0 && s1_last_position.get_bound_weight() == bound_weight::after_all_prefixed) {
+                return true;
+            }
+            return r2 < 0;
+        }
+        return r < 0;
     };
     // lower bound will be the 1st element which is not *all* before the candidate sstable.
     // upper bound will be the 1st element which the candidate sstable is *all* before.
@@ -129,8 +148,8 @@ sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) co
 std::vector<sstable_run>
 partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
     auto has_run = [this] (const shared_sstable& sst) { return _all_runs.contains(sst->run_identifier()); };
-    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
-    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
+    auto run_ids = boost::copy_range<std::unordered_set<sstables::run_id>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (sstables::run_id run_id) {
         return _all_runs.at(run_id);
     }));
 }
@@ -259,7 +278,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<utils::UUID, sstable_run>& all_runs, bool use_level_metadata)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata)
         : _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)
@@ -927,9 +946,10 @@ compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_sha
 std::unique_ptr<sstable_set_impl> compound_sstable_set::clone() const {
     std::vector<lw_shared_ptr<sstable_set>> cloned_sets;
     cloned_sets.reserve(_sets.size());
-    for (auto& set : _sets) {
+    for (const auto& set : _sets) {
         // implicit clone by using sstable_set's copy ctor.
-        cloned_sets.push_back(make_lw_shared(std::move(*set)));
+        auto cloned_set = make_lw_shared(*set);
+        cloned_sets.push_back(std::move(cloned_set));
     }
     return std::make_unique<compound_sstable_set>(_schema, std::move(cloned_sets));
 }

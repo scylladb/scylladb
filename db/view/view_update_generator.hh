@@ -30,11 +30,11 @@ private:
     std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
     metrics::metric_groups _metrics;
+    class progress_tracker;
+    std::unique_ptr<progress_tracker> _progress_tracker;
 public:
-    view_update_generator(replica::database& db) : _db(db) {
-        setup_metrics();
-        discover_staging_sstables();
-    }
+    view_update_generator(replica::database& db);
+    ~view_update_generator();
 
     future<> start();
     future<> stop();

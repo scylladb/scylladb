@@ -13,9 +13,12 @@
 namespace locator {
 class ec2_snitch : public production_snitch_base {
 public:
+    static constexpr const char* TOKEN_REQ_ENDPOINT = "/latest/api/token";
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/latest/meta-data/placement/availability-zone";
     static constexpr const char* AWS_QUERY_SERVER_ADDR = "169.254.169.254";
     static constexpr uint16_t AWS_QUERY_SERVER_PORT = 80;
+    static constexpr int AWS_API_CALL_RETRIES = 5;
+    static constexpr auto AWS_API_CALL_RETRY_INTERVAL = std::chrono::seconds{5};
 
     ec2_snitch(const snitch_config&);
     virtual future<> start() override;
@@ -24,13 +27,14 @@ public:
     }
 protected:
     future<> load_config(bool prefer_local);
-    future<sstring> aws_api_call(sstring addr, uint16_t port, const sstring cmd);
+    future<sstring> aws_api_call(sstring addr, uint16_t port, const sstring cmd, std::optional<sstring> token);
     future<sstring> read_property_file();
 private:
     connected_socket _sd;
     input_stream<char> _in;
     output_stream<char> _out;
     http_response_parser _parser;
-    sstring _zone_req;
+    sstring _req;
+    future<sstring> aws_api_call_once(sstring addr, uint16_t port, const sstring cmd, std::optional<sstring> token);
 };
 } // namespace locator

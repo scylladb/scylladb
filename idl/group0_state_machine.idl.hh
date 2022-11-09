@@ -6,14 +6,25 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "raft/raft.hh"
+#include "gms/inet_address_serializer.hh"
+
+#include "idl/frozen_schema.idl.hh"
+#include "idl/uuid.idl.hh"
+#include "idl/raft_storage.idl.hh"
+
 namespace service {
 
 struct schema_change {
     std::vector<canonical_mutation> mutations;
 };
 
+struct broadcast_table_query {
+    service::broadcast_tables::query query;
+};
+
 struct group0_command {
-    std::variant<service::schema_change> change;
+    std::variant<service::schema_change, service::broadcast_table_query> change;
     canonical_mutation history_append;
 
     std::optional<utils::UUID> prev_state_id;

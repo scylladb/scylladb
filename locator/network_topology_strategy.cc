@@ -14,7 +14,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "locator/network_topology_strategy.hh"
-#include "utils/sequenced_set.hh"
 #include <boost/algorithm/string.hpp>
 #include "utils/hash.hh"
 
@@ -34,10 +33,8 @@ bool operator==(const endpoint_dc_rack& d1, const endpoint_dc_rack& d2) {
 }
 
 network_topology_strategy::network_topology_strategy(
-    snitch_ptr& snitch,
     const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(snitch,
-                                      config_options,
+        abstract_replication_strategy(config_options,
                                       replication_strategy_type::network_topology) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
@@ -77,7 +74,6 @@ network_topology_strategy::network_topology_strategy(
     }
 }
 
-using endpoint_set = utils::sequenced_set<inet_address>;
 using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
 
 class natural_endpoints_tracker {
@@ -236,12 +232,12 @@ public:
         return _dcs_to_fill == 0;
     }
 
-    const endpoint_set& replicas() const noexcept {
+    endpoint_set& replicas() noexcept {
         return _replicas;
     }
 };
 
-future<inet_address_vector_replica_set>
+future<endpoint_set>
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm) const {
 
@@ -256,7 +252,7 @@ network_topology_strategy::calculate_natural_endpoints(
         }
     }
 
-    co_return boost::copy_range<inet_address_vector_replica_set>(tracker.replicas().get_vector());
+    co_return std::move(tracker.replicas());
 }
 
 void network_topology_strategy::validate_options() const {
@@ -279,7 +275,7 @@ std::optional<std::set<sstring>> network_topology_strategy::recognized_options(c
     return datacenters;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, snitch_ptr&, const replication_strategy_config_options&>;
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

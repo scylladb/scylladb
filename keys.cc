@@ -12,6 +12,7 @@
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
 #include <boost/algorithm/string.hpp>
+#include "utils/utf8.hh"
 
 logging::logger klog("keys");
 
@@ -36,7 +37,19 @@ static std::ostream& print_key(std::ostream& out, const T& key_with_schema) {
 }
 
 std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk) {
-    return print_key(out, pk);
+    const auto& [schema, key] = pk;
+    auto type_iterator = key.get_compound_type(schema)->types().begin();
+    bool first = true;
+    for (auto&& e : key.components(schema)) {
+        if (!first) {
+            out << ":";
+        }
+        first = false;
+        auto keystr = (*type_iterator)->to_string(to_bytes(e));
+        out << (utils::utf8::validate((const uint8_t *) keystr.data(), keystr.size()) ? keystr : "<non-utf8-key>");
+        ++type_iterator;
+    }
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_schema_wrapper& ck) {

@@ -438,6 +438,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
     rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
     rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
+    // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
+    rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
+    rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
     std::unordered_map<std::string,std::string> key_attribute_types;
     // Add base table's KeySchema and collect types for AttributeDefinitions:
@@ -460,6 +465,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
             describe_key_schema(view_entry, *vptr, key_attribute_types);
+            // Add projection type
+            rjson::value projection = rjson::empty_object();
+            rjson::add(projection, "ProjectionType", "ALL");
+            // FIXME: we have to get ProjectionType from the schema when it is added
+            rjson::add(view_entry, "Projection", std::move(projection));
             // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
             rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
             rjson::push_back(index_array, std::move(view_entry));
@@ -1082,7 +1092,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     elogger.trace("Updating table {}", request);
 
     static const std::vector<sstring> unsupported = {
-        "AttributeDefinitions", 
         "GlobalSecondaryIndexUpdates", 
         "ProvisionedThroughput",
         "ReplicaUpdates",
@@ -1255,6 +1264,22 @@ put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schem
     check_key(key, schema);
 }
 
+// find_attribute() checks whether the named attribute is stored in the
+// schema as a real column (we do this for key attribute, and for a GSI key)
+// and if so, returns that column. If not, the function returns nullptr,
+// telling the caller that the attribute is stored serialized in the
+// ATTRS_COLUMN_NAME map - not in a stand-alone column in the schema.
+static inline const column_definition* find_attribute(const schema& schema, const bytes& attribute_name) {
+    const column_definition* cdef = schema.get_column_definition(attribute_name);
+    // Although ATTRS_COLUMN_NAME exists as an actual column, when used as an
+    // attribute name it should refer to an attribute inside ATTRS_COLUMN_NAME
+    // not to ATTRS_COLUMN_NAME itself. This if() is needed for #5009.
+    if (cdef && cdef->name() == executor::ATTRS_COLUMN_NAME) {
+        return nullptr;
+    }
+    return cdef;
+}
+
 put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
@@ -1262,7 +1287,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
-        const column_definition* cdef = schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*schema, column_name);
         if (!cdef) {
             bytes value = serialize_item(it->value);
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
@@ -1294,7 +1319,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     auto& row = m.partition().clustered_row(*schema, _ck);
     attribute_collector attrs_collector;
     for (auto& c : *_cells) {
-        const column_definition* cdef = schema->get_column_definition(c.column_name);
+        const column_definition* cdef = find_attribute(*schema, c.column_name);
         if (!cdef) {
             attrs_collector.put(c.column_name, c.value, ts);
         } else {
@@ -1359,7 +1384,8 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(proxy.get_tombstone_limit()));
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -2748,7 +2774,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 }
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
@@ -2770,7 +2796,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
         } else {
@@ -3063,7 +3089,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(_proxy.get_tombstone_limit()));
 
     std::unordered_set<std::string> used_attribute_names;
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
@@ -3217,7 +3244,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                    query::tombstone_limit(_proxy.get_tombstone_limit()));
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
@@ -3618,7 +3646,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         if (schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, schema);
         }
-        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
@@ -3629,7 +3657,8 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 

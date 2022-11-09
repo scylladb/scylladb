@@ -197,6 +197,8 @@ def is_system_partition(dev):
     return (uuid in SYSTEM_PARTITION_UUIDS)
 
 def is_unused_disk(dev):
+    # resolve symlink to real path
+    dev = os.path.realpath(dev)
     # dev is not in /sys/class/block/, like /dev/nvme[0-9]+
     if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/', ''))):
         return False
@@ -424,8 +426,16 @@ class sysconfig_parser:
     def __escape(self, val):
         return re.sub(r'"', r'\"', val)
 
+    def __unescape(self, val):
+        return re.sub(r'\\"', r'"', val)
+
+    def __format_line(self, key, val):
+        need_quotes = any([ch.isspace() for ch in val])
+        esc_val = self.__escape(val)
+        return f'{key}="{esc_val}"' if need_quotes else f'{key}={esc_val}'
+
     def __add(self, key, val):
-        self._data += '{}="{}"\n'.format(key, self.__escape(val))
+        self._data += self.__format_line(key, val) + '\n'
         self.__load()
 
     def __init__(self, filename):
@@ -440,7 +450,8 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        return self._cfg.get('global', key).strip('"')
+        val = self._cfg.get('global', key).strip('"')
+        return self.__unescape(val)
 
     def has_option(self, key):
         return self._cfg.has_option('global', key)
@@ -448,7 +459,8 @@ class sysconfig_parser:
     def set(self, key, val):
         if not self.has_option(key):
             return self.__add(key, val)
-        self._data = re.sub('^{}=[^\n]*$'.format(key), '{}="{}"'.format(key, self.__escape(val)), self._data, flags=re.MULTILINE)
+        new_line = self.__format_line(key, val)
+        self._data = re.sub(f'^{key}=[^\n]*$', new_line, self._data, flags=re.MULTILINE)
         self.__load()
 
     def commit(self):

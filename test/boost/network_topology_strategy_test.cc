@@ -91,7 +91,8 @@ void strategy_sanity_check(
 void endpoints_check(
     abstract_replication_strategy::ptr_type ars_ptr,
     const token_metadata& tm,
-    inet_address_vector_replica_set& endpoints) {
+    inet_address_vector_replica_set& endpoints,
+    const locator::topology& topo) {
 
     // Check the total RF
     BOOST_CHECK(endpoints.size() == ars_ptr->get_replication_factor(tm));
@@ -101,10 +102,9 @@ void endpoints_check(
     BOOST_CHECK(endpoints.size() == ep_set.size());
 
     // Check the per-DC RF
-    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
     std::unordered_map<sstring, size_t> dc_rf;
     for (auto ep : endpoints) {
-        sstring dc = snitch->get_datacenter(ep);
+        sstring dc = topo.get_location(ep).dc;
 
         auto rf = dc_rf.find(dc);
         if (rf == dc_rf.end()) {
@@ -140,7 +140,8 @@ auto d2t = [](double d) -> int64_t {
 void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
                      abstract_replication_strategy::ptr_type ars_ptr,
-                     locator::token_metadata_ptr tmptr) {
+                     locator::token_metadata_ptr tmptr,
+                     const locator::topology& topo) {
     auto& tm = *tmptr;
     strategy_sanity_check(ars_ptr, tm, options);
 
@@ -151,7 +152,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
         auto endpoints1 = erm->get_natural_endpoints(t1);
 
-        endpoints_check(ars_ptr, tm, endpoints1);
+        endpoints_check(ars_ptr, tm, endpoints1, topo);
 
         print_natural_endpoints(cur_point1, endpoints1);
 
@@ -164,10 +165,24 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
-        endpoints_check(ars_ptr, tm, endpoints2);
+        endpoints_check(ars_ptr, tm, endpoints2, topo);
         check_ranges_are_sorted(erm, rp.host);
         BOOST_CHECK(endpoints1 == endpoints2);
     }
+}
+
+std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_point>& pts) {
+    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
+
+    // This resembles rack_inferring_snitch dc/rack generation which is
+    // still in use by this test via token_metadata internals
+    for (const auto& p : pts) {
+        auto rack = std::to_string(uint8_t(p.host.bytes()[2]));
+        auto dc = std::to_string(uint8_t(p.host.bytes()[1]));
+        topo->update_endpoint(p.host, { dc, rack }, locator::topology::pending::no);
+    }
+
+    return topo;
 }
 
 // Run in a seastar thread.
@@ -178,13 +193,12 @@ void simple_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
-    sharded<gms::gossiper> g;
-    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg, std::ref(g)).get();
+    sharded<snitch_ptr> snitch;
+    snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -200,14 +214,19 @@ void simple_test() {
         { 11.0, inet_address("192.102.40.2") }
     };
 
+    auto topo = generate_topology(ring_points);
+
     std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens;
     for (const auto& [ring_point, endpoint] : ring_points) {
         endpoint_tokens[endpoint].insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
     }
 
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
-        return tm.update_normal_tokens(endpoint_tokens);
+    stm.mutate_token_metadata([&endpoint_tokens, &topo] (token_metadata& tm) -> future<> {
+        for (auto&& i : endpoint_tokens) {
+            tm.update_topology(i.first, topo->get_location(i.first));
+            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+        }
     }).get();
 
     /////////////////////////////////////
@@ -222,7 +241,7 @@ void simple_test() {
         "NetworkTopologyStrategy", options323);
 
 
-    full_ring_check(ring_points, options323, ars_ptr, stm.get());
+    full_ring_check(ring_points, options323, ars_ptr, stm.get(), *topo);
 
     ///////////////
     // Create the replication strategy
@@ -235,7 +254,7 @@ void simple_test() {
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options320);
 
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -247,7 +266,7 @@ void simple_test() {
         tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
 }
 
 // Run in a seastar thread.
@@ -258,13 +277,12 @@ void heavy_origin_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
-    sharded<gms::gossiper> g;
-    sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg, std::ref(g)).get();
+    sharded<snitch_ptr> snitch;
+    snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -308,14 +326,19 @@ void heavy_origin_test() {
         }
     }
 
-    stm.mutate_token_metadata([&tokens] (token_metadata& tm) {
-        return tm.update_normal_tokens(tokens);
+    auto topo = generate_topology(ring_points);
+
+    stm.mutate_token_metadata([&tokens, &topo] (token_metadata& tm) -> future<> {
+        for (auto&& i : tokens) {
+            tm.update_topology(i.first, topo->get_location(i.first));
+            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+        }
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", config_options);
 
-    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
+    full_ring_check(ring_points, config_options, ars_ptr, stm.get(), *topo);
 }
 
 
@@ -369,15 +392,15 @@ static bool has_sufficient_replicas(
     return true;
 }
 
-static std::vector<inet_address> calculate_natural_endpoints(
+static locator::endpoint_set calculate_natural_endpoints(
                 const token& search_token, const token_metadata& tm,
-                snitch_ptr& snitch,
+                locator::topology& topo,
                 const std::unordered_map<sstring, size_t>& datacenters) {
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    utils::sequenced_set<inet_address> replicas;
+    locator::endpoint_set replicas;
 
     // replicas we have found in each DC
     std::unordered_map<sstring, std::unordered_set<inet_address>> dc_replicas;
@@ -388,7 +411,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     // when we relax the rack uniqueness we can append this to the current
     // result so we don't have to wind back the iterator
     //
-    std::unordered_map<sstring, utils::sequenced_set<inet_address>>
+    std::unordered_map<sstring, locator::endpoint_set>
         skipped_dc_endpoints;
 
     //
@@ -430,7 +453,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
         }
 
         inet_address ep = *tm.get_endpoint(next);
-        sstring dc = snitch->get_datacenter(ep);
+        sstring dc = topo.get_location(ep).dc;
 
         auto& seen_racks_dc_set = seen_racks[dc];
         auto& racks_dc_map = racks.at(dc);
@@ -451,7 +474,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
             dc_replicas_dc_set.insert(ep);
             replicas.push_back(ep);
         } else {
-            sstring rack = snitch->get_rack(ep);
+            sstring rack = topo.get_location(ep).rack;
             // is this a new rack? - we prefer to replicate on different racks
             if (seen_racks_dc_set.contains(rack)) {
                 skipped_dc_endpoints_set.push_back(ep);
@@ -477,18 +500,18 @@ static std::vector<inet_address> calculate_natural_endpoints(
         }
     }
 
-    return std::move(replicas.get_vector());
+    return replicas;
 }
 
 // Called in a seastar thread.
-static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const shared_token_metadata& stm, std::unique_ptr<locator::topology> topo, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(snitch,
+    my_network_topology_strategy nts(
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
@@ -499,7 +522,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
-        auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
+        auto expected = calculate_natural_endpoints(token, tm, *topo, datacenters);
         auto actual = nts.calculate_natural_endpoints(token, tm).get0();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
@@ -514,12 +537,9 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
 }
 
 
-std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
+std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
     auto& e1 = seastar::testing::local_random_engine;
 
-    using addr_to_string_type = std::unordered_map<inet_address, sstring>;
-
-    addr_to_string_type node_to_rack, node_to_dc;
     std::unordered_map<sstring, size_t> racks_per_dc;
     std::vector<std::reference_wrapper<const sstring>> dcs;
 
@@ -537,48 +557,21 @@ std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstr
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
+    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
+
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        node_to_rack.emplace(node, to_sstring(r));
-        node_to_dc.emplace(node, dc);
+        topo->update_endpoint(node, { dc, to_sstring(r) }, locator::topology::pending::no);
     }
 
-    class my_snitch : public snitch_base {
-    public:
-        my_snitch(addr_to_string_type node_to_rack,
-                        addr_to_string_type node_to_dc)
-            : _node_to_rack(std::move(node_to_rack))
-            , _node_to_dc(std::move(node_to_dc))
-        {}
-        sstring get_rack(inet_address endpoint) override {
-            return _node_to_rack.at(endpoint);
-        }
-        sstring get_datacenter(inet_address endpoint) override {
-            return _node_to_dc.at(endpoint);
-        }
-        sstring get_name() const override {
-            return "muminpappa";
-        }
-    private:
-        addr_to_string_type _node_to_rack, _node_to_dc;
-    };
-
-    return std::make_unique<my_snitch>(std::move(node_to_rack), std::move(node_to_dc));
+    return topo;
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-
-    snitch_config cfg;
-    cfg.name = "RackInferringSnitch";
-    sharded<gms::gossiper> g;
-    sharded<snitch_ptr>& g_snitch = i_endpoint_snitch::snitch_instance();
-    g_snitch.start(cfg, std::ref(g)).get();
-    auto stop_snitch = defer([&g_snitch] { g_snitch.stop().get(); });
-    g_snitch.invoke_on_all(&snitch_ptr::start).get();
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;
@@ -597,14 +590,10 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         return inet_address((127u << 24) | ++i);
     });
 
-    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
-
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
-        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); });
-        // not doing anything sharded. We can just play fast and loose with the snitch.
-        (void)snitch.stop();
-        snitch = generate_snitch(datacenters, nodes);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
+        auto topo = generate_topology(datacenters, nodes);
 
         std::unordered_set<dht::token> random_tokens;
         while (random_tokens.size() < nodes.size() * VNODES) {
@@ -619,10 +608,13 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
             }
         }
         
-        stm.mutate_token_metadata([&endpoint_tokens] (token_metadata& tm) {
-            return tm.update_normal_tokens(endpoint_tokens);
+        stm.mutate_token_metadata([&endpoint_tokens, &topo] (token_metadata& tm) -> future<> {
+            for (auto&& i : endpoint_tokens) {
+                tm.update_topology(i.first, topo->get_location(i.first));
+                co_await tm.update_normal_tokens(std::move(i.second), i.first);
+            }
         }).get();
-        test_equivalence(stm, snitch, datacenters);
+        test_equivalence(stm, std::move(topo), datacenters);
     }
 }
 

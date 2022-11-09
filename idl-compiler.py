@@ -74,6 +74,22 @@ class ASTBase:
         return self.name if not self.ns_context \
             else self.combine_ns(self.ns_context) + "::" + self.name
 
+class Include(ASTBase):
+    '''AST node representing a single `include file/module`.'''
+
+    def __init__(self, name):
+        super().__init__(name)
+        sfx = '.idl.hh'
+        self.is_module = name.endswith(sfx)
+        if self.is_module:
+            self.module_name = self.name[0:-len(sfx)]
+
+    def __str__(self):
+        return f"<Include(name={self.name}, is_module={self.is_module})>"
+
+    def __repr__(self):
+        return self.__str__()
+
 class BasicType(ASTBase):
     '''AST node that represents terminal grammar nodes for the non-template
     types, defined either inside or outside the IDL.
@@ -462,6 +478,11 @@ class RpcVerb(ASTBase):
     - [[with_timeout]] - an additional time_point parameter is supplied
       to the handler function and send* method uses send_message_*_timeout
       variant of internal function to actually send the message.
+      Incompatible with [[cancellable]].
+    - [[cancellable]] - an additional abort_source& parameter is supplied
+      to the handler function and send* method uses send_message_*_cancellable
+      variant of internal function to actually send the message.
+      Incompatible with [[with_timeout]].
     - [[one_way]] - the handler function is annotated by
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
@@ -470,16 +491,17 @@ class RpcVerb(ASTBase):
     the return type is set to be `future<>`.
     For one-way verbs, the use of return clause is prohibited and the
     signature of `send*` function always returns `future<>`."""
-    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, one_way):
+    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, cancellable, one_way):
         super().__init__(name)
         self.params = parameters
         self.return_values = return_values
         self.with_client_info = with_client_info
         self.with_timeout = with_timeout
+        self.cancellable = cancellable
         self.one_way = one_way
 
     def __str__(self):
-        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, cancellable={self.cancellable}, one_way={self.one_way})>"
 
     def __repr__(self):
         return self.__str__()
@@ -490,6 +512,8 @@ class RpcVerb(ASTBase):
             send_fn += '_oneway'
         if self.with_timeout:
             send_fn += '_timeout'
+        if self.cancellable:
+            send_fn += '_cancellable'
         return send_fn
 
     def handler_function_return_values(self):
@@ -535,6 +559,8 @@ class RpcVerb(ASTBase):
         res = 'netw::messaging_service* ms, netw::msg_addr id'
         if self.with_timeout:
             res += ', netw::messaging_service::clock_type::time_point timeout'
+        if self.cancellable:
+            res += ', abort_source& as'
         if self.params:
             for idx, p in enumerate(self.params):
                 res += ', ' + p.to_string_send_fn_signature()
@@ -546,6 +572,8 @@ class RpcVerb(ASTBase):
         res = f'ms, {self.messaging_verb_enum_case()}, id'
         if self.with_timeout:
             res += ', timeout'
+        if self.cancellable:
+            res += ', as'
         if self.params:
             for idx, p in enumerate(self.params):
                 res += ', ' + f'std::move({p.name if p.name else f"_{idx + 1}"})'
@@ -583,6 +611,8 @@ class NamespaceDef(ASTBase):
 def basic_type_parse_action(tokens):
     return BasicType(name=tokens[0])
 
+def include_parse_action(tokens):
+    return Include(name=tokens[0])
 
 def template_type_parse_action(tokens):
     return TemplateType(name=tokens['template_name'], template_parameters=tokens["template_parameters"].asList())
@@ -657,11 +687,14 @@ def rpc_verb_parse_action(tokens):
     raw_attrs = tokens['attributes']
     params = tokens['params'] if 'params' in tokens else []
     with_timeout = not raw_attrs.empty() and 'with_timeout' in raw_attrs.attr_items
+    cancellable = not raw_attrs.empty() and 'cancellable' in raw_attrs.attr_items
     with_client_info = not raw_attrs.empty() and 'with_client_info' in raw_attrs.attr_items
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
     if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
-    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
+    if with_timeout and cancellable:
+        raise Exception(f"Error in verb {name}: [[with_timeout]] cannot be used together with [[cancellable]] in the same verb")
+    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, cancellable=cancellable, one_way=one_way)
 
 
 def namespace_parse_action(tokens):
@@ -674,6 +707,7 @@ def parse_file(file_name):
     number = pp.pyparsing_common.signed_integer
     identifier = pp.pyparsing_common.identifier
 
+    include_kw = pp.Keyword('#include').suppress()
     lbrace = pp.Literal('{').suppress()
     rbrace = pp.Literal('}').suppress()
     cls = pp.Keyword('class').suppress()
@@ -708,6 +742,9 @@ def parse_file(file_name):
 
     type <<= tmpl | (pp.Optional(const) + btype)
     type.setParseAction(type_parse_action)
+
+    include_stmt = include_kw - pp.QuotedString('"')
+    include_stmt.setParseAction(include_parse_action)
 
     enum_class = enum_lit - cls
 
@@ -755,9 +792,9 @@ def parse_file(file_name):
     namespace = ns - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
     namespace.setParseAction(namespace_parse_action)
 
-    content <<= enum | class_def | rpc_verb | namespace
+    content <<= include_stmt | enum | class_def | rpc_verb | namespace
 
-    for varname in ("enum", "class_def", "class_member", "content", "namespace", "template_def"):
+    for varname in ("include_stmt", "enum", "class_def", "class_member", "content", "namespace", "template_def"):
         locals()[varname].setName(varname)
 
     rt = pp.OneOrMore(content)
@@ -1497,6 +1534,23 @@ def add_visitors(cout):
         handle_visitors_nodes(local_writable_types[k], cout)
 
 
+def handle_include(obj, hout, cout):
+    '''Generate #include directives.
+    '''
+
+    if obj.is_module:
+        fprintln(hout, f'#include "{obj.module_name}.dist.hh"')
+        fprintln(cout, f'#include "{obj.module_name}.dist.impl.hh"')
+    else:
+        fprintln(hout, f'#include "{obj.name}"')
+
+def handle_includes(tree, hout, cout):
+    for obj in tree:
+        if isinstance(obj, Include):
+            handle_include(obj, hout, cout)
+        else:
+            pass
+
 def handle_class(cls, hout, cout):
     '''Generate serializer class declarations and definitions for a class
     defined in IDL.
@@ -1535,6 +1589,8 @@ def handle_objects(tree, hout, cout):
         elif isinstance(obj, NamespaceDef):
             handle_objects(obj.members, hout, cout)
         elif isinstance(obj, RpcVerb):
+            pass
+        elif isinstance(obj, Include):
             pass
         else:
             print(f"Unknown type: {obj}")
@@ -1599,6 +1655,8 @@ def handle_types(tree):
             pass
         elif isinstance(obj, NamespaceDef):
             handle_types(obj.members)
+        elif isinstance(obj, Include):
+            pass
         else:
             print(f"Unknown object type: {obj}")
 
@@ -1655,11 +1713,20 @@ def load_file(name):
     """)
     print_cw(cout)
     fprintln(hout, "#include \"serializer.hh\"\n")
-    if config.ns != '':
-        fprintln(hout, f"namespace {config.ns} {{")
-        fprintln(cout, f"namespace {config.ns} {{")
+    fprintln(cout, "#include \"serializer_impl.hh\"")
+    fprintln(cout, "#include \"serialization_visitors.hh\"")
+
+    def maybe_open_namespace(printed=False):
+        if config.ns != '' and not printed:
+            fprintln(hout, f"namespace {config.ns} {{")
+            fprintln(cout, f"namespace {config.ns} {{")
+            printed = True
+        return printed
+
     data = parse_file(name)
     if data:
+        handle_includes(data, hout, cout)
+        printed = maybe_open_namespace()
         setup_additional_metadata(data)
         handle_types(data)
         handle_objects(data, hout, cout)
@@ -1667,6 +1734,7 @@ def load_file(name):
         module_name = os.path.basename(name)
         module_name = module_name[:module_name.find('.')]
         generate_rpc_verbs(hout, cout, module_name)
+    maybe_open_namespace(printed)
     add_visitors(cout)
     if config.ns != '':
         fprintln(hout, f"}} // {config.ns}")

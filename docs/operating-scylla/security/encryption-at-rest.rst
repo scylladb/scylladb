@@ -2,11 +2,13 @@
 Encryption at Rest
 ==================
 
+:label-tip:`ScyllaDB Enterprise`
 
-.. versionadded:: 2019.1.1 Scylla Enterprise
-.. versionchanged:: 2019.1.3 Scylla Enterprise
+.. versionadded:: 2019.1.1
+.. versionchanged:: 2019.1.3
 
-.. include:: /rst_include/enterprise-only-note.rst
+Introduction
+=============
 
 Scylla Enterprise protects your sensitive data with data-at-rest encryption. 
 It protects the privacy of your user's data, reduces the risk of data breaches, and helps meet regulatory requirements. 

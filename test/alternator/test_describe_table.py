@@ -18,7 +18,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from alternator_util import multiset
+from util import multiset
 
 # Test that DescribeTable correctly returns the table's name and state
 def test_describe_table_basic(test_table):
@@ -94,9 +94,9 @@ def test_describe_table_size(test_table):
 # Test the ProvisionedThroughput attribute returned by DescribeTable.
 # This is a very partial test: Our test table is configured without
 # provisioned throughput, so obviously it will not have interesting settings
-# for it. DynamoDB returns zeros for some of the attributes, even though
-# the documentation suggests missing values should have been fine too.
-@pytest.mark.xfail(reason="DescribeTable does not return provisioned throughput")
+# for it. But DynamoDB documents that zeros be returned for WriteCapacityUnits
+# and ReadCapacityUnits, and does this in practice as well - and some
+# applications assume these numbers are always there (even if 0).
 def test_describe_table_provisioned_throughput(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert got['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0

@@ -31,6 +31,7 @@
 #include "service/migration_manager.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
+#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
@@ -135,6 +136,8 @@ private:
     sharded<db::batchlog_manager>& _batchlog_manager;
     sharded<gms::gossiper>& _gossiper;
     service::raft_group0_client& _group0_client;
+    sharded<service::raft_group_registry>& _group0_registry;
+    sharded<db::system_keyspace>& _sys_ks;
 
 private:
     struct core_local_state {
@@ -186,7 +189,9 @@ public:
             sharded<qos::service_level_controller> &sl_controller,
             sharded<db::batchlog_manager>& batchlog_manager,
             sharded<gms::gossiper>& gossiper,
-            service::raft_group0_client& client)
+            service::raft_group0_client& client,
+            sharded<service::raft_group_registry>& group0_registry,
+            sharded<db::system_keyspace>& sys_ks)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -198,6 +203,8 @@ public:
             , _batchlog_manager(batchlog_manager)
             , _gossiper(gossiper)
             , _group0_client(client)
+            , _group0_registry(group0_registry)
+            , _sys_ks(sys_ks)
     {
         adjust_rlimit();
     }
@@ -284,7 +291,7 @@ public:
     }
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
-        auto id = utils::UUID_gen::get_time_UUID();
+        auto id = table_id(utils::UUID_gen::get_time_UUID());
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
@@ -417,6 +424,14 @@ public:
         return _group0_client;
     }
 
+    virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
+        return _group0_registry;
+    }
+
+    virtual db::system_keyspace& get_system_keyspace() override {
+        return _sys_ks.local();
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();
@@ -469,6 +484,7 @@ public:
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
+            // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<compaction_manager> cm;
             sharded<replica::database> db;
@@ -491,8 +507,8 @@ public:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
-            if (cfg->host_id == utils::UUID{}) {
-                cfg->host_id = utils::make_random_uuid();
+            if (!cfg->host_id) {
+                cfg->host_id = locator::host_id::create_random_id();
             }
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
@@ -510,8 +526,15 @@ public:
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
 
+            sharded<locator::snitch_ptr> snitch;
+            snitch.start(locator::snitch_config{}).get();
+            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
+
             sharded<locator::shared_token_metadata> token_metadata;
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
+            locator::token_metadata::config tm_cfg;
+            tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
             sharded<locator::effective_replication_map_factory> erm_factory;
@@ -588,11 +611,6 @@ public:
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            sharded<locator::snitch_ptr>& snitch = locator::i_endpoint_snitch::snitch_instance();
-            snitch.start(locator::snitch_config{}, std::ref(gossiper)).get();
-            auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
-            snitch.invoke_on_all(&locator::snitch_ptr::start).get();
-
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
@@ -606,19 +624,29 @@ public:
             sharded<streaming::stream_manager> stream_manager;
             sharded<service::forward_service> forward_service;
             sharded<direct_failure_detector::failure_detector> fd;
+            sharded<service::raft_address_map<>> raft_address_map;
 
-            direct_fd_clock fd_clock;
+            raft_address_map.start().get();
+            auto stop_address_map = defer([&raft_address_map] {
+                raft_address_map.stop().get();
+            });
+
+
+            static sharded<service::direct_fd_pinger> fd_pinger;
+            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper)), std::ref(raft_address_map)).get();
+            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
+
+            service::direct_fd_clock fd_clock;
             fd.start(
-                sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_direct_fd_pinger()); }, std::ref(gossiper)),
-                std::ref(fd_clock),
-                direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+                std::ref(fd_pinger), std::ref(fd_clock),
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
 
             auto stop_fd = defer([&fd] {
                 fd.stop().get();
             });
 
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
-                std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
+                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
@@ -671,7 +699,7 @@ public:
 
             feature_service.invoke_on_all([] (auto& fs) {
                 return seastar::async([&fs] {
-                    fs.enable(fs.known_feature_set());
+                    fs.enable(fs.supported_feature_set());
                 });
             }).get();
 
@@ -693,7 +721,7 @@ public:
             auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local());
+            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
@@ -713,10 +741,12 @@ public:
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config).get();
+            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
-            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
+            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
+                return sys_ks.start(snitch.local());
+            }).get();
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
@@ -728,20 +758,19 @@ public:
             });
 
             sharded<service::storage_service> ss;
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
                 std::ref(sys_ks),
-                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(feature_service), std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(repair),
                 std::ref(stream_manager),
                 std::ref(elc_notif),
-                std::ref(bm)).get();
+                std::ref(bm),
+                std::ref(snitch)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            replica::distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg, db::table_selector::all()).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, *cfg, db::table_selector::all()).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
@@ -757,7 +786,11 @@ public:
                 }
             }).get();
 
-            auto stop_system_keyspace = defer([] { db::qctx = {}; });
+            group0_client.init().get();
+            auto stop_system_keyspace = defer([&sys_ks] {
+                db::qctx = {};
+                sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
+            });
 
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&replica::database::shutdown).get();
@@ -808,7 +841,7 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms.local(),
-                    gossiper.local(), qp.local(), mm.local(), group0_client};
+                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), sys_ks.local(), group0_client};
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });
@@ -870,7 +903,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client);
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

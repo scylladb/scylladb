@@ -65,13 +65,6 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
-        fcfg._disabled_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
-    } else {
-        // Disable support for using raft cluster management so that it cannot
-        // be enabled by accident.
-        // This prevents the `USES_RAFT_CLUSTER_MANAGEMENT` feature from being
-        // advertised via gossip ahead of time.
-        fcfg._masked_features.insert("USES_RAFT_CLUSTER_MANAGEMENT"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
@@ -105,16 +98,7 @@ void feature_service::enable(const sstring& name) {
     }
 }
 
-future<> feature_service::support(const std::string_view& name) {
-    _config._masked_features.erase(sstring(name));
-
-    if (db::qctx) {
-        // Update `system.local#supported_features` accordingly
-        co_await db::system_keyspace::save_local_supported_features(supported_feature_set());
-    }
-}
-
-std::set<std::string_view> feature_service::known_feature_set() {
+std::set<std::string_view> feature_service::supported_feature_set() {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
@@ -139,6 +123,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         "CORRECT_STATIC_COMPACT_IN_MC"sv,
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
+        "LARGE_COLLECTION_DETECTION"sv,
     };
 
     for (auto& [name, f_ref] : _registered_features) {
@@ -153,15 +138,6 @@ std::set<std::string_view> feature_service::known_feature_set() {
 
 const std::unordered_map<sstring, std::reference_wrapper<feature>>& feature_service::registered_features() const {
     return _registered_features;
-}
-
-std::set<std::string_view> feature_service::supported_feature_set() {
-    auto features = known_feature_set();
-
-    for (const sstring& s : _config._masked_features) {
-        features.erase(s);
-    }
-    return features;
 }
 
 feature::feature(feature_service& service, std::string_view name, bool enabled)

@@ -33,7 +33,7 @@ using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto ranges = db::size_estimates::test_get_local_ranges(e.local_db()).get0();
+        auto ranges = db::size_estimates::test_get_local_ranges(e.local_db(), e.get_system_keyspace()).get0();
         auto start_token1 = utf8_type->to_string(ranges[3].start);
         auto start_token2 = utf8_type->to_string(ranges[5].start);
         auto end_token1 = utf8_type->to_string(ranges[3].end);

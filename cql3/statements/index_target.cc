@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <regex>
 #include <stdexcept>
 #include "index_target.hh"
 #include "index/secondary_index.hh"
@@ -21,9 +22,11 @@ using db::index::secondary_index;
 
 const sstring index_target::target_option_name = "target";
 const sstring index_target::custom_index_option_name = "class_name";
+const std::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
-sstring index_target::as_string() const {
+sstring index_target::column_name() const {
     struct as_string_visitor {
+        const index_target* target;
         sstring operator()(const std::vector<::shared_ptr<column_identifier>>& columns) const {
             return "(" + boost::algorithm::join(columns | boost::adaptors::transformed(
                     [](const ::shared_ptr<cql3::column_identifier>& ident) -> sstring {
@@ -36,7 +39,7 @@ sstring index_target::as_string() const {
         }
     };
 
-    return std::visit(as_string_visitor(), value);
+    return std::visit(as_string_visitor {this}, value);
 }
 
 index_target::target_type index_target::from_sstring(const sstring& s)
@@ -45,26 +48,66 @@ index_target::target_type index_target::from_sstring(const sstring& s)
         return index_target::target_type::keys;
     } else if (s == "entries") {
         return index_target::target_type::keys_and_values;
+    } else if (s == "regular_values") {
+        return index_target::target_type::regular_values;
     } else if (s == "values") {
-        return index_target::target_type::values;
+        return index_target::target_type::collection_values;
     } else if (s == "full") {
         return index_target::target_type::full;
     }
     throw std::runtime_error(format("Unknown target type: {}", s));
 }
 
-sstring index_target::index_option(target_type type) {
-    switch (type) {
-        case target_type::keys: return secondary_index::index_keys_option_name;
-        case target_type::keys_and_values: return secondary_index::index_entries_option_name;
-        case target_type::values: return secondary_index::index_values_option_name;
-        default: throw std::invalid_argument("should not reach");
+index_target::target_type index_target::from_target_string(const sstring& target) {
+    std::cmatch match;
+    if (std::regex_match(target.data(), match, target_regex)) {
+        return index_target::from_sstring(match[1].str());
     }
+    return target_type::regular_values;
+}
+
+// A CQL column's name may contain any characters. If we use this string as-is
+// inside a target string, it may confuse us when we later try to parse the
+// resulting string (e.g., see issue #10707). We should therefore use the
+// function escape_target_column() to "escape" the target column name, and use
+// the reverse function unescape_target_column() to undo this.
+// Cassandra uses for this escaping the CQL syntax of this column name
+// (basically, column_identifier::as_cql_name()). This is an overkill,
+// but since we already have such code, we might as well use it.
+sstring index_target::escape_target_column(const cql3::column_identifier& col) {
+    return col.to_cql_string();
+}
+sstring index_target::unescape_target_column(std::string_view str) {
+    // We don't have a reverse version of util::maybe_quote(), so
+    // we need to open-code it here. Cassandra has this too - in
+    // index/TargetParser.java
+    if (str.size() >= 2 && str.starts_with('"') && str.ends_with('"')) {
+        str.remove_prefix(1);
+        str.remove_suffix(1);
+        // remove doubled quotes in the middle of the string, which to_cql_string()
+        // adds. This code is inefficient but rarely called so it's fine.
+        static const std::regex double_quote_re("\"\"");
+        return std::regex_replace(std::string(str), double_quote_re, "\"");
+    }
+    return sstring(str);
+}
+
+sstring index_target::column_name_from_target_string(const sstring& target) {
+    std::cmatch match;
+    if (std::regex_match(target.data(), match, target_regex)) {
+        return unescape_target_column(match[2].str());
+    }
+    return unescape_target_column(target);
 }
 
 ::shared_ptr<index_target::raw>
-index_target::raw::values_of(::shared_ptr<column_identifier::raw> c) {
-    return ::make_shared<raw>(c, target_type::values);
+index_target::raw::regular_values_of(::shared_ptr<column_identifier::raw> c) {
+    return ::make_shared<raw>(c, target_type::regular_values);
+}
+
+::shared_ptr<index_target::raw>
+index_target::raw::collection_values_of(::shared_ptr<column_identifier::raw> c) {
+    return ::make_shared<raw>(c, target_type::collection_values);
 }
 
 ::shared_ptr<index_target::raw>
@@ -84,7 +127,7 @@ index_target::raw::full_collection(::shared_ptr<column_identifier::raw> c) {
 
 ::shared_ptr<index_target::raw>
 index_target::raw::columns(std::vector<::shared_ptr<column_identifier::raw>> c) {
-    return ::make_shared<raw>(std::move(c), target_type::values);
+    return ::make_shared<raw>(std::move(c), target_type::regular_values);
 }
 
 ::shared_ptr<index_target>
@@ -115,10 +158,11 @@ sstring to_sstring(index_target::target_type type)
     switch (type) {
     case index_target::target_type::keys: return "keys";
     case index_target::target_type::keys_and_values: return "entries";
-    case index_target::target_type::values: return "values";
+    case index_target::target_type::regular_values: return "regular_values";
+    case index_target::target_type::collection_values: return "values";
     case index_target::target_type::full: return "full";
     }
-    return "";
+    throw std::runtime_error("to_sstring(index_target::target_type): should not reach");
 }
 
 }

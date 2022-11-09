@@ -18,7 +18,10 @@
 #include "gms/feature.hh"
 #include "direct_failure_detector/failure_detector.hh"
 
-namespace gms { class gossiper; }
+namespace gms {
+class gossiper;
+class echo_pinger;
+}
 
 namespace service {
 
@@ -39,7 +42,10 @@ struct raft_server_for_group {
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
+    std::optional<seastar::future<>> aborted;
 };
+
+class direct_fd_pinger;
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -50,12 +56,13 @@ class raft_group_registry : public seastar::peering_sharded_service<raft_group_r
 private:
     // True if the feature is enabled
     bool _is_enabled;
+
     netw::messaging_service& _ms;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
-    raft_address_map<> _srv_address_mappings;
+    raft_address_map<>& _srv_address_mappings;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
@@ -71,12 +78,13 @@ private:
 
     raft_server_for_group& server_for_group(raft::group_id id);
 
-    // Group 0 id, valid only on shard 0 after boot is over
+    // Group 0 id, valid only on shard 0 after boot/upgrade is over
     std::optional<raft::group_id> _group0_id;
 
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
-    raft_group_registry(bool is_enabled, netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
+    raft_group_registry(bool is_enabled, raft_address_map<>&,
+            netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start
@@ -95,18 +103,46 @@ public:
     raft::server& get_server(raft::group_id gid);
 
     // Return an instance of group 0. Valid only on shard 0,
-    // after boot is complete
+    // after boot/upgrade is complete
     raft::server& group0();
 
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);
+    void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 
+    // Is the RAFT local feature enabled?
+    // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
     bool is_enabled() const { return _is_enabled; }
+};
+
+// Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
+// Translates `raft::server_id`s to `gms::inet_address`es before pinging.
+// The actual pinging is performed by `echo_pinger`.
+class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
+    gms::echo_pinger& _echo_pinger;
+    raft_address_map<>& _address_map;
+
+public:
+    direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map<>& address_map)
+            : _echo_pinger(pinger), _address_map(address_map) {}
+
+    direct_fd_pinger(const direct_fd_pinger&) = delete;
+    direct_fd_pinger(direct_fd_pinger&&) = delete;
+
+    future<bool> ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) override;
+};
+
+// XXX: find a better place to put this?
+struct direct_fd_clock : public direct_failure_detector::clock {
+    using base = std::chrono::steady_clock;
+
+    direct_failure_detector::clock::timepoint_t now() noexcept override;
+    future<> sleep_until(direct_failure_detector::clock::timepoint_t tp, abort_source& as) override;
 };
 
 } // end of namespace service

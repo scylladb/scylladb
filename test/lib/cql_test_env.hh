@@ -51,6 +51,7 @@ namespace service {
 class client_state;
 class migration_manager;
 class raft_group0_client;
+class raft_group_registry;
 
 }
 
@@ -165,6 +166,10 @@ public:
     virtual future<> refresh_client_state() = 0;
 
     virtual service::raft_group0_client& get_raft_group0_client() = 0;
+
+    virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
+
+    virtual db::system_keyspace& get_system_keyspace() = 0;
 
     data_dictionary::database data_dictionary();
 };

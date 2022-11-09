@@ -22,42 +22,19 @@ namespace locator {
  */
 struct simple_snitch : public snitch_base {
     simple_snitch(const snitch_config& cfg) {
-        _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
-        _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+        _my_dc = get_datacenter();
+        _my_rack = get_rack();
 
         // This snitch is ready on creation
         set_snitch_ready();
     }
 
-    virtual sstring get_rack(inet_address endpoint) override {
+    virtual sstring get_rack() const override {
         return "rack1";
     }
 
-    virtual sstring get_datacenter(inet_address endpoint) override {
+    virtual sstring get_datacenter() const override {
         return "datacenter1";
-    }
-
-    virtual void sort_by_proximity(
-        inet_address address, inet_address_vector_replica_set& addresses) override {
-        // Optimization to avoid walking the list
-    }
-
-    virtual int compare_endpoints(inet_address& target, inet_address& a1,
-                                  inet_address& a2) override {
-        //
-        // "Making all endpoints equal ensures we won't change the original
-        // ordering." - quote from C* code.
-        //
-        // Effectively this would return 0 even in the following case:
-        //
-        // compare_endpoints(NodeA, NodeA, NodeB) // -1 should be returned
-        //
-        // The snitch_base implementation would handle the above case correctly.
-        //
-        // I'm leaving the this implementation anyway since it's the C*'s
-        // implementation and some installations may depend on it.
-        //
-        return 0;
     }
 
     virtual sstring get_name() const override {

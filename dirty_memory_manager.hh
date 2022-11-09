@@ -39,134 +39,73 @@ public:
     std::optional<region_heap::handle_type> _heap_handle;
 };
 
+// The region_group class keeps track of two memory use counts:
 //
-// Users of a region_group can pass an instance of the class region_group_reclaimer, and specialize
-// its methods start_reclaiming() and stop_reclaiming(). Those methods will be called when the LSA
+//  - real memory: this is LSA memory used by memtables, whether active or being
+//            flushed. 
+//  - spooled memory: this is LSA memory used by memtables undergoing a flush
+//            that has been copied to an sstable. It a subset of
+//            real memory. Once a flushing memtable is sealed, its spooled memory
+//            drops to zero and real memory drops by the size of the memtable.
+//
+// Since the control loop is interested in (real memory) - (spooled memory), we keep
+// track of the difference as unspooled memory.
+//
+// real memory and unspooled memory react to events in this way:
+//   - data added to memtable: both real memory and unspooled memory increase by the same amount
+//            (spooled memory does not change). Note the increase can actually be a decrease if
+//            data was deleted or overwritten.
+//   - part of the memtable was flushed to disk: unspooled memory decreases (spooled memory
+//            increases)
+//
+// Users of a region_group configure reclaim with an unspooled memory soft limit (where
+// sstable flush starts, but allocation can still continue), an unspooled memory hard limit (where
+// allocation cannot proceed until sstable flush makes progress),
+// and callbacks that are called when reclaiming is required and no longer necessary.
+// There is also a real memory hard limit.
+
+//
+// These callbacks will be called when the dirty memory manager
 // see relevant changes in the memory pressure conditions for this region_group. By specializing
-// those methods - which are a nop by default - the callers can take action to aid the LSA in
-// alleviating pressure.
-class region_group_reclaimer {
-protected:
-    size_t _threshold;
-    size_t _soft_limit;
-    bool _under_pressure = false;
-    bool _under_soft_pressure = false;
-    // The following restrictions apply to implementations of start_reclaiming() and stop_reclaiming():
-    //
-    //  - must not use any region or region_group objects, because they're invoked synchronously
-    //    with operations on those.
-    //
-    //  - must be noexcept, because they're called on the free path.
-    //
-    //  - the implementation may be called synchronously with any operation
-    //    which allocates memory, because these are called by memory reclaimer.
-    //    In particular, the implementation should not depend on memory allocation
-    //    because that may fail when in reclaiming context.
-    //
-    virtual void start_reclaiming() noexcept {}
-    virtual void stop_reclaiming() noexcept {}
-public:
-    bool under_pressure() const noexcept {
-        return _under_pressure;
-    }
+// those methods - which are a nop by default - the callers initiate memtable flusing to
+// free real and unspooled memory.
 
-    bool over_soft_limit() const noexcept {
-        return _under_soft_pressure;
-    }
+// The following restrictions apply to implementations of start_reclaiming() and stop_reclaiming():
+//
+//  - must not use any region or region_group objects, because they're invoked synchronously
+//    with operations on those.
+//
+//  - must be noexcept, because they're called on the free path.
+//
+//  - the implementation may be called synchronously with any operation
+//    which allocates memory, because these are called by memory reclaimer.
+//    In particular, the implementation should not depend on memory allocation
+//    because that may fail when in reclaiming context.
+//
 
-    void notify_soft_pressure() noexcept {
-        if (!_under_soft_pressure) {
-            _under_soft_pressure = true;
-            start_reclaiming();
-        }
-    }
+using reclaim_start_callback = noncopyable_function<void () noexcept>;
+using reclaim_stop_callback = noncopyable_function<void () noexcept>;
 
-    void notify_soft_relief() noexcept {
-        if (_under_soft_pressure) {
-            _under_soft_pressure = false;
-            stop_reclaiming();
-        }
-    }
-
-    void notify_pressure() noexcept {
-        _under_pressure = true;
-    }
-
-    void notify_relief() noexcept {
-        _under_pressure = false;
-    }
-
-    region_group_reclaimer() noexcept
-        : _threshold(std::numeric_limits<size_t>::max()), _soft_limit(std::numeric_limits<size_t>::max()) {}
-    region_group_reclaimer(size_t threshold) noexcept
-        : _threshold(threshold), _soft_limit(threshold) {}
-    region_group_reclaimer(size_t threshold, size_t soft) noexcept
-        : _threshold(threshold), _soft_limit(soft) {
-        assert(_soft_limit <= _threshold);
-    }
-
-    virtual ~region_group_reclaimer() {}
-
-    size_t throttle_threshold() const noexcept {
-        return _threshold;
-    }
-    size_t soft_limit_threshold() const noexcept {
-        return _soft_limit;
-    }
+struct reclaim_config {
+    size_t unspooled_hard_limit = std::numeric_limits<size_t>::max();
+    size_t unspooled_soft_limit = unspooled_hard_limit;
+    size_t real_hard_limit = std::numeric_limits<size_t>::max();
+    reclaim_start_callback start_reclaiming = [] () noexcept {};
+    reclaim_stop_callback stop_reclaiming = [] () noexcept {};
 };
 
-// Groups regions for the purpose of statistics.  Can be nested.
-// Interfaces to regions via region_listener
+// A container for memtables. Called "region_group" for historical
+// reasons. Receives updates about memtable size change via the
+// LSA region_listener interface.
 class region_group : public region_listener {
-    static region_group_reclaimer no_reclaimer;
-
-    // We want to sort the subgroups so that we can easily find the one that holds the biggest
-    // region for freeing purposes. Please note that this is not the biggest of the region groups,
-    // since a big region group can have a big collection of very small regions, and freeing them
-    // won't achieve anything. An example of such scenario is a ScyllaDB region with a lot of very
-    // small memtables that add up, versus one with a very big memtable. The small memtables are
-    // likely still growing, and freeing the big memtable will guarantee that the most memory is
-    // freed up, while maximizing disk throughput.
-    //
-    // As asynchronous reclaim will likely involve disk operation, and those tend to be more
-    // efficient when bulk done, this behavior is not ScyllaDB memtable specific.
-    //
-    // The maximal score is recursively defined as:
-    //
-    //      max(our_biggest_region, our_subtree_biggest_region)
-    struct subgroup_maximal_region_ascending_less_comparator {
-        bool operator()(region_group* rg1, region_group* rg2) const {
-            return rg1->maximal_score() < rg2->maximal_score();
-        }
-    };
-    friend struct subgroup_maximal_region_ascending_less_comparator;
-
     using region_heap = dirty_memory_manager_logalloc::region_heap;
-
-    using subgroup_heap = boost::heap::binomial_heap<region_group*,
-          boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
-          boost::heap::allocator<std::allocator<region_group*>>,
-          //constant_time_size<true> causes corruption with boost < 1.60
-          boost::heap::constant_time_size<false>>;
-
-    region_group* _parent = nullptr;
-    size_t _total_memory = 0;
-    region_group_reclaimer& _reclaimer;
-
-    subgroup_heap _subgroups;
-    subgroup_heap::handle_type _subgroup_heap_handle;
-    region_heap _regions;
-    region_group* _maximal_rg = nullptr;
-    // We need to store the score separately, otherwise we'd have to have an extra pass
-    // before we update the region occupancy.
-    size_t _maximal_score = 0;
-
+public:
     struct allocating_function {
         virtual ~allocating_function() = default;
         virtual void allocate() = 0;
         virtual void fail(std::exception_ptr) = 0;
     };
-
+private:
     template <typename Func>
     struct concrete_allocating_function : public allocating_function {
         using futurator = futurize<std::result_of_t<Func()>>;
@@ -201,6 +140,17 @@ class region_group : public region_listener {
         explicit on_request_expiry(sstring name) : _name(std::move(name)) {}
         void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
+private:
+    reclaim_config _cfg;
+
+    bool _under_unspooled_pressure = false;
+    bool _under_unspooled_soft_pressure = false;
+
+    region_group* _subgroup = nullptr;
+
+    size_t _real_total_memory = 0;
+
+    bool _under_real_pressure = false;
 
     // It is a more common idiom to just hold the promises in the circular buffer and make them
     // ready. However, in the time between the promise being made ready and the function execution,
@@ -216,13 +166,74 @@ class region_group : public region_listener {
 
     uint64_t _blocked_requests_counter = 0;
 
+    size_t _unspooled_total_memory = 0;
+
+    region_heap _regions;
+
     condition_variable _relief;
-    future<> _releaser;
     bool _shutdown_requested = false;
+    future<> _releaser;
+
+private:
+    size_t real_throttle_threshold() const noexcept {
+        return _cfg.real_hard_limit;
+    }
+public:
+    void update_real(ssize_t delta);
+
+    size_t real_memory_used() const noexcept {
+        return _real_total_memory;
+    }
+
+private:
+    bool do_update_real_and_check_relief(ssize_t delta);
+
+public:
+    bool under_unspooled_pressure() const noexcept {
+        return _under_unspooled_pressure;
+    }
+
+    bool over_unspooled_soft_limit() const noexcept {
+        return _under_unspooled_soft_pressure;
+    }
+
+    void notify_unspooled_soft_pressure() noexcept {
+        if (!_under_unspooled_soft_pressure) {
+            _under_unspooled_soft_pressure = true;
+            _cfg.start_reclaiming();
+        }
+    }
+
+private:
+    void notify_unspooled_soft_relief() noexcept {
+        if (_under_unspooled_soft_pressure) {
+            _under_unspooled_soft_pressure = false;
+            _cfg.stop_reclaiming();
+        }
+    }
+
+    void notify_unspooled_pressure() noexcept {
+        _under_unspooled_pressure = true;
+    }
+
+    void notify_unspooled_relief() noexcept {
+        _under_unspooled_pressure = false;
+    }
+
+    void execute_one();
+public:
+    size_t unspooled_throttle_threshold() const noexcept {
+        return _cfg.unspooled_hard_limit;
+    }
+private:
+    size_t unspooled_soft_limit_threshold() const noexcept {
+        return _cfg.unspooled_soft_limit;
+    }
 
     bool reclaimer_can_block() const;
     future<> start_releaser(scheduling_group deferered_work_sg);
-    void notify_relief();
+    future<> release_queued_allocations();
+    void notify_unspooled_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 private: // from region_listener
     virtual void moved(region* old_address, region* new_address) override;
@@ -236,11 +247,7 @@ public:
     // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
     // (given to run_when_memory_available()) when they must be deferred due to lack of memory
     // at the time the call to run_when_memory_available() was made.
-    region_group(sstring name = "(unnamed region_group)",
-            region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group()) noexcept
-        : region_group(std::move(name), nullptr, reclaimer, deferred_work_sg) {}
-    region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
+    region_group(sstring name = "(unnamed region group)", reclaim_config cfg = {},
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
@@ -250,16 +257,13 @@ public:
         if (reclaimer_can_block()) {
             assert(_shutdown_requested);
         }
-        if (_parent) {
-            _parent->del(this);
-        }
     }
     region_group& operator=(const region_group&) = delete;
     region_group& operator=(region_group&&) = delete;
-    size_t memory_used() const noexcept {
-        return _total_memory;
+    size_t unspooled_memory_used() const noexcept {
+        return _unspooled_total_memory;
     }
-    void update(ssize_t delta);
+    void update_unspooled(ssize_t delta);
 
     // It would be easier to call update, but it is unfortunately broken in boost versions up to at
     // least 1.59.
@@ -273,7 +277,7 @@ public:
     //    the full update cycle even then.
     virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
         _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
-        update(delta);
+        update_unspooled(delta);
     }
 
     virtual void decrease_evictable_usage(region* r) override { // From region_listener
@@ -282,7 +286,7 @@ public:
 
     virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
         decrease_evictable_usage(r);
-        update(delta);
+        update_unspooled(delta);
     }
 
     //
@@ -305,22 +309,7 @@ public:
     // We disallow future-returning functions here, because otherwise memory may be available
     // when we start executing it, but no longer available in the middle of the execution.
     requires (!is_future<std::invoke_result_t<Func>>::value)
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-        auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-            return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
-        });
-
-        if (!blocked_at) {
-            return futurize_invoke(func);
-        }
-
-        auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
-        auto fut = fn->get_future();
-        _blocked_requests.push_back(std::move(fn), timeout);
-        ++_blocked_requests_counter;
-
-        return fut;
-    }
+    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout);
 
     // returns a pointer to the largest region (in terms of memory usage) that sits below this
     // region group. This includes the regions owned by this region group as well as all of its
@@ -329,76 +318,18 @@ public:
 
     // Shutdown is mandatory for every user who has set a threshold
     // Can be called at most once.
-    future<> shutdown() noexcept {
-        _shutdown_requested = true;
-        _relief.signal();
-        return std::move(_releaser);
-    }
+    future<> shutdown() noexcept;
 
-    size_t blocked_requests() const noexcept {
-        return _blocked_requests.size();
-    }
+    size_t blocked_requests() const noexcept;
 
-    uint64_t blocked_requests_counter() const noexcept {
-        return _blocked_requests_counter;
-    }
+    uint64_t blocked_requests_counter() const noexcept;
 private:
     // Returns true if and only if constraints of this group are not violated.
     // That's taking into account any constraints imposed by enclosing (parent) groups.
     bool execution_permitted() noexcept;
 
-    // Executes the function func for each region_group upwards in the hierarchy, starting with the
-    // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
-    // the next ancestor in the hierarchy, or stop_iteration::yes, in which case it stops at this
-    // level.
-    //
-    // This method returns a pointer to the region_group that was processed last, or nullptr if the
-    // root was reached.
-    template <typename Func>
-    static region_group* do_for_each_parent(region_group *node, Func&& func) noexcept(noexcept(func(node))) {
-        auto rg = node;
-        while (rg) {
-            if (func(rg) == stop_iteration::yes) {
-                return rg;
-            }
-            rg = rg->_parent;
-        }
-        return nullptr;
-    }
-
-    inline bool under_pressure() const noexcept {
-        return _reclaimer.under_pressure();
-    }
-
     uint64_t top_region_evictable_space() const noexcept;
 
-    uint64_t maximal_score() const noexcept {
-        return _maximal_score;
-    }
-
-    void update_maximal_rg() {
-        auto my_score = top_region_evictable_space();
-        auto children_score = _subgroups.empty() ? 0 : _subgroups.top()->maximal_score();
-        auto old_maximal_score = _maximal_score;
-        if (children_score > my_score) {
-            _maximal_rg = _subgroups.top()->_maximal_rg;
-        } else {
-            _maximal_rg = this;
-        }
-
-        _maximal_score = _maximal_rg->top_region_evictable_space();
-        if (_parent) {
-            // binomial heap update boost bug.
-            if (_maximal_score > old_maximal_score) {
-                _parent->_subgroups.increase(_subgroup_heap_handle);
-            } else if (_maximal_score < old_maximal_score) {
-                _parent->_subgroups.decrease(_subgroup_heap_handle);
-            }
-        }
-    }
-
-    void add(region_group* child);
-    void del(region_group* child);
     virtual void add(region* child) override; // from region_listener
     virtual void del(region* child) override; // from region_listener
 
@@ -453,24 +384,20 @@ public:
     future<flush_permit> reacquire_sstable_write_permit() &&;
 };
 
-class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_reclaimer {
-    dirty_memory_manager_logalloc::region_group_reclaimer _real_dirty_reclaimer;
+class dirty_memory_manager {
     // We need a separate boolean, because from the LSA point of view, pressure may still be
     // mounting, in which case the pressure flag could be set back on if we force it off.
     bool _db_shutdown_requested = false;
 
     replica::database* _db;
-    // The _real_region_group protects against actual dirty memory usage hitting the maximum. Usage
-    // for this group is the real dirty memory usage of the system.
-    dirty_memory_manager_logalloc::region_group _real_region_group;
-    // The _virtual_region_group accounts for virtual memory usage. It is defined as the real dirty
+    // The _region_group accounts for unspooled memory usage. It is defined as the real dirty
     // memory usage minus bytes that were already written to disk.
-    dirty_memory_manager_logalloc::region_group _virtual_region_group;
+    dirty_memory_manager_logalloc::region_group _region_group;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
     // simultaneously can sustain high levels of throughput, the memory is not freed until the
     // memtable is totally gone. That means that if we have throttled requests, they will stay
-    // throttled for a long time. Even when we have virtual dirty, that only provides a rough
+    // throttled for a long time. Even when we have unspooled dirty, that only provides a rough
     // estimate, and we can't release requests that early.
     semaphore _flush_serializer;
     // We will accept a new flush before another one ends, once it is done with the data write.
@@ -487,10 +414,10 @@ class dirty_memory_manager: public dirty_memory_manager_logalloc::region_group_r
     future<> flush_when_needed();
 
     future<> _waiting_flush;
-    virtual void start_reclaiming() noexcept override;
+    void start_reclaiming() noexcept;
 
     bool has_pressure() const noexcept {
-        return over_soft_limit();
+        return _region_group.over_unspooled_soft_limit();
     }
 
     unsigned _extraneous_flushes = 0;
@@ -504,7 +431,7 @@ public:
     // Limits and pressure conditions:
     // ===============================
     //
-    // Virtual Dirty
+    // Unspooled Dirty
     // -------------
     // We can't free memory until the whole memtable is flushed because we need to keep it in memory
     // until the end, but we can fake freeing memory. When we are done with an element of the
@@ -513,13 +440,13 @@ public:
     // Because the amount of memory that we pretend to free should be close enough to the actual
     // memory used by the memtables, that effectively creates two sub-regions inside the dirty
     // region group, of equal size. In the worst case, we will have <memtable_total_space> dirty
-    // bytes used, and half of that already virtually freed.
+    // bytes used, and half of that already spooled.
     //
     // Hard Limit
     // ----------
     // The total space that can be used by memtables in each group is defined by the threshold, but
-    // we will only allow the region_group to grow to half of that. This is because of virtual_dirty
-    // as explained above. Because virtual dirty is implemented by reducing the usage in the
+    // we will only allow the region_group to grow to half of that. This is because of unspooled_dirty
+    // as explained above. Because unspooled dirty is implemented by reducing the usage in the
     // region_group directly on partition written, we want to throttle every time half of the memory
     // as seen by the region_group. To achieve that we need to set the hard limit (first parameter
     // of the region_group_reclaimer) to 1/2 of the user-supplied threshold
@@ -531,54 +458,64 @@ public:
     // flushing only when the hard limit is hit, workloads in which the disk is fast enough to cope
     // would see latency added to some requests unnecessarily.
     //
-    // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
+    // We then set the soft limit to 80 % of the unspooled dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
     dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg);
-    dirty_memory_manager() : dirty_memory_manager_logalloc::region_group_reclaimer()
-        , _db(nullptr)
-        , _real_region_group("memtable", _real_dirty_reclaimer)
-        , _virtual_region_group("memtable (virtual)", &_real_region_group, *this)
+    dirty_memory_manager()
+        : _db(nullptr)
+        , _region_group("memtable (unspooled)",
+                dirty_memory_manager_logalloc::reclaim_config{
+                    .start_reclaiming = std::bind_front(&dirty_memory_manager::start_reclaiming, this),
+                })
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
     static dirty_memory_manager& from_region_group(dirty_memory_manager_logalloc::region_group *rg) noexcept {
-        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_virtual_region_group));
+        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
     }
 
     dirty_memory_manager_logalloc::region_group& region_group() noexcept {
-        return _virtual_region_group;
+        return _region_group;
     }
 
     const dirty_memory_manager_logalloc::region_group& region_group() const noexcept {
-        return _virtual_region_group;
+        return _region_group;
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update(-delta);
-        _virtual_region_group.update(delta);
+        _region_group.update_real(-delta);
+        _region_group.update_unspooled(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _real_region_group.update(delta);
-        _virtual_region_group.update(-delta);
+        _region_group.update_real(delta);
+        _region_group.update_unspooled(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
     void pin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update(delta);
+        _region_group.update_real(delta);
     }
 
     void unpin_real_dirty_memory(int64_t delta) {
-        _real_region_group.update(-delta);
+        _region_group.update_real(-delta);
     }
 
     size_t real_dirty_memory() const noexcept {
-        return _real_region_group.memory_used();
+        return _region_group.real_memory_used();
     }
 
-    size_t virtual_dirty_memory() const noexcept {
-        return _virtual_region_group.memory_used();
+    size_t unspooled_dirty_memory() const noexcept {
+        return _region_group.unspooled_memory_used();
+    }
+
+    void notify_soft_pressure() {
+        _region_group.notify_unspooled_soft_pressure();
+    }
+
+    size_t throttle_threshold() const {
+        return _region_group.unspooled_throttle_threshold();
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
@@ -615,6 +552,45 @@ private:
 
     friend class flush_permit;
 };
+
+namespace dirty_memory_manager_logalloc {
+
+template <typename Func>
+// We disallow future-returning functions here, because otherwise memory may be available
+// when we start executing it, but no longer available in the middle of the execution.
+requires (!is_future<std::invoke_result_t<Func>>::value)
+futurize_t<std::result_of_t<Func()>>
+region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
+    bool blocked = 
+        !_blocked_requests.empty()
+        || under_unspooled_pressure()
+        || _under_real_pressure;
+
+    if (!blocked) {
+        return futurize_invoke(func);
+    }
+
+    auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
+    auto fut = fn->get_future();
+    _blocked_requests.push_back(std::move(fn), timeout);
+    ++_blocked_requests_counter;
+
+    return fut;
+}
+
+inline
+size_t
+region_group::blocked_requests() const noexcept {
+    return _blocked_requests.size();
+}
+
+inline
+uint64_t
+region_group::blocked_requests_counter() const noexcept {
+    return _blocked_requests_counter;
+}
+
+}
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;
 

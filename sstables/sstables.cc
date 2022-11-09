@@ -34,8 +34,10 @@
 #include "types.hh"
 #include "writer.hh"
 #include "m_format_read_helpers.hh"
+#include "open_info.hh"
 #include "sstables.hh"
 #include "sstable_writer.hh"
+#include "sstable_version.hh"
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
@@ -86,6 +88,18 @@ thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
 
 namespace sstables {
+
+// The below flag governs the mode of index file page caching used by the index
+// reader.
+//
+// If set to true, the reader will read and/or populate a common global cache,
+// which shares its capacity with the row cache. If false, the reader will use
+// BYPASS CACHE semantics for index caching.
+//
+// This flag is intended to be a temporary hack. The goal is to eventually
+// solve index caching problems via a smart cache replacement policy.
+//
+thread_local utils::updateable_value<bool> global_cache_index_pages(false);
 
 logging::logger sstlog("sstable");
 
@@ -230,7 +244,7 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
         unsigned long nr = read_unaligned<unsigned long>(buf.get());
-        d = bit_cast<double>(net::ntoh(nr));
+        d = std::bit_cast<double>(net::ntoh(nr));
         return make_ready_future<>();
     });
 }
@@ -272,6 +286,15 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, u
 
         uuid = utils::UUID_gen::get_UUID(const_cast<int8_t*>(reinterpret_cast<const int8_t*>(buf.get())));
     });
+}
+
+template <typename Tag>
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::tagged_uuid<Tag>& id) {
+    // Read directly into tha tagged_uuid `id` member
+    // This is ugly, but save an allocation or reimplementation
+    // of parse(..., utils::UUID&)
+    utils::UUID& uuid = *const_cast<utils::UUID*>(&id.uuid());
+    return parse(s, v, in, uuid);
 }
 
 // For all types that take a size, we provide a template that takes the type
@@ -1149,7 +1172,7 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
-void sstable::set_position_range() {
+void sstable::set_min_max_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
     }
@@ -1171,7 +1194,108 @@ void sstable::set_position_range() {
         return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
     };
 
-    _position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
+    _min_max_position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
+}
+
+future<std::optional<position_in_partition>>
+sstable::find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed, const io_priority_class& pc) {
+    using position_in_partition_opt = std::optional<position_in_partition>;
+    class position_finder {
+        position_in_partition_opt& _pos;
+        bool _reversed;
+    private:
+        // If consuming in reversed mode, range_tombstone_change or clustering_row will have
+        // its bound weight reversed, so we need to revert it here so the returned position
+        // can be correctly used to mark the end bound.
+        void on_position_found(position_in_partition&& pos, bool reverse_pos = false) {
+            _pos = reverse_pos ? std::move(pos).reversed() : std::move(pos);
+        }
+    public:
+        position_finder(position_in_partition_opt& pos, bool reversed) noexcept : _pos(pos), _reversed(reversed) {}
+
+        void consume_new_partition(const dht::decorated_key& dk) {}
+
+        stop_iteration consume(tombstone t) {
+            // Handle case partition contains only a partition_tombstone, so position_in_partition
+            // for this key should be before all rows.
+            on_position_found(position_in_partition::before_all_clustered_rows());
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(range_tombstone_change&& rt) {
+            on_position_found(std::move(std::move(rt)).position(), _reversed);
+            return stop_iteration::yes;
+        }
+
+        stop_iteration consume(clustering_row&& cr) {
+            on_position_found(position_in_partition::for_key(std::move(cr.key())), _reversed);
+            return stop_iteration::yes;
+        }
+
+        stop_iteration consume(static_row&& sr) {
+            on_position_found(position_in_partition(sr.position()));
+            // If reversed == true, we shouldn't stop at static row as we want to find the last row.
+            // We don't want to ignore its position, to handle the case where partition contains only static row.
+            return stop_iteration(!_reversed);
+        }
+
+        stop_iteration consume_end_of_partition() {
+            // Handle case where partition has no rows.
+            if (!_pos) {
+                on_position_found(_reversed ? position_in_partition::after_all_clustered_rows() : position_in_partition::before_all_clustered_rows());
+            }
+            return stop_iteration::yes;
+        }
+
+        mutation_opt consume_end_of_stream() {
+            return std::nullopt;
+        }
+    };
+
+    auto pr = dht::partition_range::make_singular(key);
+    auto s = get_schema();
+    auto full_slice = s->full_slice();
+    if (reversed) {
+        s = s->make_reversed();
+        full_slice.options.set(query::partition_slice::option::reversed);
+    }
+    auto r = make_reader(s, std::move(permit), pr, full_slice, pc, {}, streamed_mutation::forwarding::no,
+                         mutation_reader::forwarding::no /* to avoid reading past the partition end */);
+
+    position_in_partition_opt ret = std::nullopt;
+    position_finder finder(ret, reversed);
+    std::exception_ptr ex;
+    try {
+        co_await r.consume(finder);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await r.close();
+    if (ex) {
+        co_await coroutine::exception(std::move(ex));
+    }
+    co_return std::move(ret);
+}
+
+future<> sstable::load_first_and_last_position_in_partition() {
+    if (!_schema->clustering_key_size()) {
+        co_return;
+    }
+
+    auto& sem = _manager.sstable_metadata_concurrency_sem();
+    reader_permit permit = co_await sem.obtain_permit(&*_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout);
+    auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
+    auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
+
+    // Allow loading to proceed even if we were unable to load this metadata as the lack of it
+    // will not affect correctness.
+    if (!first_pos_opt || !last_pos_opt) {
+        sstlog.warn("Unable to retrieve metadata for first and last keys of {}. Not a critical error.", get_filename());
+        co_return;
+    }
+
+    _first_partition_first_position = std::move(*first_pos_opt);
+    _last_partition_last_position = std::move(*last_pos_opt);
 }
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
@@ -1301,9 +1425,9 @@ future<> sstable::update_info_for_opened_data() {
         }
         return make_ready_future<>();
     }).then([this] {
-        this->set_position_range();
+        this->set_min_max_position_range();
         this->set_first_and_last_keys();
-        _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(utils::make_random_uuid());
+        _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
         // Get disk usage for this sstable (includes all components).
         _bytes_on_disk = 0;
@@ -1327,6 +1451,8 @@ future<> sstable::update_info_for_opened_data() {
                 _bytes_on_disk += bytes;
             });
         });
+    }).then([this] {
+        return load_first_and_last_position_in_partition();
     });
 }
 
@@ -1626,7 +1752,7 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
     }
 
     return std::ranges::any_of(ranges, [this] (const query::clustering_range& range) {
-        return _position_range.overlaps(*_schema,
+        return _min_max_position_range.overlaps(*_schema,
             position_in_partition_view::for_range_start(range),
             position_in_partition_view::for_range_end(range));
     });
@@ -1821,7 +1947,7 @@ void sstable::validate_originating_host_id() const {
     }
 
     auto local_host_id = _manager.get_local_host_id();
-    if (local_host_id == utils::UUID{}) {
+    if (!local_host_id) {
         // we don't know the local host id before it is loaded from
         // (or generated and written to) system.local, but some system
         // sstable reads must happen before the bootstrap process gets
@@ -3285,13 +3411,13 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
 // gc_before for all the partitions that have record in repair history map. It
 // is fine that some of the partitions inside the sstable does not have a
 // record.
-gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time) const {
+gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const {
     auto s = get_schema();
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range);
-    return ::get_gc_before_for_range(s, range, compaction_time).max_gc_before;
+    sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_state));
+    return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
 }
 
 // If the sstable contains any regular live cells, we can not drop the sstable.
@@ -3302,7 +3428,7 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
 // in the repair history map, we can not drop the sstable, in such case we
 // return gc_clock::time_point::min() as gc_before. Otherwise, return the
 // gc_before from the repair history map.
-gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time) const {
+gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const {
     auto deletion_time = get_max_local_deletion_time();
     auto s = get_schema();
     // No need to query gc_before for the sstable if the max_deletion_time is max()
@@ -3314,9 +3440,9 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, query",
-            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count());
-    auto res = ::get_gc_before_for_range(s, range, compaction_time);
+    sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
+            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
+    auto res = gc_state.get_gc_before_for_range(s, range, compaction_time);
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
 

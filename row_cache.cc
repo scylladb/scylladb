@@ -67,10 +67,7 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_met
     }
 
     _region.make_evictable([this] {
-        return with_allocator(_region.allocator(), [this] {
-          // Removing a partition may require reading large keys when we rebalance
-          // the rbtree, so linearize anything we read
-           try {
+        return with_allocator(_region.allocator(), [this] () noexcept {
             if (!_garbage.empty()) {
                 _garbage.clear_some();
                 return memory::reclaiming_result::reclaimed_something;
@@ -81,12 +78,6 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_met
             }
             current_tracker = this;
             return _lru.evict();
-           } catch (std::bad_alloc&) {
-            // Bad luck, linearization during partition removal caused us to
-            // fail.  Drop the entire cache so we can make forward progress.
-            clear();
-            return memory::reclaiming_result::reclaimed_something;
-           }
         });
     });
 }
@@ -165,9 +156,10 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(rows_entry& e) {
-    // last dummy may not be linked if evicted, but
-    // the unlink_from_lru() handles it
-    e.unlink_from_lru();
+    // last dummy may not be linked if evicted
+    if (e.is_linked()) {
+        _lru.remove(e);
+    }
     _lru.add(e);
 }
 
@@ -968,9 +960,6 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                     size_t partition_count = 0;
                     {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
-                        // FIXME: we should really be checking should_yield() here instead of
-                        // need_preempt(). However, should_yield() is currently quite
-                        // expensive and we need to amortize it somehow.
                         do {
                           STAP_PROBE(scylla, row_cache_update_partition_start);
                           {
@@ -1096,7 +1085,10 @@ void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
         if (i != _partitions.end()) {
             for (partition_version& pv : i->partition().versions_from_oldest()) {
                 for (rows_entry& row : pv.partition().clustered_rows()) {
-                    row.unlink_from_lru();
+                    // Last dummy may already be unlinked.
+                    if (row.is_linked()) {
+                        _tracker.get_lru().remove(row);
+                    }
                 }
             }
         }
@@ -1231,7 +1223,6 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // so don't remove it, just unlink from the LRU.
         // That dummy is linked in the LRU, because there may be partitions
         // with no regular rows, and we need to track them.
-        unlink_from_lru();
     } else {
         // When evicting a dummy with both sides continuous we don't need to break continuity.
         //

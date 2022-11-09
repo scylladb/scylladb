@@ -99,6 +99,7 @@ CREATE TABLE system.large_cells (
     clustering_key text,
     column_name text,
     compaction_time timestamp,
+    collection_elements bigint,
     PRIMARY KEY ((keyspace_name, table_name), sstable_name, cell_size, partition_key, clustering_key, column_name)
 ) WITH CLUSTERING ORDER BY (sstable_name ASC, cell_size DESC, partition_key ASC, clustering_key ASC, column_name ASC)
 ~~~

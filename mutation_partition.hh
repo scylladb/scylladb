@@ -32,6 +32,7 @@
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
 #include "utils/immutable-collection.hh"
+#include "tombstone_gc.hh"
 
 class mutation_fragment;
 class mutation_partition_view;
@@ -826,6 +827,7 @@ public:
 
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
+        maybe_shadow();
     }
 
     void apply(shadowable_tombstone deleted_at) {
@@ -1037,14 +1039,12 @@ struct mutation_application_stats {
     uint64_t row_writes = 0;
     uint64_t rows_compacted_with_tombstones = 0;
     uint64_t rows_dropped_by_tombstones = 0;
-    bool has_any_tombstones = false;
 
     mutation_application_stats& operator+=(const mutation_application_stats& other) {
         row_hits += other.row_hits;
         row_writes += other.row_writes;
         rows_compacted_with_tombstones += other.rows_compacted_with_tombstones;
         rows_dropped_by_tombstones += other.rows_dropped_by_tombstones;
-        has_any_tombstones |= other.has_any_tombstones;
         return *this;
     }
 };
@@ -1318,7 +1318,8 @@ private:
         bool reverse,
         uint64_t row_limit,
         can_gc_fn&,
-        bool drop_tombstones_unconditionally);
+        bool drop_tombstones_unconditionally,
+        const tombstone_gc_state& gc_state);
 
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
     // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
@@ -1357,7 +1358,8 @@ public:
     //   - drops expired tombstones which timestamp is before max_purgeable
     void compact_for_compaction(const schema& s, can_gc_fn&,
         const dht::decorated_key& dk,
-        gc_clock::time_point compaction_time);
+        gc_clock::time_point compaction_time,
+        const tombstone_gc_state& gc_state);
 
     // Like compact_for_compaction but drop tombstones unconditionally
     void compact_for_compaction_drop_tombstones_unconditionally(const schema& s,
