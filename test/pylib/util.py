@@ -20,13 +20,15 @@ def unique_name():
     return unique_name_prefix + str(current_ms)
 
 
-async def wait_for(pred: Callable[[], Awaitable[Optional[T]]], deadline: float) -> T:
+async def wait_for(
+        pred: Callable[[], Awaitable[Optional[T]]],
+        deadline: float, period: float = 1) -> T:
     while True:
         assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
         if res is not None:
             return res
-        await asyncio.sleep(1)
+        await asyncio.sleep(period)
 
 
 unique_name.last_ms = 0
