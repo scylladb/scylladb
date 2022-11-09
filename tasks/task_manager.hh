@@ -98,7 +98,7 @@ public:
             module_ptr _module;
             abort_source _as;
         public:
-            impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, task_id parent_id)
+            impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, task_id parent_id) noexcept
                 : _status({
                     .id = id,
                     .type = std::move(type),
