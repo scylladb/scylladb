@@ -14,6 +14,8 @@
 #include "cql3/constants.hh"
 #include "cql3/user_types.hh"
 #include "cql3/type_json.hh"
+#include "cql3/functions/user_function.hh"
+#include "cql3/functions/user_aggregate.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "types/map.hh"
 #include "types/set.hh"
@@ -24,6 +26,7 @@
 #include "cql3/prepare_context.hh"
 #include "user_aggregate.hh"
 #include "cql3/expr/expression.hh"
+#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptors.hpp>
 
 #include "error_injection_fcts.hh"
@@ -380,6 +383,32 @@ functions::get(data_dictionary::database db,
     }
 
     return std::move(compatibles[0]);
+}
+
+template<typename F>
+std::vector<shared_ptr<F>> functions::get_filtered_transformed(const sstring& keyspace) {
+    auto filter = [&] (const std::pair<const function_name, shared_ptr<function>>& d) -> bool {
+        return d.first.keyspace == keyspace && dynamic_cast<F*>(d.second.get());
+    };
+    auto transformer = [] (const std::pair<const function_name, shared_ptr<function>>& d) -> shared_ptr<F> {
+        return dynamic_pointer_cast<F>(d.second);
+    };
+    
+    return boost::copy_range<std::vector<shared_ptr<F>>>(
+        _declared 
+        | boost::adaptors::filtered(filter) 
+        | boost::adaptors::transformed(transformer)
+    );
+}
+
+std::vector<shared_ptr<user_function>>
+functions::get_user_functions(const sstring& keyspace) {
+    return get_filtered_transformed<user_function>(keyspace);
+}
+
+std::vector<shared_ptr<user_aggregate>>
+functions::get_user_aggregates(const sstring& keyspace) {
+    return get_filtered_transformed<user_aggregate>(keyspace);
 }
 
 boost::iterator_range<functions::declared_t::iterator>
