@@ -28,7 +28,7 @@ Scylla tries to maximize the resource usage of all system components. The shard-
 
 CPU
 ^^^
-ScyllaDB requires modern Intel CPUs that support the SSE4.2 instruction set and will not boot without it.
+ScyllaDB requires modern Intel/AMD CPUs that support the SSE4.2 instruction set and will not boot without it.
 
 ScyllaDB supports the following CPUs:
 
