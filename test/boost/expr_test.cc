@@ -1545,3 +1545,31 @@ BOOST_AUTO_TEST_CASE(prepare_null_no_type_fails) {
     BOOST_REQUIRE_THROW(prepare_expression(null_expr, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_bind_variable) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression bind_var = bind_variable{.bind_index = 1, .receiver = nullptr};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(int32_type);
+
+    expression prepared = prepare_expression(bind_var, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = bind_variable{
+        .bind_index = 1,
+        .receiver = receiver,
+    };
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_bind_variable_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression bind_var = bind_variable{.bind_index = 1, .receiver = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(bind_var, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
