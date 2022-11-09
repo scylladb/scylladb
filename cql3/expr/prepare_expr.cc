@@ -252,6 +252,15 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
                           format("map_prepare_expression bad non-map receiver type: {}", receiver->type->name()));
     }
     data_type map_element_tuple_type = tuple_type_impl::get_instance({map_type->get_keys_type(), map_type->get_values_type()});
+
+    // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+    // other words a non-frozen collection only exists if it has elements.  Return nullptr right
+    // away to simplify predicate evaluation.  See also
+    // https://issues.apache.org/jira/browse/CASSANDRA-5141
+    if (map_type->is_multi_cell() && c.elements.empty()) {
+        return constant::make_null(receiver->type);
+    }
+
     std::vector<expression> values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
