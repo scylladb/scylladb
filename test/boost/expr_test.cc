@@ -2321,3 +2321,195 @@ BOOST_AUTO_TEST_CASE(prepare_collection_constructor_checks_style_type) {
         prepare_expression(set_constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field2", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), make_bigint_raw(987), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(column_identifier("field2", true), null{});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), raw_value::make_null(), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// prepare_expression will treat all missing as if they were specified with value null.
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_missing_field) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), raw_value::make_null(), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field2", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(column_identifier("field2", true),
+                                 bind_variable{.bind_index = 2, .receiver = nullptr});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    usertype_constructor* prepared_constructor = as_if<usertype_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
+
+    bind_variable* prepared_bind_var =
+        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    usertype_constructor::elements_map_type expected_constructor_elements;
+    expected_constructor_elements.emplace(column_identifier("field1", true), make_smallint_const(152));
+    expected_constructor_elements.emplace(column_identifier("field2", true),
+                                          bind_variable{.bind_index = 2, .receiver = bind_var_receiver});
+    expected_constructor_elements.emplace(column_identifier("field3", true), make_text_const("ututu"));
+
+    expression expected = usertype_constructor{.elements = expected_constructor_elements, .type = user_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// A combination of a bind variable and a missing field.
+// prepare_expression should properly fill in the missing field in this case as well.
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing_field) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(column_identifier("field2", true),
+                                 bind_variable{.bind_index = 2, .receiver = nullptr});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    usertype_constructor* prepared_constructor = as_if<usertype_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
+
+    bind_variable* prepared_bind_var =
+        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    usertype_constructor::elements_map_type expected_constructor_elements;
+    expected_constructor_elements.emplace(column_identifier("field1", true), constant::make_null(short_type));
+    expected_constructor_elements.emplace(column_identifier("field2", true),
+                                          bind_variable{.bind_index = 2, .receiver = bind_var_receiver});
+    expected_constructor_elements.emplace(column_identifier("field3", true), make_text_const("ututu"));
+
+    expression expected = usertype_constructor{.elements = expected_constructor_elements, .type = user_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
