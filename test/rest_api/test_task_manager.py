@@ -136,15 +136,21 @@ async def test_task_manager_wait(rest_api):
 def test_task_manager_ttl(rest_api):
     with new_test_module(rest_api):
         args0 = {"keyspace": "keyspace0", "table": "table0"}
+        args1 = {"keyspace": "keyspace0", "table": "table0", "shard": "1"}
         with new_test_task(rest_api, args0) as task0:
             print(f"created test task {task0}")
-            ttl = 2
-            with set_tmp_task_ttl(rest_api, ttl):
-                resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task0}")
-                resp.raise_for_status()
+            with new_test_task(rest_api, args1) as task1:
+                print(f"created test task {task1}")
+                ttl = 2
+                with set_tmp_task_ttl(rest_api, ttl):
+                    resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task0}")
+                    resp.raise_for_status()
+                    resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task1}")
+                    resp.raise_for_status()
 
-                time.sleep(ttl + 1)
-                assert_task_does_not_exist(rest_api, task0)
+                    time.sleep(ttl + 1)
+                    assert_task_does_not_exist(rest_api, task0)
+                    assert_task_does_not_exist(rest_api, task1)
 
 def test_task_manager_sequence_number(rest_api):
     with new_test_module(rest_api):
