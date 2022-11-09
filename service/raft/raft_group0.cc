@@ -905,8 +905,11 @@ future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list pee
             // incoming RPC will then be bounced to the leader.
             co_return group0_peer_exchange{group0_info{
                 .group0_id = std::get<raft::group_id>(_group0),
+                // Use self as leader - modify_config() is
+                // a forwarding API so we'll be able to forward
+                // the request when it arrives.
                 .id = _raft_gr.group0().id(),
-                .ip_addr = _raft_gr.address_map().get_inet_address(_raft_gr.group0().id())
+                .ip_addr = _gossiper.get_broadcast_address(),
             }};
         }
     }, _group0);

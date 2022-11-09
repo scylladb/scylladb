@@ -29,10 +29,18 @@ protected:
     netw::messaging_service& _messaging;
     raft_address_map& _address_map;
     seastar::gate _shutdown_gate;
-public:
+
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
             raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id);
 
+private:
+    template <typename Verb, typename Msg> void
+    one_way_rpc(std::experimental::source_location loc, raft::server_id id, Verb&& verb, Msg&& msg);
+
+    template <typename Verb, typename... Args> auto
+    two_way_rpc(std::experimental::source_location loc, raft::server_id id, Verb&& verb, Args&&... args);
+
+public:
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;
     void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override;

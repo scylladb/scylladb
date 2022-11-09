@@ -339,17 +339,6 @@ public:
         handle_add_or_update_entry(id, addr, true);
         replicate_add_or_update_entry(id, addr, true);
     }
-
-    // Map raft server_id to inet_address to be consumed by `messaging_service`
-    gms::inet_address get_inet_address(raft::server_id id) const {
-        auto it = find(id);
-        if (!it) {
-            auto msg = format("Destination raft server not found with id {}", id);
-            rslog.error("{}", msg);
-            throw std::runtime_error(msg);
-        }
-        return *it;
-    }
 };
 
 using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
