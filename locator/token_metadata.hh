@@ -67,9 +67,10 @@ public:
     void remove_endpoint(inet_address ep);
 
     /**
-     * Returns true iff contains given endpoint
+     * Returns true iff contains given endpoint.
+     * Excludes pending endpoints if `with_pending == pending::no`.
      */
-    bool has_endpoint(inet_address, pending with_pending = pending::no) const;
+    bool has_endpoint(inet_address, pending with_pending) const;
 
     const std::unordered_map<sstring,
                            std::unordered_set<inet_address>>&

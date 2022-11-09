@@ -731,7 +731,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     std::optional<bool> topology_status;
     auto has_topology = [&] {
         if (!topology_status.has_value()) {
-            topology_status = _token_metadata ? _token_metadata->get()->get_topology().has_endpoint(id.addr) : false;
+            topology_status = _token_metadata
+                ? _token_metadata->get()->get_topology().has_endpoint(id.addr, locator::topology::pending::yes)
+                : false;
         }
         return *topology_status;
     };
