@@ -24,7 +24,7 @@ public:
     }
 
     static version current() {
-        static version v(3, 0, 8);
+        static version v(4, 0, 0);
         return v;
     }
 
