@@ -99,7 +99,7 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
 
     tmt::get_and_update_ttl.set(r, [&ctx, &cfg] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         uint32_t ttl = cfg.task_ttl_seconds();
-        cfg.task_ttl_seconds.set(boost::lexical_cast<uint32_t>(req->query_parameters["ttl"]));
+        co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
         co_return json::json_return_type(ttl);
     });
 }
