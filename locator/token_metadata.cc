@@ -420,8 +420,8 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
         co_return;
     }
 
-    if (!is_member(endpoint)) {
-        on_internal_error(tlogger, format("token_metadata_impl: {} must be member to update normal tokens", endpoint));
+    if (!_topology.has_endpoint(endpoint, topology::pending::no)) {
+        on_internal_error(tlogger, format("token_metadata_impl: {} must be a member of topology to update normal tokens", endpoint));
     }
 
     bool should_sort_tokens = false;
