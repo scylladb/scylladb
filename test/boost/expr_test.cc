@@ -1573,3 +1573,100 @@ BOOST_AUTO_TEST_CASE(prepare_bind_variable_no_receiver) {
     BOOST_REQUIRE_THROW(prepare_expression(bind_var, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+
+    // Can't infer type
+    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(boolean_type));
+    expression expected = make_bool_const(true);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int8) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(byte_type));
+    expression expected = make_tinyint_const(13);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int16) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(short_type));
+    expression expected = make_smallint_const(1337);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int32) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13377331"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+    expression expected = make_int_const(13377331);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int64) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337733113377331"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(long_type));
+    expression expected = make_bigint_const(1337733113377331);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_text) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "scylla_is_the_best"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(utf8_type));
+    expression expected = make_text_const("scylla_is_the_best");
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "not_integer_text"};
+
+    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+                        exceptions::invalid_request_exception);
+}
