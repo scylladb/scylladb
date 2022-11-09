@@ -1524,3 +1524,24 @@ BOOST_AUTO_TEST_CASE(prepare_cast_text_int) {
     BOOST_REQUIRE_THROW(prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression null_expr = null{};
+
+    expression prepared = prepare_expression(null_expr, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+    expression expected = constant::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// null can't be prepared without a receiver because we are unable to infer the type.
+BOOST_AUTO_TEST_CASE(prepare_null_no_type_fails) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression null_expr = null{};
+    BOOST_REQUIRE_THROW(prepare_expression(null_expr, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
