@@ -1670,3 +1670,73 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
     BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+            },
+        .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+            },
+        .type = nullptr};
+
+    data_type tup_type = tuple_type_impl::get_instance({int32_type, short_type, utf8_type});
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(tup_type);
+
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), receiver);
+    expression expected =
+        make_tuple_const({make_int_const(123), make_smallint_const(456), make_text_const("some text")},
+                         {int32_type, short_type, utf8_type});
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_of_columns) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("c1", int32_type, column_kind::clustering_key)
+                                  .with_column("c2", utf8_type, column_kind::clustering_key)
+                                  .with_column("c3", byte_type, column_kind::clustering_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements = {unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c1", true)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c2", true)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c3", true)}},
+        .type = nullptr};
+
+    data_type tup_type = tuple_type_impl::get_instance({int32_type, utf8_type, byte_type});
+
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr);
+    expression expected = tuple_constructor{.elements =
+                                                {
+                                                    column_value(table_schema->get_column_definition("c1")),
+                                                    column_value(table_schema->get_column_definition("c2")),
+                                                    column_value(table_schema->get_column_definition("c3")),
+                                                },
+                                            .type = tup_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
