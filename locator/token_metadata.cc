@@ -555,7 +555,7 @@ const std::unordered_map<inet_address, host_id>& token_metadata_impl::get_endpoi
 }
 
 bool token_metadata_impl::is_member(inet_address endpoint) const {
-    return _topology.has_endpoint(endpoint, topology::pending::no);
+    return _normal_token_owners.contains(endpoint);
 }
 
 void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
