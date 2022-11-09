@@ -3123,6 +3123,20 @@ sstring user_type_impl::get_name_as_cql_string() const {
     return cql3::util::maybe_quote(get_name_as_string());
 }
 
+std::ostream& user_type_impl::describe(std::ostream& os) const {
+    os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
+    for (size_t i = 0; i < _string_field_names.size(); i++) {
+        os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
+        if (i < _string_field_names.size() - 1) {
+            os << ",";
+        }
+        os << "\n";
+    }
+    os << ");";
+
+    return os;
+}
+
 data_type
 user_type_impl::freeze() const {
     if (_is_multi_cell) {

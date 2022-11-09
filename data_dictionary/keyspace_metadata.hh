@@ -17,10 +17,11 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
+#include "data_dictionary/keyspace_element.hh"
 
 namespace data_dictionary {
 
-class keyspace_metadata final {
+class keyspace_metadata final : public keyspace_element {
     sstring _name;
     sstring _strategy_name;
     locator::replication_strategy_config_options _strategy_options;
@@ -89,6 +90,11 @@ public:
     void remove_user_type(const user_type ut);
     std::vector<schema_ptr> tables() const;
     std::vector<view_ptr> views() const;
+
+    virtual sstring keypace_name() const override { return name(); }
+    virtual sstring element_name() const override { return name(); }
+    virtual sstring element_type() const override { return "keyspace"; }
+    virtual std::ostream& describe(std::ostream& os) const override;
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 

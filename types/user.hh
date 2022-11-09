@@ -10,8 +10,9 @@
 
 #include "types.hh"
 #include "types/tuple.hh"
+#include "data_dictionary/keyspace_element.hh"
 
-class user_type_impl : public tuple_type_impl {
+class user_type_impl : public tuple_type_impl, public data_dictionary::keyspace_element {
     using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>, bool>;
 public:
     const sstring _keyspace;
@@ -44,6 +45,11 @@ public:
     virtual data_type freeze() const override;
     sstring get_name_as_string() const;
     sstring get_name_as_cql_string() const;
+
+    virtual sstring keypace_name() const override { return _keyspace; }
+    virtual sstring element_name() const override { return get_name_as_string(); }
+    virtual sstring element_type() const override { return "type"; }
+    virtual std::ostream& describe(std::ostream& os) const override;
 
 private:
     static sstring make_name(sstring keyspace,

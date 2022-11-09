@@ -14,12 +14,13 @@
 #include "scalar_function.hh"
 #include "lang/lua.hh"
 #include "lang/wasm.hh"
+#include "data_dictionary/keyspace_element.hh"
 
 namespace cql3 {
 namespace functions {
 
 
-class user_function final : public abstract_function, public scalar_function {
+class user_function final : public abstract_function, public scalar_function, public data_dictionary::keyspace_element {
 public:
     struct lua_context {
         sstring bitcode;
@@ -59,6 +60,11 @@ public:
     virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
     virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override;
+
+    virtual sstring keypace_name() const override { return name().keyspace; }
+    virtual sstring element_name() const override { return name().name; }
+    virtual sstring element_type() const override { return "function"; }
+    virtual std::ostream& describe(std::ostream& os) const override;
 };
 
 }

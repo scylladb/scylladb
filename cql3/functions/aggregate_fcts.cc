@@ -12,6 +12,7 @@
 #include "types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
+#include "cql3/util.hh"
 #include "cql_serialization_format.hh"
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
@@ -813,6 +814,35 @@ bool user_aggregate::is_aggregate() const { return true; }
 bool user_aggregate::is_reducible() const { return _reducefunc != nullptr; }
 bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || (_finalfunc && _finalfunc->requires_thread()); }
 bool user_aggregate::has_finalfunc() const { return _finalfunc != nullptr; }
+
+std::ostream& user_aggregate::describe(std::ostream& os) const {
+    auto ks = cql3::util::maybe_quote(name().keyspace);
+    auto na = cql3::util::maybe_quote(name().name);
+
+    os << "CREATE AGGREGATE " << ks << "." << na << "(";
+    for (size_t i = 0; i < _arg_types.size(); i++) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << _arg_types[i]->cql3_type_name();
+    }
+    os << ")\n";
+
+    os << "SFUNC " << cql3::util::maybe_quote(_sfunc->name().name) << "\n"
+       << "STYPE " << _sfunc->return_type()->cql3_type_name();
+    if (is_reducible()) {
+        os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_reducefunc->name().name);
+    }
+    if (has_finalfunc()) {
+        os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_finalfunc->name().name);
+    }
+    if (_initcond) {
+        os << "\n" << "INITCOND " << _sfunc->return_type()->deserialize(bytes_view(*_initcond)).to_parsable_string();
+    }
+    os << ";";
+
+    return os;
+}
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {

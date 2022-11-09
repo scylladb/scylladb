@@ -763,8 +763,18 @@ static bool is_index(replica::database& db, const table_id& id, const schema& s)
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
+sstring schema::element_type(replica::database& db) const {
+    if (is_view()) {
+        if (is_index(db, view_info()->base_id(), *this)) {
+            return "index";
+        } else {
+            return "view";
+        }
+    }
+    return "table";
+}
 
-std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
+std::ostream& schema::describe(replica::database& db, std::ostream& os, bool with_internals) const {
     os << "CREATE ";
     int n = 0;
 
@@ -807,11 +817,25 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
             os << "\n    WHERE " << view_info()->where_clause();
         }
     } else {
-        os << " TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
+        os << "TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
         for (auto& cdef : all_columns()) {
+            if (with_internals && dropped_columns().contains(cdef.name_as_text())) {
+                // If the column has been re-added after a drop, we don't include it right away. Instead, we'll add the
+                // dropped one first below, then we'll issue the DROP and then the actual ADD for this column, thus
+                // simulating the proper sequence of events.
+                continue;
+            }
+
             os << "\n    ";
             column_definition_as_cql_key(os, cdef);
             os << ",";
+        }
+
+        if (with_internals) {
+            for (auto& cdef: dropped_columns()) {
+                os << "\n    ";
+                os << cql3::util::maybe_quote(cdef.first) << " " << cdef.second.type->cql3_type_name() << ",";
+            }
         }
     }
 
@@ -840,6 +864,9 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
         os << "\n) ";
     }
     os << "WITH ";
+    if (with_internals) {
+        os << "ID = " << id() << "\nAND ";
+    }
     if (!clustering_key_columns().empty()) {
         // Adding clustering key order can be optional, but there's no harm in doing so.
         os << "CLUSTERING ORDER BY (";
@@ -864,7 +891,7 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
     os << "\n    AND caching = {";
     map_as_cql_param(os, caching_options().to_map());
     os << "}";
-    os << "\n    AND comment = '" << comment()<< "'";
+    os << "\n    AND comment = " << cql3::util::single_quote(comment());
     os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
     map_as_cql_param(os, compaction_strategy_options(), false) << "}";
     os << "\n    AND compression = {";
@@ -881,6 +908,21 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os) const {
     os << "\n    AND read_repair_chance = " << read_repair_chance();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "';";
     os << "\n";
+
+    if (with_internals) {
+        for (auto& cdef : dropped_columns()) {
+            os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
+               << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << cdef.second.timestamp << ";";
+
+            auto column = get_column_definition(to_bytes(cdef.first));
+            if (column) {
+                os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
+                   << " ADD ";
+                column_definition_as_cql_key(os, *column);
+                os << ";";
+            }
+        }
+    }
 
     return os;
 }
