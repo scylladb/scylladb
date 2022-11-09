@@ -2002,3 +2002,299 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_null) {
     BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type)),
                         exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "2"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    expression expected = make_map_const({{make_smallint_const(1), make_bigint_const(10)},
+                                          {make_smallint_const(2), make_bigint_const(-20)},
+                                          {make_smallint_const(3), make_bigint_const(30)}},
+                                         short_type, long_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// preparing empty nonfrozen collections results in null
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_empty_nonfrozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::map, .elements = {}, .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+    expression expected = constant::make_null(map_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_empty_frozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::map, .elements = {}, .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, false);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+    expression expected = constant(make_map_raw({}), map_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "2"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {bind_variable{.bind_index = 1, .receiver = nullptr},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    tuple_constructor* prepared_tup = as_if<tuple_constructor>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_tup != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_tup->elements.size(), 2);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_tup->elements[0]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver->type == short_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {make_smallint_const(3), make_bigint_const(30)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{
+                    .elements = {bind_variable{.bind_index = 1, .receiver = bind_var_receiver}, make_bigint_const(-20)},
+                    .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{.elements = {make_smallint_const(1), make_bigint_const(10)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+            },
+        .type = map_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "3"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "30"}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "2"},
+                                               bind_variable{.bind_index = 1, .receiver = nullptr}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "1"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "10"}},
+                                  .type = nullptr},
+            },
+        .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    tuple_constructor* prepared_tup = as_if<tuple_constructor>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_tup != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_tup->elements.size(), 2);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_tup->elements[1]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {make_smallint_const(3), make_bigint_const(30)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{
+                    .elements = {make_smallint_const(2), bind_variable{.bind_index = 1, .receiver = bind_var_receiver}},
+                    .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{.elements = {make_smallint_const(1), make_bigint_const(10)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+            },
+        .type = map_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_key) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {null{}, untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                              .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "3"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "30"}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "2"},
+                                               null{}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "1"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "10"}},
+                                  .type = nullptr},
+            },
+        .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type)),
+                        exceptions::invalid_request_exception);
+}
