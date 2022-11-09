@@ -14,6 +14,8 @@ import pytest
 from cassandra.cluster import Cluster
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import ssl
+import time
+import random
 
 from util import unique_name, new_test_table, cql_session
 
@@ -139,6 +141,19 @@ def driver_bug_1():
     if (scylla_driver and driver_version < (3, 24, 5) or
             not scylla_driver and driver_version <= (3, 25, 0)):
         pytest.skip("Python driver too old to run this test")
+
+# `random_seed` fixture should be used when the test uses random module.
+# If the fixture is used, the seed is visible in case of test's failure,
+# so it can be easily recreated.
+# The state of random module is restored to before-test state after the test finishes.
+@pytest.fixture(scope="function")
+def random_seed():
+    state = random.getstate()
+    seed = time.time()
+    print(f"Using seed {seed}")
+    random.seed(seed)
+    yield seed
+    random.setstate(state)
 
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
