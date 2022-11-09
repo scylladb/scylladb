@@ -2298,3 +2298,26 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_value) {
     BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type)),
                         exceptions::invalid_request_exception);
 }
+
+// preparing the collection constructor should check that the type of constructor
+// matches the type of the receiver. style_type::set shouldn't be assignable to a list.
+BOOST_AUTO_TEST_CASE(prepare_collection_constructor_checks_style_type) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression set_constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}},
+        .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(int32_type, true);
+    expression prepared =
+        prepare_expression(set_constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+    expression expected = make_set_const({make_int_const(123)}, int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+
+    data_type list_type = list_type_impl::get_instance(int32_type, true);
+    BOOST_REQUIRE_THROW(
+        prepare_expression(set_constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
+        exceptions::invalid_request_exception);
+}
