@@ -27,7 +27,14 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
         })
     , _parent_id(parent_id)
     , _module(module)
-{}
+{
+    // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
+    if (!parent_id) {
+        _shutdown_subscription = module->get_task_manager()._as.subscribe([this] () noexcept {
+            (void)abort();
+        });
+    }
+}
 
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
     if (!_children.empty()) {
