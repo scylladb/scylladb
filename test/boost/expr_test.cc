@@ -1478,3 +1478,49 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
 
     BOOST_REQUIRE_EQUAL(tok, prepared);
 }
+
+BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+             .type = cql3_type::raw::from(int32_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(int32_type);
+
+    expression prepared = prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = cast{.arg = make_int_const(123), .type = int32_type};
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_cast_int_short) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+             .type = cql3_type::raw::from(short_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
+
+    expression prepared = prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = cast{.arg = make_smallint_const(123), .type = short_type};
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_cast_text_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "123"},
+             .type = cql3_type::raw::from(short_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
+
+    BOOST_REQUIRE_THROW(prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver),
+                        exceptions::invalid_request_exception);
+}
