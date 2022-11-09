@@ -38,6 +38,10 @@ raw_value make_int_raw(int32_t val) {
     return make_raw(val);
 }
 
+raw_value make_bigint_raw(int64_t val) {
+    return make_raw(val);
+}
+
 raw_value make_text_raw(const sstring_view& text) {
     return raw_value::make_value(utf8_type->decompose(text));
 }
@@ -65,6 +69,10 @@ constant make_smallint_const(int16_t val) {
 }
 
 constant make_int_const(int32_t val) {
+    return make_const(val);
+}
+
+constant make_bigint_const(int64_t val) {
     return make_const(val);
 }
 
