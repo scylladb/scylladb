@@ -26,6 +26,10 @@ raw_value make_bool_raw(bool val) {
     return make_raw(val);
 }
 
+raw_value make_tinyint_raw(int8_t val) {
+    return make_raw(val);
+}
+
 raw_value make_smallint_raw(int16_t val) {
     return make_raw(val);
 }
@@ -49,6 +53,10 @@ constant make_empty_const(data_type type) {
 }
 
 constant make_bool_const(bool val) {
+    return make_const(val);
+}
+
+constant make_tinyint_const(int8_t val) {
     return make_const(val);
 }
 
