@@ -81,7 +81,8 @@ public:
         SettingsFile,
         CommandLine,
         CQL,
-        Internal
+        Internal,
+        API,
     };
 
     struct config_src {
