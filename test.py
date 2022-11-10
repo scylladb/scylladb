@@ -8,6 +8,7 @@
 #
 import argparse
 import asyncio
+import collections
 import colorama
 import difflib
 import filecmp
@@ -81,7 +82,7 @@ class TestSuite(ABC):
     artifacts = ArtifactRegistry()
     hosts = HostRegistry()
     FLAKY_RETRIES = 5
-    _next_id = 0
+    _next_id = collections.defaultdict(int) # (test_key -> id)
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
@@ -119,14 +120,22 @@ class TestSuite(ABC):
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
 
-    @property
-    def next_id(self) -> int:
-        TestSuite._next_id += 1
-        return TestSuite._next_id
+    # Generate a unique ID for `--repeat`ed tests
+    # We want these tests to have different XML IDs so test result
+    # processors (Jenkins) don't merge results for different iterations of
+    # the same test. We also don't want the ids to be too random, because then
+    # there is no correlation between test identifiers across multiple
+    # runs of test.py, and so it's hard to understand failure trends. The
+    # compromise is for next_id() results to be unique only within a particular
+    # test case. That is, we'll have a.1, a.2, a.3, b.1, b.2, b.3 rather than
+    # a.1 a.2 a.3 b.4 b.5 b.6.
+    def next_id(self, test_key) -> int:
+        TestSuite._next_id[test_key] += 1
+        return TestSuite._next_id[test_key]
 
     @staticmethod
     def test_count() -> int:
-        return TestSuite._next_id
+        return sum(TestSuite._next_id.values())
 
     @staticmethod
     def load_cfg(path: str) -> dict:
@@ -250,7 +259,7 @@ class UnitTestSuite(TestSuite):
         self.custom_args = cfg.get("custom_args", {})
 
     async def create_test(self, shortname, suite, args):
-        test = UnitTest(self.next_id, shortname, suite, args)
+        test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
         self.tests.append(test)
 
     async def add_test(self, shortname) -> None:
@@ -302,14 +311,14 @@ class BoostTestSuite(UnitTestSuite):
 
             case_list = self._case_cache[fqname]
             if len(case_list) == 1:
-                test = BoostTest(self.next_id, shortname, suite, args, None)
+                test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None)
                 self.tests.append(test)
             else:
                 for case in case_list:
-                    test = BoostTest(self.next_id, shortname, suite, args, case)
+                    test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case)
                     self.tests.append(test)
         else:
-            test = BoostTest(self.next_id, shortname, suite, args, None)
+            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None)
             self.tests.append(test)
 
     def junit_tests(self) -> Iterable['Test']:
@@ -382,7 +391,7 @@ class PythonTestSuite(TestSuite):
         assert False
 
     async def add_test(self, shortname) -> None:
-        test = PythonTest(self.next_id, shortname, self)
+        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
 
@@ -396,7 +405,7 @@ class CQLApprovalTestSuite(PythonTestSuite):
         return TestSuite.build_test_list(self)
 
     async def add_test(self, shortname: str) -> None:
-        test = CQLApprovalTest(self.next_id, shortname, self)
+        test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
     @property
@@ -417,7 +426,7 @@ class TopologyTestSuite(PythonTestSuite):
 
     async def add_test(self, shortname: str) -> None:
         """Add test to suite"""
-        test = TopologyTest(self.next_id, shortname, self)
+        test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, self)
         self.tests.append(test)
 
     @property
@@ -439,7 +448,7 @@ class RunTestSuite(TestSuite):
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
     async def add_test(self, shortname) -> None:
-        test = RunTest(self.next_id, shortname, self)
+        test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
     @property
