@@ -2467,23 +2467,25 @@ class db_config_table final : public streaming_virtual_table {
             return make_exception_future<>(virtual_table_update_exception("option source is not updateable"));
         }
 
-        return smp::submit_to(0, [&cfg = _cfg, name = std::move(*name), value = std::move(*value)] () mutable {
+        return smp::submit_to(0, [&cfg = _cfg, name = std::move(*name), value = std::move(*value)] () mutable -> future<> {
             for (auto& c_ref : cfg.values()) {
                 auto& c = c_ref.get();
                 if (c.name() == name) {
+                    std::exception_ptr ex;
                     try {
-                        if (c.set_value(value, utils::config_file::config_source::CQL)) {
-                            return cfg.broadcast_to_all_shards();
+                        if (co_await c.set_value_on_all_shards(value, utils::config_file::config_source::CQL)) {
+                            co_return;
                         } else {
-                            return make_exception_future<>(virtual_table_update_exception("option is not live-updateable"));
+                            ex = std::make_exception_ptr(virtual_table_update_exception("option is not live-updateable"));
                         }
                     } catch (boost::bad_lexical_cast&) {
-                        return make_exception_future<>(virtual_table_update_exception("cannot parse option value"));
+                        ex = std::make_exception_ptr(virtual_table_update_exception("cannot parse option value"));
                     }
+                    co_await coroutine::return_exception_ptr(std::move(ex));
                 }
             }
 
-            return make_exception_future<>(virtual_table_update_exception("no such option"));
+            co_await coroutine::return_exception(virtual_table_update_exception("no such option"));
         });
     }
 
