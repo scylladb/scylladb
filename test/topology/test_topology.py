@@ -10,6 +10,9 @@ import pytest
 import logging
 import asyncio
 import random
+import time
+
+from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +60,33 @@ async def test_remove_node_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Flaky due to #11780")
 async def test_decommission_node_add_column(manager, random_tables):
     """Add a node, remove an original node, add a column"""
-    servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
-    await manager.server_add()
-    await manager.decommission_node(servers[1].server_id)             # Decommission [1]
+    servers = await manager.running_servers()
+    decommission_target = servers[1]
+    # The sleep injections significantly increase the probability of reproducing #11780:
+    # 1. bootstrapped_server finishes bootstrapping and enters NORMAL state
+    # 2. decommission_target starts storage_service::handle_state_normal(bootstrapped_server),
+    #    enters sleep before calling storage_service::notify_joined
+    # 3. we start decommission on decommission_target
+    # 4. decommission_target sends node_ops_verb with decommission_prepare request to bootstrapped_server
+    # 5. bootstrapped_server receives the RPC and enters sleep
+    # 6. decommission_target handle_state_normal wakes up,
+    #    calls storage_service::notify_joined which drops some RPC clients
+    # 7. If #11780 is not fixed, this will fail the node_ops_verb RPC, causing decommission to fail
+    await manager.api.enable_injection(
+        decommission_target.ip_addr, 'storage_service_notify_joined_sleep', one_shot=True)
+    bootstrapped_server = await manager.server_add()
+    async def no_joining_nodes():
+        joining_nodes = await manager.api.get_joining_nodes(decommission_target.ip_addr)
+        return not joining_nodes
+    # Wait until decommission_target thinks that bootstrapped_server is NORMAL
+    # note: when this wait finishes, we're usually in the middle of storage_service::handle_state_normal
+    await wait_for(no_joining_nodes, time.time() + 30, period=.1)
+    await manager.api.enable_injection(
+        bootstrapped_server.ip_addr, 'storage_service_decommission_prepare_handler_sleep', one_shot=True)
+    await manager.decommission_node(decommission_target.server_id)
     await table.add_column()
     await random_tables.verify_schema()
 

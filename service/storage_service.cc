@@ -64,6 +64,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "utils/stall_free.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -2584,6 +2585,8 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
             node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::decommission_prepare) {
+            utils::get_local_injector().inject(
+                "storage_service_decommission_prepare_handler_sleep", std::chrono::milliseconds{1500}).get();
             if (req.leaving_nodes.size() > 1) {
                 auto msg = format("decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, req.leaving_nodes);
                 slogger.warn("{}", msg);
@@ -3612,6 +3615,9 @@ future<> storage_service::notify_joined(inet_address endpoint) {
     if (!_gossiper.is_normal(endpoint)) {
         co_return;
     }
+
+    co_await utils::get_local_injector().inject(
+        "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
 
     co_await container().invoke_on_all([endpoint] (auto&& ss) {
         ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
