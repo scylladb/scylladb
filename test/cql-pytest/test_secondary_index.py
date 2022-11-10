@@ -207,6 +207,24 @@ def test_paging_with_desc_clustering_order(cql, test_keyspace):
         stmt = SimpleStatement(f"SELECT * FROM {table} WHERE c = 42", fetch_size=1)
         assert len([row for row in cql.execute(stmt)]) == 3
 
+# The following test is similar to the above, except that the reversed type
+# is not of the indexed column itself - but it's still part of the index's
+# materialized view (because it's part of the key), and we use SELECT DISTINCT
+# instead of SELECT. This reproduces Scylla Enterprise issue #2449,
+# and is a regression test for commit c8653d1321ca9ff5963f9e5479372a6000a0f096.
+def test_paging_with_desc_clustering_order2(cql, test_keyspace):
+    schema = 'p1 int, p2 int, c int, primary key ((p1,p2),c)'
+    extra = 'with clustering order by (c desc)'
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        cql.execute(f"CREATE INDEX ON {table}(p1)")
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table}(p1,p2,c) VALUES (7, {i}, 42)")
+        stmt = SimpleStatement(f"SELECT p1,p2 FROM {table} WHERE p1 = 7", fetch_size=1)
+        assert len(list(cql.execute(stmt))) == 3
+        # Reproduces Scylla Enterprise issue #2449:
+        stmt = SimpleStatement(f"SELECT DISTINCT p1,p2 FROM {table} WHERE p1 = 7", fetch_size=1)
+        assert len(list(cql.execute(stmt))) == 3
+
 # Test that deleting a base partition works fine, even if it produces a large batch
 # of individual view updates. Refs #8852 - view updates used to be applied with
 # per-partition granularity, but after fixing the issue it's no longer the case,
