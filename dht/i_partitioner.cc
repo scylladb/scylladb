@@ -9,6 +9,7 @@
 #include "i_partitioner.hh"
 #include "sharder.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "dht/token-sharding.hh"
 #include "dht/partition_filter.hh"
 #include "utils/class_registrator.hh"
@@ -367,6 +368,25 @@ flat_mutation_reader_v2::filter incremental_owned_ranges_checker::make_partition
     return [checker = incremental_owned_ranges_checker(sorted_owned_ranges)] (const dht::decorated_key& dk) mutable {
         return checker.belongs_to_current_node(dk.token());
     };
+}
+
+future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& source_ranges, dht::partition_range_vector ranges_to_subtract) {
+    auto cmp = dht::ring_position_comparator(schema);
+    // optimize set of potentially overlapping ranges by deoverlapping them.
+    auto ranges = dht::partition_range::deoverlap(source_ranges, cmp);
+
+    // subtract *each* owned range from the partition range of *each* sstable*,
+    // such that we'll be left only with a set of non-owned ranges.
+    for (auto& range_to_subtract : ranges_to_subtract) {
+        dht::partition_range_vector tmp;
+        for (auto& range : ranges) {
+            auto ret = range.subtract(range_to_subtract, cmp);
+            tmp.insert(tmp.end(), ret.begin(), ret.end());
+            co_await coroutine::maybe_yield();
+        }
+        ranges = std::move(tmp);
+    }
+    co_return ranges;
 }
 
 }
