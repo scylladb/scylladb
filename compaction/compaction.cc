@@ -41,6 +41,7 @@
 #include "mutation_compactor.hh"
 #include "leveled_manifest.hh"
 #include "dht/token.hh"
+#include "dht/partition_filter.hh"
 #include "mutation_writer/shard_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
@@ -1080,30 +1081,8 @@ private:
 };
 
 class cleanup_compaction final : public regular_compaction {
-    class incremental_owned_ranges_checker {
-        const dht::token_range_vector& _sorted_owned_ranges;
-        mutable dht::token_range_vector::const_iterator _it;
-    public:
-        incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
-                : _sorted_owned_ranges(sorted_owned_ranges)
-                , _it(_sorted_owned_ranges.begin()) {
-        }
-
-        // Must be called with increasing token values.
-        bool belongs_to_current_node(const dht::token& t) const {
-            // While token T is after a range Rn, advance the iterator.
-            // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
-            // or at a range which is after T (if T doesn't belong to this node).
-            while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
-                _it++;
-            }
-
-            return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
-        }
-    };
-
     owned_ranges_ptr _owned_ranges;
-    incremental_owned_ranges_checker _owned_ranges_checker;
+    mutable dht::incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
     dht::partition_range_vector
