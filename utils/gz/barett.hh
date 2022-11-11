@@ -44,12 +44,6 @@ inline uint32_t crc32_fold_barett_u64(uint64_t p);
 
 #include <wmmintrin.h>
 
-inline uint32_t crc32_fold_barett_u64_in_m128(__m128i);
-
-uint32_t crc32_fold_barett_u64(uint64_t p) {
-    return crc32_fold_barett_u64_in_m128(_mm_set_epi64x(0, p));
-}
-
 uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
     __m128i x1;
     const __m128i mask32 = (__m128i)(__v4si){ int32_t(0xFFFFFFFF) };
@@ -105,16 +99,13 @@ uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
     return _mm_cvtsi128_si32(_mm_srli_si128(x0 ^ x1, 4));
 }
 
+uint32_t crc32_fold_barett_u64(uint64_t p) {
+    return crc32_fold_barett_u64_in_m128(_mm_set_epi64x(0, p));
+}
+
 #elif defined(__aarch64__)
 
 #include <arm_neon.h>
-
-inline uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t);
-
-uint32_t crc32_fold_barett_u64(uint64_t p) {
-    return crc32_fold_barett_u64_in_u64x2(
-            vcombine_u64((uint64x1_t)p, (uint64x1_t)0UL));
-}
 
 uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
     uint64x2_t x1;
@@ -129,6 +120,11 @@ uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
             vmull_p64(vgetq_lane_u32(vreinterpretq_u32_u64(x0), 0),
                       barrett_reduction_constant_hi));
     return vgetq_lane_u64(vshrq_n_u64(x0 ^ x1, 32), 0);
+}
+
+uint32_t crc32_fold_barett_u64(uint64_t p) {
+    return crc32_fold_barett_u64_in_u64x2(
+            vcombine_u64((uint64x1_t)p, (uint64x1_t)0UL));
 }
 
 #else
