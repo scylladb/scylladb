@@ -727,6 +727,10 @@ uint64_t reader_concurrency_semaphore::get_serialize_limit() const {
     return _initial_resources.memory * _serialize_limit_multiplier();
 }
 
+void reader_concurrency_semaphore::consume(resources r) {
+    _resources -= r;
+}
+
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
     maybe_admit_waiters();
