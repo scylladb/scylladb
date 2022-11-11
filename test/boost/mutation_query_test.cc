@@ -500,7 +500,10 @@ SEASTAR_TEST_CASE(test_partition_limit) {
         mutation m3(s, partition_key::from_single_value(*s, "key3"));
         m3.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
 
-        auto src = make_source({m1, m2, m3});
+        std::vector<mutation> muts = {m1, m2, m3};
+        std::sort(muts.begin(), muts.end(), mutation_decorated_key_less_comparator{});
+
+        auto src = make_source(muts);
         auto slice = make_full_slice(*s);
 
         {
@@ -509,13 +512,13 @@ SEASTAR_TEST_CASE(test_partition_limit) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
                 .has(a_row()
-                    .with_column("pk", data_value(bytes("key2")))
-                    .with_column("ck", data_value(bytes("A")))
-                    .with_column("v1", data_value(bytes("A:v"))))
-                .has(a_row()
                     .with_column("pk", data_value(bytes("key3")))
                     .with_column("ck", data_value(bytes("B")))
-                    .with_column("v1", data_value(bytes("B:v"))));
+                    .with_column("v1", data_value(bytes("B:v"))))
+                .has(a_row()
+                    .with_column("pk", data_value(bytes("key2")))
+                    .with_column("ck", data_value(bytes("A")))
+                    .with_column("v1", data_value(bytes("A:v"))));
         }
 
         {
@@ -524,9 +527,9 @@ SEASTAR_TEST_CASE(test_partition_limit) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(1)
                 .has(a_row()
-                    .with_column("pk", data_value(bytes("key2")))
-                    .with_column("ck", data_value(bytes("A")))
-                    .with_column("v1", data_value(bytes("A:v"))));
+                    .with_column("pk", data_value(bytes("key3")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B:v"))));
         }
     });
 }
