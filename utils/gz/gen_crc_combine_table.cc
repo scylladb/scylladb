@@ -16,8 +16,24 @@
 
 #include <seastar/core/print.hh>
 
+template <int bits>
+static
+constexpr
+std::array<uint32_t, bits>
+make_crc32_power_table() {
+    std::array<uint32_t, bits> pows;
+    pows[0] = 0x00800000; // x^8
+    for (int i = 1; i < bits; ++i) {
+        //   x^(2*N)          mod G(x)
+        // = (x^N)*(x^N)      mod G(x)
+        // = (x^N mod G(x))^2 mod G(x)
+        pows[i] = crc32_fold_barett_u64(clmul(pows[i - 1], pows[i - 1]) << 1);
+    }
+    return pows;
+}
+
 int main() {
-    const int bits = 32;
+    constexpr int bits = 32;
     const int radix_bits = 8;
     const uint32_t one = 0x80000000; // x^0
 
@@ -29,14 +45,7 @@ int main() {
                   "#include \"utils/gz/crc_combine_table.hh\"\n"
                  "\n";
 
-    uint32_t pows[bits]; // pows[i] = x^(2^i*8) mod G(x)
-    pows[0] = 0x00800000; // x^8
-    for (int i = 1; i < bits; ++i) {
-        //   x^(2*N)          mod G(x)
-        // = (x^N)*(x^N)      mod G(x)
-        // = (x^N mod G(x))^2 mod G(x)
-        pows[i] = crc32_fold_barett_u64(clmul(pows[i - 1], pows[i - 1]) << 1);
-    }
+    constexpr auto pows = make_crc32_power_table<bits>(); // pows[i] = x^(2^i*8) mod G(x)
 
     for (int base = 0; base < bits; base += radix_bits) {
         std::cout << "std::array<uint32_t, " << (1<<radix_bits) << "> crc32_x_pow_radix_8_table_base_" << base << " = {";
