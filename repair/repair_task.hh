@@ -88,6 +88,26 @@ public:
         , _ri(std::move(ri))
         , _ex(std::move(ex))
     {}
+
+    void check_failed_ranges();
+    void abort_repair_info() noexcept;
+    void check_in_abort();
+    void check_in_shutdown();
+    repair_neighbors get_repair_neighbors(const dht::token_range& range);
+    void update_statistics(const repair_stats& stats) {
+        _ri->update_statistics(stats);
+    }
+    const std::vector<sstring>& table_names() {
+        return _ri->table_names();
+    }
+
+    bool hints_batchlog_flushed() const {
+        return _ri->hints_batchlog_flushed();
+    }
+
+    future<> repair_range(const dht::token_range& range, table_id);
+
+    size_t ranges_size();
 protected:
     future<> run() override;
 };

@@ -456,7 +456,7 @@ void repair_module::abort_all_repairs() {
     _aborted_pending_repairs = _pending_repairs;
     for (auto& x : _repairs) {
         auto& ri = x.second;
-        ri->abort();
+        ri->abort_repair_info();
     }
     rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
 }
@@ -540,6 +540,36 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
     return last_s->get_sharder();
 }
 
+void shard_repair_task_impl::check_failed_ranges() {
+    _ri->check_failed_ranges();
+}
+
+void shard_repair_task_impl::abort_repair_info() noexcept {
+    _ri->abort_repair_info();
+}
+
+void shard_repair_task_impl::check_in_abort() {
+    _ri->check_in_abort();
+}
+
+void shard_repair_task_impl::check_in_shutdown() {
+    _ri->check_in_shutdown();
+}
+
+repair_neighbors shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
+    return _ri->get_repair_neighbors(range);
+}
+
+size_t shard_repair_task_impl::ranges_size() {
+    return _ri->ranges_size();
+}
+
+// Repair a single local range, multiple column families.
+// Comparable to RepairSession in Origin
+future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
+    return _ri->repair_range(range, table_id);
+}
+
 repair_info::repair_info(repair_service& repair,
     const sstring& keyspace_,
     locator::effective_replication_map_ptr erm_,
@@ -574,7 +604,7 @@ repair_info::repair_info(repair_service& repair,
     , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed)) {
     if (as != nullptr) {
-        _abort_subscription = as->subscribe([this] () noexcept { abort(); });
+        _abort_subscription = as->subscribe([this] () noexcept { abort_repair_info(); });
     }
 }
 
@@ -593,7 +623,7 @@ void repair_info::check_failed_ranges() {
     }
 }
 
-void repair_info::abort() noexcept {
+void repair_info::abort_repair_info() noexcept {
     aborted = true;
 }
 
@@ -630,7 +660,7 @@ future<> repair_info::repair_range(const dht::token_range& range, ::table_id tab
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
                 rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                         id.uuid(), ranges_index, ranges_size(), id.shard(), keyspace, table_names(), range, neighbors, live_neighbors, status);
-                abort();
+                abort_repair_info();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                     node, keyspace, mandatory_neighbors)));
            }

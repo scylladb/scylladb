@@ -215,7 +215,7 @@ public:
             abort_source* as,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
-    void abort() noexcept;
+    void abort_repair_info() noexcept;
     void check_in_abort();
     void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
