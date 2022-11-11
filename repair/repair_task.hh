@@ -83,11 +83,16 @@ public:
             std::string type,
             tasks::task_id parent_id,
             lw_shared_ptr<repair_info> ri,
-            std::exception_ptr ex)
+            std::exception_ptr ex,
+            abort_source* as)
         : repair_task_impl(module, id, 0, std::move(keyspace), "", std::move(type), "", parent_id)
         , _ri(std::move(ri))
         , _ex(std::move(ex))
-    {}
+    {
+        if (as != nullptr) {
+            _ri->_abort_subscription = as->subscribe([this] () noexcept { abort_repair_info(); });
+        }
+    }
 
     lw_shared_ptr<repair_info> get_repair_info() const noexcept {
         return _ri;
@@ -98,14 +103,14 @@ public:
     void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
-        _ri->update_statistics(stats);
+        _ri->_stats.add(stats);
     }
     const std::vector<sstring>& table_names() {
-        return _ri->table_names();
+        return _ri->cfs;
     }
 
     bool hints_batchlog_flushed() const {
-        return _ri->hints_batchlog_flushed();
+        return _ri->_hints_batchlog_flushed;
     }
 
     future<> repair_range(const dht::token_range& range, table_id);

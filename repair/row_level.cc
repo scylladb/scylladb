@@ -2689,7 +2689,7 @@ private:
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
-        if (!_shard_task.get_repair_info()->hints_batchlog_flushed()) {
+        if (!_shard_task.hints_batchlog_flushed()) {
             co_return;
         }
         repair_service& rs = _shard_task.get_repair_info()->rs;

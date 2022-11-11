@@ -212,25 +212,7 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
-            abort_source* as,
             bool hints_batchlog_flushed);
-    void check_failed_ranges();
-    void abort_repair_info() noexcept;
-    void check_in_abort();
-    void check_in_shutdown();
-    repair_neighbors get_repair_neighbors(const dht::token_range& range);
-    void update_statistics(const repair_stats& stats) {
-        _stats.add(stats);
-    }
-    const std::vector<sstring>& table_names() {
-        return cfs;
-    }
-
-    bool hints_batchlog_flushed() const {
-        return _hints_batchlog_flushed;
-    }
-
-    size_t ranges_size();
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
