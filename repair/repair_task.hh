@@ -109,6 +109,7 @@ public:
 
     size_t ranges_size();
 protected:
+    future<> do_repair_ranges();
     future<> run() override;
 };
 

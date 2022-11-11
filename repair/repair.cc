@@ -952,7 +952,8 @@ static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manag
     co_return task;
 }
 
-static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
+future<> shard_repair_task_impl::do_repair_ranges() {
+    lw_shared_ptr<repair_info> ri = _ri;
     // Repair tables in the keyspace one after another
     assert(ri->table_names().size() == ri->table_ids.size());
     for (int idx = 0; idx < ri->table_ids.size(); idx++) {
@@ -1015,7 +1016,7 @@ future<> shard_repair_task_impl::run() {
 
     auto& ri = _ri;
     ri->rs.get_repair_module().add_repair_info(ri->id.id, ri);
-    return do_repair_ranges(ri).then([ri] {
+    return do_repair_ranges().then([ri] {
         ri->check_failed_ranges();
         ri->rs.get_repair_module().remove_repair_info(ri->id.id);
         return make_ready_future<>();
