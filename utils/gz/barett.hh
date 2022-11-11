@@ -40,6 +40,9 @@
  */
 inline uint32_t crc32_fold_barett_u64(uint64_t p);
 
+
+constexpr uint64_t barrett_reduction_constants[2] = { 0x00000001F7011641, 0x00000001DB710641 };
+
 #if defined(__x86_64__) || defined(__i386__)
 
 #include <wmmintrin.h>
@@ -47,8 +50,8 @@ inline uint32_t crc32_fold_barett_u64(uint64_t p);
 uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
     __m128i x1;
     const __m128i mask32 = (__m128i)(__v4si){ int32_t(0xFFFFFFFF) };
-    const __v2di barrett_reduction_constants =
-        (__v2di){ 0x00000001F7011641, 0x00000001DB710641 };
+    const __v2di brc =
+        (__v2di){ barrett_reduction_constants[0], barrett_reduction_constants[1] };
 
     /*
      * Reduce 64 => 32 bits using Barrett reduction.
@@ -94,8 +97,8 @@ uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
      *
      */
     x1 = x0;
-    x0 = _mm_clmulepi64_si128(x0 & mask32, barrett_reduction_constants, 0x00);
-    x0 = _mm_clmulepi64_si128(x0 & mask32, barrett_reduction_constants, 0x10);
+    x0 = _mm_clmulepi64_si128(x0 & mask32, brc, 0x00);
+    x0 = _mm_clmulepi64_si128(x0 & mask32, brc, 0x10);
     return _mm_cvtsi128_si32(_mm_srli_si128(x0 ^ x1, 4));
 }
 
@@ -109,8 +112,8 @@ uint32_t crc32_fold_barett_u64(uint64_t p) {
 
 uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
     uint64x2_t x1;
-    const uint64_t barrett_reduction_constant_lo = 0x00000001F7011641;
-    const uint64_t barrett_reduction_constant_hi = 0x00000001DB710641;
+    const uint64_t barrett_reduction_constant_lo = barrett_reduction_constants[0];
+    const uint64_t barrett_reduction_constant_hi = barrett_reduction_constants[1];
 
     x1 = x0;
     x0 = vreinterpretq_u64_p128(
