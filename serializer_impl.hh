@@ -791,7 +791,7 @@ unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
 // using a range.
 // Use begin() and end() to iterate through the frozen vector,
 // deserializing (or skipping) one element at a time.
-template <typename T>
+template <typename T, bool IsForward=true>
 class vector_deserializer {
 public:
     using value_type = T;
@@ -800,6 +800,41 @@ public:
 private:
     input_stream _in;
     size_t _size;
+    utils::chunked_vector<input_stream> _substreams;
+
+    void fill_substreams() requires (!IsForward) {
+        input_stream in = _in;
+        input_stream in2 = _in;
+        for (size_t i = 0; i < size(); ++i) {
+            size_t old_size = in.size();
+            serializer<T>::skip(in);
+            size_t new_size = in.size();
+
+            _substreams.push_back(in2.read_substream(old_size - new_size));
+        }
+    }
+
+    struct forward_iterator_data {
+        input_stream _in = simple_input_stream();
+        void skip() {
+            serializer<T>::skip(_in);
+        }
+        value_type deserialize_next() {
+            return deserialize(_in, boost::type<T>());
+        }
+    };
+    struct reverse_iterator_data {
+        std::reverse_iterator<utils::chunked_vector<input_stream>::const_iterator> _substream_it;
+        void skip() {
+            ++_substream_it;
+        }
+        value_type deserialize_next() {
+            input_stream is = *_substream_it;
+            ++_substream_it;
+            return deserialize(is, boost::type<T>());
+        }
+    };
+
 
 public:
     vector_deserializer() noexcept
@@ -810,7 +845,11 @@ public:
     explicit vector_deserializer(input_stream in)
         : _in(std::move(in))
         , _size(deserialize(_in, boost::type<uint32_t>()))
-    { }
+    {
+        if constexpr (!IsForward) {
+            fill_substreams();
+        }
+    }
 
     // Get the number of items in the vector
     size_t size() const noexcept {
@@ -823,13 +862,18 @@ public:
 
     // Input iterator
     class iterator {
-        input_stream _in;
+        // _idx is the distance from .begin(). It is used only for comparing iterators.
         size_t _idx = 0;
         bool _consumed = false;
+        std::conditional_t<IsForward, forward_iterator_data, reverse_iterator_data> _data;
 
-        iterator(input_stream in, size_t idx) noexcept
-            : _in(in)
-            , _idx(idx)
+        iterator(input_stream in, size_t idx) noexcept requires(IsForward)
+            : _idx(idx)
+            , _data{in}
+        { }
+        iterator(decltype(reverse_iterator_data::_substream_it) substreams, size_t idx) noexcept requires(!IsForward)
+            : _idx(idx)
+            , _data{substreams}
         { }
 
         friend class vector_deserializer;
@@ -840,7 +884,7 @@ public:
         using reference = value_type&;
         using difference_type = ssize_t;
 
-        iterator() noexcept : _in(simple_input_stream()) {}
+        iterator() noexcept = default;
 
         bool operator==(const iterator& it) const noexcept {
             return _idx == it._idx;
@@ -849,17 +893,14 @@ public:
         // Deserializes and returns the item, effectively incrementing the iterator..
         value_type operator*() const {
             auto zis = const_cast<iterator*>(this);
-            auto item = deserialize(zis->_in, boost::type<T>());
             zis->_idx++;
             zis->_consumed = true;
-            return item;
+            return zis->_data.deserialize_next();
         }
 
         iterator& operator++() {
             if (!_consumed) {
-                serializer<T>::skip(_in);
-                // auto len = read_frame_size();
-                // _in.skip(len);
+                _data.skip();
                 ++_idx;
             } else {
                 _consumed = false;
@@ -882,25 +923,46 @@ public:
     static_assert(std::input_iterator<iterator>);
     static_assert(std::sentinel_for<iterator, iterator>);
 
-    iterator begin() noexcept {
-        return iterator(_in, 0);
+    iterator begin() noexcept requires(IsForward) {
+        return {_in, 0};
     }
-    const_iterator begin() const noexcept {
-        return const_iterator(_in, 0);
+    const_iterator begin() const noexcept requires(IsForward) {
+        return {_in, 0};
     }
-    const_iterator cbegin() const noexcept {
-        return const_iterator(_in, 0);
+    const_iterator cbegin() const noexcept requires(IsForward) {
+        return {_in, 0};
     }
 
-    iterator end() noexcept {
-        return iterator(_in, _size);
+    iterator end() noexcept requires(IsForward) {
+        return {_in, _size};
     }
-    const_iterator end() const noexcept {
-        return const_iterator(_in, _size);
+    const_iterator end() const noexcept requires(IsForward) {
+        return {_in, _size};
     }
-    const_iterator cend() const noexcept {
-        return const_iterator(_in, _size);
+    const_iterator cend() const noexcept requires(IsForward) {
+        return {_in, _size};
     }
+
+    iterator begin() noexcept requires(!IsForward) {
+        return {_substreams.crbegin(), 0};
+    }
+    const_iterator begin() const noexcept requires(!IsForward) {
+        return {_substreams.crbegin(), 0};
+    }
+    const_iterator cbegin() const noexcept requires(!IsForward) {
+        return {_substreams.crbegin(), 0};
+    }
+
+    iterator end() noexcept requires(!IsForward) {
+        return {_substreams.crend(), _size};
+    }
+    const_iterator end() const noexcept requires(!IsForward) {
+        return {_substreams.crend(), _size};
+    }
+    const_iterator cend() const noexcept requires(!IsForward) {
+        return {_substreams.crend(), _size};
+    }
+
 };
 
 static_assert(std::ranges::range<vector_deserializer<int>>);
