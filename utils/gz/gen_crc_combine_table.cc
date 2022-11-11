@@ -26,7 +26,7 @@ int main() {
                  " * DO NOT EDIT!\n"
                  " */\n"
                  "\n"
-                 "#include \"utils/gz/crc_combine_table.hh\"\n"
+                  "#include \"utils/gz/crc_combine_table.hh\"\n"
                  "\n";
 
     uint32_t pows[bits]; // pows[i] = x^(2^i*8) mod G(x)
@@ -39,7 +39,7 @@ int main() {
     }
 
     for (int base = 0; base < bits; base += radix_bits) {
-        std::cout << "uint32_t crc32_x_pow_radix_8_table_base_" << base << "[" << (1<<radix_bits) << "] = {";
+        std::cout << "std::array<uint32_t, " << (1<<radix_bits) << "> crc32_x_pow_radix_8_table_base_" << base << " = {";
 
         for (int i = 0; i < (1 << radix_bits); ++i) {
             uint32_t product = one;
