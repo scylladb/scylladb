@@ -11,6 +11,7 @@
 #include "mutation_fragment_v2.hh"
 
 enum class mutation_fragment_stream_validation_level {
+    none, // disable validation altogether
     partition_region, // fragment kind
     token,
     partition_key,
