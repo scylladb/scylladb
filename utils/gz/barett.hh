@@ -29,6 +29,9 @@
 #pragma once
 
 #include <cstdint>
+#include "utils/clmul.hh"
+
+constexpr uint64_t barrett_reduction_constants[2] = { 0x00000001F7011641, 0x00000001DB710641 };
 
 /*
  * Calculates representation of p(x) mod G(x) using Barett reduction.
@@ -38,10 +41,14 @@
  * The parameter p is a bit-reversed representation of the polynomial,
  * the least significant bit corresponds to the coefficient of x^63.
  */
-inline uint32_t crc32_fold_barett_u64(uint64_t p);
-
-
-constexpr uint64_t barrett_reduction_constants[2] = { 0x00000001F7011641, 0x00000001DB710641 };
+inline constexpr uint32_t crc32_fold_barett_u64_constexpr(uint64_t p) {
+    auto x0 = p;
+    auto x1 = x0;
+    uint64_t mask32 = 0xffff'ffff;
+    x0 = clmul_u64_low_constexpr(x0 & mask32, barrett_reduction_constants[0]);
+    x0 = clmul_u64_low_constexpr(x0 & mask32, barrett_reduction_constants[1]);
+    return (x0 ^ x1) >> 32;
+}
 
 #if defined(__x86_64__) || defined(__i386__)
 
@@ -102,7 +109,7 @@ uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
     return _mm_cvtsi128_si32(_mm_srli_si128(x0 ^ x1, 4));
 }
 
-uint32_t crc32_fold_barett_u64(uint64_t p) {
+uint32_t crc32_fold_barett_u64_native(uint64_t p) {
     return crc32_fold_barett_u64_in_m128(_mm_set_epi64x(0, p));
 }
 
@@ -125,7 +132,7 @@ uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
     return vgetq_lane_u64(vshrq_n_u64(x0 ^ x1, 32), 0);
 }
 
-uint32_t crc32_fold_barett_u64(uint64_t p) {
+uint32_t crc32_fold_barett_u64_native(uint64_t p) {
     return crc32_fold_barett_u64_in_u64x2(
             vcombine_u64((uint64x1_t)p, (uint64x1_t)0UL));
 }
@@ -135,3 +142,9 @@ uint32_t crc32_fold_barett_u64(uint64_t p) {
 #error "Not implemented for this arch"
 
 #endif
+
+inline
+constexpr
+uint32_t crc32_fold_barett_u64(uint64_t p) {
+    return std::is_constant_evaluated() ? crc32_fold_barett_u64_constexpr(p) : crc32_fold_barett_u64_native(p);
+}
