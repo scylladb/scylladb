@@ -32,6 +32,24 @@ make_crc32_power_table() {
     return pows;
 }
 
+static
+constexpr
+std::array<uint32_t, 256>
+make_crc32_table(int base, int radix_bits, uint32_t one, std::array<uint32_t, 32> pows) {
+    std::array<uint32_t, 256> table;
+    for (int i = 0; i < (1 << radix_bits); ++i) {
+        uint32_t product = one;
+        for (int j = 0; j < radix_bits; ++j) {
+            if (i & (1 << j)) {
+                product = crc32_fold_barett_u64(clmul(product, pows[base + j]) << 1);
+            }
+        }
+        table[i] = product;
+    }
+    return table;
+}
+
+
 int main() {
     constexpr int bits = 32;
     const int radix_bits = 8;
@@ -50,16 +68,13 @@ int main() {
     for (int base = 0; base < bits; base += radix_bits) {
         std::cout << "std::array<uint32_t, " << (1<<radix_bits) << "> crc32_x_pow_radix_8_table_base_" << base << " = {";
 
+        auto table = make_crc32_table(base, radix_bits, one, pows);
+
         for (int i = 0; i < (1 << radix_bits); ++i) {
-            uint32_t product = one;
-            for (int j = 0; j < radix_bits; ++j) {
-                if (i & (1 << j)) {
-                    product = crc32_fold_barett_u64(clmul(product, pows[base + j]) << 1);
-                }
-            }
             if (i % 4 == 0) {
                 std::cout << "\n    ";
             }
+            auto product = table[i];
             std::cout << seastar::format(" 0x{:0>8x},", product);
         }
 
