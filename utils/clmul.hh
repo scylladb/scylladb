@@ -21,6 +21,16 @@ constexpr uint64_t clmul_u32_constexpr(uint32_t p1, uint32_t p2) {
     return result;
 }
 
+// returns the low half of the result
+inline
+constexpr uint64_t clmul_u64_low_constexpr(uint64_t p1, uint64_t p2) {
+    uint64_t result = 0;
+    for (unsigned i = 0; i < 64; ++i) {
+        result ^= (((p1 >> i) & 1) * p2) << i;
+    }
+    return result;
+}
+
 #if defined(__x86_64__) || defined(__i386__)
 
 #include <wmmintrin.h>
