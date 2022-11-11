@@ -129,7 +129,7 @@ private:
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
     // Map repair id into repair_info.
-    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
+    std::unordered_map<int, tasks::task_id> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
     std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
@@ -156,9 +156,9 @@ public:
 
     repair_status get(int id) const;
     void check_in_shutdown();
-    void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
+    void add_repair_info(int id, tasks::task_id ri);
     void remove_repair_info(int id);
-    lw_shared_ptr<repair_info> get_repair_info(int id);
+    tasks::task_manager::task_ptr get_repair_info(int id);
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
