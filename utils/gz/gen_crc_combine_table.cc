@@ -49,11 +49,23 @@ make_crc32_table(int base, int radix_bits, uint32_t one, std::array<uint32_t, 32
     return table;
 }
 
+static constexpr int bits = 32;
+static constexpr int radix_bits = 8;
+static constexpr uint32_t one = 0x80000000; // x^0
+static constexpr auto pows = make_crc32_power_table<bits>(); // pows[i] = x^(2^i*8) mod G(x)
+
+constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_0 = make_crc32_table(0, radix_bits, one, pows);
+constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8 = make_crc32_table(8, radix_bits, one, pows);
+constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16 = make_crc32_table(16, radix_bits, one, pows);
+constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24 = make_crc32_table(24, radix_bits, one, pows);
 
 int main() {
-    constexpr int bits = 32;
-    const int radix_bits = 8;
-    const uint32_t one = 0x80000000; // x^0
+    std::array<const std::array<uint32_t, 256>*, 4> tables = {
+        &crc32_x_pow_radix_8_table_base_0,
+        &crc32_x_pow_radix_8_table_base_8,
+        &crc32_x_pow_radix_8_table_base_16,
+        &crc32_x_pow_radix_8_table_base_24,
+    };
 
     std::cout << "/*\n"
                  " * Generated with gen_crc_combine_table.cc\n"
@@ -63,12 +75,11 @@ int main() {
                   "#include \"utils/gz/crc_combine_table.hh\"\n"
                  "\n";
 
-    constexpr auto pows = make_crc32_power_table<bits>(); // pows[i] = x^(2^i*8) mod G(x)
 
     for (int base = 0; base < bits; base += radix_bits) {
         std::cout << "std::array<uint32_t, " << (1<<radix_bits) << "> crc32_x_pow_radix_8_table_base_" << base << " = {";
 
-        auto table = make_crc32_table(base, radix_bits, one, pows);
+        auto& table = *tables[base / radix_bits];
 
         for (int i = 0; i < (1 << radix_bits); ++i) {
             if (i % 4 == 0) {
