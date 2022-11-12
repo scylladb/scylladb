@@ -7,14 +7,13 @@
  *
  */
 
-#include <iostream>
-
 #if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 
+#include <array>
+
+#include "crc_combine_table.hh"
 #include "utils/clmul.hh"
 #include "barett.hh"
-
-#include <seastar/core/print.hh>
 
 template <int bits>
 static
@@ -59,51 +58,8 @@ constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8 = make_crc3
 constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16 = make_crc32_table(16, radix_bits, one, pows);
 constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24 = make_crc32_table(24, radix_bits, one, pows);
 
-int main() {
-    std::array<const std::array<uint32_t, 256>*, 4> tables = {
-        &crc32_x_pow_radix_8_table_base_0,
-        &crc32_x_pow_radix_8_table_base_8,
-        &crc32_x_pow_radix_8_table_base_16,
-        &crc32_x_pow_radix_8_table_base_24,
-    };
-
-    std::cout << "/*\n"
-                 " * Generated with gen_crc_combine_table.cc\n"
-                 " * DO NOT EDIT!\n"
-                 " */\n"
-                 "\n"
-                  "#include \"utils/gz/crc_combine_table.hh\"\n"
-                 "\n";
-
-
-    for (int base = 0; base < bits; base += radix_bits) {
-        std::cout << "std::array<uint32_t, " << (1<<radix_bits) << "> crc32_x_pow_radix_8_table_base_" << base << " = {";
-
-        auto& table = *tables[base / radix_bits];
-
-        for (int i = 0; i < (1 << radix_bits); ++i) {
-            if (i % 4 == 0) {
-                std::cout << "\n    ";
-            }
-            auto product = table[i];
-            std::cout << seastar::format(" 0x{:0>8x},", product);
-        }
-
-        std::cout << "\n};\n\n";
-    }
-}
-
 #else
 
-int main() {
-    std::cout << "/*\n"
-                 " * Generated with gen_crc_combine_table.cc\n"
-                 " * DO NOT EDIT!\n"
-                 " */\n"
-                 "\n"
-                 "/* Not implemented for this CPU architecture. */\n"
-                 "\n";
-    return 0;
-}
+#error "Not implemented for this CPU architecture."
 
 #endif
