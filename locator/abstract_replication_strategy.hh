@@ -101,7 +101,7 @@ public:
 
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     virtual void validate_options() const = 0;
-    virtual std::optional<std::set<sstring>> recognized_options(const topology&) const = 0;
+    virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
     // Decide if the replication strategy allow removing the node being
     // replaced from the natural endpoints when a node is being replaced in the

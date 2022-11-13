@@ -266,8 +266,8 @@ void network_topology_strategy::validate_options() const {
     }
 }
 
-std::optional<std::set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
-    std::set<sstring> datacenters;
+std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
+    std::unordered_set<sstring> datacenters;
     for (const auto& [dc_name, endpoints] : topology.get_datacenter_endpoints()) {
         datacenters.insert(dc_name);
     }
