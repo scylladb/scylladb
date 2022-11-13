@@ -16,7 +16,6 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "inet_address_vectors.hh"
-#include "locator/host_id.hh"
 #include <optional>
 #include <memory>
 #include <boost/range/iterator_range.hpp>
@@ -24,6 +23,8 @@
 #include "range.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
+
+#include "locator/types.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -34,14 +35,7 @@ namespace locator {
 
 class abstract_replication_strategy;
 
-using inet_address = gms::inet_address;
 using token = dht::token;
-
-// Endpoint Data Center and Rack names
-struct endpoint_dc_rack {
-    sstring dc;
-    sstring rack;
-};
 
 class topology {
 public:
