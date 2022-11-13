@@ -521,6 +521,7 @@ void token_metadata_impl::debug_show() const {
 }
 
 void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
+    _topology.add_or_update_endpoint(endpoint, host_id);
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
@@ -1261,7 +1262,7 @@ future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metada
     auto lk = co_await stm.local().get_lock();
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
-    pending_token_metadata_ptr.reserve(smp::count);
+    pending_token_metadata_ptr.resize(smp::count);
     auto tmptr = make_token_metadata_ptr(co_await stm.local().get()->clone_async());
     auto& tm = *tmptr;
     // bump the token_metadata ring_version

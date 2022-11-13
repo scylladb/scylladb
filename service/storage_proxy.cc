@@ -3747,7 +3747,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         auto local_dc = topology.get_datacenter();
 
         for(auto dest: handler.get_targets()) {
-            sstring dc = topology.get_datacenter(dest);
+            auto node = topology.find_node(dest);
+            const auto& dc = node->dc_rack().dc;
             // read repair writes do not go through coordinator since mutations are per destination
             if (handler.read_repair_write() || dc == local_dc) {
                 local.emplace_back("", inet_address_vector_replica_set({dest}));
