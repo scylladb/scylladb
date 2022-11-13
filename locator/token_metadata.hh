@@ -117,6 +117,10 @@ public:
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
+
+    /**
+     * Update or add endpoint given its inet_address and endpoint_dc_rack.
+     */
     void update_topology(inet_address ep, endpoint_dc_rack dr);
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
