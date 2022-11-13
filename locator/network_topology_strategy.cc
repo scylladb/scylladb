@@ -267,12 +267,8 @@ void network_topology_strategy::validate_options() const {
 }
 
 std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
-    std::unordered_set<sstring> datacenters;
-    for (const auto& [dc_name, endpoints] : topology.get_datacenter_endpoints()) {
-        datacenters.insert(dc_name);
-    }
     // We only allow datacenter names as options
-    return datacenters;
+    return topology.get_datacenters();
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const replication_strategy_config_options&>;
