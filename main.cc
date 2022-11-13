@@ -751,6 +751,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting tokens manager");
             locator::token_metadata::config tm_cfg;
+            // The local node's host_id is updated after loading from system.local
+            // or making a random one for a new node
+            tm_cfg.topo_cfg.local_host_id = host_id::create_null_id();
+            tm_cfg.topo_cfg.local_endpoint = utils::fb_utilities::get_broadcast_address();
             tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
             if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
                 //
@@ -1164,6 +1168,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return sys_ks.start(snitch.local());
             }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+            shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
+                tm.get_topology().update_endpoint(endpoint, hostid);
+                return make_ready_future<>();
+            }).get();
 
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};

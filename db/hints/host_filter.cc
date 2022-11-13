@@ -32,8 +32,10 @@ bool host_filter::can_hint_for(const locator::topology& topo, gms::inet_address 
     switch (_enabled_kind) {
     case enabled_kind::enabled_for_all:
         return true;
-    case enabled_kind::enabled_selectively:
-        return topo.has_endpoint(ep) && _dcs.contains(topo.get_datacenter(ep));
+    case enabled_kind::enabled_selectively: {
+        auto node = topo.find_node(ep);
+        return node && _dcs.contains(node->dc_rack().dc);
+    }
     case enabled_kind::disabled_for_all:
         return false;
     }
