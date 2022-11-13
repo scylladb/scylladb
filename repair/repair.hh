@@ -230,8 +230,6 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    future<> repair_range(const dht::token_range& range, table_id);
-
     size_t ranges_size();
 };
 

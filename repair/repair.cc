@@ -564,12 +564,6 @@ size_t shard_repair_task_impl::ranges_size() {
     return _ri->ranges_size();
 }
 
-// Repair a single local range, multiple column families.
-// Comparable to RepairSession in Origin
-future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
-    return _ri->repair_range(range, table_id);
-}
-
 repair_info::repair_info(repair_service& repair,
     const sstring& keyspace_,
     locator::effective_replication_map_ptr erm_,
@@ -645,31 +639,31 @@ size_t repair_info::ranges_size() {
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-future<> repair_info::repair_range(const dht::token_range& range, ::table_id table_id) {
+future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
     check_in_shutdown();
     check_in_abort();
-    ranges_index++;
+    _ri->ranges_index++;
     repair_neighbors neighbors = get_repair_neighbors(range);
     return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range, table_id] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
-                    boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
+                    boost::adaptors::filtered([this] (const gms::inet_address& node) { return _ri->gossiper.is_alive(node); }));
       for (auto& node : mandatory_neighbors) {
            auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
            if (it == live_neighbors.end()) {
-                nr_failed_ranges++;
+                _ri->nr_failed_ranges++;
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
                 rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                        id.uuid(), ranges_index, ranges_size(), id.shard(), keyspace, table_names(), range, neighbors, live_neighbors, status);
+                        _ri->id.uuid(), _ri->ranges_index, ranges_size(), _ri->id.shard(), _ri->keyspace, table_names(), range, neighbors, live_neighbors, status);
                 abort_repair_info();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
-                    node, keyspace, mandatory_neighbors)));
+                    node, _ri->keyspace, mandatory_neighbors)));
            }
       }
       if (live_neighbors.size() != neighbors.size()) {
-            nr_failed_ranges++;
+            _ri->nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
             rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid(), ranges_index, ranges_size(), id.shard(), keyspace, table_names(), range, neighbors, live_neighbors, status);
+                    _ri->id.uuid(), _ri->ranges_index, ranges_size(), _ri->id.shard(), _ri->keyspace, table_names(), range, neighbors, live_neighbors, status);
             if (live_neighbors.empty()) {
                 return make_ready_future<>();
             }
@@ -678,27 +672,27 @@ future<> repair_info::repair_range(const dht::token_range& range, ::table_id tab
       if (neighbors.empty()) {
             auto status = "skipped_no_followers";
             rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid(), ranges_index, ranges_size(), id.shard(), keyspace, table_names(), range, neighbors, live_neighbors, status);
+                    _ri->id.uuid(), _ri->ranges_index, ranges_size(), _ri->id.shard(), _ri->keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
       rlogger.debug("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-            id.uuid(), ranges_index, ranges_size(), id.shard(), keyspace, table_names(), range, neighbors, live_neighbors);
-      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, table_id] {
+            _ri->id.uuid(), _ri->ranges_index, ranges_size(), _ri->id.shard(), _ri->keyspace, table_names(), range, neighbors, live_neighbors);
+      return _ri->mm.sync_schema(_ri->db.local(), neighbors).then([this, &neighbors, range, table_id] {
             sstring cf;
             try {
-                cf = db.local().find_column_family(table_id).schema()->cf_name();
+                cf = _ri->db.local().find_column_family(table_id).schema()->cf_name();
             } catch (replica::no_such_column_family&) {
                 return make_ready_future<>();
             }
             // Row level repair
-            if (dropped_tables.contains(cf)) {
+            if (_ri->dropped_tables.contains(cf)) {
                 return make_ready_future<>();
             }
-            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
-                dropped_tables.insert(cf);
+            return repair_cf_range_row_level(*_ri, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
+                _ri->dropped_tables.insert(cf);
                 return make_ready_future<>();
             }).handle_exception([this] (std::exception_ptr ep) mutable {
-                nr_failed_ranges++;
+                _ri->nr_failed_ranges++;
                 return make_exception_future<>(std::move(ep));
             });
       });
@@ -962,9 +956,9 @@ future<> shard_repair_task_impl::do_repair_ranges() {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 ri->id.uuid(), idx + 1, ri->table_ids.size(), ri->keyspace, table_name, table_id, ri->reason);
-        co_await coroutine::parallel_for_each(ri->ranges, [ri, table_id] (auto&& range) {
-            return with_semaphore(ri->rs.get_repair_module().range_parallelism_semaphore(), 1, [ri, &range, table_id] {
-                return ri->repair_range(range, table_id).then([ri] {
+        co_await coroutine::parallel_for_each(ri->ranges, [this, ri, table_id] (auto&& range) {
+            return with_semaphore(ri->rs.get_repair_module().range_parallelism_semaphore(), 1, [this, ri, &range, table_id] {
+                return repair_range(range, table_id).then([ri] {
                     if (ri->reason == streaming::stream_reason::bootstrap) {
                         ri->rs.get_metrics().bootstrap_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::replace) {
