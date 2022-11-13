@@ -50,8 +50,11 @@ public:
         bool disable_proximity_sorting = false;
     };
     topology(config cfg);
-    topology(const topology& other);
+    topology(topology&&) = default;
 
+    topology& operator=(topology&&) = default;
+
+    future<topology> clone_gently() const;
     future<> clear_gently() noexcept;
 
     using pending = bool_class<struct pending_tag>;
@@ -108,6 +111,9 @@ public:
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
 private:
+    // default constructor for cloning purposes
+    topology() = default;
+
     /**
      * compares two endpoints in relation to the target endpoint, returning as
      * Comparator.compare would

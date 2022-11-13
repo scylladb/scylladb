@@ -366,9 +366,7 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
     }
     ret._normal_token_owners = _normal_token_owners;
     ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
-    co_await coroutine::maybe_yield();
-    ret._topology = _topology;
-    co_await coroutine::maybe_yield();
+    ret._topology = co_await _topology.clone_gently();
     if (clone_sorted_tokens) {
         ret._sorted_tokens = _sorted_tokens;
         co_await coroutine::maybe_yield();
@@ -1261,13 +1259,33 @@ topology::topology(config cfg)
     _pending_locations[utils::fb_utilities::get_broadcast_address()] = std::move(cfg.local_dc_rack);
 }
 
-topology::topology(const topology& other)
-        : _dc_endpoints(other._dc_endpoints)
-        , _dc_racks(other._dc_racks)
-        , _current_locations(other._current_locations)
-        , _pending_locations(other._pending_locations)
-        , _sort_by_proximity(other._sort_by_proximity)
-{
+future<topology> topology::clone_gently() const {
+    topology ret;
+    ret._dc_endpoints.reserve(_dc_endpoints.size());
+    for (const auto& p : _dc_endpoints) {
+        ret._dc_endpoints.emplace(p);
+    }
+    co_await coroutine::maybe_yield();
+    ret._dc_racks.reserve(_dc_racks.size());
+    for (const auto& [dc, rack_endpoints] : _dc_racks) {
+        ret._dc_racks[dc].reserve(rack_endpoints.size());
+        for (const auto& p : rack_endpoints) {
+            ret._dc_racks[dc].emplace(p);
+        }
+    }
+    co_await coroutine::maybe_yield();
+    ret._current_locations.reserve(_current_locations.size());
+    for (const auto& p : _current_locations) {
+        ret._current_locations.emplace(p);
+    }
+    co_await coroutine::maybe_yield();
+    ret._pending_locations.reserve(_pending_locations.size());
+    for (const auto& p : _pending_locations) {
+        ret._pending_locations.emplace(p);
+    }
+    co_await coroutine::maybe_yield();
+    ret._sort_by_proximity = _sort_by_proximity;
+    co_return ret;
 }
 
 void topology::remove_pending_location(const inet_address& ep) {
