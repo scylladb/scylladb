@@ -74,43 +74,70 @@ protected:
 
 class shard_repair_task_impl : public repair_task_impl {
 private:
-    lw_shared_ptr<repair_info> _ri;
     std::exception_ptr _ex;
+public:
+    repair_service& rs;
+    seastar::sharded<replica::database>& db;
+    seastar::sharded<netw::messaging_service>& messaging;
+    sharded<db::system_distributed_keyspace>& sys_dist_ks;
+    sharded<db::view::view_update_generator>& view_update_generator;
+    service::migration_manager& mm;
+    gms::gossiper& gossiper;
+    const dht::sharder& sharder;
+    locator::effective_replication_map_ptr erm;
+    dht::token_range_vector ranges;
+    std::vector<sstring> cfs;
+    std::vector<table_id> table_ids;
+    repair_uniq_id id;
+    std::vector<sstring> data_centers;
+    std::vector<sstring> hosts;
+    std::unordered_set<gms::inet_address> ignore_nodes;
+    streaming::stream_reason reason;
+    std::unordered_map<dht::token_range, repair_neighbors> neighbors;
+    size_t total_rf;
+    uint64_t nr_ranges_finished = 0;
+    uint64_t nr_ranges_total;
+    size_t nr_failed_ranges = 0;
+    bool aborted = false;
+    int ranges_index = 0;
+    repair_stats _stats;
+    std::unordered_set<sstring> dropped_tables;
+    optimized_optional<abort_source::subscription> _abort_subscription;
+    bool _hints_batchlog_flushed = false;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
-            std::string keyspace,
+            const sstring& keyspace,
             std::string type,
-            tasks::task_id parent_id,
-            lw_shared_ptr<repair_info> ri,
             std::exception_ptr ex,
-            abort_source* as)
-        : repair_task_impl(module, id, 0, std::move(keyspace), "", std::move(type), "", parent_id)
-        , _ri(std::move(ri))
-        , _ex(std::move(ex))
-    {
-        if (as != nullptr) {
-            _ri->_abort_subscription = as->subscribe([this] () noexcept { abort_repair_info(); });
-        }
-    }
-
-    lw_shared_ptr<repair_info> get_repair_info() const noexcept {
-        return _ri;
-    }
+            repair_service& repair,
+            locator::effective_replication_map_ptr erm_,
+            const dht::token_range_vector& ranges_,
+            std::vector<table_id> table_ids_,
+            repair_uniq_id parent_id_,
+            const std::vector<sstring>& data_centers_,
+            const std::vector<sstring>& hosts_,
+            const std::unordered_set<gms::inet_address>& ignore_nodes_,
+            streaming::stream_reason reason_,
+            abort_source* as,
+            bool hints_batchlog_flushed);
     void check_failed_ranges();
     void abort_repair_info() noexcept;
     void check_in_abort();
     void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
-        _ri->_stats.add(stats);
+        _stats.add(stats);
     }
     const std::vector<sstring>& table_names() {
-        return _ri->cfs;
+        return cfs;
+    }
+    const std::string& get_keyspace() const noexcept {
+        return _status.keyspace;
     }
 
     bool hints_batchlog_flushed() const {
-        return _ri->_hints_batchlog_flushed;
+        return _hints_batchlog_flushed;
     }
 
     future<> repair_range(const dht::token_range& range, table_id);

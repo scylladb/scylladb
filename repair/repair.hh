@@ -170,51 +170,6 @@ public:
     }
 };
 
-class repair_info {
-public:
-    repair_service& rs;
-    seastar::sharded<replica::database>& db;
-    seastar::sharded<netw::messaging_service>& messaging;
-    sharded<db::system_distributed_keyspace>& sys_dist_ks;
-    sharded<db::view::view_update_generator>& view_update_generator;
-    service::migration_manager& mm;
-    gms::gossiper& gossiper;
-    const dht::sharder& sharder;
-    sstring keyspace;
-    locator::effective_replication_map_ptr erm;
-    dht::token_range_vector ranges;
-    std::vector<sstring> cfs;
-    std::vector<table_id> table_ids;
-    repair_uniq_id id;
-    std::vector<sstring> data_centers;
-    std::vector<sstring> hosts;
-    std::unordered_set<gms::inet_address> ignore_nodes;
-    streaming::stream_reason reason;
-    std::unordered_map<dht::token_range, repair_neighbors> neighbors;
-    size_t total_rf;
-    uint64_t nr_ranges_finished = 0;
-    uint64_t nr_ranges_total;
-    size_t nr_failed_ranges = 0;
-    bool aborted = false;
-    int ranges_index = 0;
-    repair_stats _stats;
-    std::unordered_set<sstring> dropped_tables;
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    bool _hints_batchlog_flushed = false;
-public:
-    repair_info(repair_service& repair,
-            const sstring& keyspace_,
-            locator::effective_replication_map_ptr erm_,
-            const dht::token_range_vector& ranges_,
-            std::vector<table_id> table_ids_,
-            repair_uniq_id id_,
-            const std::vector<sstring>& data_centers_,
-            const std::vector<sstring>& hosts_,
-            const std::unordered_set<gms::inet_address>& ingore_nodes_,
-            streaming::stream_reason reason_,
-            bool hints_batchlog_flushed);
-};
-
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range);
 
