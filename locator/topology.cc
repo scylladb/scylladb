@@ -24,6 +24,7 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_racks);
     co_await utils::clear_gently(_current_locations);
     co_await utils::clear_gently(_pending_locations);
+    _datacenters.clear();
     co_return;
 }
 
@@ -58,6 +59,7 @@ future<topology> topology::clone_gently() const {
         ret._pending_locations.emplace(p);
     }
     co_await coroutine::maybe_yield();
+    ret._datacenters = _datacenters;
     ret._sort_by_proximity = _sort_by_proximity;
     co_return ret;
 }
@@ -86,6 +88,7 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pend
 
     _dc_endpoints[dr.dc].insert(ep);
     _dc_racks[dr.dc][dr.rack].insert(ep);
+    _datacenters.insert(dr.dc);
     _current_locations[ep] = std::move(dr);
     remove_pending_location(ep);
 }
@@ -99,13 +102,25 @@ void topology::remove_endpoint(inet_address ep)
         return;
     }
 
-    _dc_endpoints[cur_dc_rack->second.dc].erase(ep);
-
-    auto& racks = _dc_racks[cur_dc_rack->second.dc];
-    auto& eps = racks[cur_dc_rack->second.rack];
-    eps.erase(ep);
-    if (eps.empty()) {
-        racks.erase(cur_dc_rack->second.rack);
+    const auto& dc = cur_dc_rack->second.dc;
+    const auto& rack = cur_dc_rack->second.rack;
+    if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
+        auto& eps = dit->second;
+        eps.erase(ep);
+        if (eps.empty()) {
+            _dc_endpoints.erase(dit);
+            _datacenters.erase(dc);
+            _dc_racks.erase(dc);
+        } else {
+            auto& racks = _dc_racks[dc];
+            if (auto rit = racks.find(rack); rit != racks.end()) {
+                eps = rit->second;
+                eps.erase(ep);
+                if (eps.empty()) {
+                    racks.erase(rit);
+                }
+            }
+        }
     }
 
     _current_locations.erase(cur_dc_rack);

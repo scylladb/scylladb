@@ -69,6 +69,10 @@ public:
         return _dc_racks;
     }
 
+    const std::unordered_set<sstring>& get_datacenters() const noexcept {
+        return _datacenters;
+    }
+
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
     sstring get_rack() const;
     sstring get_rack(inet_address ep) const;
@@ -119,6 +123,11 @@ private:
     std::unordered_map<inet_address, endpoint_dc_rack> _pending_locations;
 
     bool _sort_by_proximity = true;
+
+    // pre-calculated
+    std::unordered_set<sstring> _datacenters;
+
+    void calculate_datacenters();
 };
 
 } // namespace locator
