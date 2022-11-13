@@ -1271,6 +1271,7 @@ topology::topology(const topology& other)
         , _dc_racks(other._dc_racks)
         , _current_locations(other._current_locations)
         , _pending_locations(other._pending_locations)
+        , _sort_by_proximity(other._sort_by_proximity)
 {
 }
 
