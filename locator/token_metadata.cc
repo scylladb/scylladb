@@ -341,44 +341,39 @@ token_metadata_impl::ring_range(const token& start) const {
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
-    return clone_only_token_map().then([this] (token_metadata_impl ret) {
-      return do_with(std::move(ret), [this] (token_metadata_impl& ret) {
-        ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
-        return do_for_each(_bootstrap_tokens, [&ret] (const auto& p) {
-            ret._bootstrap_tokens.emplace(p);
-        }).then([this, &ret] {
-            ret._leaving_endpoints = _leaving_endpoints;
-            ret._replacing_endpoints = _replacing_endpoints;
-        }).then([this, &ret] {
-            return do_for_each(_pending_ranges_interval_map,
-                    [this, &ret] (const auto& p) {
-                ret._pending_ranges_interval_map.emplace(p);
-            });
-        }).then([this, &ret] {
-            ret._ring_version = _ring_version;
-            return make_ready_future<token_metadata_impl>(std::move(ret));
-        });
-      });
-    });
+    auto ret = co_await clone_only_token_map();
+    ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
+    for (const auto& p : _bootstrap_tokens) {
+        ret._bootstrap_tokens.emplace(p);
+        co_await coroutine::maybe_yield();
+    }
+    ret._leaving_endpoints = _leaving_endpoints;
+    ret._replacing_endpoints = _replacing_endpoints;
+    for (const auto& p : _pending_ranges_interval_map) {
+        ret._pending_ranges_interval_map.emplace(p);
+        co_await coroutine::maybe_yield();
+    }
+    ret._ring_version = _ring_version;
+    co_return ret;
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone_sorted_tokens) const noexcept {
-    return do_with(token_metadata_impl(shallow_copy{}, *this), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
-        ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
-        return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
-            ret._token_to_endpoint_map.emplace(p);
-        }).then([this, &ret] {
-            ret._normal_token_owners = _normal_token_owners;
-            ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
-        }).then([this, &ret] {
-            ret._topology = _topology;
-        }).then([this, &ret, clone_sorted_tokens] {
-            if (clone_sorted_tokens) {
-                ret._sorted_tokens = _sorted_tokens;
-            }
-            return make_ready_future<token_metadata_impl>(std::move(ret));
-        });
-    });
+    auto ret = token_metadata_impl(shallow_copy{}, *this);
+    ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
+    for (const auto& p : _token_to_endpoint_map) {
+        ret._token_to_endpoint_map.emplace(p);
+        co_await coroutine::maybe_yield();
+    }
+    ret._normal_token_owners = _normal_token_owners;
+    ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
+    co_await coroutine::maybe_yield();
+    ret._topology = _topology;
+    co_await coroutine::maybe_yield();
+    if (clone_sorted_tokens) {
+        ret._sorted_tokens = _sorted_tokens;
+        co_await coroutine::maybe_yield();
+    }
+    co_return ret;
 }
 
 future<> token_metadata_impl::clear_gently() noexcept {
