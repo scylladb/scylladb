@@ -49,7 +49,7 @@ protected:
 
     virtual void validate_options() const override;
 
-    virtual std::optional<std::set<sstring>> recognized_options(const topology&) const override;
+    virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override;
 
 private:
     // map: data centers -> replication factor

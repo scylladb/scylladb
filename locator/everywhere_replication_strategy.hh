@@ -24,7 +24,7 @@ public:
 
     virtual void validate_options() const override { /* noop */ }
 
-    std::optional<std::set<sstring>> recognized_options(const topology&) const override {
+    std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override {
         // We explicitely allow all options
         return std::nullopt;
     }

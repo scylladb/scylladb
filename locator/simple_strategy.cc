@@ -75,7 +75,7 @@ void simple_strategy::validate_options() const {
     validate_replication_factor(it->second);
 }
 
-std::optional<std::set<sstring>>simple_strategy::recognized_options(const topology&) const {
+std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(const topology&) const {
     return {{ "replication_factor" }};
 }
 

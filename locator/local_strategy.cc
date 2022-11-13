@@ -24,7 +24,7 @@ future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t,
 void local_strategy::validate_options() const {
 }
 
-std::optional<std::set<sstring>> local_strategy::recognized_options(const topology&) const {
+std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(const topology&) const {
     // LocalStrategy doesn't expect any options.
     return {};
 }
