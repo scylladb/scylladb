@@ -688,7 +688,7 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
             if (_ri->dropped_tables.contains(cf)) {
                 return make_ready_future<>();
             }
-            return repair_cf_range_row_level(*_ri, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
+            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
                 _ri->dropped_tables.insert(cf);
                 return make_ready_future<>();
             }).handle_exception([this] (std::exception_ptr ep) mutable {

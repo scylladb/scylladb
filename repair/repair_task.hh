@@ -89,6 +89,9 @@ public:
         , _ex(std::move(ex))
     {}
 
+    lw_shared_ptr<repair_info> get_repair_info() const noexcept {
+        return _ri;
+    }
     void check_failed_ranges();
     void abort_repair_info() noexcept;
     void check_in_abort();
