@@ -410,15 +410,15 @@ void repair_module::check_in_shutdown() {
     abort_source().check();
 }
 
-void repair_module::add_repair_info(int id, tasks::task_id uuid) {
+void repair_module::add_shard_task_id(int id, tasks::task_id uuid) {
     _repairs.emplace(id, uuid);
 }
 
-void repair_module::remove_repair_info(int id) {
+void repair_module::remove_shard_task_id(int id) {
     _repairs.erase(id);
 }
 
-tasks::task_manager::task_ptr repair_module::get_repair_info(int id) {
+tasks::task_manager::task_ptr repair_module::get_shard_task_ptr(int id) {
     auto it = _repairs.find(id);
     if (it != _repairs.end()) {
         auto task_it = _tasks.find(it->second);
@@ -1018,13 +1018,13 @@ future<> shard_repair_task_impl::run() {
     }
 
     auto& ri = _ri;
-    ri->rs.get_repair_module().add_repair_info(ri->id.id, _status.id);
+    ri->rs.get_repair_module().add_shard_task_id(ri->id.id, _status.id);
     return do_repair_ranges().then([ri] {
         ri->check_failed_ranges();
-        ri->rs.get_repair_module().remove_repair_info(ri->id.id);
+        ri->rs.get_repair_module().remove_shard_task_id(ri->id.id);
         return make_ready_future<>();
     }).handle_exception([this, ri] (std::exception_ptr eptr) {
-        ri->rs.get_repair_module().remove_repair_info(_status.sequence_number);
+        ri->rs.get_repair_module().remove_shard_task_id(_status.sequence_number);
         return make_exception_future<>(std::move(eptr));
     });
 }

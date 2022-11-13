@@ -156,9 +156,9 @@ public:
 
     repair_status get(int id) const;
     void check_in_shutdown();
-    void add_repair_info(int id, tasks::task_id ri);
-    void remove_repair_info(int id);
-    tasks::task_manager::task_ptr get_repair_info(int id);
+    void add_shard_task_id(int id, tasks::task_id ri);
+    void remove_shard_task_id(int id);
+    tasks::task_manager::task_ptr get_shard_task_ptr(int id);
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
