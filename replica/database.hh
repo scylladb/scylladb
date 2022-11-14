@@ -612,6 +612,15 @@ private:
         return _config.dirty_memory_manager->region_group();
     }
 
+    void add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& readers,
+             const schema_ptr& s,
+             const reader_permit& permit,
+             const dht::partition_range& range,
+             const query::partition_slice& slice,
+             const io_priority_class& pc,
+             const tracing::trace_state_ptr& trace_state,
+             streamed_mutation::forwarding fwd,
+             mutation_reader::forwarding fwd_mr) const;
 public:
     sstring dir() const {
         return _config.datadir;

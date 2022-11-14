@@ -147,6 +147,23 @@ table::find_row(schema_ptr s, reader_permit permit, const dht::decorated_key& pa
     });
 }
 
+void
+table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& readers,
+        const schema_ptr& s,
+        const reader_permit& permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        const tracing::trace_state_ptr& trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    for (auto&& mt : *_compaction_group->memtables()) {
+        if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
+            readers.emplace_back(std::move(*reader_opt));
+        }
+    }
+}
+
 flat_mutation_reader_v2
 table::make_reader_v2(schema_ptr s,
                            reader_permit permit,
@@ -193,11 +210,7 @@ table::make_reader_v2(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/309
     // https://github.com/scylladb/scylla/issues/185
 
-    for (auto&& mt : *_compaction_group->memtables()) {
-        if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
-        }
-    }
+    add_memtables_to_reader_list(readers, s, permit, range, slice, pc, trace_state, fwd, fwd_mr);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
@@ -245,11 +258,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(_compaction_group->memtables()->size() + 1);
-        for (auto&& mt : *_compaction_group->memtables()) {
-            if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
-                readers.emplace_back(std::move(*reader_opt));
-            }
-        }
+        add_memtables_to_reader_list(readers, s, permit, range, slice, pc, trace_state, fwd, fwd_mr);
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
     });
@@ -265,11 +274,7 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
 
     std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_compaction_group->memtables()->size() + 1);
-    for (auto&& mt : *_compaction_group->memtables()) {
-        if (auto reader_opt = mt->make_flat_reader_opt(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
-        }
-    }
+    add_memtables_to_reader_list(readers, schema, permit, range, slice, pc, trace_state, fwd, fwd_mr);
     readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
@@ -2356,11 +2361,7 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
     std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_compaction_group->memtables()->size() + 1);
 
-    for (auto&& mt : *_compaction_group->memtables()) {
-        if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
-        }
-    }
+    add_memtables_to_reader_list(readers, s, permit, range, slice, pc, trace_state, fwd, fwd_mr);
 
     auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
     auto effective_sstables = make_lw_shared(_compaction_strategy.make_sstable_set(_schema));
