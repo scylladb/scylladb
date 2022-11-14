@@ -469,63 +469,61 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(e),
         [&] (sharded<sstable_directory>& sstdir) {
+            distributed_loader_for_tests::process_sstable_dir(sstdir).get();
 
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+            // Collect all sstable file names
+            sstdir.invoke_on_all([&] (sstable_directory& d) {
+                return d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
+                    sstables[this_shard_id()].push_back(sst->get_filename());
+                    return make_ready_future<>();
+                });
+            }).get();
+            BOOST_REQUIRE(sstables.size() != 0);
 
-        // Collect all sstable file names
-        sstdir.invoke_on_all([&] (sstable_directory& d) {
-            return d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
-                sstables[this_shard_id()].push_back(sst->get_filename());
-                return make_ready_future<>();
-            });
-        }).get();
-        BOOST_REQUIRE(sstables.size() != 0);
+            distributed_loader_for_tests::lock_table(sstdir, e.db(), ks_name, cf_name).get();
 
-        distributed_loader_for_tests::lock_table(sstdir, e.db(), ks_name, cf_name).get();
+            auto drop = e.execute_cql("drop table cf");
 
-        auto drop = e.execute_cql("drop table cf");
-
-        auto table_exists = [&] () {
-            try {
-                e.db().invoke_on_all([ks_name, cf_name] (replica::database& db) {
-                    db.find_column_family(ks_name, cf_name);
-                }).get();
-                return true;
-            } catch (replica::no_such_column_family&) {
-                return false;
-            }
-        };
-
-        testlog.debug("Waiting until {}.{} is unlisted from the database", ks_name, cf_name);
-        while (table_exists()) {
-            yield().get();
-        }
-
-        auto all_sstables_exist = [&] () {
-            std::unordered_map<bool, size_t> res;
-            for (const auto& [shard, files] : sstables) {
-                for (const auto& f : files) {
-                    res[file_exists(f).get0()]++;
+            auto table_exists = [&] () {
+                try {
+                    e.db().invoke_on_all([ks_name, cf_name] (replica::database& db) {
+                        db.find_column_family(ks_name, cf_name);
+                    }).get();
+                    return true;
+                } catch (replica::no_such_column_family&) {
+                    return false;
                 }
+            };
+
+            testlog.debug("Waiting until {}.{} is unlisted from the database", ks_name, cf_name);
+            while (table_exists()) {
+                yield().get();
             }
-            return res;
-        };
 
-        auto res = all_sstables_exist();
-        BOOST_REQUIRE(res[false] == 0);
-        BOOST_REQUIRE(res[true] == sstables.size());
+            auto all_sstables_exist = [&] () {
+                std::unordered_map<bool, size_t> res;
+                for (const auto& [shard, files] : sstables) {
+                    for (const auto& f : files) {
+                        res[file_exists(f).get0()]++;
+                    }
+                }
+                return res;
+            };
 
-        // Stop manually now, to allow for the object to be destroyed and take the
-        // phaser with it.
-        sstdir.stop().get();
-        drop.get();
+            auto res = all_sstables_exist();
+            BOOST_REQUIRE(res[false] == 0);
+            BOOST_REQUIRE(res[true] == sstables.size());
 
-        BOOST_REQUIRE(!table_exists());
+            // Stop manually now, to allow for the object to be destroyed and take the
+            // phaser with it.
+            sstdir.stop().get();
+            drop.get();
 
-        res = all_sstables_exist();
-        BOOST_REQUIRE(res[false] == sstables.size());
-        BOOST_REQUIRE(res[true] == 0);
+            BOOST_REQUIRE(!table_exists());
 
+            res = all_sstables_exist();
+            BOOST_REQUIRE(res[false] == sstables.size());
+            BOOST_REQUIRE(res[true] == 0);
         });
     });
 }
