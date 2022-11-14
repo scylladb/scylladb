@@ -82,6 +82,7 @@
 
 #include "release.hh"
 #include "utils/build_id.hh"
+#include "utils/labels.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -3150,18 +3151,18 @@ future<> init_metrics() {
         sm::make_counter("cell_writes", [] { return sstables_stats::get_shard_stats().cell_writes; },
             sm::description("Number of cells written")),
         sm::make_counter("tombstone_writes", [] { return sstables_stats::get_shard_stats().tombstone_writes; },
-            sm::description("Number of tombstones written")),
+            sm::description("Number of tombstones written"))(basic_level),
         sm::make_counter("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
-            sm::description("Number of range tombstones written")),
+            sm::description("Number of range tombstones written"))(basic_level),
         sm::make_counter("pi_auto_scale_events", [] { return sstables_stats::get_shard_stats().promoted_index_auto_scale_events; },
             sm::description("Number of promoted index auto-scaling events")),
 
         sm::make_counter("range_tombstone_reads", [] { return sstables_stats::get_shard_stats().range_tombstone_reads; },
-            sm::description("Number of range tombstones read")),
+            sm::description("Number of range tombstones read"))(basic_level),
         sm::make_counter("row_tombstone_reads", [] { return sstables_stats::get_shard_stats().row_tombstone_reads; },
-            sm::description("Number of row tombstones read")),
+            sm::description("Number of row tombstones read"))(basic_level),
         sm::make_counter("cell_tombstone_writes", [] { return sstables_stats::get_shard_stats().cell_tombstone_writes; },
-            sm::description("Number of cell tombstones written")),
+            sm::description("Number of cell tombstones written"))(basic_level),
         sm::make_counter("single_partition_reads", [] { return sstables_stats::get_shard_stats().single_partition_reads; },
             sm::description("Number of single partition flat mutation reads")),
         sm::make_counter("range_partition_reads", [] { return sstables_stats::get_shard_stats().range_partition_reads; },
