@@ -33,6 +33,7 @@
 #include "utils/preempt.hh"
 #include "utils/vle.hh"
 #include "utils/coarse_steady_clock.hh"
+#include "utils/labels.hh"
 
 #include <random>
 #include <chrono>
@@ -2876,7 +2877,7 @@ tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*
 
     _metrics.add_group("lsa", {
         sm::make_gauge("total_space_bytes", [this] { return region_occupancy().total_space(); },
-                       sm::description("Holds a current size of allocated memory in bytes.")),
+                       sm::description("Holds a current size of allocated memory in bytes."))(basic_level),
 
         sm::make_gauge("used_space_bytes", [this] { return region_occupancy().used_space(); },
                        sm::description("Holds a current amount of used memory in bytes.")),
@@ -2891,7 +2892,7 @@ tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*
                        sm::description("Holds a current size of allocated non-LSA memory.")),
 
         sm::make_gauge("non_lsa_used_space_bytes", [this] { return non_lsa_used_space(); },
-                       sm::description("Holds a current amount of used non-LSA memory.")),
+                       sm::description("Holds a current amount of used non-LSA memory."))(basic_level),
 
         sm::make_gauge("free_space", [this] { return _segment_pool->unreserved_free_segments() * segment_size; },
                        sm::description("Holds a current amount of free memory that is under lsa control.")),
