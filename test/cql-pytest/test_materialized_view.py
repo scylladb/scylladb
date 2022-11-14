@@ -443,3 +443,55 @@ def test_view_builder_suspend_with_partition_tombstone(cql, test_keyspace, scyll
             # again, we should not see any even rows in the materialized-view,
             # they are covered with a partition tombstone in the base-table
             assert res == list(range(1, 512, 2))
+
+# Test when IS NOT NULL is required, vs. not required, for the key columns
+# of a materialized view WHERE clause.
+# In general, the user needs to add a IS NOT NULL for each and every key
+# column of the view in the view's WHERE clause, to emphasize that when
+# a row has a null value for that column - the row will be missing from
+# the view (because null key columns are not allowed).
+# However, one can argue that if one of the view's key columns was already
+# a base key column, then it is already known that this column cannot ever
+# be null, so it is pointless to require the "IS NOT NULL". However,
+# Cassandra still requires "IS NOT NULL" on any column - even base key
+# columns.
+# This test reproduces issue issue #11979, that Scylla used to require
+# IS NOT NULL inconsistently.
+@pytest.mark.xfail(reason="issue #11979")
+def test_is_not_null_requirement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        # missing "v is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p,c,v', where='p is not null and c is not null') as mv:
+                pass
+        # missing "c is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p,c,v', where='v is not null and p is not null') as mv:
+                pass
+        # missing "p is not null":
+        # This check reproduces issue #11979:
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p,c,v', where='c is not null and v is not null') as mv:
+                pass
+    # Similar test, with composite keys
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c1 int, c2 int, v int, primary key ((p1, p2), c1, c2)') as table:
+        # missing "p1 is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p2 is not null and c1 is not null and c2 is not null and v is not null') as mv:
+                pass
+        # missing "p2 is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p1 is not null and c1 is not null and c2 is not null and v is not null') as mv:
+                pass
+        # missing "c1 is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p1 is not null and p2 is not null and c2 is not null and v is not null') as mv:
+                pass
+        # missing "c2 is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p1 is not null and p2 is not null and c1 is not null and v is not null') as mv:
+                pass
+        # missing "v is not null":
+        with pytest.raises(InvalidRequest, match="IS NOT NULL"):
+            with new_materialized_view(cql, table, select='*', pk='p1,p2,c1,c2,v', where='p1 is not null and p2 is not null and c1 is not null and c2 is not null') as mv:
+                pass
