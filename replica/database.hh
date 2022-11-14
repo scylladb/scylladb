@@ -538,22 +538,11 @@ private:
     }
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept;
     future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy);
-    // Adds new sstable to the set of sstables
-    // Doesn't update the cache. The cache must be synchronized in order for reads to see
-    // the writes contained in this sstable.
-    // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
-    // Doesn't trigger compaction.
-    // Strong exception guarantees.
-    lw_shared_ptr<sstables::sstable_set>
-    do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
-        enable_backlog_tracker backlog_tracker);
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
-    // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
-    void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
     future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.

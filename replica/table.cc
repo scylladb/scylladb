@@ -395,13 +395,13 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.replace_sstables({std::move(sstable)}, {});
 }
 
-void table::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
-    auto& tracker = _compaction_strategy.get_backlog_tracker();
+void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
+    auto& tracker = get_backlog_tracker();
     tracker.replace_sstables(old_sstables, new_sstables);
 }
 
 lw_shared_ptr<sstables::sstable_set>
-table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
@@ -410,16 +410,16 @@ table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::s
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
     if (backlog_tracker) {
-        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
+        table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
     // update sstable set last in case either updating
     // staging sstables or backlog tracker throws
-    update_stats_for_new_sstable(sstable->bytes_on_disk());
+    _t.update_stats_for_new_sstable(sstable->bytes_on_disk());
     return new_sstables;
 }
 
 void compaction_group::add_sstable(sstables::shared_sstable sstable) {
-    _main_sstables = _t.do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
+    _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
@@ -431,7 +431,7 @@ void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> ne
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
-    _maintenance_sstables = _t.do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
@@ -577,16 +577,16 @@ public:
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
 class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
     sstables::shared_sstable _sst;
-    sstables::compaction_strategy& _compaction_strategy;
+    compaction::table_state& _ts;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
 public:
     database_sstable_write_monitor(lw_shared_ptr<sstable_write_permit> permit, sstables::shared_sstable sst,
-        sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
+        compaction_group& cg, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
-            , _compaction_strategy(strategy)
+            , _ts(cg.as_table_state())
             , _maximum_timestamp(max_timestamp)
     {}
 
@@ -597,13 +597,13 @@ public:
         // We failed to finish handling this SSTable, so we have to update the backlog_tracker
         // about it.
         if (_sst) {
-            _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
+            _ts.get_backlog_tracker().revert_charges(_sst);
         }
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override {
         _tracker = &t;
-        _compaction_strategy.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+        _ts.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
     }
 
     virtual void on_data_write_completed() override {
@@ -785,7 +785,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions, &cg] (flat_mutation_reader_v2 reader) mutable -> future<> {
           std::exception_ptr ex;
           try {
             auto&& priority = service::get_local_memtable_flush_priority();
@@ -796,7 +796,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             newtabs.push_back(newtab);
             tlogger.debug("Flushing to {}", newtab->get_filename());
 
-            auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_strategy,
+            auto monitor = database_sstable_write_monitor(permit, newtab, cg,
                 old->get_max_timestamp());
 
             co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg, priority);
@@ -865,7 +865,6 @@ table::stop() {
         _compaction_group->clear_sstables();
         _sstables = make_compound_sstable_set();
     }));
-    _compaction_strategy.get_backlog_tracker().disable();
     _cache.refresh_snapshot();
 }
 
@@ -992,7 +991,7 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
             _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
             _t.refresh_compound_sstable_set();
             // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
-            _t.backlog_tracker_adjust_charges({}, _new_main);
+            _cg.backlog_tracker_adjust_charges({}, _new_main);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
             return std::make_unique<sstable_lists_updater>(cg, std::move(permit), old_maintenance, new_main);
@@ -1067,7 +1066,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_sstables));
             _t.refresh_compound_sstable_set();
-            _t.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
+            _cg.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, std::move(permit), d);
@@ -1158,21 +1157,38 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
-    // FIXME: decouple backlog_tracker from compaction_strategy, so each group can have its own tracker.
-    _compaction_manager.register_backlog_tracker(new_cs.get_backlog_tracker());
-    auto move_read_charges = new_cs.type() == _compaction_strategy.type();
-    _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
+    struct compaction_group_sstable_set_updater {
+        table& t;
+        compaction_group& cg;
+        compaction_backlog_tracker new_bt;
+        lw_shared_ptr<sstables::sstable_set> new_sstables;
 
-    compaction_group& cg = *_compaction_group;
-    auto new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(_schema));
-    cg.main_sstables()->for_each_sstable([&] (const sstables::shared_sstable& s) {
-        add_sstable_to_backlog_tracker(new_cs.get_backlog_tracker(), s);
-        new_sstables->insert(s);
-    });
+        compaction_group_sstable_set_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
+            : t(t), cg(cg), new_bt(new_cs.make_backlog_tracker()) {}
+
+        void prepare(sstables::compaction_strategy& new_cs) {
+            auto move_read_charges = new_cs.type() == t._compaction_strategy.type();
+            cg.get_backlog_tracker().copy_ongoing_charges(new_bt, move_read_charges);
+
+            new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(t._schema));
+            cg.main_sstables()->for_each_sstable([this] (const sstables::shared_sstable& s) {
+                add_sstable_to_backlog_tracker(new_bt, s);
+                new_sstables->insert(s);
+            });
+        }
+
+        void execute() noexcept {
+            t._compaction_manager.register_backlog_tracker(cg.as_table_state(), std::move(new_bt));
+            cg.set_main_sstables(std::move(new_sstables));
+        }
+    };
+    compaction_group_sstable_set_updater cg_set_updater(*this, *_compaction_group, new_cs);
+
+    cg_set_updater.prepare(new_cs);
 
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
-    cg.set_main_sstables(std::move(new_sstables));
+    cg_set_updater.execute();
     refresh_compound_sstable_set();
 }
 
@@ -1679,9 +1695,9 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     })).then([this, p]() mutable {
         rebuild_statistics();
 
-        return parallel_for_each(p->remove, [this](pruner::removed_sstable& r) {
+        return parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
             if (r.enable_backlog_tracker) {
-                remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), r.sst);
+                remove_sstable_from_backlog_tracker(p->cg.get_backlog_tracker(), r.sst);
             }
             return sstables::delete_atomically({r.sst});
         }).then([p] {
@@ -2370,7 +2386,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
             // Otherwise, we can count on off-strategy completion to add it when updating lists.
             if (sst->get_origin() != sstables::repair_origin) {
-                add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                add_sstable_to_backlog_tracker(compaction_group_for_sstable(sst).get_backlog_tracker(), sst);
             }
         } catch (...) {
             tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
@@ -2558,7 +2574,14 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _t.get_compaction_manager().get_tombstone_gc_state();
     }
+    compaction_backlog_tracker& get_backlog_tracker() override {
+        return _t._compaction_manager.get_backlog_tracker(*this);
+    }
 };
+
+compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
+    return as_table_state().get_backlog_tracker();
+}
 
 compaction::table_state& compaction_group::as_table_state() const noexcept {
     return *_table_state;

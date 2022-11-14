@@ -221,13 +221,13 @@ public:
 
     ~compaction_write_monitor() {
         if (_sst) {
-            _table_s.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+            _table_s.get_backlog_tracker().revert_charges(_sst);
         }
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& tracker) override {
         _tracker = &tracker;
-        _table_s.get_compaction_strategy().get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+        _table_s.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
     }
 
     virtual void on_data_write_completed() override {
@@ -352,7 +352,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     public:
         virtual void on_read_started(const sstables::reader_position_tracker& tracker) override {
             _tracker = &tracker;
-            _table_s.get_compaction_strategy().get_backlog_tracker().register_compacting_sstable(_sst, *this);
+            _table_s.get_backlog_tracker().register_compacting_sstable(_sst, *this);
         }
 
         virtual void on_read_completed() override {
@@ -371,7 +371,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
 
         void remove_sstable() {
             if (_sst) {
-                _table_s.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+                _table_s.get_backlog_tracker().revert_charges(_sst);
             }
             _sst = {};
         }
@@ -383,7 +383,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker
             // about it.
             if (_sst) {
-                _table_s.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+                _table_s.get_backlog_tracker().revert_charges(_sst);
             }
         }
 

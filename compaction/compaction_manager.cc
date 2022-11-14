@@ -1578,8 +1578,13 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }, can_purge_tombstones::no);
 }
 
+compaction_manager::compaction_state::compaction_state(table_state& t)
+    : backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
+{
+}
+
 void compaction_manager::add(compaction::table_state& t) {
-    auto [_, inserted] = _compaction_state.insert({&t, compaction_state{}});
+    auto [_, inserted] = _compaction_state.insert({&t, compaction_state(t)});
     if (!inserted) {
         auto s = t.schema();
         on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(&t)));
@@ -1587,22 +1592,21 @@ void compaction_manager::add(compaction::table_state& t) {
 }
 
 future<> compaction_manager::remove(compaction::table_state& t) noexcept {
-    auto handle = _compaction_state.extract(&t);
+    auto& c_state = get_compaction_state(&t);
 
-    if (!handle.empty()) {
-        auto& c_state = handle.mapped();
+    // We need to guarantee that a task being stopped will not retry to compact
+    // a table being removed.
+    // The requirement above is provided by stop_ongoing_compactions().
+    _postponed.erase(&t);
 
-        // We need to guarantee that a task being stopped will not retry to compact
-        // a table being removed.
-        // The requirement above is provided by stop_ongoing_compactions().
-        _postponed.erase(&t);
+    // Wait for all compaction tasks running under gate to terminate
+    // and prevent new tasks from entering the gate.
+    co_await seastar::when_all_succeed(stop_ongoing_compactions("table removal", &t), c_state.gate.close()).discard_result();
 
-        // Wait for the termination of an ongoing compaction on table T, if any.
-        co_await stop_ongoing_compactions("table removal", &t);
+    c_state.backlog_tracker.disable();
 
-        // Wait for all functions running under gate to terminate.
-        co_await c_state.gate.close();
-    }
+    _compaction_state.erase(&t);
+
 #ifdef DEBUG
     auto found = false;
     sstring msg;
@@ -1761,7 +1765,7 @@ void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_ss
     }
 }
 
-void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) {
+void compaction_backlog_tracker::copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) const {
     for (auto&& w : _ongoing_writes) {
         new_bt.register_partially_written_sstable(w.first, *w.second);
     }
@@ -1771,13 +1775,31 @@ void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tra
             new_bt.register_compacting_sstable(w.first, *w.second);
         }
     }
-    _ongoing_writes = {};
-    _ongoing_compactions = {};
 }
 
 void compaction_backlog_tracker::revert_charges(sstables::shared_sstable sst) {
     _ongoing_writes.erase(sst);
     _ongoing_compactions.erase(sst);
+}
+
+compaction_backlog_tracker::compaction_backlog_tracker(compaction_backlog_tracker&& other)
+        : _impl(std::move(other._impl))
+        , _ongoing_writes(std::move(other._ongoing_writes))
+        , _ongoing_compactions(std::move(other._ongoing_compactions))
+        , _manager(std::exchange(other._manager, nullptr)) {
+}
+
+compaction_backlog_tracker&
+compaction_backlog_tracker::operator=(compaction_backlog_tracker&& x) noexcept {
+    if (this != &x) {
+        if (auto manager = std::exchange(_manager, x._manager)) {
+            manager->remove_backlog_tracker(this);
+        }
+        _impl = std::move(x._impl);
+        _ongoing_writes = std::move(x._ongoing_writes);
+        _ongoing_compactions = std::move(x._ongoing_compactions);
+    }
+    return *this;
 }
 
 compaction_backlog_tracker::~compaction_backlog_tracker() {
@@ -1816,4 +1838,15 @@ compaction_backlog_manager::~compaction_backlog_manager() {
     for (auto* tracker : _backlog_trackers) {
         tracker->_manager = nullptr;
     }
+}
+
+void compaction_manager::register_backlog_tracker(compaction::table_state& t, compaction_backlog_tracker new_backlog_tracker) {
+    auto& cs = get_compaction_state(&t);
+    cs.backlog_tracker = std::move(new_backlog_tracker);
+    register_backlog_tracker(cs.backlog_tracker);
+}
+
+compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction::table_state& t) {
+    auto& cs = get_compaction_state(&t);
+    return cs.backlog_tracker;
 }

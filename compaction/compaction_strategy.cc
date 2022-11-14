@@ -427,14 +427,6 @@ struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
     virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
-// Just so that if we have more than one CF with NullStrategy, we don't create a lot
-// of objects to iterate over for no reason
-// Still thread local because of make_unique. But this will disappear soon
-static thread_local compaction_backlog_tracker null_backlog_tracker(std::make_unique<null_backlog_tracker>());
-compaction_backlog_tracker& get_null_backlog_tracker() {
-    return null_backlog_tracker;
-}
-
 //
 // Null compaction strategy is the default compaction strategy.
 // As the name implies, it does nothing.
@@ -453,8 +445,8 @@ public:
         return compaction_strategy_type::null;
     }
 
-    virtual compaction_backlog_tracker& get_backlog_tracker() override {
-        return get_null_backlog_tracker();
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override {
+        return std::make_unique<null_backlog_tracker>();
     }
 };
 
@@ -462,9 +454,12 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
         : compaction_strategy_impl(options)
         , _max_sstable_size_in_mb(calculate_max_sstable_size_in_mb(compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION)))
         , _stcs_options(options)
-        , _backlog_tracker(std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options))
 {
     _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
+}
+
+std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() {
+    return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options);
 }
 
 int32_t
@@ -486,7 +481,6 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     : compaction_strategy_impl(options)
     , _options(options)
     , _stcs_options(options)
-    , _backlog_tracker(std::make_unique<time_window_backlog_tracker>(_options, _stcs_options))
 {
     if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
         _disable_tombstone_compaction = true;
@@ -495,6 +489,10 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
         clogger.debug("Enabling tombstone compactions for TWCS");
     }
     _use_clustering_key_filter = true;
+}
+
+std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() {
+    return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
 
 } // namespace sstables
@@ -640,7 +638,6 @@ namespace sstables {
 date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _manifest(options)
-    , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
 {
     clogger.warn("DateTieredCompactionStrategy is deprecated. Usually cases for which it is used are better handled by TimeWindowCompactionStrategy."
             " Please change your compaction strategy to TWCS as DTCS will be retired in the near future");
@@ -685,16 +682,22 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
 }
 
+std::unique_ptr<compaction_backlog_tracker::impl> date_tiered_compaction_strategy::make_backlog_tracker() {
+    return std::make_unique<unimplemented_backlog_tracker>();
+}
+
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _options(options)
-    , _backlog_tracker(std::make_unique<size_tiered_backlog_tracker>(_options))
 {}
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
     : _options(options)
-    , _backlog_tracker(std::make_unique<size_tiered_backlog_tracker>(_options))
 {}
+
+std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() {
+    return std::make_unique<size_tiered_backlog_tracker>(_options);
+}
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
@@ -736,8 +739,8 @@ bool compaction_strategy::use_clustering_key_filter() const {
     return _compaction_strategy_impl->use_clustering_key_filter();
 }
 
-compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
-    return _compaction_strategy_impl->get_backlog_tracker();
+compaction_backlog_tracker compaction_strategy::make_backlog_tracker() {
+    return compaction_backlog_tracker(_compaction_strategy_impl->make_backlog_tracker());
 }
 
 sstables::compaction_descriptor
