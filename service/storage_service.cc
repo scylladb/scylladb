@@ -969,13 +969,29 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     bool is_member = tmptr->is_member(endpoint);
-    // Update pending ranges after update of normal tokens immediately to avoid
-    // a race where natural endpoint was updated to contain node A, but A was
-    // not yet removed from pending endpoints
-    if (!is_member) {
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+    bool do_notify_joined = false;
+
+    if (endpoints_to_remove.contains(endpoint)) [[unlikely]] {
+        if (!owned_tokens.empty()) {
+            on_fatal_internal_error(slogger, format("endpoint={} is marked for removal but still owns {} tokens", endpoint, owned_tokens.size()));
+        }
+    } else {
+        if (owned_tokens.empty()) {
+            on_internal_error_noexcept(slogger, format("endpoint={} is not marked for removal but owns no tokens", endpoint));
+        }
+
+        // Update pending ranges after update of normal tokens immediately to avoid
+        // a race where natural endpoint was updated to contain node A, but A was
+        // not yet removed from pending endpoints
+        if (!is_member) {
+            auto dc_rack = get_dc_rack_for(endpoint);
+            slogger.debug("handle_state_normal: update_topology: endpoint={} dc={} rack={}", endpoint, dc_rack.dc, dc_rack.rack);
+            tmptr->update_topology(endpoint, std::move(dc_rack));
+            do_notify_joined = true;
+        }
+        co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     }
-    co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
+
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
@@ -983,7 +999,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     for (auto ep : endpoints_to_remove) {
         co_await remove_endpoint(ep);
     }
-    slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
+    slogger.debug("handle_state_normal: endpoint={} is_member={} endpoint_to_remove={} owned_tokens={}", endpoint, is_member, endpoints_to_remove.contains(endpoint), owned_tokens);
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         co_await update_peer_info(endpoint);
         try {
@@ -994,7 +1010,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     // Send joined notification only when this node was not a member prior to this
-    if (!is_member) {
+    if (do_notify_joined) {
         co_await notify_joined(endpoint);
     }
 
@@ -1215,6 +1231,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_return;
         }
         if (get_token_metadata().is_member(endpoint)) {
+            slogger.debug("endpoint={} on_change:     updating system.peers table", endpoint);
             co_await do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
@@ -1312,6 +1329,7 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
 }
 
 future<> storage_service::update_peer_info(gms::inet_address endpoint) {
+    slogger.debug("Update peer info: endpoint={}", endpoint);
     using namespace gms;
     auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
