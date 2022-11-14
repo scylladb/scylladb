@@ -910,6 +910,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/config_file.cc',
                 'utils/multiprecision_int.cc',
                 'utils/gz/crc_combine.cc',
+                'utils/gz/crc_combine_table.cc',
                 'gms/version_generator.cc',
                 'gms/versioned_value.cc',
                 'gms/gossiper.cc',
@@ -1323,8 +1324,6 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
-
-deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
 
 warnings = [
@@ -1954,7 +1953,6 @@ with open(buildfile, 'w') as f:
                 ] + [
                     'abseil/' + x for x in abseil_libs
                 ]])
-                objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
                 if binary in tests:
                     local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
@@ -2003,12 +2001,6 @@ with open(buildfile, 'w') as f:
                     rust_libs[staticlib] = src
                 else:
                     raise Exception('No rule for ' + src)
-        compiles['$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o'] = '$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc'
-        compiles['$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'] = 'utils/gz/gen_crc_combine_table.cc'
-        f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
-                                            '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
-        f.write('build {}: link_build.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
-                                                '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
         f.write('   libs = $seastar_libs_{}\n'.format(mode))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
