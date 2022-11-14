@@ -2,7 +2,7 @@
 Scylla Auditing Guide
 =====================
 
-.. include:: /rst_include/enterprise-only-note.rst
+:label-tip:`ScyllaDB Enterprise`
 
 
 Auditing allows the administrator to monitor activities on a Scylla cluster, including queries and data changes. 
