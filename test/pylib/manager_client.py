@@ -215,3 +215,19 @@ class ManagerClient():
         except Exception as exc:
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
         return HostID(host_id)
+
+    async def set_logger_level(self, server_id: ServerNum, logger: str, level: str) -> None:
+        """Set level for logger"""
+        node_ip = await self.get_host_ip(server_id)
+        await self.api.client.post(f"/system/logger/{logger}", host=node_ip, params={"level": level})
+
+    async def get_logger_level(self, server_id: ServerNum, logger: str) -> str:
+        """Get level of logger"""
+        node_ip = await self.get_host_ip(server_id)
+        return await self.api.client.get_text(f"/system/logger/{logger}", host=node_ip)
+
+    async def set_logger_level_all_running(self, logger: str, level: str) -> None:
+        """Set level for logger for all running servers"""
+        for server in await self.running_servers():
+            await self.api.client.post(f"/system/logger/{logger}", host=server.ip_addr,
+                                       params={"level": level})

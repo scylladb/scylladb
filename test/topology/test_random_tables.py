@@ -10,6 +10,13 @@ from cassandra.protocol import InvalidRequest                            # type:
 # Simple test of schema helper
 @pytest.mark.asyncio
 async def test_new_table(manager, random_tables):
+
+    # Increment logging level to debug rare CI failure
+    servers = await manager.running_servers()
+    loggers = ['storage_service', 'paxos', 'raft', 'raft_group0', 'querier', 'query_processor', 'rpc']
+    for logger in loggers:
+        await manager.set_logger_level_all_running(logger, 'trace')
+
     cql = manager.cql
     assert cql is not None
     table = await random_tables.add_table(ncolumns=5)
@@ -24,9 +31,12 @@ async def test_new_table(manager, random_tables):
     assert len(res) == 1
     assert list(res[0])[:2] == vals
     await random_tables.drop_table(table)
+    # TODO: in very rare occasions this raises cassandra.ReadFailure instead of InvalidRequest
     with pytest.raises(InvalidRequest, match='unconfigured table'):
         await cql.run_async(f"SELECT * FROM {table}")
     await random_tables.verify_schema()
+    for logger in loggers:
+        await manager.set_logger_level_all_running(logger, 'info')
 
 
 # Simple test of schema helper with alter
