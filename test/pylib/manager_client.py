@@ -149,7 +149,7 @@ class ManagerClient():
     async def server_add(self) -> ServerInfo:
         """Add a new server"""
         try:
-            server_info = await self.client.get_json("/cluster/addserver")
+            server_info = await self.client.put_json("/cluster/addserver", {}, response_type="json")
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:

@@ -769,7 +769,7 @@ class ScyllaClusterManager:
                            self._cluster_server_stop_gracefully)
         app.router.add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
         app.router.add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
-        app.router.add_get('/cluster/addserver', self._cluster_server_add)
+        app.router.add_put('/cluster/addserver', self._cluster_server_add)
         app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         app.router.add_get('/cluster/decommission-node/{server_id}',
                            self._cluster_decommission_node)
@@ -862,7 +862,7 @@ class ScyllaClusterManager:
         ret = await self.cluster.server_restart(server_id)
         return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
 
-    async def _cluster_server_add(self, _request) -> aiohttp.web.Response:
+    async def _cluster_server_add(self, request) -> aiohttp.web.Response:
         """Add a new server"""
         assert self.cluster
         s_info = await self.cluster.add_server()
