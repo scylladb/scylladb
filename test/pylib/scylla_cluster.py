@@ -22,7 +22,7 @@ import uuid
 from io import BufferedWriter
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.manager_client import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 import aiohttp
 import aiohttp.web
 import yaml
