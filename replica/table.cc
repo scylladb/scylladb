@@ -1745,8 +1745,10 @@ void table::set_schema(schema_ptr s) {
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 
-    for (auto& m : *_compaction_group->memtables()) {
-        m->set_schema(s);
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        for (auto& m: *cg->memtables()) {
+            m->set_schema(s);
+        }
     }
 
     _cache.set_schema(s);
