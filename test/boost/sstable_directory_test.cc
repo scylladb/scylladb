@@ -147,7 +147,10 @@ static void with_sstable_directory(
 
     sharded<sstable_directory> sstdir;
     auto stop_sstdir = defer([&sstdir] {
-        sstdir.stop().get();
+        // The func is allowed to stop sstdir, and some tests actually do it
+        if (sstdir.local_is_initialized()) {
+            sstdir.stop().get();
+        }
     });
 
     auto wrapped_sfe = [&sstable_from_existing] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
@@ -459,24 +462,13 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             return cf.flush();
         }).get();
 
-        sharded<semaphore> sstdir_sem;
-        sstdir_sem.start(1).get();
-        auto stop_sstdir_sem = defer([&sstdir_sem] {
-            sstdir_sem.stop().get();
-        });
-
-        sharded<sstable_directory> sstdir;
-        sstdir.start(path, default_priority_class(), 1, std::ref(sstdir_sem),
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::no,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
-                sstable_from_existing_file(e)).get();
-
-        // stop cleanly in case we fail early for unexpected reasons
-        auto stop = defer([&sstdir] {
-            sstdir.stop().get();
-        });
+        with_sstable_directory(path, 1,
+            sstable_directory::need_mutate_level::no,
+            sstable_directory::lack_of_toc_fatal::no,
+            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
+            sstable_directory::allow_loading_materialized_view::no,
+            sstable_from_existing_file(e),
+        [&] (sharded<sstable_directory>& sstdir) {
 
         distributed_loader_for_tests::process_sstable_dir(sstdir).get();
 
@@ -525,7 +517,6 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
 
         // Stop manually now, to allow for the object to be destroyed and take the
         // phaser with it.
-        stop.cancel();
         sstdir.stop().get();
         drop.get();
 
@@ -534,6 +525,8 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
         res = all_sstables_exist();
         BOOST_REQUIRE(res[false] == sstables.size());
         BOOST_REQUIRE(res[true] == 0);
+
+        });
     });
 }
 
