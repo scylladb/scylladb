@@ -535,6 +535,8 @@ private:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+    // Returns a list of all compaction groups.
+    const std::vector<std::unique_ptr<compaction_group>>& compaction_groups() const noexcept;
 
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();

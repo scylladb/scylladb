@@ -499,6 +499,10 @@ compaction_group& table::compaction_group_for_sstable(const sstables::shared_sst
     return *_compaction_group;
 }
 
+const std::vector<std::unique_ptr<compaction_group>>& table::compaction_groups() const noexcept {
+    return _compaction_groups;
+}
+
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
