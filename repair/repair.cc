@@ -1336,6 +1336,7 @@ future<> repair_service::do_sync_data_using_repair(
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+    assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         auto& db = get_db().local();
@@ -1510,6 +1511,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 }
 
 future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+    assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto& db = get_db().local();
@@ -1702,10 +1704,12 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
 }
 
 future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
+    assert(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
 }
 
 future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+    assert(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
         seastar::sharded<replica::database>& db = get_db();
@@ -1718,6 +1722,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
 }
 
 future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes) {
+    assert(this_shard_id() == 0);
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto& db = get_db().local();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
@@ -1801,6 +1806,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
 }
 
 future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
+    assert(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
         auto& topology = tmptr->get_topology();
@@ -1816,6 +1822,7 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, 
 }
 
 future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::list<gms::inet_address> ignore_nodes) {
+    assert(this_shard_id() == 0);
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto& topology = tmptr->get_topology();
