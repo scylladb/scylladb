@@ -255,27 +255,21 @@ future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
     return make_ready_future<>();
 }
 
-bool messaging_service::is_same_dc(inet_address addr) const {
-    // It's a "safety check". The token metadata pointer is nullptr before
+bool messaging_service::topology_known_for(inet_address addr) const {
+    // The token metadata pointer is nullptr before
     // the service is start_listen()-ed and after it's being shutdown()-ed.
-    // No new clients should appear in those period, but if they do it's
-    // better to classify them somehow. Telling that all endpoints live in
-    // different DCs/RACKs would make messaging apply the most restrictive
-    // compression/encryption rules which can be sub-optimal but not bad.
-    if (_token_metadata == nullptr) {
-        return false;
-    }
+    return _token_metadata
+        && _token_metadata->get()->get_topology().has_endpoint(addr, locator::topology::pending::yes);
+}
 
+// Precondition: `topology_known_for(addr)`.
+bool messaging_service::is_same_dc(inet_address addr) const {
     const auto& topo = _token_metadata->get()->get_topology();
     return topo.get_datacenter(addr) == topo.get_datacenter();
 }
 
+// Precondition: `topology_known_for(addr)`.
 bool messaging_service::is_same_rack(inet_address addr) const {
-    // See comment in is_same_dc() about this check
-    if (_token_metadata == nullptr) {
-        return false;
-    }
-
     const auto& topo = _token_metadata->get()->get_topology();
     return topo.get_rack(addr) == topo.get_rack();
 }
@@ -308,13 +302,13 @@ void messaging_service::do_start_listen() {
                 case encrypt_what::dc:
                     so.filter_connection = [this](const seastar::socket_address& caddr) {
                         auto addr = get_public_endpoint_for(caddr);
-                        return is_same_dc(addr);
+                        return topology_known_for(addr) && is_same_dc(addr);
                     };
                     break;
                 case encrypt_what::rack:
                     so.filter_connection = [this](const seastar::socket_address& caddr) {
                         auto addr = get_public_endpoint_for(caddr);
-                        return is_same_dc(addr) && is_same_rack(addr);
+                        return topology_known_for(addr) && is_same_dc(addr) && is_same_rack(addr);
                     };
                     break;
             }
@@ -675,7 +669,7 @@ gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
     auto it = _preferred_ip_cache.find(ep);
 
     if (it != _preferred_ip_cache.end()) {
-        if (is_same_dc(ep)) {
+        if (topology_known_for(ep) && is_same_dc(ep)) {
             return it->second;
         }
     }
@@ -731,9 +725,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     std::optional<bool> topology_status;
     auto has_topology = [&] {
         if (!topology_status.has_value()) {
-            topology_status = _token_metadata
-                ? _token_metadata->get()->get_topology().has_endpoint(id.addr, locator::topology::pending::yes)
-                : false;
+            topology_status = topology_known_for(id.addr);
         }
         return *topology_status;
     };
