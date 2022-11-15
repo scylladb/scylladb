@@ -147,7 +147,10 @@ static void with_sstable_directory(
 
     sharded<sstable_directory> sstdir;
     auto stop_sstdir = defer([&sstdir] {
-        sstdir.stop().get();
+        // The func is allowed to stop sstdir, and some tests actually do it
+        if (sstdir.local_is_initialized()) {
+            sstdir.stop().get();
+        }
     });
 
     auto wrapped_sfe = [&sstable_from_existing] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
@@ -459,81 +462,69 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             return cf.flush();
         }).get();
 
-        sharded<semaphore> sstdir_sem;
-        sstdir_sem.start(1).get();
-        auto stop_sstdir_sem = defer([&sstdir_sem] {
-            sstdir_sem.stop().get();
-        });
+        with_sstable_directory(path, 1,
+            sstable_directory::need_mutate_level::no,
+            sstable_directory::lack_of_toc_fatal::no,
+            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
+            sstable_directory::allow_loading_materialized_view::no,
+            sstable_from_existing_file(e),
+        [&] (sharded<sstable_directory>& sstdir) {
+            distributed_loader_for_tests::process_sstable_dir(sstdir).get();
 
-        sharded<sstable_directory> sstdir;
-        sstdir.start(path, default_priority_class(), 1, std::ref(sstdir_sem),
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::no,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
-                sstable_from_existing_file(e)).get();
+            // Collect all sstable file names
+            sstdir.invoke_on_all([&] (sstable_directory& d) {
+                return d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
+                    sstables[this_shard_id()].push_back(sst->get_filename());
+                    return make_ready_future<>();
+                });
+            }).get();
+            BOOST_REQUIRE(sstables.size() != 0);
 
-        // stop cleanly in case we fail early for unexpected reasons
-        auto stop = defer([&sstdir] {
-            sstdir.stop().get();
-        });
+            distributed_loader_for_tests::lock_table(sstdir, e.db(), ks_name, cf_name).get();
 
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+            auto drop = e.execute_cql("drop table cf");
 
-        // Collect all sstable file names
-        sstdir.invoke_on_all([&] (sstable_directory& d) {
-            return d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
-                sstables[this_shard_id()].push_back(sst->get_filename());
-                return make_ready_future<>();
-            });
-        }).get();
-        BOOST_REQUIRE(sstables.size() != 0);
-
-        distributed_loader_for_tests::lock_table(sstdir, e.db(), ks_name, cf_name).get();
-
-        auto drop = e.execute_cql("drop table cf");
-
-        auto table_exists = [&] () {
-            try {
-                e.db().invoke_on_all([ks_name, cf_name] (replica::database& db) {
-                    db.find_column_family(ks_name, cf_name);
-                }).get();
-                return true;
-            } catch (replica::no_such_column_family&) {
-                return false;
-            }
-        };
-
-        testlog.debug("Waiting until {}.{} is unlisted from the database", ks_name, cf_name);
-        while (table_exists()) {
-            yield().get();
-        }
-
-        auto all_sstables_exist = [&] () {
-            std::unordered_map<bool, size_t> res;
-            for (const auto& [shard, files] : sstables) {
-                for (const auto& f : files) {
-                    res[file_exists(f).get0()]++;
+            auto table_exists = [&] () {
+                try {
+                    e.db().invoke_on_all([ks_name, cf_name] (replica::database& db) {
+                        db.find_column_family(ks_name, cf_name);
+                    }).get();
+                    return true;
+                } catch (replica::no_such_column_family&) {
+                    return false;
                 }
+            };
+
+            testlog.debug("Waiting until {}.{} is unlisted from the database", ks_name, cf_name);
+            while (table_exists()) {
+                yield().get();
             }
-            return res;
-        };
 
-        auto res = all_sstables_exist();
-        BOOST_REQUIRE(res[false] == 0);
-        BOOST_REQUIRE(res[true] == sstables.size());
+            auto all_sstables_exist = [&] () {
+                std::unordered_map<bool, size_t> res;
+                for (const auto& [shard, files] : sstables) {
+                    for (const auto& f : files) {
+                        res[file_exists(f).get0()]++;
+                    }
+                }
+                return res;
+            };
 
-        // Stop manually now, to allow for the object to be destroyed and take the
-        // phaser with it.
-        stop.cancel();
-        sstdir.stop().get();
-        drop.get();
+            auto res = all_sstables_exist();
+            BOOST_REQUIRE(res[false] == 0);
+            BOOST_REQUIRE(res[true] == sstables.size());
 
-        BOOST_REQUIRE(!table_exists());
+            // Stop manually now, to allow for the object to be destroyed and take the
+            // phaser with it.
+            sstdir.stop().get();
+            drop.get();
 
-        res = all_sstables_exist();
-        BOOST_REQUIRE(res[false] == sstables.size());
-        BOOST_REQUIRE(res[true] == 0);
+            BOOST_REQUIRE(!table_exists());
+
+            res = all_sstables_exist();
+            BOOST_REQUIRE(res[false] == sstables.size());
+            BOOST_REQUIRE(res[true] == 0);
+        });
     });
 }
 
