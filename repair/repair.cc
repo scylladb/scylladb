@@ -686,15 +686,6 @@ static dht::token_range_vector get_primary_ranges(
             utils::fb_utilities::get_broadcast_address());
 }
 
-// get_primary_ranges_within_dc() is similar to get_primary_ranges(),
-// but instead of each range being assigned just one primary owner
-// across the entire cluster, here each range is assigned a primary
-// owner in each of the clusters.
-static dht::token_range_vector get_primary_ranges_within_dc(
-        replica::database& db, sstring keyspace) {
-    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges_within_dc(utils::fb_utilities::get_broadcast_address());
-}
-
 void repair_stats::add(const repair_stats& o) {
     round_nr += o.round_nr;
     round_nr_fast_path_already_synced += o.round_nr_fast_path_already_synced;
@@ -1013,7 +1004,8 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
     auto& db = get_db().local();
-    auto& topology = db.get_token_metadata().get_topology();
+    auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
+    auto& topology = erm->get_token_metadata().get_topology();
 
     repair_options options(options_map);
 
@@ -1042,7 +1034,11 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         // may be set, except data_centers may contain only local DC (-local)
         if (options.data_centers.size() == 1 &&
             options.data_centers[0] == topology.get_datacenter()) {
-            ranges = get_primary_ranges_within_dc(db, keyspace);
+            // get_primary_ranges_within_dc() is similar to get_primary_ranges(),
+            // but instead of each range being assigned just one primary owner
+            // across the entire cluster, here each range is assigned a primary
+            // owner in each of the DCs.
+            ranges = erm->get_primary_ranges_within_dc(utils::fb_utilities::get_broadcast_address());
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
         } else {
