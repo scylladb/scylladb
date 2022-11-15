@@ -19,6 +19,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
+#include "seastar/core/smp.hh"
 #include "utils/stall_free.hh"
 #include "utils/fb_utilities.hh"
 
@@ -302,6 +303,7 @@ public:
 
     void invalidate_cached_rings() {
         _ring_version = ++_static_ring_version;
+        tlogger.debug("ring_version={}", _ring_version);
     }
 
     friend class token_metadata;
@@ -1251,6 +1253,32 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     tm.invalidate_cached_rings();
     co_await func(tm);
     set(make_token_metadata_ptr(std::move(tm)));
+}
+
+future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
+    auto base_shard = this_shard_id();
+    assert(base_shard == 0);
+    auto lk = co_await stm.local().get_lock();
+
+    std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
+    pending_token_metadata_ptr.reserve(smp::count);
+    auto tmptr = make_token_metadata_ptr(co_await stm.local().get()->clone_async());
+    auto& tm = *tmptr;
+    // bump the token_metadata ring_version
+    // to invalidate cached token/replication mappings
+    // when the modified token_metadata is committed.
+    tm.invalidate_cached_rings();
+    co_await func(tm);
+
+    // Apply the mutated token_metadata only after successfully cloning it on all shards.
+    pending_token_metadata_ptr[base_shard] = tmptr;
+    co_await smp::invoke_on_others(base_shard, [&] () -> future<> {
+        pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tm.clone_async());
+    });
+
+    co_await stm.invoke_on_all([&] (shared_token_metadata& stm) {
+        stm.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
+    });
 }
 
 host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) {
