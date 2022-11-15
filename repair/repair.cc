@@ -213,7 +213,7 @@ static std::vector<gms::inet_address> get_neighbors(replica::database& db,
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
-        auto dc_endpoints_map = db.get_token_metadata().get_topology().get_datacenter_endpoints();
+        auto dc_endpoints_map = erm->get_token_metadata().get_topology().get_datacenter_endpoints();
         std::unordered_set<gms::inet_address> dc_endpoints;
         for (const sstring& dc : data_centers) {
             auto it = dc_endpoints_map.find(dc);
@@ -1353,6 +1353,8 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         seastar::sharded<replica::database>& db = get_db();
         auto ks_erms = db.local().get_non_local_strategy_keyspaces_erms();
+        auto& topology = tmptr->get_topology();
+        auto local_dc = topology.get_datacenter();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
         // Calculate number of ranges to sync data
@@ -1426,8 +1428,6 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         std::vector<gms::inet_address> mandatory_neighbors;
                         // All neighbors
                         std::vector<inet_address> neighbors;
-                        auto& topology = db.local().get_token_metadata().get_topology();
-                        auto local_dc = topology.get_datacenter();
                         auto get_node_losing_the_ranges = [&, &keyspace_name = keyspace_name] (const std::vector<gms::inet_address>& old_nodes, const std::unordered_set<gms::inet_address>& new_nodes) {
                             // Remove the new nodes from the old nodes list, so
                             // that it contains only the node that will lose
@@ -1528,6 +1528,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
         seastar::sharded<replica::database>& db = get_db();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto ks_erms = db.local().get_non_local_strategy_keyspaces_erms();
+        auto& topology = tmptr->get_topology();
+        auto local_dc = topology.get_datacenter();
         bool is_removenode = myip != leaving_node;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
@@ -1577,8 +1579,6 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             dht::token_range_vector ranges_for_removenode;
-            auto& topology = db.local().get_token_metadata().get_topology();
-            auto local_dc = topology.get_datacenter();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             for (auto&r : ranges) {
                 seastar::thread::maybe_yield();
@@ -1767,6 +1767,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             }
             auto& strat = erm->get_replication_strategy();
             dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
+            auto& topology = erm->get_token_metadata().get_topology();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             auto nr_tables = get_nr_tables(db.local(), keyspace_name);
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, source_dc, ranges.size() * nr_tables, ignore_nodes);
@@ -1774,7 +1775,6 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 auto& r = *it;
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto& topology = db.local().get_token_metadata().get_topology();
                 auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr).get0() |
                     boost::adaptors::filtered([myip, &source_dc, &topology, &ignore_nodes] (const gms::inet_address& node) {
                         if (node == myip) {
@@ -1816,7 +1816,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
 future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
-        auto& topology = get_db().local().get_token_metadata().get_topology();
+        auto& topology = tmptr->get_topology();
         source_dc = topology.get_datacenter();
     }
     auto reason = streaming::stream_reason::rebuild;
@@ -1831,7 +1831,7 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, 
 future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::list<gms::inet_address> ignore_nodes) {
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
-    auto& topology = get_db().local().get_token_metadata().get_topology();
+    auto& topology = tmptr->get_topology();
     auto source_dc = topology.get_datacenter();
     auto reason = streaming::stream_reason::replace;
     // update a cloned version of tmptr
