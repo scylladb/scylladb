@@ -562,6 +562,7 @@ repair_info::repair_info(repair_service& repair,
     , gossiper(repair.get_gossiper())
     , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)
+    , erm(db.local().find_keyspace(keyspace).get_effective_replication_map())
     , ranges(ranges_)
     , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
@@ -570,7 +571,7 @@ repair_info::repair_info(repair_service& repair,
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
     , reason(reason_)
-    , total_rf(db.local().find_keyspace(keyspace).get_effective_replication_map()->get_replication_factor())
+    , total_rf(erm->get_replication_factor())
     , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed)) {
     if (as != nullptr) {

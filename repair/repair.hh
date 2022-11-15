@@ -20,6 +20,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 
+#include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
 #include "frozen_mutation.hh"
 #include "utils/UUID.hh"
@@ -180,6 +181,7 @@ public:
     gms::gossiper& gossiper;
     const dht::sharder& sharder;
     sstring keyspace;
+    locator::effective_replication_map_ptr erm;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
