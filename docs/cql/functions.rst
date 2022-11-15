@@ -231,8 +231,8 @@ takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For exam
 
 .. _udfs:
 
-User-defined functions
-~~~~~~~~~~~~~~~~~~~~~~
+User-defined functions :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 User-defined functions (UDFs) execute user-provided code in ScyllaDB. Supported languages are currently Lua and WebAssembly.
 
@@ -350,8 +350,8 @@ instance::
 
 .. _user-defined-aggregates-functions:
 
-User-defined aggregates (UDAs)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+User-defined aggregates (UDAs) :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 User-defined aggregates allow the creation of custom aggregate functions. User-defined aggregates can be used in SELECT statement.
 
