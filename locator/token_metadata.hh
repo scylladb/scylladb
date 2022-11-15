@@ -23,6 +23,7 @@
 #include "range.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/sharded.hh>
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
@@ -317,7 +318,7 @@ public:
         return _lock_func();
     }
 
-    // mutate_token_metadata acquires the shared_token_metadata lock,
+    // mutate_token_metadata_on_all_shards acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)
     // and calls an asynchronous functor on
     // the cloned copy of the token_metadata to mutate it.
@@ -326,6 +327,18 @@ public:
     // is set back to to the shared_token_metadata,
     // otherwise, the clone is destroyed.
     future<> mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func);
+
+    // mutate_token_metadata_on_all_shards acquires the shared_token_metadata lock,
+    // clones the token_metadata (using clone_async)
+    // and calls an asynchronous functor on
+    // the cloned copy of the token_metadata to mutate it.
+    //
+    // If the functor is successful, the mutated clone
+    // is set back to to the shared_token_metadata on all shards,
+    // otherwise, the clone is destroyed.
+    //
+    // Must be called on shard 0.
+    static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
 };
 
 }
