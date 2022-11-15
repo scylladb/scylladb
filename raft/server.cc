@@ -278,6 +278,10 @@ private:
     void check_not_aborted();
     void handle_background_error(const char* fiber_name);
 
+    // Triggered on the next tick, used to delay retries in add_entry, modify_config, read_barrier.
+    std::optional<shared_promise<>> _tick_promise;
+    future<> wait_for_next_tick(seastar::abort_source* as);
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -356,6 +360,19 @@ future<> server_impl::start() {
     }
 
     co_return;
+}
+
+future<> server_impl::wait_for_next_tick(seastar::abort_source* as) {
+    check_not_aborted();
+
+    if (!_tick_promise) {
+        _tick_promise.emplace();
+    }
+    try {
+        co_await (as ? _tick_promise->get_shared_future(*as) : _tick_promise->get_shared_future());
+    } catch (abort_requested_exception&) {
+        throw request_aborted();
+    }
 }
 
 future<> server_impl::wait_for_leader(seastar::abort_source* as) {
@@ -495,13 +512,14 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
         // configuration.
-        co_return add_entry_reply{not_a_leader{server_id{}}};
+        co_return add_entry_reply{transient_error{format("Add entry from {} was discarded since "
+                                                         "it is not part of the configuration", from), {}}};
     }
     logger.trace("[{}] adding a forwarded entry from {}", id(), from);
     try {
         co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as)};
     } catch (raft::not_a_leader& e) {
-        co_return add_entry_reply{e};
+        co_return add_entry_reply{transient_error{std::current_exception(), e.leader}};
     }
 }
 
@@ -521,6 +539,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         auto eid = co_await add_entry_on_leader(std::move(command), as);
         co_return co_await wait_for_entry(eid, type, as);
     }
+    server_id prev_leader{};
     while (true) {
         if (as && as->abort_requested()) {
             throw request_aborted();
@@ -529,35 +548,49 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
-        } else {
-            auto reply = co_await [&]() -> future<add_entry_reply> {
-                if (leader == _id) {
-                    logger.trace("[{}] an entry proceeds on a leader", id());
-                    // Make a copy of the command since we may still
-                    // retry and forward it.
-                    co_return co_await execute_add_entry(leader, command, as);
-                } else {
-                    logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    try {
-                        co_return co_await _rpc->send_add_entry(leader, command);
-                    } catch (const transport_error& e) {
-                        logger.trace("[{}] send_add_entry on {} resulted in {}; "
-                                     "rethrow as commit_status_unknown", _id, leader, e);
-                        throw raft::commit_status_unknown();
-                    }
-                }
-            }();
-            if (std::holds_alternative<raft::entry_id>(reply)) {
-                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type, as);
-            } else if (std::holds_alternative<raft::commit_status_unknown>(reply)) {
-                // It should be impossible to obtain `commit_status_unknown` here
-                // because neither `execute_add_entry` nor `send_add_entry` wait for the entry
-                // to be committed/applied.
-                on_internal_error(logger, "add_entry: `execute_add_entry` or `send_add_entry`"
-                        " returned `commit_status_unknown`");
+            continue;
+        }
+        if (prev_leader && leader == prev_leader) {
+            // This is to protect against busy loop in case we didn't get
+            // any new information about the current leader.
+            // This can happen if the server responds with a transient_error with
+            // an empty leader and the current node has not yet learned the new leader.
+            // We neglect an excessive delay if the newly elected leader is the same as
+            // the previous one, this supposed to be a rare.
+            co_await wait_for_next_tick(as);
+            prev_leader = leader = server_id{};
+            continue;
+        }
+        prev_leader = leader;
+        auto reply = co_await [&]() -> future<add_entry_reply> {
+            if (leader == _id) {
+                logger.trace("[{}] an entry proceeds on a leader", id());
+                // Make a copy of the command since we may still
+                // retry and forward it.
+                co_return co_await execute_add_entry(leader, command, as);
             } else {
-                leader = std::get<raft::not_a_leader>(reply).leader;
+                logger.trace("[{}] forwarding the entry to {}", id(), leader);
+                try {
+                    co_return co_await _rpc->send_add_entry(leader, command);
+                } catch (const transport_error& e) {
+                    logger.trace("[{}] send_add_entry on {} resulted in {}; "
+                                 "rethrow as commit_status_unknown", _id, leader, e);
+                    throw raft::commit_status_unknown();
+                }
             }
+        }();
+        if (std::holds_alternative<raft::entry_id>(reply)) {
+            co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type, as);
+        } else if (std::holds_alternative<raft::commit_status_unknown>(reply)) {
+            // It should be impossible to obtain `commit_status_unknown` here
+            // because neither `execute_add_entry` nor `send_add_entry` wait for the entry
+            // to be committed/applied.
+            on_internal_error(logger, "add_entry: `execute_add_entry` or `send_add_entry`"
+                    " returned `commit_status_unknown`");
+        } else {
+            const auto e = std::get<transient_error>(reply);
+            logger.trace("[{}] got {}", _id, e);
+            leader = e.leader;
         }
     }
 }
@@ -568,7 +601,8 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
         // configuration.
-        co_return add_entry_reply{not_a_leader{server_id{}}};
+        co_return add_entry_reply{transient_error{format("Modify config from {} was discarded since "
+                                                         "it is not part of the configuration", from), {}}};
     }
     try {
         // Wait for a new slot to become available
@@ -608,11 +642,18 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
             // information that the entry may already have been
             // committed in the return value.
             co_return add_entry_reply{commit_status_unknown()};
-        } else if (!is_transient_error(e)) {
-            throw;
         }
+        if (const auto* ex = dynamic_cast<const not_a_leader*>(&e)) {
+            co_return add_entry_reply{transient_error{std::current_exception(), ex->leader}};
+        }
+        if (const auto* ex = dynamic_cast<const dropped_entry*>(&e)) {
+            co_return add_entry_reply{transient_error{std::current_exception(), {}}};
+        }
+        if (const auto* ex = dynamic_cast<const conf_change_in_progress*>(&e)) {
+            co_return add_entry_reply{transient_error{std::current_exception(), {}}};
+        }
+        throw;
     }
-    co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
 }
 
 future<> server_impl::modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
@@ -627,6 +668,7 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
         }
         throw raft::not_a_leader{_fsm->current_leader()};
     }
+    server_id prev_leader{};
     while (true) {
         if (as && as->abort_requested()) {
             throw request_aborted();
@@ -635,34 +677,47 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
-        } else {
-            auto reply = co_await [&]() -> future<add_entry_reply> {
-                if (leader == _id) {
-                    // Make a copy since of the params since we may
-                    // still retry and forward them.
-                    co_return co_await execute_modify_config(leader, add, del, as);
-                } else {
-                    logger.trace("[{}] forwarding the entry to {}", id(), leader);
-                    try {
-                        co_return co_await _rpc->send_modify_config(leader, add, del);
-                    } catch (const transport_error& e) {
-                        logger.trace("[{}] send_modify_config on {} resulted in {}; "
-                                     "rethrow as commit_status_unknown", _id, leader, e);
-                        throw raft::commit_status_unknown();
-                    }
-                }
-            }();
-            if (std::holds_alternative<raft::entry_id>(reply)) {
-                // Do not wait for the entry locally. The reply means that the leader committed it,
-                // and there is no reason to wait for our local commit index to match.
-                // See also #9981.
-                co_return;
-            }
-            if (auto nal = std::get_if<raft::not_a_leader>(&reply)) {
-                leader = nal->leader;
+            continue;
+        }
+        if (prev_leader && leader == prev_leader) {
+            // This is to protect against busy loop in case we didn't get
+            // any new information about the current leader.
+            // This can happen if the server responds with a transient_error with
+            // an empty leader and the current node has not yet learned the new leader.
+            // We neglect an excessive delay if the newly elected leader is the same as
+            // the previous one, this supposed to be a rare.
+            co_await wait_for_next_tick(as);
+            prev_leader = leader = server_id{};
+            continue;
+        }
+        prev_leader = leader;
+        auto reply = co_await [&]() -> future<add_entry_reply> {
+            if (leader == _id) {
+                // Make a copy since of the params since we may
+                // still retry and forward them.
+                co_return co_await execute_modify_config(leader, add, del, as);
             } else {
-                throw std::get<raft::commit_status_unknown>(reply);
+                logger.trace("[{}] forwarding the entry to {}", id(), leader);
+                try {
+                    co_return co_await _rpc->send_modify_config(leader, add, del);
+                } catch (const transport_error& e) {
+                    logger.trace("[{}] send_modify_config on {} resulted in {}; "
+                                 "rethrow as commit_status_unknown", _id, leader, e);
+                    throw raft::commit_status_unknown();
+                }
             }
+        }();
+        if (std::holds_alternative<raft::entry_id>(reply)) {
+            // Do not wait for the entry locally. The reply means that the leader committed it,
+            // and there is no reason to wait for our local commit index to match.
+            // See also #9981.
+            co_return;
+        }
+        if (const auto e = std::get_if<raft::transient_error>(&reply)) {
+            logger.trace("[{}] got {}", _id, *e);
+            leader = e->leader;
+        } else {
+            throw std::get<raft::commit_status_unknown>(reply);
         }
     }
 }
@@ -1342,6 +1397,9 @@ future<> server_impl::abort(sstring reason) {
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error(*_aborted));
     }
+    if (_tick_promise) {
+        _tick_promise->set_exception(stopped_error(*_aborted));
+    }
 
     abort_snapshot_transfers();
 
@@ -1524,6 +1582,10 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+
+    if (_tick_promise && !_aborted) {
+        std::exchange(_tick_promise, std::nullopt)->set_value();
+    }
 }
 
 raft::server_id server_impl::id() const {

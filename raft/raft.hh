@@ -317,14 +317,6 @@ struct request_aborted : public error {
     request_aborted() : error("Request is aborted by a caller") {}
 };
 
-// True if a failure to execute a Raft operation can be re-tried,
-// perhaps with a different server.
-inline bool is_transient_error(const std::exception& e) {
-    return dynamic_cast<const not_a_leader*>(&e) ||
-           dynamic_cast<const dropped_entry*>(&e) ||
-           dynamic_cast<const conf_change_in_progress*>(&e);
-}
-
 inline bool is_uncertainty(const std::exception& e) {
     return dynamic_cast<const commit_status_unknown*>(&e) ||
            dynamic_cast<const stopped_error*>(&e);
@@ -450,12 +442,41 @@ struct entry_id {
     index_t idx;
 };
 
+// The execute_add_entry/execute_modify_config methods can return this error to signal
+// that the request should be retried.
+// The exception is only used internally for entry/config forwarding and should not be leaked to a user.
+struct transient_error: public error {
+    // for IDL serialization
+    sstring message() const {
+        return what();
+    }
+    // A leader that the client should use for retrying.
+    // Could be empty, if the new leader is not known.
+    // Client should wait for a new leader in this case.
+    server_id leader;
+
+    explicit transient_error(const sstring& message, server_id leader)
+        : error(message)
+        , leader(leader)
+    {
+    }
+
+    explicit transient_error(std::exception_ptr e, server_id leader)
+        : transient_error(format("Transient error: '{}'", e), leader)
+    {
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const transient_error& e) {
+        return os << "transient_error, message: " << e.what() << ", leader: " << e.leader;
+    }
+};
+
 // Response to add_entry or modify_config RPC.
 // Carries either entry id (the entry is not committed yet),
-// not_a_leader (the entry is not added to Raft log), or, for
+// transient_error (the entry is not added to Raft log), or, for
 // modify_config, commit_status_unknown (commit status is
 // unknown).
-using add_entry_reply = std::variant<entry_id, not_a_leader, commit_status_unknown>;
+using add_entry_reply = std::variant<entry_id, transient_error, commit_status_unknown>;
 
 // std::monostate {} if the leader cannot execute the barrier because
 // it did not commit any entries yet
