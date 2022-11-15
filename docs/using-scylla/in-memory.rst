@@ -2,10 +2,9 @@
 Scylla in-memory tables
 =========================
 
+:label-tip:`ScyllaDB Enterprise`
 
-.. versionadded:: 2018.1.7 Scylla Enterprise
-
-.. include:: /rst_include/enterprise-only-note.rst
+.. versionadded:: 2018.1.7
 
 Overview
 ========

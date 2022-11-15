@@ -2,13 +2,13 @@
 LDAP Authorization (Role Management)
 =====================================
 
-.. include:: /rst_include/enterprise-only-note.rst
+:label-tip:`ScyllaDB Enterprise`
+
+.. versionadded:: 2021.1.2
 
 Scylla Enterprise customers can manage and authorize users’ privileges via an :abbr:`LDAP (Lightweight Directory Access Protocol)` server.
 LDAP is an open, vendor-neutral, industry-standard protocol for accessing and maintaining distributed user access control over a standard IP network.
 If your users are already stored in an LDAP directory, you can now use the same LDAP server to regulate their roles in Scylla.
-
-.. versionadded:: Scylla Enterprise 2021.1.2
 
 
 Introduction

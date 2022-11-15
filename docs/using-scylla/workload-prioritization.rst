@@ -2,9 +2,7 @@
 Workload Prioritization
 ========================
 
-
-
-.. include:: /rst_include/enterprise-only-note.rst
+:label-tip:`ScyllaDB Enterprise`
 
 In a typical database there are numerous workloads running at the same time.
 Each workload type dictates a different acceptable level of latency and throughput.
