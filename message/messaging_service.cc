@@ -472,6 +472,24 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
+// The verbs using this RPC client use the following connection settings,
+// regardless of whether the peer is in the same DC/Rack or not:
+// - tcp_nodelay
+// - encryption (unless completely disabled in config)
+// - compression (unless completely disabled in config)
+//
+// The reason for having topology-independent setting for encryption is to ensure
+// that gossiper verbs can reach the peer, even though the peer may not know our topology yet.
+// See #11992 for detailed explanations.
+//
+// We also always want `tcp_nodelay` for gossiper verbs so they have low latency
+// (and there's no advantage from batching verbs in this group anyway).
+//
+// And since we fixed a topology-independent setting for encryption and tcp_nodelay,
+// to keep things simple, we also fix a setting for compression. This allows this RPC client
+// to be established without checking the topology (which may not be known anyway
+// when we first start gossiping).
+static constexpr unsigned TOPOLOGY_INDEPENDENT_IDX = 0;
 
 static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     // *_CONNECTION_COUNT constants needs to be updated after allocating a new index.
@@ -492,8 +510,11 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
     case messaging_verb::GET_GROUP0_UPGRADE_STATE:
-        // ATTN -- if moving GOSSIP_ verbs elsewhere, mind updating the tcp_nodelay
-        // setting in get_rpc_client(), which assumes gossiper verbs live in idx 0
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        // DO NOT put any 'hot' (e.g. data path) verbs in this group,
+        // only verbs which are 'rare' and 'cheap'.
+        // DO NOT move GOSSIP_ verbs outside this group.
+        static_assert(TOPOLOGY_INDEPENDENT_IDX == 0);
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -719,12 +740,14 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
-        if (_cfg.encrypt == encrypt_what::all || !has_topology()) {
+
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        if (_cfg.encrypt == encrypt_what::all || idx == TOPOLOGY_INDEPENDENT_IDX) {
             return true;
         }
 
         // either rack/dc need to be in same dc to use non-tls
-        if (!is_same_dc(id.addr)) {
+        if (!has_topology() || !is_same_dc(id.addr)) {
             return true;
         }
 
@@ -753,22 +776,21 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return false;
         }
 
-        if (_cfg.compress == compress_what::all || !has_topology()) {
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        if (_cfg.compress == compress_what::all || idx == TOPOLOGY_INDEPENDENT_IDX) {
             return true;
         }
 
-        return !is_same_dc(id.addr);
+        return !has_topology() || !is_same_dc(id.addr);
     }();
 
     auto must_tcp_nodelay = [&] {
-        if (idx == 0) {
-            return true; // gossip
-        }
-        if (_cfg.tcp_nodelay == tcp_nodelay_what::all || !has_topology()) {
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        if (_cfg.tcp_nodelay == tcp_nodelay_what::all || idx == TOPOLOGY_INDEPENDENT_IDX) {
             return true;
         }
 
-        return is_same_dc(id.addr);
+        return !has_topology() || is_same_dc(id.addr);
     }();
 
     auto addr = get_preferred_ip(id.addr);
@@ -790,7 +812,13 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr, laddr);
 
-    bool topology_ignored = topology_status.has_value() ? *topology_status == false : false;
+    // Remember if we had the peer's topology information when creating the client;
+    // if not, we shall later drop the client and create a new one after we learn the peer's
+    // topology (so we can use optimal encryption settings and so on for intra-dc/rack messages).
+    // But we don't want to apply this logic for TOPOLOGY_INDEPENDENT_IDX client - its settings
+    // are independent of topology, so there's no point in dropping it later after we learn
+    // the topology (so we always set `topology_ignored` to `false` in that case).
+    bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
     auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
     assert(res.second);
     it = res.first;
