@@ -199,21 +199,18 @@ void remove_item(Collection& c, T& item) {
 }
 
 // Return all of the neighbors with whom we share the provided range.
-static std::vector<gms::inet_address> get_neighbors(replica::database& db,
+static std::vector<gms::inet_address> get_neighbors(
+        const locator::effective_replication_map& erm,
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
-
-    replica::keyspace& ks = db.find_keyspace(ksname);
-    auto erm = ks.get_effective_replication_map();
-
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
-    auto ret = erm->get_natural_endpoints(tok);
+    auto ret = erm.get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
-        auto dc_endpoints_map = erm->get_token_metadata().get_topology().get_datacenter_endpoints();
+        auto dc_endpoints_map = erm.get_token_metadata().get_topology().get_datacenter_endpoints();
         std::unordered_set<gms::inet_address> dc_endpoints;
         for (const sstring& dc : data_centers) {
             auto it = dc_endpoints_map.find(dc);
@@ -276,7 +273,7 @@ static std::vector<gms::inet_address> get_neighbors(replica::database& db,
         }
         if (ret.size() < 1) {
             auto me = utils::fb_utilities::get_broadcast_address();
-            auto others = erm->get_natural_endpoints(tok);
+            auto others = erm.get_natural_endpoints(tok);
             remove_item(others, me);
             throw std::runtime_error(fmt::format("Repair requires at least two "
                     "endpoints that are neighbors before it can continue, "
@@ -318,7 +315,8 @@ static std::vector<gms::inet_address> get_neighbors(replica::database& db,
 #endif
 }
 
-static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(replica::database& db,
+static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
+        const locator::effective_replication_map& erm,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
         const std::vector<sstring>& data_centers,
@@ -332,7 +330,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(re
     participating_hosts.insert(utils::fb_utilities::get_broadcast_address());
 
     co_await do_for_each(ranges, [&] (const dht::token_range& range) {
-        const auto nbs = get_neighbors(db, ksname, range, data_centers, hosts, ignore_nodes);
+        const auto nbs = get_neighbors(erm, ksname, range, data_centers, hosts, ignore_nodes);
         for (const auto& nb : nbs) {
             participating_hosts.insert(nb);
         }
@@ -607,7 +605,7 @@ void repair_info::check_in_abort() {
 
 repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(db.local(), keyspace, range, data_centers, hosts, ignore_nodes)) :
+        repair_neighbors(get_neighbors(*erm, keyspace, range, data_centers, hosts, ignore_nodes)) :
         neighbors[range];
 }
 
@@ -1116,7 +1114,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         }
 
         bool hints_batchlog_flushed = false;
-        auto participants = get_hosts_participating_in_repair(db, keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
+        auto participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
         if (needs_flush_before_repair) {
             auto waiting_nodes = db.get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
