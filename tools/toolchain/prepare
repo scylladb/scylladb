@@ -25,14 +25,15 @@ fi
 archs=(amd64 arm64 s390x)
 
 # docker arch has a diffrent spelling than uname arch
-arch_uname_amd64=x86_64
-arch_uname_arm64=aarch64
-arch_uname_s390x=s390x
+declare -A arch_unames=(
+    [amd64]=x86_64
+    [arm64]=aarch64
+    [s390x]=s390x
+)
 
 for arch in "${archs[@]}"; do
     # translate from docker arch to uname arch
-    indirect="arch_uname_${arch}"
-    arch_uname="${!indirect}"
+    arch_uname="${arch_unames[$arch]}"
     if [[ "$(uname -m)" == "${arch_uname}" ]]; then
         continue
     fi
