@@ -1034,7 +1034,8 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             ranges = erm->get_primary_ranges(utils::fb_utilities::get_broadcast_address());
         }
     } else {
-        ranges = db.get_keyspace_local_ranges(keyspace);
+        // get keyspace local ranges
+        ranges = erm->get_ranges(utils::fb_utilities::get_broadcast_address());
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
