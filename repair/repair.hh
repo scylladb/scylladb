@@ -204,6 +204,7 @@ public:
 public:
     repair_info(repair_service& repair,
             const sstring& keyspace_,
+            locator::effective_replication_map_ptr erm_,
             const dht::token_range_vector& ranges_,
             std::vector<table_id> table_ids_,
             repair_uniq_id id_,

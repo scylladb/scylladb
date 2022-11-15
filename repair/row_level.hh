@@ -13,6 +13,7 @@
 #include "repair/repair.hh"
 #include "repair/repair_task.hh"
 #include "tasks/task_manager.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -148,6 +149,7 @@ private:
 
     // Must be called on shard 0
     future<> sync_data_using_repair(sstring keyspace,
+            locator::effective_replication_map_ptr erm,
             dht::token_range_vector ranges,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,
             streaming::stream_reason reason,
