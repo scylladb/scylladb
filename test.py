@@ -453,6 +453,7 @@ class Test:
         self.id = test_no
         self.path = ""
         self.args: List[str] = []
+        self.valid_exit_codes = [0]
         # Name with test suite name
         self.name = os.path.join(suite.name, shortname.split('.')[0])
         # Name within the suite
@@ -775,19 +776,27 @@ class PythonTest(Test):
         self.server_log_filename: Optional[pathlib.Path] = None
         PythonTest._reset(self)
 
+    def _prepare_pytest_params(self, options: argparse.Namespace):
+        self.args = [
+            "-s",  # don't capture print() output inside pytest
+            "--log-level=DEBUG",   # Capture logs
+            "-o",
+            "junit_family=xunit2",
+            "--junit-xml={}".format(self.xmlout)]
+        if options.markers:
+            self.args.append(f"-m={options.markers}")
+
+            # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
+            no_tests_selected_exit_code = 5
+            self.valid_exit_codes = [0, no_tests_selected_exit_code]
+        self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
+
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
         self.server_log = None
         self.server_log_filename = None
         self.is_before_test_ok = False
         self.is_after_test_ok = False
-        self.args = [
-            "-s",  # don't capture print() output inside pytest
-            "--log-level=DEBUG",   # Capture logs
-            "-o",
-            "junit_family=xunit2",
-            "--junit-xml={}".format(self.xmlout),
-            str(self.suite.suite_path / (self.shortname + ".py"))]
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -797,6 +806,8 @@ class PythonTest(Test):
             print(self.server_log)
 
     async def run(self, options: argparse.Namespace) -> Test:
+
+        self._prepare_pytest_params(options)
 
         async with self.suite.clusters.instance() as cluster:
             try:
@@ -835,6 +846,8 @@ class TopologyTest(PythonTest):
         super().__init__(test_no, shortname, suite)
 
     async def run(self, options: argparse.Namespace) -> Test:
+
+        self._prepare_pytest_params(options)
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.uname, self.suite.clusters, test_path) as manager:
@@ -968,7 +981,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
-            if process.returncode != 0:
+            if process.returncode not in test.valid_exit_codes:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
                 return False
             try:
@@ -1063,6 +1076,12 @@ def parse_cmd_line() -> argparse.Namespace:
                         choices=["CRITICAL", "ERROR", "WARNING", "INFO",
                                  "DEBUG"],
                         dest="log_level")
+    parser.add_argument('--markers', action='store', metavar='MARKEXPR',
+                        help="Only run tests that match the given mark expression. The syntax is the same "
+                             "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
+                             "is only supported by python tests for now, other tests ignore it. "
+                             "By default, the marker filter is not applied and all tests will be run without exception."
+                             "To exclude e.g. slow tests you can write --markers 'not slow'.")
 
     boost_group = parser.add_argument_group('boost suite options')
     boost_group.add_argument('--random-seed', action="store",
