@@ -493,6 +493,12 @@ public:
                 debug::the_database = nullptr;
             });
             auto cfg = cfg_in.db_config;
+            if (!cfg->reader_concurrency_semaphore_serialize_limit_multiplier.is_set()) {
+                cfg->reader_concurrency_semaphore_serialize_limit_multiplier.set(std::numeric_limits<uint32_t>::max());
+            }
+            if (!cfg->reader_concurrency_semaphore_kill_limit_multiplier.is_set()) {
+                cfg->reader_concurrency_semaphore_kill_limit_multiplier.set(std::numeric_limits<uint32_t>::max());
+            }
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
