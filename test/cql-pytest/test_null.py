@@ -50,6 +50,22 @@ def test_insert_null_key(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
+# Same as test_insert_null_key() above, just adds IF NOT EXISTS and
+# reproduces issue #11954.
+@pytest.mark.skip(reason="#11954 crashes Scylla")
+def test_insert_null_key_lwt(cql, table1):
+    s = unique_key_string()
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{s}', null) IF NOT EXISTS")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"INSERT INTO {table1} (p,c) VALUES (null, '{s}') IF NOT EXISTS")
+    # Try the same thing with prepared statement.
+    stmt = cql.prepare(f"INSERT INTO {table1} (p,c) VALUES (?, ?) IF NOT EXISTS")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [s, None])
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [None, s])
+
 # Tests handling of "key_column in ?" where ? is bound to null.
 # Reproduces issue #8265.
 def test_primary_key_in_null(scylla_only, cql, table1):
