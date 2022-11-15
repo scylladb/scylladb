@@ -1011,9 +1011,9 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+    get_repair_module().check_in_shutdown();
     auto& db = get_db().local();
     auto& topology = db.get_token_metadata().get_topology();
-    get_repair_module().check_in_shutdown();
 
     repair_options options(options_map);
 
