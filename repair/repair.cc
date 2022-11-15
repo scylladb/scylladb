@@ -1011,8 +1011,8 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
-    seastar::sharded<replica::database>& db = get_db();
-    auto& topology = db.local().get_token_metadata().get_topology();
+    auto& db = get_db().local();
+    auto& topology = db.get_token_metadata().get_topology();
     get_repair_module().check_in_shutdown();
 
     repair_options options(options_map);
@@ -1042,14 +1042,14 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         // may be set, except data_centers may contain only local DC (-local)
         if (options.data_centers.size() == 1 &&
             options.data_centers[0] == topology.get_datacenter()) {
-            ranges = get_primary_ranges_within_dc(db.local(), keyspace);
+            ranges = get_primary_ranges_within_dc(db, keyspace);
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
         } else {
-            ranges = get_primary_ranges(db.local(), keyspace);
+            ranges = get_primary_ranges(db, keyspace);
         }
     } else {
-        ranges = db.local().get_keyspace_local_ranges(keyspace);
+        ranges = db.get_keyspace_local_ranges(keyspace);
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
@@ -1103,7 +1103,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     }
 
     std::vector<sstring> cfs =
-        options.column_families.size() ? options.column_families : list_column_families(db.local(), keyspace);
+        options.column_families.size() ? options.column_families : list_column_families(db, keyspace);
     if (cfs.empty()) {
         rlogger.info("repair[{}]: completed successfully: no tables to repair", id.uuid());
         return id.id;
@@ -1115,9 +1115,9 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         auto uuid = id.uuid();
 
         bool needs_flush_before_repair = false;
-        if (db.local().features().tombstone_gc_options) {
+        if (db.features().tombstone_gc_options) {
             for (auto& table: cfs) {
-                auto s = db.local().find_column_family(keyspace, table).schema();
+                auto s = db.find_column_family(keyspace, table).schema();
                 const auto& options = s->tombstone_gc_options();
                 if (options.mode() == tombstone_gc_mode::repair) {
                     needs_flush_before_repair = true;
@@ -1126,9 +1126,9 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         }
 
         bool hints_batchlog_flushed = false;
-        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
+        auto participants = get_hosts_participating_in_repair(db, keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
         if (needs_flush_before_repair) {
-            auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
+            auto waiting_nodes = db.get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
                 return ignore_nodes.contains(addr);
             });
@@ -1161,7 +1161,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
-        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        auto table_ids = get_table_ids(db, keyspace, cfs);
         abort_source as;
         auto off_strategy_updater = seastar::async([this, uuid = uuid.uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
@@ -1291,17 +1291,17 @@ future<> repair_service::do_sync_data_using_repair(
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
         shared_ptr<node_ops_info> ops_info) {
-    seastar::sharded<replica::database>& db = get_db();
+    auto& db = get_db().local();
 
     repair_uniq_id id = get_repair_module().new_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
     return get_repair_module().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_info] () mutable {
-        auto cfs = list_column_families(db.local(), keyspace);
+        auto cfs = list_column_families(db, keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
             return;
         }
-        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        auto table_ids = get_table_ids(db, keyspace, cfs);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         if (get_repair_module().is_aborted(id.uuid())) {
@@ -1339,7 +1339,7 @@ future<> repair_service::do_sync_data_using_repair(
     }).then([id, keyspace] {
         rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded", id.uuid(), keyspace);
     }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
-        if (!db.local().has_keyspace(keyspace)) {
+        if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
             return make_ready_future<>();
         }
@@ -1351,8 +1351,8 @@ future<> repair_service::do_sync_data_using_repair(
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
-        seastar::sharded<replica::database>& db = get_db();
-        auto ks_erms = db.local().get_non_local_strategy_keyspaces_erms();
+        auto& db = get_db().local();
+        auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
         auto local_dc = topology.get_datacenter();
         auto myip = utils::fb_utilities::get_broadcast_address();
@@ -1360,13 +1360,13 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
         // Calculate number of ranges to sync data
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            if (!db.local().has_keyspace(keyspace_name)) {
+            if (!db.has_keyspace(keyspace_name)) {
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, _sys_ks.local().local_dc_rack()).get0();
             seastar::thread::maybe_yield();
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += desired_ranges.size() * nr_tables;
         }
         container().invoke_on_all([nr_ranges_total] (repair_service& rs) {
@@ -1375,7 +1375,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
         }).get();
         rlogger.info("bootstrap_with_repair: started with keyspaces={}, nr_ranges_total={}", ks_erms | boost::adaptors::map_keys, nr_ranges_total);
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            if (!db.local().has_keyspace(keyspace_name)) {
+            if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
                 continue;
             }
@@ -1398,7 +1398,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
 
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             rlogger.info("bootstrap_with_repair: started with keyspace={}, nr_ranges={}", keyspace_name, desired_ranges.size() * nr_tables);
             for (auto& desired_range : desired_ranges) {
                 for (auto& x : range_addresses) {
@@ -1525,9 +1525,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
-        seastar::sharded<replica::database>& db = get_db();
+        auto& db = get_db().local();
         auto myip = utils::fb_utilities::get_broadcast_address();
-        auto ks_erms = db.local().get_non_local_strategy_keyspaces_erms();
+        auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
         auto local_dc = topology.get_datacenter();
         bool is_removenode = myip != leaving_node;
@@ -1536,7 +1536,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
             dht::token_range_vector ranges = erm->get_ranges(leaving_node);
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
         }
         if (reason == streaming::stream_reason::decommission) {
@@ -1552,14 +1552,14 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
         }
         rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, leaving_node);
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            if (!db.local().has_keyspace(keyspace_name)) {
+            if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
             // First get all ranges the leaving node is responsible for
             dht::token_range_vector ranges = erm->get_ranges(leaving_node);
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
@@ -1732,18 +1732,18 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
 
 future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes) {
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
-        seastar::sharded<replica::database>& db = get_db();
-        auto ks_erms = db.local().get_non_local_strategy_keyspaces_erms();
+        auto& db = get_db().local();
+        auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            if (!db.local().has_keyspace(keyspace_name)) {
+            if (!db.has_keyspace(keyspace_name)) {
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
             // Okay to yield since tm is immutable
             dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
 
         }
@@ -1761,7 +1761,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
         rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, source_dc, nr_ranges_total, ignore_nodes);
         for (const auto& [keyspace_name, erm] : ks_erms) {
             size_t nr_ranges_skipped = 0;
-            if (!db.local().has_keyspace(keyspace_name)) {
+            if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
                 continue;
             }
@@ -1769,7 +1769,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             auto& topology = erm->get_token_metadata().get_topology();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
-            auto nr_tables = get_nr_tables(db.local(), keyspace_name);
+            auto nr_tables = get_nr_tables(db, keyspace_name);
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, source_dc, ranges.size() * nr_tables, ignore_nodes);
             for (auto it = ranges.begin(); it != ranges.end();) {
                 auto& r = *it;
