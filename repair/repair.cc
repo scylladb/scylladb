@@ -1267,17 +1267,8 @@ future<> repair_service::sync_data_using_repair(
     if (ranges.empty()) {
         return make_ready_future<>();
     }
-    return container().invoke_on(0, [keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_info] (repair_service& local_repair) mutable {
-        return local_repair.do_sync_data_using_repair(std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_info);
-    });
-}
 
-future<> repair_service::do_sync_data_using_repair(
-        sstring keyspace,
-        dht::token_range_vector ranges,
-        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
-        streaming::stream_reason reason,
-        shared_ptr<node_ops_info> ops_info) {
+    assert(this_shard_id() == 0);
     auto& db = get_db().local();
 
     repair_uniq_id id = get_repair_module().new_repair_uniq_id();
