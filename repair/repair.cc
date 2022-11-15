@@ -675,17 +675,6 @@ future<> repair_info::repair_range(const dht::token_range& range, ::table_id tab
     });
 }
 
-static dht::token_range_vector get_primary_ranges_for_endpoint(
-        replica::database& db, sstring keyspace, gms::inet_address ep) {
-    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges(ep);
-}
-
-static dht::token_range_vector get_primary_ranges(
-        replica::database& db, sstring keyspace) {
-    return get_primary_ranges_for_endpoint(db, keyspace,
-            utils::fb_utilities::get_broadcast_address());
-}
-
 void repair_stats::add(const repair_stats& o) {
     round_nr += o.round_nr;
     round_nr_fast_path_already_synced += o.round_nr_fast_path_already_synced;
@@ -1042,7 +1031,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
         } else {
-            ranges = get_primary_ranges(db, keyspace);
+            ranges = erm->get_primary_ranges(utils::fb_utilities::get_broadcast_address());
         }
     } else {
         ranges = db.get_keyspace_local_ranges(keyspace);
