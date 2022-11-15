@@ -412,9 +412,11 @@ static query::partition_slice make_partition_slice(const schema& s) {
     opts.set(query::partition_slice::option::send_clustering_key);
     opts.set(query::partition_slice::option::send_timestamp);
     opts.set(query::partition_slice::option::send_ttl);
+    opts.set(query::partition_slice::option::always_return_static_content);
     return query::partition_slice(
             {query::full_clustering_range},
-            { },
+            boost::copy_range<query::column_id_vector>(s.static_columns()
+                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
             boost::copy_range<query::column_id_vector>(s.regular_columns()
                     | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
             std::move(opts));
@@ -2330,8 +2332,13 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume(static_row&&, tombstone, bool) {
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
         inject_failure("view_builder_consume_static_row");
+        if (_views_to_build.empty() || _builder._as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+
+        add_fragment(std::move(sr));
         return stop_iteration::no;
     }
 
@@ -2344,8 +2351,13 @@ public:
             return stop_iteration::yes;
         }
 
-        _fragments_memory_usage += cr.memory_usage(*_step.reader.schema());
-        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(cr));
+        add_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*_step.reader.schema());
+        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(fragment));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
@@ -2353,7 +2365,6 @@ public:
             // so let's flush these rows now.
             flush_fragments();
         }
-        return stop_iteration::no;
     }
 
     stop_iteration consume(range_tombstone_change&&) {
