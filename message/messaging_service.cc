@@ -664,22 +664,27 @@ gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
 }
 
 void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache) {
-    _preferred_ip_cache = ips_cache;
+    _preferred_ip_cache.clear();
     _preferred_to_endpoint.clear();
+    for (auto& p : ips_cache) {
+        cache_preferred_ip(p.first, p.second);
+    }
+}
+
+void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
+    if (ip.addr().is_addr_any()) {
+        mlogger.warn("Cannot set INADDR_ANY as preferred IP for endpoint {}", ep);
+        return;
+    }
+
+    _preferred_ip_cache[ep] = ip;
+    _preferred_to_endpoint[ip] = ep;
     //
     // Reset the connections to the endpoints that have entries in
     // _preferred_ip_cache so that they reopen with the preferred IPs we've
     // just read.
     //
-    for (auto& p : _preferred_ip_cache) {
-        this->remove_rpc_client(msg_addr(p.first));
-        _preferred_to_endpoint[p.second] = p.first;
-    }
-}
-
-void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
-    _preferred_ip_cache[ep] = ip;
-    _preferred_to_endpoint[ip] = ep;
+    remove_rpc_client(msg_addr(ep));
 }
 
 gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_address& ip) const {
