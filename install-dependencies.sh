@@ -45,6 +45,7 @@ debian_base_packages=(
     pigz
     libunistring-dev
     libzstd-dev
+    libdeflate-dev
 )
 
 fedora_packages=(
@@ -58,6 +59,7 @@ fedora_packages=(
     jsoncpp-devel
     rapidjson-devel
     snappy-devel
+    libdeflate-devel
     systemd-devel
     git
     python

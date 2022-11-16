@@ -1604,8 +1604,6 @@ if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 
-libdeflate_cflags = seastar_cflags
-
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
     # original flags may be space separated, so convert to string still
@@ -1739,6 +1737,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  maybe_static(True, '-lzstd'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
                  '-lxxhash',
+                 '-ldeflate',
                 ])
 if has_wasmtime:
     print("Found wasmtime dependency, linking with libwasmtime")
@@ -1949,8 +1948,6 @@ with open(buildfile, 'w') as f:
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
-                    'libdeflate/libdeflate.a',
-                ] + [
                     'abseil/' + x for x in abseil_libs
                 ]])
                 if binary in tests:
@@ -2142,10 +2139,6 @@ with open(buildfile, 'w') as f:
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-        f.write('rule libdeflate.{mode}\n'.format(**locals()))
-        f.write('  command = make -C libdeflate BUILD_DIR=../$builddir/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../$builddir/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
-        f.write('build $builddir/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
-        f.write('  pool = submodule_pool\n')
 
         for lib in abseil_libs:
             f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja\n'.format(**locals()))
