@@ -407,7 +407,7 @@ public:
     // using the schema_tables merge_lock.
     //
     // Must be called on shard 0.
-    future<token_metadata_lock> get_lock() noexcept {
+    future<token_metadata_lock> get_lock() const noexcept {
         return _lock_func();
     }
 
