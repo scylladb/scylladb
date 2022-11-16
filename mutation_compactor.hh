@@ -167,6 +167,9 @@ class compact_mutation_state {
     std::unique_ptr<mutation_compactor_garbage_collector> _collector;
 
     compaction_stats _stats;
+
+    // Remember if we requested to stop mid-partition.
+    stop_iteration _stop = stop_iteration::no;
 private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
@@ -304,6 +307,7 @@ public:
     }
 
     void consume_new_partition(const dht::decorated_key& dk) {
+        _stop = stop_iteration::no;
         auto& pk = dk.key();
         _dk = &dk;
         _return_static_content_on_partition_with_no_rows =
@@ -370,9 +374,9 @@ public:
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
             partition_is_not_empty(consumer);
-            return consumer.consume(std::move(sr), current_tombstone, is_live);
+            _stop = consumer.consume(std::move(sr), current_tombstone, is_live);
         }
-        return stop_iteration::no;
+        return _stop;
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -424,22 +428,21 @@ public:
         };
 
         if (only_live() && is_live) {
-            auto stop = consume_row();
+            _stop = consume_row();
             if (++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
+                _stop = stop_iteration::yes;
             }
-            return stop;
+            return _stop;
         } else if (!only_live()) {
-            auto stop = stop_iteration::no;
             if (!cr.empty()) {
-                stop = consume_row();
+                _stop = consume_row();
             }
             if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
+                _stop = stop_iteration::yes;
             }
-            return stop;
+            return _stop;
         }
-        return stop_iteration::no;
+        return _stop;
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -448,7 +451,8 @@ public:
         ++_stats.range_tombstones;
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
-        return do_consume(std::move(rt), consumer, gc_consumer);
+        _stop = do_consume(std::move(rt), consumer, gc_consumer);
+        return _stop;
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -459,9 +463,9 @@ public:
             _rt_assembler.emplace();
         }
         if (auto rt_opt = _rt_assembler->consume(_schema, std::move(rtc))) {
-            return do_consume(std::move(*rt_opt), consumer, gc_consumer);
+            _stop = do_consume(std::move(*rt_opt), consumer, gc_consumer);
         }
-        return stop_iteration::no;
+        return _stop;
     }
 
     template <typename Consumer, typename GCConsumer>
@@ -562,16 +566,31 @@ public:
     /// compactor will result in the new compactor being in the same state *this
     /// is (given the same outside parameters of course). Practically this
     /// allows the compaction state to be stored in the compacted reader.
-    detached_compaction_state detach_state() && {
+    /// If the currently compacted partition is exhausted a disengaged optional
+    /// is returned -- in this case there is no state to detach.
+    std::optional<detached_compaction_state> detach_state() && {
+        // If we exhausted the partition, there is no need to detach-restore the
+        // compaction state.
+        // We exhausted the partition if `consume_partition_end()` was called
+        // without us requesting the consumption to stop (remembered in _stop)
+        // from one of the consume() overloads.
+        // The consume algorithm calls `consume_partition_end()` in two cases:
+        // * on a partition-end fragment
+        // * consume() requested to stop
+        // In the latter case, the partition is not exhausted. Even if the next
+        // fragment to process is a partition-end, it will not be consumed.
+        if (!_stop) {
+            return {};
+        }
         partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
         if (_rt_assembler) {
             if (_current_tombstone) {
-                return {std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _current_tombstone)};
+                return detached_compaction_state{std::move(ps), std::move(_last_static_row), range_tombstone_change(position_in_partition_view::after_key(_last_clustering_pos), _current_tombstone)};
             } else {
-                return {std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
+                return detached_compaction_state{std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
             }
         }
-        return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
+        return detached_compaction_state{std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
 
     const compaction_stats& stats() const { return _stats; }
