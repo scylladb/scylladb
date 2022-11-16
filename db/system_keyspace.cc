@@ -1544,11 +1544,18 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
-    auto res = co_await execute_cql(format("SELECT peer FROM system.{}", PEERS));
+    auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
     assert(res);
 
     std::vector<gms::inet_address> ret;
     for (auto& row: *res) {
+        if (!row.has("tokens")) {
+            // Ignore rows that don't have tokens. Such rows may
+            // be introduced by code that persists parts of peer
+            // information (such as RAFT_ID) which may potentially
+            // race with deleting a peer (during node removal).
+            continue;
+        }
         ret.emplace_back(row.get_as<net::inet_address>("peer"));
     }
     co_return ret;
