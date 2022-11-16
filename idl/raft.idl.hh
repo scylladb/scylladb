@@ -80,6 +80,11 @@ struct not_a_leader {
     raft::server_id leader;
 };
 
+struct transient_error {
+    sstring message();
+    raft::server_id leader;
+};
+
 struct commit_status_unknown {
 };
 
