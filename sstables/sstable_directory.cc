@@ -99,7 +99,7 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
 }
 
 future<>
-sstable_directory::process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner) {
+sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
@@ -113,8 +113,8 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, bool sort
         } else {
             return make_ready_future<>();
         }
-    }).then([sst, sort_sstables_according_to_owner, this] {
-        if (sort_sstables_according_to_owner) {
+    }).then([sst, flags, this] {
+        if (flags.sort_sstables_according_to_owner) {
             return sort_sstable(sst);
         } else {
             dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
@@ -155,7 +155,7 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<>
-sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
+sstable_directory::process_sstable_dir(process_flags flags) {
     dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
 
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
@@ -213,11 +213,11 @@ sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await parallel_for_each_restricted(state.descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
-        return process_descriptor(std::move(desc), sort_sstables_according_to_owner);
+        return process_descriptor(std::move(desc), flags);
     });
 
     // For files missing TOC, it depends on where this is coming from.

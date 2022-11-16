@@ -23,8 +23,8 @@
 
 class distributed_loader_for_tests {
 public:
-    static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, bool sort_sstables_according_to_owner = true) {
-        return replica::distributed_loader::process_sstable_dir(dir, sort_sstables_according_to_owner);
+    static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstable_directory::process_flags flags) {
+        return replica::distributed_loader::process_sstable_dir(dir, flags);
     }
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
@@ -178,7 +178,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     // No generation found on empty directory.
     BOOST_REQUIRE_EQUAL(max_generation_seen, 0);
@@ -203,7 +203,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
+    auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
   });
@@ -228,7 +228,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-                auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
+                auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
                 BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
         });
     });
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
   });
@@ -268,7 +268,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
                 sstable_directory::allow_loading_materialized_view::no,
                 sstable_from_existing_file(env),
                 [] (sharded<sstables::sstable_directory>& sstdir) {
-            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir);
+            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
             BOOST_REQUIRE_NO_THROW(expect_ok.get());
         });
     });
@@ -289,7 +289,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
-    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal);
+    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
 
@@ -300,7 +300,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_ok) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
   });
@@ -326,7 +326,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [&dir, &tempstat] (sharded<sstables::sstable_directory>& sstdir_ok) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
     lister::scan_dir(dir.path(), lister::dir_entry_types::of<directory_entry_type::regular>(), [tempstat] (fs::path parent_dir, directory_entry de) {
         BOOST_REQUIRE(fs::canonical(parent_dir / fs::path(de.name)) != tempstat);
@@ -343,7 +343,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
-    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal);
+    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
   }).get();
@@ -364,7 +364,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     BOOST_REQUIRE_EQUAL(max_generation_seen, 3333);
    });
@@ -410,7 +410,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
    });
   }).get();
@@ -438,7 +438,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
    });
   }).get();
@@ -469,7 +469,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(e),
         [&] (sharded<sstable_directory>& sstdir) {
-            distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+            distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
 
             // Collect all sstable file names
             sstdir.invoke_on_all([&] (sstable_directory& d) {
@@ -560,7 +560,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
@@ -609,7 +609,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
@@ -658,7 +658,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();

@@ -48,6 +48,12 @@ public:
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
     using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+
+    // Flags below control how to behave when scanning new SSTables.
+    struct process_flags {
+        bool sort_sstables_according_to_owner = true;
+    };
+
 private:
     using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
     using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -106,7 +112,7 @@ private:
     // the amount of data resharded per shard, so a coordinator may redistribute this.
     sstable_info_vector _shared_sstable_info;
 
-    future<> process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner = true);
+    future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
@@ -156,7 +162,7 @@ public:
     // This function doesn't change on-storage state. If files are to be removed, a separate call
     // (commit_file_removals()) has to be issued. This is to make sure that all instances of this
     // class in a sharded service have the opportunity to validate its files.
-    future<> process_sstable_dir(bool sort_sstables_according_to_owner = true);
+    future<> process_sstable_dir(process_flags flags);
 
     // Sort the sstable according to owner
     future<> sort_sstable(sstables::shared_sstable sst);
