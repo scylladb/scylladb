@@ -1265,7 +1265,7 @@ future<> repair_service::sync_data_using_repair(
         streaming::stream_reason reason,
         shared_ptr<node_ops_info> ops_info) {
     if (ranges.empty()) {
-        return make_ready_future<>();
+        co_return;
     }
 
     assert(this_shard_id() == 0);
@@ -1273,7 +1273,7 @@ future<> repair_service::sync_data_using_repair(
 
     repair_uniq_id id = get_repair_module().new_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    return get_repair_module().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_info] () mutable {
+    co_await get_repair_module().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_info] () mutable {
         auto cfs = list_column_families(db, keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
