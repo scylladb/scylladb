@@ -30,6 +30,7 @@
 #include <seastar/core/io_priority_class.hh>
 
 class memtable;
+class reader_permit;
 class flat_mutation_reader;
 
 namespace sstables {

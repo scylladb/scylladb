@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <boost/intrusive/parent_from_member.hpp>
 
 //  A movable pointer-like object paired with exactly one other object of the same type. 
