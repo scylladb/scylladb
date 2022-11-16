@@ -183,6 +183,7 @@ feature's implementation is still subject to change and upgrades may not be
 possible if such a feature is used. For these reasons, experimental features
 are not recommended for mission-critical uses, and they need to be
 individually enabled with the "--experimental-features" configuration option.
+See [Enabling Experimental Features](#yaml_enabling_experimental_features) for details.
 
 In this release, the following DynamoDB API features are considered
 experimental:
