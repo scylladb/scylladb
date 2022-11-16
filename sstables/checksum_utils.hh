@@ -9,7 +9,7 @@
 #pragma once
 
 #include <zlib.h>
-#include "libdeflate/libdeflate.h"
+#include <libdeflate.h>
 #include "utils/gz/crc_combine.hh"
 
 template<typename Checksum>
