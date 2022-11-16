@@ -177,19 +177,13 @@ public:
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
                      unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
 
-    // Default filter will include all sstables
     using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
-    static sstable_filter_func_t default_sstable_filter() {
-        return [] (const sstables::shared_sstable&) {
-            return true;
-        };
-    }
 
     // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
     future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
                      sstables::compaction_sstable_creator_fn creator,
                      sstables::reshape_mode mode,
-                     sstable_filter_func_t sstable_filter = default_sstable_filter());
+                     sstable_filter_func_t sstable_filter);
 
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this

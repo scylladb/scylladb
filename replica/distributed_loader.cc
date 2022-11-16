@@ -352,7 +352,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
                   global_table->get_sstables_manager().get_highest_supported_format(),
                   sstables::sstable::format_types::big,
                   &error_handler_gen_for_upload_dir);
-        }, sstables::sstable_directory::default_sstable_filter()).get();
+        }, [] (const sstables::shared_sstable&) { return true; }).get();
 
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
 
