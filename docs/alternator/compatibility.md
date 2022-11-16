@@ -144,6 +144,35 @@ This monitoring stack is different from DynamoDB's offering - but Scylla's
 is significantly more powerful and gives the user better insights on
 the internals of the database and its performance.
 
+## Time To Live (TTL)
+
+Like in DynamoDB, Alternator items which are set to expire at a certain
+time will not disappear exactly at that time, but only after some delay.
+DynamoDB guarantees that the expiration delay will be less than 48 hours
+(though for small tables the delay is often much shorter).
+
+In Alternator, the expiration delay is configurable - it  can it can be be set
+with the `--alternator-ttl-period-in-seconds` configuration option.
+The default is 24 hours.
+
+ <!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 5.2. -->
+---
+
+**NOTE**
+
+In ScyllaDB versions 5.0 and earlier, DynamoDB's TTL feature 
+is experimental and needs to be enabled explicitly with the
+`--experimental-features=alternator-ttl` configuration option.
+See [Enabling Experimental Features](#yaml_enabling_experimental_features) for details.
+
+One thing that the experimental implementation is missing is that expiration
+events appear in the Streams API as normal deletions - without the
+distinctive marker on deletions which are really expirations.
+See <https://github.com/scylladb/scylla/issues/5060>.
+
+---
+
+
 ## Experimental API features
 
 Some DynamoDB API features are supported by Alternator, but considered
@@ -157,24 +186,6 @@ individually enabled with the "--experimental-features" configuration option.
 
 In this release, the following DynamoDB API features are considered
 experimental:
-
-* DynamoDB's TTL (item expiration) feature is supported, but in this release
-  still considered experimental and needs to be enabled explicitly with the
-  `--experimental-features=alternator-ttl` configuration option.
-  The experimental implementation is mostly complete, but not throughly
-  tested or optimized.
-
-  Like in DynamoDB, Alternator items which are set to expire at a certain
-  time will not disappear exactly at that time, but only after some delay.
-  DynamoDB guarantees that the expiration delay will be less than 48 hours
-  (though for small tables the delay is often much shorter). In Alternator,
-  the expiration delay is configurable - it defaults to 24 hours but can
-  be set with the `--alternator-ttl-period-in-seconds` configuration option.
-
-  One thing that this implementation is still missing is that expiration
-  events appear in the Streams API as normal deletions - without the
-  distinctive marker on deletions which are really expirations.
-  <https://github.com/scylladb/scylla/issues/5060>
 
 * The DynamoDB Streams API for capturing change is supported, but still
   considered experimental so needs to be enabled explicitly with the
