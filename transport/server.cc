@@ -602,8 +602,10 @@ future<> cql_server::connection::process_request() {
         if (allow_shedding && _shed_incoming_requests) {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
+                const char* message = "request shed due to coordinator overload";
+                clogger.debug("{}: {}, stream {}", _client_state.get_remote_address(), message);
                 write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
-                        "request shed due to coordinator overload", tracing::trace_state_ptr()));
+                    message, tracing::trace_state_ptr()));
                 return make_ready_future<>();
             });
         }
@@ -621,10 +623,11 @@ future<> cql_server::connection::process_request() {
         auto stream = f.stream;
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
         if (mem_estimate > _server._max_request_size) {
-            write_response(make_error(stream, exceptions::exception_code::INVALID,
-                    format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}", f.length, mem_estimate, _server._max_request_size),
-                    tracing::trace_state_ptr()));
-            return std::exchange(_ready_to_respond, make_ready_future<>()).then([this] {
+            const auto message = format("request size too large (frame size {:d}; estimate {:d}; allowed {:d})",
+                f.length, mem_estimate, _server._max_request_size);
+            clogger.debug("{}: {}, request dropped", _client_state.get_remote_address(), message);
+            write_response(make_error(stream, exceptions::exception_code::INVALID, message, tracing::trace_state_ptr()));
+            return std::exchange(_ready_to_respond, make_ready_future<>()).then([this, length = f.length] {
                 return _read_buf.close();
             });
         }
@@ -632,9 +635,12 @@ future<> cql_server::connection::process_request() {
         if (_server._stats.requests_serving > _server._max_concurrent_requests) {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
+                const auto message = format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}",
+                                            _server._stats.requests_serving);
+                clogger.debug("{}: {}, request dropped", _client_state.get_remote_address(), message);
                 write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
-                        format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._stats.requests_serving),
-                        tracing::trace_state_ptr()));
+                    message,
+                    tracing::trace_state_ptr()));
                 return make_ready_future<>();
             });
         }
