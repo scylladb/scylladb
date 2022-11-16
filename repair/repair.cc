@@ -991,7 +991,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
     auto& db = get_db().local();
     auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
@@ -1093,7 +1093,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         options.column_families.size() ? options.column_families : list_column_families(db, keyspace);
     if (cfs.empty()) {
         rlogger.info("repair[{}]: completed successfully: no tables to repair", id.uuid());
-        return id.id;
+        co_return id.id;
     }
 
     // Do it in the background.
@@ -1220,7 +1220,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid(), ep);
     });
 
-    return id.id;
+    co_return id.id;
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair,

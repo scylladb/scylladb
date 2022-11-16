@@ -133,7 +133,7 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
-    int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+    future<int> do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
     // all repair-based node operation entry points must be called on shard 0
