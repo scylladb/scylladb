@@ -359,7 +359,6 @@ public:
         // from a parent and set. Otherwise, it must be set by caller.
         future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = task_info{}) {
             auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr));
-            foreign_task_ptr parent;
             bool abort = false;
             if (parent_d) {
                 task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable {
