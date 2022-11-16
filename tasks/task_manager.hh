@@ -221,7 +221,6 @@ public:
 
         void start() {
             _impl->_status.start_time = db_clock::now();
-            _impl->_status.state = task_manager::task_state::running;
 
             try {
                 // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
@@ -234,6 +233,8 @@ public:
                         module->unregister_task(id);
                     });
                 });
+                _impl->_as.check();
+                _impl->_status.state = task_manager::task_state::running;
                 _impl->run_to_completion();
             } catch (...) {
                 _impl->finish_failed(std::current_exception());
