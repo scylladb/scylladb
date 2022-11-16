@@ -313,10 +313,6 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
         directory.start(upload, service::get_local_streaming_priority(),
             db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
-            sstables::sstable_directory::need_mutate_level::yes,
-            sstables::sstable_directory::lack_of_toc_fatal::no,
-            sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
-            sstables::sstable_directory::allow_loading_materialized_view::no,
             [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
@@ -326,6 +322,9 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 
         lock_table(directory, db, ks, cf).get();
         sstables::sstable_directory::process_flags flags {
+            .need_mutate_level = true,
+            .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
+            .allow_loading_materialized_view = false,
         };
         process_sstable_dir(directory, flags).get();
 
@@ -382,10 +381,6 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 
         directory.start(upload, service::get_local_streaming_priority(),
             db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
-            sstables::sstable_directory::need_mutate_level::yes,
-            sstables::sstable_directory::lack_of_toc_fatal::no,
-            sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
-            sstables::sstable_directory::allow_loading_materialized_view::no,
             [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
@@ -396,6 +391,9 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
         lock_table(directory, db, ks, cf).get();
         sstables::sstable_directory::process_flags flags {
+            .need_mutate_level = true,
+            .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
+            .allow_loading_materialized_view = false,
             .sort_sstables_according_to_owner = false,
         };
         process_sstable_dir(directory, flags).get();
@@ -555,10 +553,6 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     auto& db = _db;
     co_await directory.start(fs::path(sstdir), default_priority_class(),
         db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
-        sstables::sstable_directory::need_mutate_level::no,
-        sstables::sstable_directory::lack_of_toc_fatal::yes,
-        sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
-        sstables::sstable_directory::allow_loading_materialized_view::yes,
         [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
             return global_table->make_sstable(dir.native(), gen, v, f);
     });
@@ -569,6 +563,9 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     co_await distributed_loader::lock_table(directory, _db, _ks, _cf);
 
     sstables::sstable_directory::process_flags flags {
+        .throw_on_missing_toc = true,
+        .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
+        .allow_loading_materialized_view = true,
     };
     co_await distributed_loader::process_sstable_dir(directory, flags);
 

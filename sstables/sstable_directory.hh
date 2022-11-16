@@ -34,11 +34,6 @@ bool manifest_json_filter(const std::filesystem::path&, const directory_entry& e
 // or the main directory.
 class sstable_directory {
 public:
-    using lack_of_toc_fatal = bool_class<class lack_of_toc_fatal_tag>;
-    using need_mutate_level = bool_class<class need_mutate_level_tag>;
-    using enable_dangerous_direct_import_of_cassandra_counters = bool_class<class enable_dangerous_direct_import_of_cassandra_counters_tag>;
-    using allow_loading_materialized_view = bool_class<class allow_loading_materialized_view_tag>;
-
     using sstable_object_from_existing_fn =
         noncopyable_function<sstables::shared_sstable(std::filesystem::path,
                                                       sstables::generation_type,
@@ -51,6 +46,10 @@ public:
 
     // Flags below control how to behave when scanning new SSTables.
     struct process_flags {
+        bool need_mutate_level = false;
+        bool throw_on_missing_toc = false;
+        bool enable_dangerous_direct_import_of_cassandra_counters = false;
+        bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
     };
 
@@ -83,12 +82,6 @@ private:
     const size_t _load_parallelism;
     semaphore& _load_semaphore;
 
-    // Flags below control how to behave when scanning new SSTables.
-    need_mutate_level _need_mutate_level;
-    lack_of_toc_fatal _throw_on_missing_toc;
-    enable_dangerous_direct_import_of_cassandra_counters _enable_dangerous_direct_import_of_cassandra_counters;
-    allow_loading_materialized_view _allow_loading_materialized_view;
-
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
 
@@ -113,7 +106,7 @@ private:
     sstable_info_vector _shared_sstable_info;
 
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
-    void validate(sstables::shared_sstable sst) const;
+    void validate(sstables::shared_sstable sst, process_flags flags) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
     future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
@@ -131,10 +124,6 @@ public:
             ::io_priority_class io_prio,
             unsigned load_parallelism,
             semaphore& load_semaphore,
-            need_mutate_level need_mutate,
-            lack_of_toc_fatal fatal_nontoc,
-            enable_dangerous_direct_import_of_cassandra_counters eddiocc,
-            allow_loading_materialized_view,
             sstable_object_from_existing_fn sstable_from_existing);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
