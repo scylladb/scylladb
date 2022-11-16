@@ -13,7 +13,7 @@
 
 #include "crc_combine_table.hh"
 #include "utils/clmul.hh"
-#include "barett.hh"
+#include "barrett.hh"
 
 template <int bits>
 static
@@ -26,7 +26,7 @@ make_crc32_power_table() {
         //   x^(2*N)          mod G(x)
         // = (x^N)*(x^N)      mod G(x)
         // = (x^N mod G(x))^2 mod G(x)
-        pows[i] = crc32_fold_barett_u64(clmul(pows[i - 1], pows[i - 1]) << 1);
+        pows[i] = crc32_fold_barrett_u64(clmul(pows[i - 1], pows[i - 1]) << 1);
     }
     return pows;
 }
@@ -40,7 +40,7 @@ make_crc32_table(int base, int radix_bits, uint32_t one, std::array<uint32_t, 32
         uint32_t product = one;
         for (int j = 0; j < radix_bits; ++j) {
             if (i & (1 << j)) {
-                product = crc32_fold_barett_u64(clmul(product, pows[base + j]) << 1);
+                product = crc32_fold_barrett_u64(clmul(product, pows[base + j]) << 1);
             }
         }
         table[i] = product;

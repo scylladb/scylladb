@@ -35,14 +35,14 @@ inline
 constexpr uint64_t barrett_reduction_constants[2] = { 0x00000001F7011641, 0x00000001DB710641 };
 
 /*
- * Calculates representation of p(x) mod G(x) using Barett reduction.
+ * Calculates representation of p(x) mod G(x) using Barrett reduction.
  *
  * p(x) is a polynomial of degree 64.
  *
  * The parameter p is a bit-reversed representation of the polynomial,
  * the least significant bit corresponds to the coefficient of x^63.
  */
-inline constexpr uint32_t crc32_fold_barett_u64_constexpr(uint64_t p) {
+inline constexpr uint32_t crc32_fold_barrett_u64_constexpr(uint64_t p) {
     auto x0 = p;
     auto x1 = x0;
     uint64_t mask32 = 0xffff'ffff;
@@ -56,7 +56,7 @@ inline constexpr uint32_t crc32_fold_barett_u64_constexpr(uint64_t p) {
 #include <wmmintrin.h>
 
 inline
-uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
+uint32_t crc32_fold_barrett_u64_in_m128(__m128i x0) {
     __m128i x1;
     const __m128i mask32 = (__m128i)(__v4si){ int32_t(0xFFFFFFFF) };
     const __v2di brc =
@@ -112,8 +112,8 @@ uint32_t crc32_fold_barett_u64_in_m128(__m128i x0) {
 }
 
 inline
-uint32_t crc32_fold_barett_u64_native(uint64_t p) {
-    return crc32_fold_barett_u64_in_m128(_mm_set_epi64x(0, p));
+uint32_t crc32_fold_barrett_u64_native(uint64_t p) {
+    return crc32_fold_barrett_u64_in_m128(_mm_set_epi64x(0, p));
 }
 
 #elif defined(__aarch64__)
@@ -121,7 +121,7 @@ uint32_t crc32_fold_barett_u64_native(uint64_t p) {
 #include <arm_neon.h>
 
 inline
-uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
+uint32_t crc32_fold_barrett_u64_in_u64x2(uint64x2_t x0) {
     uint64x2_t x1;
     const uint64_t barrett_reduction_constant_lo = barrett_reduction_constants[0];
     const uint64_t barrett_reduction_constant_hi = barrett_reduction_constants[1];
@@ -137,8 +137,8 @@ uint32_t crc32_fold_barett_u64_in_u64x2(uint64x2_t x0) {
 }
 
 inline
-uint32_t crc32_fold_barett_u64_native(uint64_t p) {
-    return crc32_fold_barett_u64_in_u64x2(
+uint32_t crc32_fold_brarett_u64_native(uint64_t p) {
+    return crc32_fold_barrett_u64_in_u64x2(
             vcombine_u64((uint64x1_t)p, (uint64x1_t)0UL));
 }
 
@@ -150,6 +150,6 @@ uint32_t crc32_fold_barett_u64_native(uint64_t p) {
 
 inline
 constexpr
-uint32_t crc32_fold_barett_u64(uint64_t p) {
-    return std::is_constant_evaluated() ? crc32_fold_barett_u64_constexpr(p) : crc32_fold_barett_u64_native(p);
+uint32_t crc32_fold_barrett_u64(uint64_t p) {
+    return std::is_constant_evaluated() ? crc32_fold_barrett_u64_constexpr(p) : crc32_fold_barrett_u64_native(p);
 }

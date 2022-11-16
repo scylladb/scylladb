@@ -44,7 +44,7 @@ using u64 = uint64_t;
 
 #if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 
-#include "barett.hh"
+#include "barrett.hh"
 
 /*
  * Calculates:
@@ -66,7 +66,7 @@ u64 pmul(u32 p1, u32 p2) {
  */
 static
 u32 pmul_mod(u32 p1, u32 p2) {
-    return crc32_fold_barett_u64(pmul(p1, p2));
+    return crc32_fold_barrett_u64(pmul(p1, p2));
 }
 
 /*
@@ -145,8 +145,8 @@ u32 mul_by_x_pow_mul8(u32 p, u64 e) {
 
     u64 y0 = pmul(p, x0);
     u64 y1 = pmul(x1, x2);
-    u32 z0 = crc32_fold_barett_u64(y0);
-    u32 z1 = crc32_fold_barett_u64(y1);
+    u32 z0 = crc32_fold_barrett_u64(y0);
+    u32 z1 = crc32_fold_barrett_u64(y1);
 
     if (__builtin_expect(e < 0x1000000, true)) {
         return pmul_mod(z0, z1);
@@ -168,12 +168,12 @@ u32 mul_by_x_pow_mul8(u32 p, u64 e) {
     u64 y3 = pmul(x6, x7);
     u64 u0 = pmul(z0, z1);
 
-    u32 z2 = crc32_fold_barett_u64(y2);
-    u32 z3 = crc32_fold_barett_u64(y3);
+    u32 z2 = crc32_fold_barrett_u64(y2);
+    u32 z3 = crc32_fold_barrett_u64(y3);
 
     u64 u1 = pmul(z2, z3);
-    u32 v0 = crc32_fold_barett_u64(u0);
-    u32 v1 = crc32_fold_barett_u64(u1);
+    u32 v0 = crc32_fold_barrett_u64(u0);
+    u32 v1 = crc32_fold_barrett_u64(u1);
 
     return pmul_mod(v0, v1);
 }
@@ -208,7 +208,7 @@ u32 fast_crc32_combine(u32 crc, u32 crc2, ssize_t len2) {
 #else
 
 // FIXME: Optimize for other archs
-// That boils down to implementing crc32_fold_barett_u64() and clmul()
+// That boils down to implementing crc32_fold_barrett_u64() and clmul()
 // and reusing the algorithm above. For now, delegate to zlib.
 
 #include <zlib.h>
