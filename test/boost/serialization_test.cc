@@ -255,13 +255,71 @@ static void test_vector_deserializer(const std::vector<T>& v) {
     }
 }
 
+template <typename T>
+static void test_reverse_vector_deserializer(const std::vector<T>& v) {
+    auto buf = ser::serialize_to_buffer<bytes>(v);
+    auto in = simple_input_stream((const char*)buf.data(), buf.size());
+    auto range = ser::vector_deserializer<T, false>(in);
+
+    auto test_equal = [] (const T& lhs, const T& rhs) {
+        if (lhs != rhs) {
+            throw std::runtime_error("compared values differ");
+        }
+    };
+
+    auto required = [] (bool x) {
+        if (!x) {
+            throw std::runtime_error(format("failed requirment"));
+        }
+    };
+
+    {
+        auto vit = v.rbegin();
+        auto rit = range.begin();
+        while (rit != range.end()) {
+            test_equal(*rit, *vit);
+            ++rit;
+            ++vit;
+        }
+        required(vit == v.rend());
+    }
+
+    {
+        auto vit = v.rbegin();
+        auto rit = range.begin();
+        while (rit != range.end()) {
+            test_equal(*rit++, *vit++);
+        }
+        required(vit == v.rend());
+    }
+
+    {
+        auto cvit = v.crbegin();
+        auto crit = range.cbegin();
+        while (crit != range.cend()) {
+            test_equal(*crit++, *cvit++);
+        }
+        required(cvit == v.crend());
+    }
+
+    {
+        auto vit = v.rbegin();
+        for (auto i : range) {
+            test_equal(i, *vit++);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(vector_deserializer) {
     std::vector<int> int_vect = { 3, 1, 4 };
     test_vector_deserializer(int_vect);
+    test_reverse_vector_deserializer(int_vect);
 
     std::vector<sstring> sstring_vect = { "testing", "one", "two", "three" };
     test_vector_deserializer(sstring_vect);
+    test_reverse_vector_deserializer(sstring_vect);
 
     std::vector<std::optional<bool>> opt_bool_vect = { true, false, {}, false, true };
     test_vector_deserializer(opt_bool_vect);
+    test_reverse_vector_deserializer(opt_bool_vect);
 }
