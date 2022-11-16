@@ -12,6 +12,8 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
+#include "replica/database.hh"
 #include "utils/stall_free.hh"
 
 namespace locator {
@@ -466,6 +468,44 @@ void effective_replication_map_factory::submit_background_work(future<> fut) {
             rslogger.warn("effective_replication_map_factory background task failed: {}. Ignored.", std::move(ex));
         });
     });
+}
+
+future<> global_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+    return sharded_db.invoke_on(0, [this, &sharded_db, keyspace_name] (replica::database& db) -> future<> {
+        // To ensure we get the same effective_replication_map
+        // on all shards, acquire the shared_token_metadata lock.
+        //
+        // As a sanity check compare the ring_version on each shard
+        // to the reference version on shard 0.
+        //
+        // This invariant is achieved by storage_service::mutate_token_metadata
+        // and storage_service::replicate_to_all_cores that first acquire the
+        // shared_token_metadata lock, then prepare a mutated token metadata
+        // that will have an incremented ring_version, use it to re-calculate
+        // all e_r_m:s and clone both on all shards. including the ring version,
+        // all under the lock.
+        auto lk = co_await db.get_shared_token_metadata().get_lock();
+        auto erm = db.find_keyspace(keyspace_name).get_effective_replication_map();
+        auto ring_version = erm->get_token_metadata().get_ring_version();
+        _erms[0] = make_foreign(std::move(erm));
+        co_await coroutine::parallel_for_each(boost::irange(1u, smp::count), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
+            _erms[shard] = co_await sharded_db.invoke_on(shard, [keyspace_name, ring_version] (const replica::database& db) {
+                const auto& ks = db.find_keyspace(keyspace_name);
+                auto erm = ks.get_effective_replication_map();
+                auto local_ring_version = erm->get_token_metadata().get_ring_version();
+                if (local_ring_version != ring_version) {
+                    on_internal_error(rslogger, format("Inconsistent effective_replication_map ring_verion {}, expected {}", local_ring_version, ring_version));
+                }
+                return make_foreign(std::move(erm));
+            });
+        });
+    });
+}
+
+future<global_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+    global_effective_replication_map ret;
+    co_await ret.get_keyspace_erms(sharded_db, keyspace_name);
+    co_return ret;
 }
 
 } // namespace locator
