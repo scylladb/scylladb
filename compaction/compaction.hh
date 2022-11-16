@@ -80,8 +80,10 @@ struct compaction_data {
     }
 
     void stop(sstring reason) {
-        stop_requested = std::move(reason);
-        abort.request_abort();
+        if (!abort.abort_requested()) {
+            stop_requested = std::move(reason);
+            abort.request_abort();
+        }
     }
 };
 
