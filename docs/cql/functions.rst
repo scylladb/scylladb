@@ -21,7 +21,6 @@
 .. _cql-functions:
 
 .. Need some intro for UDF and native functions in general and point those to it.
-.. _udfs:
 .. _native-functions:
 
 Functions
@@ -33,13 +32,15 @@ CQL supports two main categories of functions:
 - The :ref:`aggregate functions <aggregate-functions>`, which are used to aggregate multiple rows of results from a
   ``SELECT`` statement.
 
-.. In both cases, CQL provides a number of native "hard-coded" functions as well as the ability to create new user-defined
-.. functions.
+In both cases, CQL provides a number of native "hard-coded" functions as well as the ability to create new user-defined
+functions.
 
-.. .. note:: By default, the use of user-defined functions is disabled by default for security concerns (even when
-..    enabled, the execution of user-defined functions is sandboxed and a "rogue" function should not be allowed to do
-..    evil, but no sandbox is perfect so using user-defined functions is opt-in). See the ``enable_user_defined_functions``
-..    in ``scylla.yaml`` to enable them.
+.. note:: Although user-defined functions are sandboxed, protecting the system from a "rogue" function, user-defined functions are disabled by default for extra security.
+   See the ``enable_user_defined_functions`` in ``scylla.yaml`` to enable them.
+
+   Additionally, user-defined functions are still experimental and need to be explicitly enabled by adding ``udf`` to the list of
+   ``experimental_features`` configuration options in ``scylla.yaml``, or turning on the ``experimental`` flag.
+   See :ref:`Enabling Experimental Features <yaml_enabling_experimental_features>` for details.
 
 .. A function is identifier by its name:
 
@@ -60,11 +61,11 @@ Native functions
 Cast
 ````
 
-Supported starting from Scylla version 2.1 
+Supported starting from ScyllaDB version 2.1 
 
 The ``cast`` function can be used to convert one native datatype to another.
 
-The following table describes the conversions supported by the ``cast`` function. Scylla will silently ignore any cast converting a cast datatype into its own datatype.
+The following table describes the conversions supported by the ``cast`` function. ScyllaDB will silently ignore any cast converting a cast datatype into its own datatype.
 
 =============== =======================================================================================================
  From            To
@@ -228,6 +229,65 @@ A number of functions are provided to “convert” the native types into binary
 takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For example, ``bigintAsBlob(3)`` is
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
+.. _udfs:
+
+User-defined functions :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+User-defined functions (UDFs) execute user-provided code in ScyllaDB. Supported languages are currently Lua and WebAssembly.
+
+UDFs are part of the ScyllaDB schema and are automatically propagated to all nodes in the cluster.
+UDFs can be overloaded, so that multiple UDFs with different argument types can have the same function name, for example::
+
+   CREATE FUNCTION sample ( arg int ) ...;
+   CREATE FUNCTION sample ( arg text ) ...;
+
+When calling a user-defined function, arguments can be literals or terms. Prepared statement placeholders can be used, too.
+
+CREATE FUNCTION statement
+`````````````````````````
+
+Creating a new user-defined function uses the ``CREATE FUNCTION`` statement. For example::
+
+    CREATE OR REPLACE FUNCTION div(dividend double, divisor double)
+      RETURNS NULL ON NULL INPUT
+      RETURNS double
+      LANGUAGE LUA
+      AS 'return dividend/divisor;';
+
+``CREATE FUNCTION`` with the optional ``OR REPLACE`` keywords creates either a function
+or replaces an existing one with the same signature. A ``CREATE FUNCTION`` without ``OR REPLACE``
+fails if a function with the same signature already exists. If the optional ``IF NOT EXISTS``
+keywords are used, the function will only be created only if another function with the same
+signature does not exist. ``OR REPLACE`` and ``IF NOT EXISTS`` cannot be used together.
+
+Behavior for null input values must be defined for each function:
+
+* ``RETURNS NULL ON NULL INPUT`` declares that the function will always return null (without being executed) if any of the input arguments is null.
+* ``CALLED ON NULL INPUT`` declares that the function will always be executed.
+
+Function Signature
+``````````````````
+
+Signatures are used to distinguish individual functions. The signature consists of a fully-qualified function name of the <keyspace>.<function_name> and a concatenated list of all the argument types.
+
+Note that keyspace names, function names and argument types are subject to the default naming conventions and case-sensitivity rules.
+
+Functions belong to a keyspace; if no keyspace is specified, the current keyspace is used. User-defined functions are not allowed in the system keyspaces.
+
+DROP FUNCTION statement
+```````````````````````
+
+Dropping a function uses the ``DROP FUNCTION`` statement. For example::
+
+   DROP FUNCTION myfunction;
+   DROP FUNCTION mykeyspace.afunction;
+   DROP FUNCTION afunction ( int );
+   DROP FUNCTION afunction ( text );
+
+You must specify the argument types of the function, the arguments_signature, in the drop command if there are multiple overloaded functions with the same name but different signatures.
+``DROP FUNCTION`` with the optional ``IF EXISTS`` keywords drops a function if it exists, but does not throw an error if it doesn’t.
+
 .. _aggregate-functions:
 
 Aggregate functions
@@ -289,6 +349,59 @@ instance::
     SELECT AVG (players) FROM plays;
 
 .. _user-defined-aggregates-functions:
+
+User-defined aggregates (UDAs) :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+User-defined aggregates allow the creation of custom aggregate functions. User-defined aggregates can be used in SELECT statement.
+
+Each aggregate requires an initial state of type ``STYPE`` defined with the ``INITCOND`` value (default value: ``null``). The first argument of the state function must have type STYPE. The remaining arguments of the state function must match the types of the user-defined aggregate arguments. The state function is called once for each row, and the value returned by the state function becomes the new state. After all rows are processed, the optional FINALFUNC is executed with the last state value as its argument.
+
+The ``STYPE`` value is mandatory in order to distinguish possibly overloaded versions of the state and/or final function, since the overload can appear after creation of the aggregate.
+
+A complete working example for user-defined aggregates (assuming that a keyspace has been selected using the ``USE`` statement)::
+
+   CREATE FUNCTION accumulate_len(acc tuple<bigint,bigint>, a text)
+   	  RETURNS NULL ON NULL INPUT
+   	  RETURNS tuple<bigint,bigint>
+   	  LANGUAGE lua as 'return {acc[1] + 1, acc[2] + #a}';
+
+   CREATE OR REPLACE FUNCTION present(res tuple<bigint,bigint>)
+   	  RETURNS NULL ON NULL INPUT
+   	  RETURNS text
+   	  LANGUAGE lua as
+   	    'return "The average string length is " .. res[2]/res[1] .. "!"';
+
+   CREATE OR REPLACE AGGREGATE avg_length(text)
+      SFUNC accumulate_len
+      STYPE tuple<bigint,bigint>
+      FINALFUNC present
+      INITCOND (0,0);
+
+CREATE AGGREGATE statement
+``````````````````````````
+
+The ``CREATE AGGREGATE`` command with the optional ``OR REPLACE`` keywords creates either an aggregate or replaces an existing one with the same signature. A ``CREATE AGGREGATE`` without ``OR REPLACE`` fails if an aggregate with the same signature already exists. The ``CREATE AGGREGATE`` command with the optional ``IF NOT EXISTS`` keywords creates an aggregate if it does not already exist. The ``OR REPLACE`` and ``IF NOT EXISTS`` phrases cannot be used together.
+
+The ``STYPE`` value defines the type of the state value and must be specified. The optional ``INITCOND`` defines the initial state value for the aggregate; the default value is null. A non-null ``INITCOND`` must be specified for state functions that are declared with ``RETURNS NULL ON NULL INPUT``.
+
+The ``SFUNC`` value references an existing function to use as the state-modifying function. The first argument of the state function must have type ``STYPE``. The remaining arguments of the state function must match the types of the user-defined aggregate arguments. The state function is called once for each row, and the value returned by the state function becomes the new state. State is not updated for state functions declared with ``RETURNS NULL ON NULL INPUT`` and called with null. After all rows are processed, the optional ``FINALFUNC`` is executed with last state value as its argument. It must take only one argument with type ``STYPE``, but the return type of the ``FINALFUNC`` may be a different type. A final function declared with ``RETURNS NULL ON NULL INPUT`` means that the aggregate’s return value will be null, if the last state is null.
+
+If no ``FINALFUNC`` is defined, the overall return type of the aggregate function is ``STYPE``. If a ``FINALFUNC`` is defined, it is the return type of that function.
+
+DROP AGGREGATE statement
+````````````````````````
+
+Dropping an user-defined aggregate function uses the DROP AGGREGATE statement. For example::
+
+   DROP AGGREGATE myAggregate;
+   DROP AGGREGATE myKeyspace.anAggregate;
+   DROP AGGREGATE someAggregate ( int );
+   DROP AGGREGATE someAggregate ( text );
+
+The ``DROP AGGREGATE`` statement removes an aggregate created using ``CREATE AGGREGATE``. You must specify the argument types of the aggregate to drop if there are multiple overloaded aggregates with the same name but a different signature.
+
+The ``DROP AGGREGATE`` command with the optional ``IF EXISTS`` keywords drops an aggregate if it exists, and does nothing if a function with the signature does not exist.
 
 .. include:: /rst_include/apache-cql-return-index.rst 
 
