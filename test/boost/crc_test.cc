@@ -11,7 +11,7 @@
 #include <boost/test/unit_test.hpp>
 #include "utils/crc.hh"
 #include "utils/clmul.hh"
-#include "utils/gz/barett.hh"
+#include "utils/gz/barrett.hh"
 #include <seastar/core/print.hh>
 
 constexpr uint32_t input_32_1_c = 0x12345678;
@@ -29,8 +29,8 @@ BOOST_AUTO_TEST_CASE(clmul_u32_constexpr_equals_native) {
 }
 
 BOOST_AUTO_TEST_CASE(barrett_fold_constexpr_equals_native) {
-    constexpr auto constexpr_result = crc32_fold_barett_u64(input_64_1_c);
-    BOOST_REQUIRE_EQUAL(crc32_fold_barett_u64(input_64_1), constexpr_result);
+    constexpr auto constexpr_result = crc32_fold_barrett_u64(input_64_1_c);
+    BOOST_REQUIRE_EQUAL(crc32_fold_barrett_u64(input_64_1), constexpr_result);
 }
 inline
 uint32_t
