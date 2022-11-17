@@ -3161,12 +3161,7 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
         assert(sstable::is_pending_delete_dir(fs::path(pending_delete_dir)));
         try {
             auto sstdir = parent_path(pending_delete_dir);
-            auto f = open_file_dma(pending_delete_log, open_flags::ro).get0();
-            auto size = f.size().get0();
-            auto in = make_file_input_stream(f);
-            auto text = in.read_exactly(size).get0();
-            in.close().get();
-            f.close().get();
+            auto text = seastar::util::read_entire_file_contiguous(fs::path(pending_delete_log)).get0();
 
             sstring all(text.begin(), text.end());
             std::vector<sstring> basenames;
