@@ -138,6 +138,25 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& 
     return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
 }
 
+// Run on all tables, skipping dropped tables
+future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
+    std::exception_ptr ex;
+    for (const auto& ti : local_tables) {
+        apilog.debug("Starting {} on {}.{}", op, keyspace, ti);
+        try {
+            co_await func(db.find_column_family(ti.id));
+        } catch (const replica::no_such_column_family& e) {
+            apilog.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
+        } catch (...) {
+            ex = std::current_exception();
+            apilog.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
+        }
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    }
+}
+
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
     ss::token_range r;
     r.start_token = d._start_token;
@@ -652,15 +671,18 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         try {
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 auto local_tables = table_infos;
-                // FIXME: tables might have been dropped in the background
                 // major compact smaller tables first, to increase chances of success if low on space.
                 std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
+                  // FIXME: indentation
+                  try {
                     return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                  } catch (const replica::no_such_column_family& e) {
+                    return int64_t(-1);
+                  }
                 });
-                // as a table can be dropped during loop below, let's find it before issuing major compaction request.
-                for (const auto& ti : local_tables) {
-                    co_await db.find_column_family(ti.id).compact_all_sstables();
-                }
+                co_await run_on_existing_tables("force_keyspace_compaction", db, keyspace, local_tables, [] (replica::table& t) {
+                    return t.compact_all_sstables();
+                });
             });
         } catch (...) {
             apilog.error("force_keyspace_compaction: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
@@ -683,18 +705,20 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         try {
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 auto local_tables = table_infos;
-                // FIXME: tables might have been dropped in the background
                 // cleanup smaller tables first, to increase chances of success if low on space.
                 std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
+                  // FIXME: indentation
+                  try {
                     return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                  } catch (const replica::no_such_column_family& e) {
+                    return int64_t(-1);
+                  }
                 });
                 auto& cm = db.get_compaction_manager();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-                // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
-                for (auto& ti : local_tables) {
-                    replica::table& t = db.find_column_family(ti.id);
-                    co_await t.perform_cleanup_compaction(owned_ranges_ptr);
-                }
+                co_await run_on_existing_tables("force_keyspace_cleanup", db, keyspace, local_tables, [&] (replica::table& t) {
+                    return t.perform_cleanup_compaction(owned_ranges_ptr);
+                });
             });
         } catch (...) {
             apilog.error("force_keyspace_cleanup: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
@@ -711,11 +735,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
           // FIXME: indentation
           res = co_await ctx.db.map_reduce0([&] (replica::database& db) -> future<bool> {
             bool needed = false;
-            for (const auto& ti : table_infos) {
-                // FIXME: tables might have been dropped in the background
-                    auto& t = db.find_column_family(ti.id);
+            co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, keyspace, table_infos, [&needed] (replica::table& t) -> future<> {
                 needed |= co_await t.perform_offstrategy_compaction();
-            }
+            });
             co_return needed;
           }, false, std::plus<bool>());
         } catch (...) {
@@ -735,12 +757,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
           // FIXME: indentation
           co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
             auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-            for (const auto& ti : table_infos) {
-                auto& cm = db.get_compaction_manager();
-                // FIXME: tables might have been dropped in the background
-                auto& cf = db.find_column_family(ti.id);
-                co_await cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
-            };
+            co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
+                return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+            });
           });
         } catch (...) {
             apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
