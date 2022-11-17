@@ -13,6 +13,7 @@
 #include "repair/repair.hh"
 #include "repair/repair_task.hh"
 #include "tasks/task_manager.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -133,9 +134,10 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
-    int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+    future<int> do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
+    // all repair-based node operation entry points must be called on shard 0
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
     future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
     future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
@@ -145,13 +147,9 @@ private:
     future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
     future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes);
 
+    // Must be called on shard 0
     future<> sync_data_using_repair(sstring keyspace,
-            dht::token_range_vector ranges,
-            std::unordered_map<dht::token_range, repair_neighbors> neighbors,
-            streaming::stream_reason reason,
-            shared_ptr<node_ops_info> ops_info);
-
-    future<> do_sync_data_using_repair(sstring keyspace,
+            locator::effective_replication_map_ptr erm,
             dht::token_range_vector ranges,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,
             streaming::stream_reason reason,

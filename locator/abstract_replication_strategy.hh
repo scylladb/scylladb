@@ -22,6 +22,7 @@
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
+class database;
 class keyspace;
 }
 
@@ -264,6 +265,33 @@ inline mutable_effective_replication_map_ptr make_effective_replication_map(abst
 
 // Apply the replication strategy over the current configuration and the given token_metadata.
 future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
+
+// Class to hold a coherent view of a keyspace
+// effective replication map on all shards
+class global_effective_replication_map {
+    std::vector<foreign_ptr<effective_replication_map_ptr>> _erms;
+
+public:
+    global_effective_replication_map() : _erms(smp::count) {}
+    global_effective_replication_map(global_effective_replication_map&&) = default;
+    global_effective_replication_map& operator=(global_effective_replication_map&&) = default;
+
+    future<> get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
+
+    const effective_replication_map& get() const noexcept {
+        return *_erms[this_shard_id()];
+    }
+
+    const effective_replication_map& operator*() const noexcept {
+        return get();
+    }
+
+    const effective_replication_map* operator->() const noexcept {
+        return &get();
+    }
+};
+
+future<global_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
 
 } // namespace locator
 
