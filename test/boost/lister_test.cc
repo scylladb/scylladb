@@ -32,7 +32,7 @@ public:
 SEASTAR_TEST_CASE(test_empty_lister) {
     auto tmp = tmpdir();
     size_t count = 0;
-    co_await lister::scan_dir(tmp.path(), { directory_entry_type::directory, directory_entry_type::regular }, [&count] (fs::path dir, directory_entry de) {
+    co_await lister::scan_dir(tmp.path(), lister::dir_entry_types::full(), [&count] (fs::path dir, directory_entry de) {
         ++count;
         return make_ready_future<>();
     });
@@ -99,7 +99,7 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     // aborts the lister and that the exception is propagated
     // to the scan_dir resulting future.
     size_t walked = 0;
-    auto f = lister::scan_dir(tmp.path(), { directory_entry_type::directory, directory_entry_type::regular }, [&walked, initial] (fs::path dir, directory_entry de) {
+    auto f = lister::scan_dir(tmp.path(), lister::dir_entry_types::full(), [&walked, initial] (fs::path dir, directory_entry de) {
         if (++walked == initial) {
             throw expected_exception();
         }
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_lister_abort) {
     // similar to the above, just return an exceptional future
     // rather than throwing the exception.
     walked = 0;
-    f = lister::scan_dir(tmp.path(), { directory_entry_type::directory, directory_entry_type::regular }, [&walked, initial] (fs::path dir, directory_entry de) {
+    f = lister::scan_dir(tmp.path(), lister::dir_entry_types::full(), [&walked, initial] (fs::path dir, directory_entry de) {
         if (++walked == initial) {
             return make_exception_future<>(expected_exception());
         }

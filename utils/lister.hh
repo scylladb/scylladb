@@ -16,7 +16,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/util/bool_class.hh>
-
+#include "enum_set.hh"
 #include "seastarx.hh"
 
 namespace fs = std::filesystem;
@@ -27,7 +27,8 @@ public:
      * Types of entries to list. If empty - list all present entries except for
      * hidden if not requested to.
      */
-    using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
+    using listable_entry_types = super_enum<directory_entry_type, directory_entry_type::regular, directory_entry_type::directory>;
+    using dir_entry_types = enum_set<listable_entry_types>;
     /**
      * This callback is going to be called for each entry in the given directory
      * that has the corresponding type and meets the filter demands.
@@ -165,7 +166,7 @@ class directory_lister {
     std::optional<future<>> _opt_done_fut;
 public:
     directory_lister(fs::path dir,
-            lister::dir_entry_types type = {directory_entry_type::regular, directory_entry_type::directory},
+            lister::dir_entry_types type = lister::dir_entry_types::full(),
             lister::filter_type filter = [] (const fs::path& parent_dir, const directory_entry& entry) { return true; },
             lister::show_hidden do_show_hidden = lister::show_hidden::yes) noexcept
         : _dir(std::move(dir))

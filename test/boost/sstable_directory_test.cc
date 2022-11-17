@@ -328,7 +328,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
             [&dir, &tempstat] (sharded<sstables::sstable_directory>& sstdir_ok) {
     auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok);
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
-    lister::scan_dir(dir.path(), { directory_entry_type::regular }, [tempstat] (fs::path parent_dir, directory_entry de) {
+    lister::scan_dir(dir.path(), lister::dir_entry_types::of<directory_entry_type::regular>(), [tempstat] (fs::path parent_dir, directory_entry de) {
         BOOST_REQUIRE(fs::canonical(parent_dir / fs::path(de.name)) != tempstat);
         return make_ready_future<>();
     }).get();
