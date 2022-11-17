@@ -163,7 +163,7 @@ The default is 24 hours.
 In ScyllaDB versions 5.0 and earlier, DynamoDB's TTL feature 
 is experimental and needs to be enabled explicitly with the
 `--experimental-features=alternator-ttl` configuration option.
-See [Enabling Experimental Features](#yaml_enabling_experimental_features) for details.
+See [Enabling Experimental Features](https://docs.scylladb.com/stable/operating-scylla/admin.html#enabling-experimental-features) for details.
 
 One thing that the experimental implementation is missing is that expiration
 events appear in the Streams API as normal deletions - without the
@@ -183,7 +183,7 @@ feature's implementation is still subject to change and upgrades may not be
 possible if such a feature is used. For these reasons, experimental features
 are not recommended for mission-critical uses, and they need to be
 individually enabled with the "--experimental-features" configuration option.
-See [Enabling Experimental Features](#yaml_enabling_experimental_features) for details.
+See [Enabling Experimental Features](https://docs.scylladb.com/stable/operating-scylla/admin.html#enabling-experimental-features) for details.
 
 In this release, the following DynamoDB API features are considered
 experimental:
