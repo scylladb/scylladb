@@ -3112,18 +3112,17 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Create temporary pending_delete log file.
             auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
             // Write all toc names into the log file.
-            file_output_stream_options options;
-            options.buffer_size = 4096;
-            auto w = file_writer::make(std::move(f), options, tmp_pending_delete_log).get0();
+            auto out = make_file_output_stream(std::move(f), 4096).get0();
+            auto close_out = deferred_close(out);
 
             for (const auto& sst : ssts) {
                 auto toc = sst->component_basename(component_type::TOC);
-                w.write(toc.c_str(), toc.size());
-                w.write("\n", 1);
+                out.write(toc).get();
+                out.write("\n").get();
             }
 
-            w.flush();
-            w.close();
+            out.flush().get();
+            close_out.close_now();
 
             auto dir_f = open_directory(pending_delete_dir).get0();
             // Once flushed and closed, the temporary log file can be renamed.
