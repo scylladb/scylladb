@@ -459,8 +459,13 @@ class ScyllaCluster:
         msg: str = ""
         data: dict = {}
 
+    class CreateServerParams(NamedTuple):
+        cluster_name: str
+        seeds: List[str]
+        config_from_test: dict[str, str]
+
     def __init__(self, replicas: int,
-                 create_server: Callable[[str, List[str], dict[str, str]], ScyllaServer]) -> None:
+                 create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
@@ -529,8 +534,12 @@ class ScyllaCluster:
 
     async def add_server(self) -> ServerInfo:
         """Add a new server to the cluster"""
-        extra_config: dict[str, str] = {}
-        server = self.create_server(self.name, self._seeds(), extra_config)
+        params = ScyllaCluster.CreateServerParams(
+            cluster_name = self.name,
+            seeds = self._seeds(),
+            config_from_test = {}
+        )
+        server = self.create_server(params)
         self.is_dirty = True
         try:
             logging.info("Cluster %s adding server...", self)

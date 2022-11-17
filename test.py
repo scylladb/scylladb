@@ -336,7 +336,7 @@ class PythonTestSuite(TestSuite):
         self.clusters = Pool(pool_size, self.create_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
-        def create_server(cluster_name: str, seeds: List[str], config_from_test: dict[str, str]):
+        def create_server(create_cfg: ScyllaCluster.CreateServerParams):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
@@ -351,14 +351,14 @@ class PythonTestSuite(TestSuite):
                      "authorizer": "CassandraAuthorizer"}
             config_options = default_config_options | \
                              self.cfg.get("extra_scylla_config_options", {}) | \
-                             config_from_test
+                             create_cfg.config_from_test
 
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 host_registry=self.hosts,
-                cluster_name=cluster_name,
-                seeds=seeds,
+                cluster_name=create_cfg.cluster_name,
+                seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options)
 
