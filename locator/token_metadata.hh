@@ -16,7 +16,6 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "inet_address_vectors.hh"
-#include "locator/host_id.hh"
 #include <optional>
 #include <memory>
 #include <boost/range/iterator_range.hpp>
@@ -24,6 +23,9 @@
 #include "range.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
+
+#include "locator/types.hh"
+#include "locator/topology.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -34,104 +36,7 @@ namespace locator {
 
 class abstract_replication_strategy;
 
-using inet_address = gms::inet_address;
 using token = dht::token;
-
-// Endpoint Data Center and Rack names
-struct endpoint_dc_rack {
-    sstring dc;
-    sstring rack;
-};
-
-class topology {
-public:
-    struct config {
-        endpoint_dc_rack local_dc_rack;
-        bool disable_proximity_sorting = false;
-    };
-    topology(config cfg);
-    topology(const topology& other);
-
-    future<> clear_gently() noexcept;
-
-    using pending = bool_class<struct pending_tag>;
-
-    /**
-     * Stores current DC/rack assignment for ep
-     */
-    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend);
-
-    /**
-     * Removes current DC/rack assignment for ep
-     */
-    void remove_endpoint(inet_address ep);
-
-    /**
-     * Returns true iff contains given endpoint
-     */
-    bool has_endpoint(inet_address, pending with_pending = pending::no) const;
-
-    const std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>&
-    get_datacenter_endpoints() const {
-        return _dc_endpoints;
-    }
-
-    const std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
-    get_datacenter_racks() const {
-        return _dc_racks;
-    }
-
-    const endpoint_dc_rack& get_location(const inet_address& ep) const;
-    sstring get_rack() const;
-    sstring get_rack(inet_address ep) const;
-    sstring get_datacenter() const;
-    sstring get_datacenter(inet_address ep) const;
-
-    auto get_local_dc_filter() const noexcept {
-        return [ this, local_dc = get_datacenter() ] (inet_address ep) {
-            return get_datacenter(ep) == local_dc;
-        };
-    };
-
-    template <std::ranges::range Range>
-    inline size_t count_local_endpoints(const Range& endpoints) const {
-        return std::count_if(endpoints.begin(), endpoints.end(), get_local_dc_filter());
-    }
-
-    /**
-     * This method will sort the <tt>List</tt> by proximity to the given
-     * address.
-     */
-    void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
-
-private:
-    /**
-     * compares two endpoints in relation to the target endpoint, returning as
-     * Comparator.compare would
-     */
-    int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
-    void remove_pending_location(const inet_address& ep);
-
-    /** multi-map: DC -> endpoints in that DC */
-    std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>
-        _dc_endpoints;
-
-    /** map: DC -> (multi-map: rack -> endpoints in that rack) */
-    std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>
-        _dc_racks;
-
-    /** reverse-lookup map: endpoint -> current known dc/rack assignment */
-    std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
-    std::unordered_map<inet_address, endpoint_dc_rack> _pending_locations;
-
-    bool _sort_by_proximity = true;
-};
 
 class token_metadata;
 
@@ -160,7 +65,6 @@ struct host_id_or_endpoint {
     void resolve(const token_metadata& tm);
 };
 
-using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;
 class token_metadata_impl;
 
 class token_metadata final {
