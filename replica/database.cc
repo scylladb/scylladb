@@ -2542,15 +2542,14 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    auto dirs_only_entries = lister::dir_entry_types{directory_entry_type::directory};
     std::vector<database::snapshot_details_result> details;
 
     for (auto& datadir : data_dirs) {
-        co_await lister::scan_dir(datadir, dirs_only_entries, [this, &dirs_only_entries, &details] (fs::path parent_dir, directory_entry de) -> future<> {
+        co_await lister::scan_dir(datadir, { directory_entry_type::directory }, [this, &details] (fs::path parent_dir, directory_entry de) -> future<> {
             // KS directory
             sstring ks_name = de.name;
 
-            co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &dirs_only_entries, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+            co_return co_await lister::scan_dir(parent_dir / de.name, { directory_entry_type::directory }, [this, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
                 // CF directory
                 auto cf_dir = parent_dir / de.name;
 
@@ -2562,7 +2561,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                 }
 
                 auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, { directory_entry_type::directory }, [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     database::snapshot_details_result snapshot_result = {
                         .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
