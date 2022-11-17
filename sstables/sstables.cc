@@ -3038,13 +3038,6 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 }
 
 future<>
-delete_sstables(std::vector<sstring> tocs) {
-    return parallel_for_each(tocs, [] (const sstring& name) {
-        return remove_by_toc_name(name);
-    });
-}
-
-future<>
 sstable::unlink() noexcept {
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
@@ -3165,10 +3158,10 @@ future<> replay_pending_delete_log(fs::path pending_delete_log) {
         sstring all(text.begin(), text.end());
         std::vector<sstring> basenames;
         boost::split(basenames, all, boost::is_any_of("\n"), boost::token_compress_on);
-        auto tocs = boost::copy_range<std::vector<sstring>>(basenames
-                | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); })
-                | boost::adaptors::transformed([&sstdir] (auto&& basename) { return sstdir + "/" + basename; }));
-        co_await delete_sstables(tocs);
+        auto tocs = boost::copy_range<std::vector<sstring>>(basenames | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); }));
+        co_await parallel_for_each(tocs, [&sstdir] (const sstring& name) {
+            return remove_by_toc_name(sstdir + "/" + name);
+        });
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
     }
