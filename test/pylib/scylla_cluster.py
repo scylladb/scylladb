@@ -188,16 +188,13 @@ class ScyllaServer:
         self.ip_addr = await self.host_registry.lease_host()
         if not self.seeds:
             self.seeds = [self.ip_addr]
-        # Use the last part in host IP 127.151.3.27 -> 27
-        # There can be no duplicates within the same test run
-        # thanks to how host registry registers subnets, and
-        # different runs use different vardirs.
-        shortname = pathlib.Path(f"scylla-{self.ip_addr.rsplit('.', maxsplit=1)[-1]}")
+
+        shortname = f"scylla-{self.server_id}"
         self.workdir = self.vardir / shortname
 
         logging.info("installing Scylla server in %s...", self.workdir)
 
-        self.log_filename = self.vardir / shortname.with_suffix(".log")
+        self.log_filename = (self.vardir / shortname).with_suffix(".log")
 
         self.config_filename = self.workdir / "conf/scylla.yaml"
 
