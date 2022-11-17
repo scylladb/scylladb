@@ -719,7 +719,7 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self, test_case_name: str) -> None:
+    async def _before_test(self, test_case_name: str) -> str:
         if self.cluster.is_dirty:
             await self.clusters.steal()
             await self.cluster.stop()
@@ -729,6 +729,7 @@ class ScyllaClusterManager:
         self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
+        return str(self.cluster)
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
@@ -809,8 +810,8 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text=f"{self.cluster.servers[server_id].host_id}")
 
     async def _before_test_req(self, request) -> aiohttp.web.Response:
-        await self._before_test(request.match_info['test_case_name'])
-        return aiohttp.web.Response(text="OK")
+        cluster_str = await self._before_test(request.match_info['test_case_name'])
+        return aiohttp.web.Response(text=cluster_str)
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
         assert self.cluster is not None
