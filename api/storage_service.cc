@@ -609,14 +609,17 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, column_families);
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
+        // FIXME: log error
+            // FIXME: indentation broken on purpose
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
             auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
@@ -628,26 +631,27 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             for (auto& id : table_ids) {
                 co_await db.find_column_family(id).compact_all_sstables();
             }
-            co_return;
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
-        });
+            });
+
+        co_return json_void();
     });
 
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, column_families);
-        return ss.local().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
-                column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
-            if (!is_cleanup_allowed) {
-                return make_exception_future<json::json_return_type>(
-                        std::runtime_error("Can not perform cleanup operation when topology changes"));
-            }
-            return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
+        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
+            auto msg = "Can not perform cleanup operation when topology changes";
+            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, column_families, msg);
+            co_await coroutine::return_exception(std::runtime_error(msg));
+        }
+        // FIXME: log error
+            // FIXME: indentation broken on purpose
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
@@ -662,11 +666,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                     replica::table& t = db.find_column_family(id);
                     co_await t.perform_cleanup_compaction(owned_ranges_ptr);
                 }
-                co_return;
-            }).then([]{
-                return make_ready_future<json::json_return_type>(0);
             });
-        });
+        co_return json::json_return_type(0);
     });
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
@@ -681,20 +682,23 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }, false, std::plus<bool>());
     }));
 
-    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, column_families, exclude_current_version);
-        return ctx.db.invoke_on_all([=] (replica::database& db) {
+        // FIXME: log error
+          // FIXME: indentation
+          co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
             auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-            return do_for_each(column_families, [=, &db](sstring cfname) {
+            for (const auto& cfname : column_families) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
-            });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
-        });
+                co_await cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
+            };
+          });
+
+        co_return json::json_return_type(0);
     }));
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
@@ -1382,7 +1386,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) {
+    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto rp = req_params({
             {"keyspace", {mandatory::yes}},
             {"cf", {""}},
@@ -1418,10 +1423,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             }
         }
 
-        auto f = make_ready_future<>();
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-            f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
+            co_await coroutine::parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
                 // We always pass here db::snapshot_ctl::snap_views::no since:
                 // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
                 // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
@@ -1450,28 +1454,25 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             return stats;
         };
 
-        return f.then([&ctx, keyspace, column_families, opts, &reduce_compaction_stats] {
-            return ctx.db.map_reduce0([=] (replica::database& db) {
-                return map_reduce(column_families, [=, &db] (sstring cfname) {
+        try {
+            auto opt_stats = co_await db.map_reduce0([&] (replica::database& db) {
+                return map_reduce(column_families, [&] (sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
                     return cm.perform_sstable_scrub(cf.as_table_state(), opts);
                 }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
             }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
-        }).then_wrapped([] (auto f) {
-            if (f.failed()) {
-                auto ex = f.get_exception();
-                if (try_catch<sstables::compaction_aborted_exception>(ex)) {
-                    return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::aborted));
-                } else {
-                    return make_exception_future<json::json_return_type>(std::move(ex));
-                }
-            } else if (f.get()->validation_errors) {
-                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::validation_errors));
-            } else {
-                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::successful));
+            if (opt_stats && opt_stats->validation_errors) {
+                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
             }
-        });
+        } catch (const sstables::compaction_aborted_exception&) {
+            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
+        } catch (...) {
+            // FIXME: log error
+            throw;
+        }
+
+        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
 }
 
