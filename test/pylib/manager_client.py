@@ -14,6 +14,7 @@ import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.scylla_cluster import ReplaceConfig
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 import aiohttp
@@ -146,10 +147,11 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
 
-    async def server_add(self) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            server_info = await self.client.put_json("/cluster/addserver", {}, response_type="json")
+            data = {'replace_cfg': replace_cfg._asdict()} if replace_cfg else {}
+            server_info = await self.client.put_json("/cluster/addserver", data, response_type="json")
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:

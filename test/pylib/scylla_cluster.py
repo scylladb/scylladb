@@ -40,6 +40,11 @@ from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 
+class ReplaceConfig(NamedTuple):
+    replaced_id: ServerNum
+    reuse_ip_addr: bool
+
+
 def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
     return {
         'cluster_name': cluster_name,
@@ -442,6 +447,7 @@ class ScyllaCluster:
     def __init__(self, host_registry: HostRegistry, replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
         self.host_registry = host_registry
+        self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
@@ -481,10 +487,9 @@ class ScyllaCluster:
         self.is_dirty = True
         logging.info("Uninstalling cluster")
         await self.stop()
-        async def uninstall_and_release_ip(server: ScyllaServer) -> None:
-            await server.uninstall()
-            await self.host_registry.release_host(Host(server.ip_addr))
-        await asyncio.gather(*(uninstall_and_release_ip(srv) for srv in self.stopped.values()))
+        await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
+        await asyncio.gather(*(self.host_registry.release_host(Host(ip))
+                               for ip in self.leased_ips))
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
@@ -511,21 +516,41 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
-        # Scylla assumes all instances of a cluster use the same port,
-        # so each instance needs an own IP address.
-        ip_addr = IPAddress(await self.host_registry.lease_host())
+
+        extra_config: dict[str, str] = {}
+        if replace_cfg:
+            replaced_id = replace_cfg.replaced_id
+            assert replaced_id in self.servers, \
+                f"add_server: replaced id {replaced_id} not found in existing servers"
+
+            replaced_srv = self.servers[replaced_id]
+            extra_config['replace_address_first_boot'] = replaced_srv.ip_addr
+
+            assert replaced_id not in self.removed, \
+                f"add_server: cannot replace removed server {replaced_srv}"
+            assert replaced_id in self.stopped, \
+                f"add_server: cannot replace running server {replaced_srv}"
+
+        if replace_cfg and replace_cfg.reuse_ip_addr:
+            ip_addr = replaced_srv.ip_addr
+        else:
+            ip_addr = IPAddress(await self.host_registry.lease_host())
+            self.leased_ips.add(ip_addr)
+
         seeds = self._seeds()
         if not seeds:
             seeds = [ip_addr]
+
         params = ScyllaCluster.CreateServerParams(
             cluster_name = self.name,
             ip_addr = ip_addr,
             seeds = seeds,
-            config_from_test = {}
+            config_from_test = extra_config
         )
+
         try:
             server = self.create_server(params)
             logging.info("Cluster %s adding server...", self)
@@ -533,7 +558,9 @@ class ScyllaCluster:
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, server.workdir.name, str(exc))
-            await self.host_registry.release_host(Host(ip_addr))
+            if not replace_cfg or not replace_cfg.reuse_ip_addr:
+                self.leased_ips.remove(ip_addr)
+                await self.host_registry.release_host(Host(ip_addr))
             raise
         self.running[server.server_id] = server
         logging.info("Cluster %s added %s", self, server)
@@ -863,7 +890,9 @@ class ScyllaClusterManager:
     async def _cluster_server_add(self, request) -> aiohttp.web.Response:
         """Add a new server"""
         assert self.cluster
-        s_info = await self.cluster.add_server()
+        data = await request.json()
+        replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
+        s_info = await self.cluster.add_server(replace_cfg)
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
                                           "ip_addr": s_info.ip_addr})
 
