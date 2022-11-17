@@ -4,11 +4,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from typing import Protocol
-from typing import Callable, Awaitable, List, Dict, Optional
+from typing import Callable, Coroutine, List, Dict, Optional
 import asyncio
 import logging
 
-Artifact = Awaitable
+Artifact = Coroutine
 
 
 class Suite(Protocol):
@@ -33,7 +33,7 @@ class ArtifactRegistry:
         logging.info("Cleaning up before exit...")
         for artifacts in self.suite_artifacts.values():
             for artifact in artifacts:
-                artifact.close()  # type: ignore
+                artifact.close()
             await asyncio.gather(*artifacts, return_exceptions=True)
         self.suite_artifacts = {}
         for artifacts in self.exit_artifacts.values():
