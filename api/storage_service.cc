@@ -673,12 +673,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 auto local_tables = table_infos;
                 // major compact smaller tables first, to increase chances of success if low on space.
                 std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
-                  // FIXME: indentation
-                  try {
-                    return db.find_column_family(ti.id).get_stats().live_disk_space_used;
-                  } catch (const replica::no_such_column_family& e) {
-                    return int64_t(-1);
-                  }
+                    try {
+                        return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                    } catch (const replica::no_such_column_family& e) {
+                        return int64_t(-1);
+                    }
                 });
                 co_await run_on_existing_tables("force_keyspace_compaction", db, keyspace, local_tables, [] (replica::table& t) {
                     return t.compact_all_sstables();
@@ -707,12 +706,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 auto local_tables = table_infos;
                 // cleanup smaller tables first, to increase chances of success if low on space.
                 std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
-                  // FIXME: indentation
-                  try {
-                    return db.find_column_family(ti.id).get_stats().live_disk_space_used;
-                  } catch (const replica::no_such_column_family& e) {
-                    return int64_t(-1);
-                  }
+                    try {
+                        return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                    } catch (const replica::no_such_column_family& e) {
+                        return int64_t(-1);
+                    }
                 });
                 auto& cm = db.get_compaction_manager();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
@@ -732,14 +730,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         try {
-          // FIXME: indentation
-          res = co_await ctx.db.map_reduce0([&] (replica::database& db) -> future<bool> {
-            bool needed = false;
-            co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, keyspace, table_infos, [&needed] (replica::table& t) -> future<> {
-                needed |= co_await t.perform_offstrategy_compaction();
-            });
-            co_return needed;
-          }, false, std::plus<bool>());
+            res = co_await ctx.db.map_reduce0([&] (replica::database& db) -> future<bool> {
+                bool needed = false;
+                co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, keyspace, table_infos, [&needed] (replica::table& t) -> future<> {
+                    needed |= co_await t.perform_offstrategy_compaction();
+                });
+                co_return needed;
+            }, false, std::plus<bool>());
         } catch (...) {
             apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
             throw;
@@ -754,13 +751,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
         try {
-          // FIXME: indentation
-          co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-            auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-            co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
-                return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
+                co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
+                    return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                });
             });
-          });
         } catch (...) {
             apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
             throw;
