@@ -687,9 +687,13 @@ bind_variable_test_assignment(const bind_variable& bv, data_dictionary::database
 }
 
 static
-bind_variable
+std::optional<bind_variable>
 bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
+    if (!receiver) {
+        return std::nullopt;
+    }
+
     return bind_variable {
         .bind_index = bv.bind_index,
         .receiver = receiver
