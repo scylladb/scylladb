@@ -336,15 +336,22 @@ class PythonTestSuite(TestSuite):
         self.clusters = Pool(pool_size, self.create_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
-        def create_server(cluster_name: str, seeds: List[str]):
+        def create_server(cluster_name: str, seeds: List[str], config_from_test: dict[str, str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
 
+            # There are multiple sources of config options, with increasing priority
+            # (if two sources provide the same config option, the higher priority one wins):
+            # 1. the defaults
+            # 2. suite-specific config options (in "extra_scylla_config_options")
+            # 3. config options from tests (when servers are added during a test)
             default_config_options = \
                     {"authenticator": "PasswordAuthenticator",
                      "authorizer": "CassandraAuthorizer"}
-            config_options = default_config_options | self.cfg.get("extra_scylla_config_options", {})
+            config_options = default_config_options | \
+                             self.cfg.get("extra_scylla_config_options", {}) | \
+                             config_from_test
 
             server = ScyllaServer(
                 exe=self.scylla_exe,
