@@ -137,7 +137,7 @@ uint32_t crc32_fold_barrett_u64_in_u64x2(uint64x2_t x0) {
 }
 
 inline
-uint32_t crc32_fold_brarett_u64_native(uint64_t p) {
+uint32_t crc32_fold_barrett_u64_native(uint64_t p) {
     return crc32_fold_barrett_u64_in_u64x2(
             vcombine_u64((uint64x1_t)p, (uint64x1_t)0UL));
 }
