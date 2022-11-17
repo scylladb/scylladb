@@ -552,6 +552,8 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
         co_await parallel_for_each(tocs, [&sstdir] (const sstring& name) {
             return remove_by_toc_name(sstdir + "/" + name);
         });
+        sstlog.debug("Replayed {}, removing", pending_delete_log);
+        co_await remove_file(pending_delete_log.native());
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
     }
