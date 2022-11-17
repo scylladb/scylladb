@@ -177,6 +177,12 @@ class ScyllaRESTAPIClient():
         assert(type(data) == int)
         return data
 
+    async def get_joining_nodes(self, node_ip: str) -> list:
+        """Get the list of joining nodes according to `node_ip`."""
+        data = await self.client.get_json(f"/storage_service/nodes/joining", host=node_ip)
+        assert(type(data) == list)
+        return data
+
     async def enable_injection(self, node_ip: str, injection: str, one_shot: bool) -> None:
         """Enable error injection named `injection` on `node_ip`. Depending on `one_shot`,
            the injection will be executed only once or every time the process passes the injection point.

@@ -504,6 +504,7 @@ private:
     void find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter);
     void do_start_listen();
 
+    bool topology_known_for(inet_address) const;
     bool is_same_dc(inet_address ep) const;
     bool is_same_rack(inet_address ep) const;
 
