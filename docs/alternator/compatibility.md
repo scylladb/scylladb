@@ -155,17 +155,7 @@ In Alternator, the expiration delay is configurable - it  can it can be be set
 with the `--alternator-ttl-period-in-seconds` configuration option.
 The default is 24 hours.
 
- <!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 5.2. -->
----
-
-**NOTE**
-
-In ScyllaDB versions 5.0 and earlier, DynamoDB's TTL feature 
-is experimental and needs to be enabled explicitly with the
-`--experimental-features=alternator-ttl` configuration option.
-See [Enabling Experimental Features](https://docs.scylladb.com/stable/operating-scylla/admin.html#enabling-experimental-features) for details.
-
-One thing that the experimental implementation is missing is that expiration
+One thing the implementation is missing is that expiration
 events appear in the Streams API as normal deletions - without the
 distinctive marker on deletions which are really expirations.
 See <https://github.com/scylladb/scylla/issues/5060>.
