@@ -3156,12 +3156,11 @@ delete_atomically(std::vector<shared_sstable> ssts) {
 // since this is an indication we crashed in the middle of delete_atomically
 future<> replay_pending_delete_log(sstring pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
-    return seastar::async([pending_delete_log = std::move(pending_delete_log)] {
         sstring pending_delete_dir = parent_path(pending_delete_log);
         assert(sstable::is_pending_delete_dir(fs::path(pending_delete_dir)));
         try {
             auto sstdir = parent_path(pending_delete_dir);
-            auto text = seastar::util::read_entire_file_contiguous(fs::path(pending_delete_log)).get0();
+            auto text = co_await seastar::util::read_entire_file_contiguous(fs::path(pending_delete_log));
 
             sstring all(text.begin(), text.end());
             std::vector<sstring> basenames;
@@ -3169,11 +3168,10 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
             auto tocs = boost::copy_range<std::vector<sstring>>(basenames
                     | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); })
                     | boost::adaptors::transformed([&sstdir] (auto&& basename) { return sstdir + "/" + basename; }));
-            delete_sstables(tocs).get();
+            co_await delete_sstables(tocs);
         } catch (...) {
             sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
         }
-    });
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
