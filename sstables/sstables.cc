@@ -3154,13 +3154,13 @@ delete_atomically(std::vector<shared_sstable> ssts) {
 
 // FIXME: Go through maybe_delete_large_partitions_entry on recovery
 // since this is an indication we crashed in the middle of delete_atomically
-future<> replay_pending_delete_log(sstring pending_delete_log) {
+future<> replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
-    sstring pending_delete_dir = parent_path(pending_delete_log);
-    assert(sstable::is_pending_delete_dir(fs::path(pending_delete_dir)));
+    fs::path pending_delete_dir = pending_delete_log.parent_path();
+    assert(sstable::is_pending_delete_dir(pending_delete_dir));
     try {
-        auto sstdir = parent_path(pending_delete_dir);
-        auto text = co_await seastar::util::read_entire_file_contiguous(fs::path(pending_delete_log));
+        sstring sstdir = pending_delete_dir.parent_path().native();
+        auto text = co_await seastar::util::read_entire_file_contiguous(pending_delete_log);
 
         sstring all(text.begin(), text.end());
         std::vector<sstring> basenames;

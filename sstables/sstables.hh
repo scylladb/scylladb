@@ -920,7 +920,7 @@ public:
 //
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts);
-future<> replay_pending_delete_log(sstring log_file);
+future<> replay_pending_delete_log(fs::path log_file);
 
 // Validate checksums
 //
