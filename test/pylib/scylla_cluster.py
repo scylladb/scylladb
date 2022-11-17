@@ -145,23 +145,21 @@ class ScyllaServer:
         # Calculated in `install` as only then we know the seed servers.
         self.config: Dict[str, object] = {}
 
-        async def stop_server() -> None:
-            if self.is_running:
-                await self.stop()
-
-        async def uninstall_server() -> None:
-            await self.uninstall()
-
-        self.stop_artifact = stop_server
-        self.uninstall_artifact = uninstall_server
-
     async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
-        await self.install()
+        try:
+            await self.install()
+        except:
+            await self.uninstall()
+            raise
 
         logging.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
 
-        await self.start(api)
+        try:
+            await self.start(api)
+        except:
+            await self.stop()
+            raise
 
         if self.cmd:
             logging.info("started server at host %s in %s, pid %d", self.ip_addr,
@@ -426,7 +424,10 @@ class ScyllaServer:
             return
         logging.info("Uninstalling server at %s", self.workdir)
 
-        shutil.rmtree(self.workdir)
+        try:
+            shutil.rmtree(self.workdir)
+        except FileNotFoundError:
+            pass
         self.log_filename.unlink(missing_ok=True)
 
         await self.host_registry.release_host(self.ip_addr)
@@ -495,7 +496,7 @@ class ScyllaCluster:
         self.is_dirty = False
 
     async def uninstall(self) -> None:
-        """Stop running servers, uninstall all servers, and remove API socket"""
+        """Stop running servers and uninstall all servers"""
         self.is_dirty = True
         logging.info("Uninstalling cluster")
         await self.stop()

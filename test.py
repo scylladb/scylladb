@@ -362,17 +362,25 @@ class PythonTestSuite(TestSuite):
                 cmdline_options=cmdline_options,
                 config_options=config_options)
 
-            # Suite artifacts are removed when
-            # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, server.stop_artifact)
-            if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dir.
-                self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
-            self.artifacts.add_exit_artifact(self, server.stop_artifact)
             return server
 
         async def create_cluster() -> ScyllaCluster:
             cluster = ScyllaCluster(cluster_size, create_server)
+
+            async def stop() -> None:
+                await cluster.stop()
+
+            # Suite artifacts are removed when
+            # the entire suite ends successfully.
+            self.artifacts.add_suite_artifact(self, stop)
+            if not self.options.save_log_on_success:
+                # If a test fails, we might want to keep the data dirs.
+                async def uninstall() -> None:
+                    await cluster.uninstall()
+
+                self.artifacts.add_suite_artifact(self, uninstall)
+            self.artifacts.add_exit_artifact(self, stop)
+
             await cluster.install_and_start()
             return cluster
 
