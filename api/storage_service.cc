@@ -617,8 +617,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, column_families);
-        // FIXME: log error
-            // FIXME: indentation broken on purpose
+        try {
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
             auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
@@ -632,6 +631,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 co_await db.find_column_family(id).compact_all_sstables();
             }
             });
+        } catch (...) {
+            apilog.error("force_keyspace_compaction: keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            throw;
+        }
 
         co_return json_void();
     });
@@ -649,8 +652,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, column_families, msg);
             co_await coroutine::return_exception(std::runtime_error(msg));
         }
-        // FIXME: log error
-            // FIXME: indentation broken on purpose
+        try {
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
@@ -667,19 +669,33 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                     co_await t.perform_cleanup_compaction(owned_ranges_ptr);
                 }
             });
+        } catch (...) {
+            apilog.error("force_keyspace_cleanup: keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            throw;
+        }
+
         co_return json::json_return_type(0);
     });
 
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, tables);
-        co_return co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
+        bool res = false;
+        try {
+          // FIXME: indentation
+          res = co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
             bool needed = false;
             for (const auto& table : tables) {
                 auto& t = db.find_column_family(keyspace, table);
                 needed |= co_await t.perform_offstrategy_compaction();
             }
             co_return needed;
-        }, false, std::plus<bool>());
+          }, false, std::plus<bool>());
+        } catch (...) {
+            apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", keyspace, tables, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(res);
     }));
 
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) -> future<json::json_return_type> {
@@ -687,7 +703,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, column_families, exclude_current_version);
-        // FIXME: log error
+        try {
           // FIXME: indentation
           co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
             auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
@@ -697,6 +713,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 co_await cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
             };
           });
+        } catch (...) {
+            apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            throw;
+        }
 
         co_return json::json_return_type(0);
     }));
@@ -1468,7 +1488,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } catch (const sstables::compaction_aborted_exception&) {
             co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
         } catch (...) {
-            // FIXME: log error
+            apilog.error("scrub keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
             throw;
         }
 
