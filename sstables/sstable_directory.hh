@@ -207,6 +207,21 @@ public:
     std::filesystem::path sstable_dir() const noexcept {
         return _sstable_dir;
     }
+
+    // When we compact sstables, we have to atomically instantiate the new
+    // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
+    // and if A contained some data that was tombstoned by B, and if B was
+    // deleted but A survived, then data from A will be resurrected.
+    //
+    // There are two violators of the requirement to atomically delete
+    // sstables: first sstable instantiation and deletion on disk is atomic
+    // only wrt. itself, not other sstables, and second when an sstable is
+    // shared among shard, so actual on-disk deletion of an sstable is deferred
+    // until all shards agree it can be deleted.
+    //
+    // This function only solves the second problem for now.
+    static future<> delete_atomically(std::vector<shared_sstable> ssts);
+    static future<> replay_pending_delete_log(std::filesystem::path log_file);
 };
 
 }

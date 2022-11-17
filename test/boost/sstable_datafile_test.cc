@@ -22,6 +22,7 @@
 #include "replica/database.hh"
 #include "sstables/metadata_collector.hh"
 #include "sstables/sstable_writer.hh"
+#include "sstables/sstable_directory.hh"
 #include <memory>
 #include "test/boost/sstable_test.hh"
 #include <seastar/core/seastar.hh>
@@ -2103,7 +2104,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(!file_exists(tmp.path().string() +  "/la-1-big-UNKNOWN.txt").get0());
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
 
-        sstables::delete_atomically({sstp}).get();
+        sstables::sstable_directory::delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
     });

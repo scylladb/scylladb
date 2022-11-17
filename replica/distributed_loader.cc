@@ -434,7 +434,7 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
             futures.push_back(remove_file(file_path.string()));
         } else if (file_path.extension() == ".log") {
             dblog.info("Found pending_delete log file: {}, replaying", file_path);
-            auto f = sstables::replay_pending_delete_log(file_path).then([file_path = std::move(file_path)] {
+            auto f = sstables::sstable_directory::replay_pending_delete_log(file_path).then([file_path = std::move(file_path)] {
                 dblog.debug("Replayed {}, removing", file_path);
                 return remove_file(file_path.string());
             });
