@@ -72,6 +72,12 @@ Supported Operations
 * ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
 
 
+You can learn more about each operation by invoking its help:
+
+    .. code-block:: console
+
+        scylla types $OPERATION --help
+
 .. _scylla-types-options:
 
 Additional Options
