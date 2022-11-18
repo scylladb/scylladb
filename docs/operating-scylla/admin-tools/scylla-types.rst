@@ -67,6 +67,8 @@ Supported Operations
 * ``print`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
+* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
+* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
 
 
 .. _scylla-types-options:
@@ -138,3 +140,28 @@ Examples
 
        (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 
+* Calculating the token of a partition key:
+
+    .. code-block:: console
+
+        scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
+
+* Calculating the owner shard of a partition key:
+
+    .. code-block:: console
+
+        scylla types shardof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType --shards=7 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): token: -5043005771368701888, shard: 1
