@@ -224,232 +224,250 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
 
 namespace tools {
 
-    sstring mutation_fragment_json_writer::to_string(gc_clock::time_point tp) {
-        return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
-    }
-    void mutation_fragment_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {
-        _writer.Key("ttl");
-        _writer.AsString(ttl);
-        _writer.Key("expiry");
-        _writer.String(to_string(expiry));
-    }
-    void mutation_fragment_json_writer::write(const tombstone& t) {
-        _writer.StartObject();
-        if (t) {
-            _writer.Key("timestamp");
-            _writer.Int64(t.timestamp);
-            _writer.Key("deletion_time");
-            _writer.String(to_string(t.deletion_time));
-        }
-        _writer.EndObject();
-    }
-    void mutation_fragment_json_writer::write(const row_marker& m) {
-        _writer.StartObject();
+sstring mutation_fragment_json_writer::to_string(gc_clock::time_point tp) {
+    return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
+}
+
+void mutation_fragment_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {
+    _writer.Key("ttl");
+    _writer.AsString(ttl);
+    _writer.Key("expiry");
+    _writer.String(to_string(expiry));
+}
+
+void mutation_fragment_json_writer::write(const tombstone& t) {
+    _writer.StartObject();
+    if (t) {
         _writer.Key("timestamp");
-        _writer.Int64(m.timestamp());
-        if (m.is_live() && m.is_expiring()) {
-            write(m.ttl(), m.expiry());
-        }
+        _writer.Int64(t.timestamp);
+        _writer.Key("deletion_time");
+        _writer.String(to_string(t.deletion_time));
+    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const row_marker& m) {
+    _writer.StartObject();
+    _writer.Key("timestamp");
+    _writer.Int64(m.timestamp());
+    if (m.is_live() && m.is_expiring()) {
+        write(m.ttl(), m.expiry());
+    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(counter_cell_view cv) {
+    _writer.StartArray();
+    for (const auto& shard : cv.shards()) {
+        _writer.StartObject();
+        _writer.Key("id");
+        _writer.AsString(shard.id());
+        _writer.Key("value");
+        _writer.Int64(shard.value());
+        _writer.Key("clock");
+        _writer.Int64(shard.logical_clock());
         _writer.EndObject();
     }
-    void mutation_fragment_json_writer::write(counter_cell_view cv) {
-        _writer.StartArray();
-        for (const auto& shard : cv.shards()) {
-            _writer.StartObject();
-            _writer.Key("id");
-            _writer.AsString(shard.id());
+    _writer.EndArray();
+}
+
+void mutation_fragment_json_writer::write(const atomic_cell_view& cell, data_type type) {
+    _writer.StartObject();
+    _writer.Key("is_live");
+    _writer.Bool(cell.is_live());
+    _writer.Key("type");
+    if (type->is_counter()) {
+        if (cell.is_counter_update()) {
+            _writer.String("counter-update");
+        } else {
+            _writer.String("counter-shards");
+        }
+    } else if (type->is_collection()) {
+        _writer.String("frozen-collection");
+    } else {
+        _writer.String("regular");
+    }
+    _writer.Key("timestamp");
+    _writer.Int64(cell.timestamp());
+    if (type->is_counter()) {
+        _writer.Key("value");
+        if (cell.is_counter_update()) {
+            _writer.Int64(cell.counter_update_value());
+        } else {
+            write(counter_cell_view(cell));
+        }
+    } else {
+        if (cell.is_live_and_has_ttl()) {
+            write(cell.ttl(), cell.expiry());
+        }
+        if (cell.is_live()) {
             _writer.Key("value");
-            _writer.Int64(shard.value());
-            _writer.Key("clock");
-            _writer.Int64(shard.logical_clock());
+            _writer.String(type->to_string(cell.value().linearize()));
+        } else {
+            _writer.Key("deletion_time");
+            _writer.String(to_string(cell.deletion_time()));
+        }
+    }
+    _writer.EndObject();
+}
+void mutation_fragment_json_writer::write(const collection_mutation_view_description& mv, data_type type) {
+    _writer.StartObject();
+
+    if (mv.tomb) {
+        _writer.Key("tombstone");
+        write(mv.tomb);
+    }
+
+    _writer.Key("cells");
+
+    std::function<void(size_t, bytes_view)> write_key;
+    std::function<void(size_t, atomic_cell_view)> write_value;
+    if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
+        write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
+        write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
+    } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
+        write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
+        write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
+    }
+
+    if (write_key && write_value) {
+        _writer.StartArray();
+        for (size_t i = 0; i < mv.cells.size(); ++i) {
+            _writer.StartObject();
+            _writer.Key("key");
+            write_key(i, mv.cells[i].first);
+            _writer.Key("value");
+            write_value(i, mv.cells[i].second);
             _writer.EndObject();
         }
         _writer.EndArray();
+    } else {
+        _writer.Null();
     }
-    void mutation_fragment_json_writer::write(const atomic_cell_view& cell, data_type type) {
-        _writer.StartObject();
-        _writer.Key("is_live");
-        _writer.Bool(cell.is_live());
-        _writer.Key("type");
-        if (type->is_counter()) {
-            if (cell.is_counter_update()) {
-                _writer.String("counter-update");
-            } else {
-                _writer.String("counter-shards");
-            }
-        } else if (type->is_collection()) {
-            _writer.String("frozen-collection");
-        } else {
-            _writer.String("regular");
-        }
-        _writer.Key("timestamp");
-        _writer.Int64(cell.timestamp());
-        if (type->is_counter()) {
-            _writer.Key("value");
-            if (cell.is_counter_update()) {
-                _writer.Int64(cell.counter_update_value());
-            } else {
-                write(counter_cell_view(cell));
-            }
-        } else {
-            if (cell.is_live_and_has_ttl()) {
-                write(cell.ttl(), cell.expiry());
-            }
-            if (cell.is_live()) {
-                _writer.Key("value");
-                _writer.String(type->to_string(cell.value().linearize()));
-            } else {
-                _writer.Key("deletion_time");
-                _writer.String(to_string(cell.deletion_time()));
-            }
-        }
-        _writer.EndObject();
-    }
-    void mutation_fragment_json_writer::write(const collection_mutation_view_description& mv, data_type type) {
-        _writer.StartObject();
 
-        if (mv.tomb) {
-            _writer.Key("tombstone");
-            write(mv.tomb);
-        }
+    _writer.EndObject();
+}
 
-        _writer.Key("cells");
-
-        std::function<void(size_t, bytes_view)> write_key;
-        std::function<void(size_t, atomic_cell_view)> write_value;
-        if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-            write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
-            write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
-        } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-            write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
-            write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
-        }
-
-        if (write_key && write_value) {
-            _writer.StartArray();
-            for (size_t i = 0; i < mv.cells.size(); ++i) {
-                _writer.StartObject();
-                _writer.Key("key");
-                write_key(i, mv.cells[i].first);
-                _writer.Key("value");
-                write_value(i, mv.cells[i].second);
-                _writer.EndObject();
-            }
-            _writer.EndArray();
-        } else {
-            _writer.Null();
-        }
-
-        _writer.EndObject();
-    }
-    void mutation_fragment_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
-        if (cdef.is_atomic()) {
-            write(cell.as_atomic_cell(cdef), cdef.type);
-        } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-            cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
-                write(mv, cdef.type);
-            });
-        } else {
-            _writer.Null();
-        }
-    }
-    void mutation_fragment_json_writer::write(const row& r, column_kind kind) {
-        _writer.StartObject();
-        r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
-            auto cdef = _schema.column_at(kind, id);
-            _writer.Key(cdef.name_as_text());
-            write(cell, cdef);
+void mutation_fragment_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+    if (cdef.is_atomic()) {
+        write(cell.as_atomic_cell(cdef), cdef.type);
+    } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
+        cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
+            write(mv, cdef.type);
         });
-        _writer.EndObject();
+    } else {
+        _writer.Null();
     }
-    void mutation_fragment_json_writer::write(const clustering_row& cr) {
-        _writer.StartObject();
-        _writer.Key("type");
-        _writer.String("clustering-row");
-        _writer.Key("key");
-        _writer.DataKey(_schema, cr.key());
-        if (cr.tomb()) {
-            _writer.Key("tombstone");
-            write(cr.tomb().regular());
-            _writer.Key("shadowable_tombstone");
-            write(cr.tomb().shadowable().tomb());
-        }
-        if (!cr.marker().is_missing()) {
-            _writer.Key("marker");
-            write(cr.marker());
-        }
-        _writer.Key("columns");
-        write(cr.cells(), column_kind::regular_column);
-        _writer.EndObject();
-    }
-    void mutation_fragment_json_writer::write(const range_tombstone_change& rtc) {
-        _writer.StartObject();
-        _writer.Key("type");
-        _writer.String("range-tombstone-change");
-        const auto pos = rtc.position();
-        if (pos.has_key()) {
-            _writer.Key("key");
-            _writer.DataKey(_schema, pos.key());
-        }
-        _writer.Key("weight");
-        _writer.Int(static_cast<int>(pos.get_bound_weight()));
+}
+
+void mutation_fragment_json_writer::write(const row& r, column_kind kind) {
+    _writer.StartObject();
+    r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+        auto cdef = _schema.column_at(kind, id);
+        _writer.Key(cdef.name_as_text());
+        write(cell, cdef);
+    });
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const clustering_row& cr) {
+    _writer.StartObject();
+    _writer.Key("type");
+    _writer.String("clustering-row");
+    _writer.Key("key");
+    _writer.DataKey(_schema, cr.key());
+    if (cr.tomb()) {
         _writer.Key("tombstone");
-        write(rtc.tombstone());
-        _writer.EndObject();
+        write(cr.tomb().regular());
+        _writer.Key("shadowable_tombstone");
+        write(cr.tomb().shadowable().tomb());
     }
-    void mutation_fragment_json_writer::start_stream() {
-        _writer.StartStream();
+    if (!cr.marker().is_missing()) {
+        _writer.Key("marker");
+        write(cr.marker());
     }
-    void mutation_fragment_json_writer::start_sstable(const sstables::sstable* const sst) {
-        _writer.SstableKey(sst);
-        _writer.StartArray();
-    }
-    void mutation_fragment_json_writer::start_partition(const partition_start& ps) {
-        const auto& dk = ps.key();
-        _clustering_array_created = false;
+    _writer.Key("columns");
+    write(cr.cells(), column_kind::regular_column);
+    _writer.EndObject();
+}
 
-        _writer.StartObject();
-
+void mutation_fragment_json_writer::write(const range_tombstone_change& rtc) {
+    _writer.StartObject();
+    _writer.Key("type");
+    _writer.String("range-tombstone-change");
+    const auto pos = rtc.position();
+    if (pos.has_key()) {
         _writer.Key("key");
-        _writer.DataKey(_schema, dk.key(), dk.token());
+        _writer.DataKey(_schema, pos.key());
+    }
+    _writer.Key("weight");
+    _writer.Int(static_cast<int>(pos.get_bound_weight()));
+    _writer.Key("tombstone");
+    write(rtc.tombstone());
+    _writer.EndObject();
+}
 
-        if (ps.partition_tombstone()) {
-            _writer.Key("tombstone");
-            write(ps.partition_tombstone());
-        }
+void mutation_fragment_json_writer::start_stream() {
+    _writer.StartStream();
+}
+
+void mutation_fragment_json_writer::start_sstable(const sstables::sstable* const sst) {
+    _writer.SstableKey(sst);
+    _writer.StartArray();
+}
+
+void mutation_fragment_json_writer::start_partition(const partition_start& ps) {
+    const auto& dk = ps.key();
+    _clustering_array_created = false;
+
+    _writer.StartObject();
+
+    _writer.Key("key");
+    _writer.DataKey(_schema, dk.key(), dk.token());
+
+    if (ps.partition_tombstone()) {
+        _writer.Key("tombstone");
+        write(ps.partition_tombstone());
     }
-    void mutation_fragment_json_writer::partition_element(const static_row& sr) {
-        _writer.Key("static_row");
-        write(sr.cells(), column_kind::static_column);
+}
+
+void mutation_fragment_json_writer::partition_element(const static_row& sr) {
+    _writer.Key("static_row");
+    write(sr.cells(), column_kind::static_column);
+}
+
+void mutation_fragment_json_writer::partition_element(const clustering_row& cr) {
+    if (!_clustering_array_created) {
+        _writer.Key("clustering_elements");
+        _writer.StartArray();
+        _clustering_array_created = true;
     }
-    void mutation_fragment_json_writer::partition_element(const clustering_row& cr) {
-        if (!_clustering_array_created) {
-            _writer.Key("clustering_elements");
-            _writer.StartArray();
-            _clustering_array_created = true;
-        }
-        write(cr);
+    write(cr);
+}
+
+void mutation_fragment_json_writer::partition_element(const range_tombstone_change& rtc) {
+    if (!_clustering_array_created) {
+        _writer.Key("clustering_elements");
+        _writer.StartArray();
+        _clustering_array_created = true;
     }
-    void mutation_fragment_json_writer::partition_element(const range_tombstone_change& rtc) {
-        if (!_clustering_array_created) {
-            _writer.Key("clustering_elements");
-            _writer.StartArray();
-            _clustering_array_created = true;
-        }
-        write(rtc);
-    }
-    void mutation_fragment_json_writer::end_partition() {
-        if (_clustering_array_created) {
-            _writer.EndArray();
-        }
-        _writer.EndObject();
-    }
-    void mutation_fragment_json_writer::end_sstable() {
+    write(rtc);
+}
+
+void mutation_fragment_json_writer::end_partition() {
+    if (_clustering_array_created) {
         _writer.EndArray();
     }
-    void mutation_fragment_json_writer::end_stream() {
-        _writer.EndStream();
-    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::end_sstable() {
+    _writer.EndArray();
+}
+
+void mutation_fragment_json_writer::end_stream() {
+    _writer.EndStream();
+}
 
 } // namespace tools
 
