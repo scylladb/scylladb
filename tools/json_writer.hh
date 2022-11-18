@@ -27,6 +27,8 @@ public:
     json_writer() : _stream(std::cout), _writer(_stream)
     { }
 
+    writer& rjson_writer() { return _writer; }
+
     // following the rapidjson method names here
     bool Null() { return _writer.Null(); }
     bool Bool(bool b) { return _writer.Bool(b); }
@@ -101,6 +103,7 @@ private:
     void write(const range_tombstone_change& rtc);
 public:
     explicit mutation_fragment_json_writer(const schema& s) : _schema(s) {}
+    json_writer& writer() { return _writer; }
     void start_stream();
     void start_sstable(const sstables::sstable* const sst);
     void start_partition(const partition_start& ps);
