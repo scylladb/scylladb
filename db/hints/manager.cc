@@ -96,7 +96,7 @@ void manager::register_metrics(const sstring& group_name) {
 future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
-    return lister::scan_dir(_hints_dir, { directory_entry_type::directory }, [this] (fs::path datadir, directory_entry de) {
+    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
         ep_key_type ep = ep_key_type(de.name);
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
@@ -656,7 +656,7 @@ future<> manager::change_host_filter(host_filter filter) {
 
             // Iterate over existing hint directories and see if we can enable an endpoint manager
             // for some of them
-            return lister::scan_dir(_hints_dir, { directory_entry_type::directory }, [this] (fs::path datadir, directory_entry de) {
+            return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
                 const ep_key_type ep = ep_key_type(de.name);
                 if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
                     return make_ready_future<>();
@@ -1168,7 +1168,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
 }
 
 static future<> scan_for_hints_dirs(const sstring& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
-    return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
+    return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
         unsigned shard_id;
         try {
             shard_id = std::stoi(de.name.c_str());
@@ -1188,10 +1188,10 @@ manager::hints_segments_map manager::get_current_hints_segments(const sstring& h
     scan_for_hints_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
         manager_logger.trace("shard_id = {}", shard_id);
         // IPs level
-        return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory }, [&current_hints_segments, shard_id] (fs::path dir, directory_entry de) {
+        return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::directory>(), [&current_hints_segments, shard_id] (fs::path dir, directory_entry de) {
             manager_logger.trace("\tIP: {}", de.name);
             // hints files
-            return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::regular }, [&current_hints_segments, shard_id, ep_addr = de.name] (fs::path dir, directory_entry de) {
+            return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::regular>(), [&current_hints_segments, shard_id, ep_addr = de.name] (fs::path dir, directory_entry de) {
                 manager_logger.trace("\t\tfile: {}", de.name);
                 current_hints_segments[ep_addr][shard_id].emplace_back(dir / de.name.c_str());
                 return make_ready_future<>();
@@ -1305,7 +1305,7 @@ void manager::remove_irrelevant_shards_directories(const sstring& hints_director
     scan_for_hints_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
             // IPs level
-            return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory, directory_entry_type::regular }, lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
+            return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::full(), lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
                 return io_check(remove_file, (dir / de.name.c_str()).native());
             }).then([shard_base_dir = dir, shard_entry = de] {
                 return io_check(remove_file, (shard_base_dir / shard_entry.name.c_str()).native());

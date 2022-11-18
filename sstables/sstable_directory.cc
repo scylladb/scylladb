@@ -172,7 +172,7 @@ sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
 
     scan_state state;
 
-    directory_lister sstable_dir_lister(_sstable_dir, { directory_entry_type::regular }, &manifest_json_filter);
+    directory_lister sstable_dir_lister(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
     std::exception_ptr ex;
     try {
         while (auto de = co_await sstable_dir_lister.get()) {

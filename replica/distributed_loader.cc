@@ -406,7 +406,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir) {
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(sstdir, { directory_entry_type::directory }, [&] (fs::path sstdir, directory_entry de) {
+    co_await lister::scan_dir(sstdir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
         // push futures that remove files/directories into an array of futures,
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
@@ -424,7 +424,7 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
 future<> distributed_loader::handle_sstables_pending_delete(sstring pending_delete_dir) {
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(pending_delete_dir, { directory_entry_type::regular }, [&futures] (fs::path dir, directory_entry de) {
+    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&futures] (fs::path dir, directory_entry de) {
         // push nested futures that remove files/directories into an array of futures,
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
@@ -744,7 +744,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
 
         parallel_for_each(cfg.data_file_directories(), [&db, &dirs] (sstring directory) {
             // we want to collect the directories first, so we can get a full set of potential dirs
-            return lister::scan_dir(directory, { directory_entry_type::directory }, [&dirs] (fs::path datadir, directory_entry de) {
+            return lister::scan_dir(directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&dirs] (fs::path datadir, directory_entry de) {
                 if (!is_system_keyspace(de.name)) {
                     dirs.emplace(de.name, datadir.native());
                 }

@@ -99,7 +99,7 @@ future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, 
             if (!exists) {
                 return make_ready_future<>();
             } else {
-                return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key, &shard_manager] (fs::path dir, directory_entry de) {
+                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, ep_key, &shard_manager] (fs::path dir, directory_entry de) {
                     // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
                     if (_files_count == 1) {
                         shard_manager.add_ep_with_pending_hints(ep_key);
@@ -138,7 +138,7 @@ void space_watchdog::on_timer() {
         _total_size = 0;
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();
-            lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (fs::path dir, directory_entry de) {
+            lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &shard_manager] (fs::path dir, directory_entry de) {
                 _files_count = 0;
                 // Let's scan per-end-point directories and enumerate hints files...
                 //

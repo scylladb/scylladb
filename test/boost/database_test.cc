@@ -506,7 +506,7 @@ SEASTAR_TEST_CASE(snapshot_works) {
         };
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
             expected.insert(de.name);
             return make_ready_future<>();
         }).get();
@@ -514,7 +514,7 @@ SEASTAR_TEST_CASE(snapshot_works) {
         BOOST_REQUIRE_GT(expected.size(), 1);
 
         // all files were copied and manifest was generated
-        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
             expected.erase(de.name);
             return make_ready_future<>();
         }).get();
@@ -533,7 +533,7 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         };
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
             expected.insert(de.name);
             return make_ready_future<>();
         }).get();
@@ -542,7 +542,7 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         BOOST_REQUIRE_EQUAL(expected.size(), 1);
 
         // all files were copied and manifest was generated
-        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
             expected.erase(de.name);
             return make_ready_future<>();
         }).get();
@@ -564,7 +564,7 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
         BOOST_REQUIRE_EQUAL(sd.live, 0);
         BOOST_REQUIRE_GT(sd.total, 0);
 
-        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
             fs::remove(parent_dir / de.name);
             return make_ready_future<>();
         }).get();
@@ -632,7 +632,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
         unsigned count = 0;
-        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
             count++;
             return make_ready_future<>();
         }).get();
@@ -668,7 +668,7 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         for (auto i = 0; i < num_snapshots; i++) {
             unsigned count = 0;
             testlog.debug("Verifying {}", snapshots_dir / snapshot_name(i));
-            lister::scan_dir(snapshots_dir / snapshot_name(i), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+            lister::scan_dir(snapshots_dir / snapshot_name(i), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
                 count++;
                 return make_ready_future<>();
             }).get();
@@ -754,7 +754,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         BOOST_REQUIRE_EQUAL(sc_sd.live, sd.live);
         BOOST_REQUIRE_EQUAL(sc_sd.total, sd.total);
 
-        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
             fs::remove(parent_dir / de.name);
             return make_ready_future<>();
         }).get();
@@ -796,7 +796,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
         auto sc_live_size = sc.local().true_snapshots_size().get0();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd.live);
 
-        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
             fs::remove(parent_dir / de.name);
             return make_ready_future<>();
         }).get();
@@ -1185,7 +1185,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         auto& cf = db.local().find_column_family("ks", "cf");
 
         // all files were copied and manifest was generated
-        co_await lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        co_await lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
             testlog.debug("Found in snapshots: {}", de.name);
             expected.erase(de.name);
             return make_ready_future<>();

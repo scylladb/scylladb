@@ -2542,15 +2542,14 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    auto dirs_only_entries = lister::dir_entry_types{directory_entry_type::directory};
     std::vector<database::snapshot_details_result> details;
 
     for (auto& datadir : data_dirs) {
-        co_await lister::scan_dir(datadir, dirs_only_entries, [this, &dirs_only_entries, &details] (fs::path parent_dir, directory_entry de) -> future<> {
+        co_await lister::scan_dir(datadir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &details] (fs::path parent_dir, directory_entry de) -> future<> {
             // KS directory
             sstring ks_name = de.name;
 
-            co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &dirs_only_entries, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
                 // CF directory
                 auto cf_dir = parent_dir / de.name;
 
@@ -2562,13 +2561,13 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                 }
 
                 auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, dirs_only_entries, [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     database::snapshot_details_result snapshot_result = {
                         .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
                     };
 
-                    co_await lister::scan_dir(parent_dir / de.name,  { directory_entry_type::regular }, [this, cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
+                    co_await lister::scan_dir(parent_dir / de.name,  lister::dir_entry_types::of<directory_entry_type::regular>(), [this, cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
                         auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
                         auto size = sd.allocated_size;
 
@@ -2651,13 +2650,13 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
             //  |- ...
             //
             auto data_dir = fs::path(parent_dir);
-            auto data_dir_lister = directory_lister(data_dir, {directory_entry_type::directory}, filter);
+            auto data_dir_lister = directory_lister(data_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), filter);
             auto close_data_dir_lister = deferred_close(data_dir_lister);
             dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set));
             while (auto ks_ent = data_dir_lister.get().get0()) {
                 auto ks_name = ks_ent->name;
                 auto ks_dir = data_dir / ks_name;
-                auto ks_dir_lister = directory_lister(ks_dir, {directory_entry_type::directory}, table_filter);
+                auto ks_dir_lister = directory_lister(ks_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), table_filter);
                 auto close_ks_dir_lister = deferred_close(ks_dir_lister);
                 dblog.debug("clear_snapshot: listing keyspace dir {} with filter={}", ks_dir, table_name_param.empty() ? "none" : fmt::format("{}", table_name_param));
                 while (auto table_ent = ks_dir_lister.get().get0()) {
@@ -2671,7 +2670,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                             has_snapshots = false;
                         } else {
                             // if specific snapshots tags were given - filter only these snapshot directories
-                            auto snapshots_dir_lister = directory_lister(snapshots_dir, {directory_entry_type::directory});
+                            auto snapshots_dir_lister = directory_lister(snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>());
                             auto close_snapshots_dir_lister = deferred_close(snapshots_dir_lister);
                             dblog.debug("clear_snapshot: listing snapshots dir {} with filter={}", snapshots_dir, tag);
                             has_snapshots = false;  // unless other snapshots are found
