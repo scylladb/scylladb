@@ -757,8 +757,6 @@ future<> reader_concurrency_semaphore::evict_inactive_reads_for_table(table_id i
         ++it;
         if (ir.reader.schema()->id() == id) {
             do_detach_inactive_reader(ir, evict_reason::manual);
-            ir.ttl_timer.cancel();
-            ir.unlink();
             evicted_readers.push_back(ir);
         }
     }
@@ -791,6 +789,8 @@ future<> reader_concurrency_semaphore::stop() noexcept {
 }
 
 void reader_concurrency_semaphore::do_detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+    ir.unlink();
+    ir.ttl_timer.cancel();
     ir.detach();
     ir.reader.permit()._impl->on_evicted();
     try {
