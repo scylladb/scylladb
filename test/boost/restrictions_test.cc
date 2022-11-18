@@ -739,9 +739,8 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
         cquery_nofail(e, "insert into t(pk,ck1,ck2,r) values (4,13,23,'a')");
         require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) allow filtering", {{I(3)}, {I(4)}});
         require_rows(e, "select pk from t where (ck1) in ((13),(33),(44)) allow filtering", {{I(3)}, {I(4)}});
-        // TODO: uncomment when #6200 is fixed.
-        // require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) and r='a' allow filtering",
-        //                  {{I(4), I(13), F(23), T("a")}});
+        require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) and r='a' allow filtering",
+                         {{I(4), I(13), F(23), T("a")}});
         cquery_nofail(e, "delete from t where pk=4");
         require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) allow filtering", {{I(3)}});
         auto stmt = e.prepare("select ck1 from t where (ck1,ck2) in ? allow filtering").get0();
