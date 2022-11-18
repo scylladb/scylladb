@@ -353,8 +353,8 @@ future<> server_impl::start() {
         rpc_config.current.merge(rpc_config.previous);
         for (const auto& s: rpc_config.current) {
             add_to_rpc_config(s.addr);
-            _rpc->add_server(s.addr);
         }
+        _rpc->on_configuration_change(get_rpc_config(), {});
     }
 
     // start fiber to persist entries added to in-memory log
@@ -974,8 +974,8 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
-                    _rpc->add_server(addr);
                 }
+                _rpc->on_configuration_change(rpc_diff.joining, {});
             }
 
              // After entries are persisted we can send messages.
@@ -992,8 +992,8 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 for (const auto& addr: rpc_diff.leaving) {
                     abort_snapshot_transfer(addr.id);
                     remove_from_rpc_config(addr);
-                    _rpc->remove_server(addr.id);
                 }
+                _rpc->on_configuration_change({}, rpc_diff.leaving);
             }
 
             // Process committed entries.

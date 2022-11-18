@@ -851,12 +851,14 @@ public:
         _send(dst, m);
     }
 
-    virtual void add_server(raft::server_address addr) override {
-        _on_server_update(addr.id, true);
-    }
-
-    virtual void remove_server(raft::server_id id) override {
-        _on_server_update(id, false);
+    virtual void on_configuration_change(raft::server_address_set add,
+        raft::server_address_set del) override {
+        for (const auto& addr: add) {
+            _on_server_update(addr.id, true);
+        }
+        for (const auto& addr: del) {
+            _on_server_update(addr.id, false);
+        }
     }
 
     virtual future<> abort() override {
