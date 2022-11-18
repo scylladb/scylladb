@@ -356,8 +356,8 @@ class PythonTestSuite(TestSuite):
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
-                host_registry=self.hosts,
                 cluster_name=create_cfg.cluster_name,
+                ip_addr=create_cfg.ip_addr,
                 seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options)
@@ -365,7 +365,7 @@ class PythonTestSuite(TestSuite):
             return server
 
         async def create_cluster() -> ScyllaCluster:
-            cluster = ScyllaCluster(cluster_size, create_server)
+            cluster = ScyllaCluster(self.hosts, cluster_size, create_server)
 
             async def stop() -> None:
                 await cluster.stop()

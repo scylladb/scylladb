@@ -20,6 +20,7 @@ import time
 from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple
 import uuid
 from io import BufferedWriter
+from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
@@ -120,21 +121,19 @@ class ScyllaServer:
     config_filename: pathlib.Path
     log_file: BufferedWriter
     host_id: HostID                             # Host id (UUID)
-    ip_addr: IPAddress
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
     def __init__(self, exe: str, vardir: str,
-                 host_registry,
-                 cluster_name: str, seeds: List[str],
+                 cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
                  config_options: Dict[str, str]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
-        self.host_registry = host_registry
         self.cmdline_options = cmdline_options
         self.cluster_name = cluster_name
+        self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
         self.cmd: Optional[Process] = None
         self.log_savepoint = 0
@@ -180,12 +179,6 @@ class ScyllaServer:
         a configuration file."""
 
         self.check_scylla_executable()
-
-        # Scylla assumes all instances of a cluster use the same port,
-        # so each instance needs an own IP address.
-        self.ip_addr = await self.host_registry.lease_host()
-        if not self.seeds:
-            self.seeds = [self.ip_addr]
 
         shortname = f"scylla-{self.server_id}"
         self.workdir = self.vardir / shortname
@@ -419,9 +412,6 @@ class ScyllaServer:
         """Clear all files left from a stopped server, including the
         data files and log files."""
 
-        if not hasattr(self, "ip_addr"):
-            logging.warning("Trying to uninstall %s not set up", self)
-            return
         logging.info("Uninstalling server at %s", self.workdir)
 
         try:
@@ -430,9 +420,6 @@ class ScyllaServer:
             pass
         self.log_filename.unlink(missing_ok=True)
 
-        await self.host_registry.release_host(self.ip_addr)
-        del self.ip_addr
-
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""
         self.log_file.seek(0, 2)  # seek to file end
@@ -440,9 +427,8 @@ class ScyllaServer:
         self.log_file.flush()
 
     def __str__(self):
-        ip_addr = getattr(self, 'ip_addr', 'undefined ip')
         host_id = getattr(self, 'host_id', 'undefined id')
-        return f"ScyllaServer({self.server_id}, {ip_addr}, {host_id})"
+        return f"ScyllaServer({self.server_id}, {self.ip_addr}, {host_id})"
 
     def _write_config_file(self) -> None:
         with self.config_filename.open('w') as config_file:
@@ -461,11 +447,13 @@ class ScyllaCluster:
 
     class CreateServerParams(NamedTuple):
         cluster_name: str
+        ip_addr: IPAddress
         seeds: List[str]
         config_from_test: dict[str, str]
 
-    def __init__(self, replicas: int,
+    def __init__(self, host_registry: HostRegistry, replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+        self.host_registry = host_registry
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
@@ -505,7 +493,10 @@ class ScyllaCluster:
         self.is_dirty = True
         logging.info("Uninstalling cluster")
         await self.stop()
-        await asyncio.gather(*(server.uninstall() for server in self.stopped.values()))
+        async def uninstall_and_release_ip(server: ScyllaServer) -> None:
+            await server.uninstall()
+            await self.host_registry.release_host(Host(server.ip_addr))
+        await asyncio.gather(*(uninstall_and_release_ip(srv) for srv in self.stopped.values()))
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
@@ -534,19 +525,27 @@ class ScyllaCluster:
 
     async def add_server(self) -> ServerInfo:
         """Add a new server to the cluster"""
+        self.is_dirty = True
+        # Scylla assumes all instances of a cluster use the same port,
+        # so each instance needs an own IP address.
+        ip_addr = IPAddress(await self.host_registry.lease_host())
+        seeds = self._seeds()
+        if not seeds:
+            seeds = [ip_addr]
         params = ScyllaCluster.CreateServerParams(
             cluster_name = self.name,
-            seeds = self._seeds(),
+            ip_addr = ip_addr,
+            seeds = seeds,
             config_from_test = {}
         )
-        server = self.create_server(params)
-        self.is_dirty = True
         try:
+            server = self.create_server(params)
             logging.info("Cluster %s adding server...", self)
             await server.install_and_start(self.api)
         except Exception as exc:
             logging.error("Failed to start Scylla server at host %s in %s: %s",
-                          server.ip_addr, server.workdir.name, str(exc))
+                          ip_addr, server.workdir.name, str(exc))
+            await self.host_registry.release_host(Host(ip_addr))
             raise
         self.running[server.server_id] = server
         logging.info("Cluster %s added %s", self, server)
