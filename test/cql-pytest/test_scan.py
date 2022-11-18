@@ -64,7 +64,6 @@ def test_multi_column_restrictions_ck(cql, test_keyspace):
 # Test that if we have multi-column restrictions on the clustering key
 # and additional filtering on regular columns, both restrictions are obeyed.
 # Reproduces #6200.
-@pytest.mark.xfail(reason="issue #6200")
 def test_multi_column_restrictions_and_filtering(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, r int, PRIMARY KEY (p, c1, c2)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c1, c2, r) VALUES (1, ?, ?, ?)")
