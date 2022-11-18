@@ -871,10 +871,16 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     // Evict inactive readers in the background while wait list isn't empty
     // This is safe since stop() closes _gate;
     (void)with_gate(_close_readers_gate, [this] {
-        return do_until([this] { return _wait_list.empty() || _inactive_reads.empty(); }, [this] {
-            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close();
+        return repeat([this] {
+            if (_wait_list.empty() || _inactive_reads.empty()) {
+                _evicting = false;
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close().then([] {
+                return stop_iteration::no;
+            });
         });
-    }).finally([this] { _evicting = false; });
+    });
 }
 
 reader_concurrency_semaphore::can_admit
