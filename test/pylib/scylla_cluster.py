@@ -116,9 +116,6 @@ class ScyllaServer:
     START_TIMEOUT = 300     # seconds
     start_time: float
     sleep_interval: float
-    workdir: pathlib.Path
-    log_filename: pathlib.Path
-    config_filename: pathlib.Path
     log_file: BufferedWriter
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
@@ -139,10 +136,17 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
-        self.config_options = config_options
-        # Sum of basic server configuration and the user-provided config options (self.config_options).
-        # Calculated in `install` as only then we know the seed servers.
-        self.config: Dict[str, object] = {}
+        shortname = f"scylla-{self.server_id}"
+        self.workdir = self.vardir / shortname
+        self.log_filename = (self.vardir / shortname).with_suffix(".log")
+        self.config_filename = self.workdir / "conf/scylla.yaml"
+        # Sum of basic server configuration and the user-provided config options.
+        self.config = make_scylla_conf(
+                workdir = self.workdir,
+                host_addr = self.ip_addr,
+                seed_addrs = self.seeds,
+                cluster_name = self.cluster_name) \
+            | config_options
 
     async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
@@ -180,29 +184,13 @@ class ScyllaServer:
 
         self.check_scylla_executable()
 
-        shortname = f"scylla-{self.server_id}"
-        self.workdir = self.vardir / shortname
-
         logging.info("installing Scylla server in %s...", self.workdir)
-
-        self.log_filename = (self.vardir / shortname).with_suffix(".log")
-
-        self.config_filename = self.workdir / "conf/scylla.yaml"
-
-        # Delete the remains of the previous run
 
         # Cleanup any remains of the previously running server in this path
         shutil.rmtree(self.workdir, ignore_errors=True)
 
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.config_filename.parent.mkdir(parents=True, exist_ok=True)
-        # Create a configuration file.
-        self.config = make_scylla_conf(
-                workdir = self.workdir,
-                host_addr = self.ip_addr,
-                seed_addrs = self.seeds,
-                cluster_name = self.cluster_name) \
-            | self.config_options
         self._write_config_file()
 
         self.log_file = self.log_filename.open("wb")
