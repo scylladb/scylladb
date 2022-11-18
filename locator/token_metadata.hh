@@ -169,7 +169,9 @@ public:
 
     void remove_endpoint(inet_address endpoint);
 
-    bool is_member(inet_address endpoint) const;
+    // Checks if the node is part of the token ring. If yes, the node is one of
+    // the nodes that owns the tokens and inside the set _normal_token_owners.
+    bool is_normal_token_owner(inet_address endpoint) const;
 
     bool is_leaving(inet_address endpoint) const;
 

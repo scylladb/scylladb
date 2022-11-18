@@ -1558,7 +1558,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto temp = tmptr->clone_after_all_left().get0();
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
             // command was used), it is still present in temp and must be removed.
-            if (temp.is_member(leaving_node)) {
+            if (temp.is_normal_token_owner(leaving_node)) {
                 temp.remove_endpoint(leaving_node);
             }
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;

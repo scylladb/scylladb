@@ -726,7 +726,7 @@ future<> gossiper::do_status_check() {
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
         if (!is_alive && (now > expire_time)
-             && (!get_token_metadata_ptr()->is_member(endpoint))) {
+             && (!get_token_metadata_ptr()->is_normal_token_owner(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
             co_await evict_from_membership(endpoint);
         }
@@ -1300,7 +1300,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
     if (!es) {
         return false;
     }
-    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_member(endpoint);
+    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(endpoint);
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
