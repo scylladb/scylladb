@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 import pytest
-from cassandra.protocol import InvalidRequest                            # type: ignore
+from cassandra.protocol import InvalidRequest, ReadFailure                         # type: ignore
 
 
 # Simple test of schema helper
@@ -24,7 +24,9 @@ async def test_new_table(manager, random_tables):
     assert len(res) == 1
     assert list(res[0])[:2] == vals
     await random_tables.drop_table(table)
-    with pytest.raises(InvalidRequest, match='unconfigured table'):
+    # NOTE: On rare occasions the exception is ReadFailure
+    with pytest.raises((InvalidRequest, ReadFailure),
+                       match='(unconfigured table|failed to execute read)'):
         await cql.run_async(f"SELECT * FROM {table}")
     await random_tables.verify_schema()
 
