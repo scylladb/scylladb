@@ -14,6 +14,9 @@ import time
 
 from test.pylib.util import wait_for
 
+from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.manager_client import ManagerClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,6 +92,24 @@ async def test_decommission_node_add_column(manager, random_tables):
     await manager.decommission_node(decommission_target.server_id)
     await table.add_column()
     await random_tables.verify_schema()
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Replace operation sleeps for 60 seconds")
+async def test_replace_different_ip(manager: ManagerClient, random_tables) -> None:
+    servers = await manager.running_servers()
+    await manager.server_stop(servers[0].server_id)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False)
+    await manager.server_add(replace_cfg)
+    # TODO: check that group 0 no longer contains the replaced node
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="As above + the new node cannot join group 0")
+async def replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
+    servers = await manager.running_servers()
+    await manager.server_stop(servers[0].server_id)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True)
+    await manager.server_add(replace_cfg)
+    # TODO: check that group 0 no longer contains the replaced node
 
 
 @pytest.mark.asyncio
