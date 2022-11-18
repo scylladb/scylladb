@@ -884,11 +884,7 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
 }
 
 reader_concurrency_semaphore::can_admit
-reader_concurrency_semaphore::can_admit_read(const reader_permit& permit, require_empty_waitlist wait_list_empty) const noexcept {
-    if (wait_list_empty && !_wait_list.empty()) {
-        return can_admit::no;
-    }
-
+reader_concurrency_semaphore::can_admit_read(const reader_permit& permit) const noexcept {
     if (!_ready_list.empty()) {
         return can_admit::no;
     }
@@ -913,10 +909,17 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
         _execution_loop_future.emplace(execution_loop());
     }
 
-    const auto admit = can_admit_read(permit, require_empty_waitlist::yes);
-    if (admit != can_admit::yes) {
+    const auto admit = can_admit_read(permit);
+    if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(std::move(permit), std::move(func));
-        if (admit == can_admit::maybe) {
+        if (admit == can_admit::yes && !_wait_list.empty()) {
+            // This is a contradiction: the semaphore could admit waiters yet it has waiters.
+            // Normally, the semaphore should admit waiters as soon as it can.
+            // So at any point in time, there should either be no waiters, or it
+            // shouldn't be able to admit new reads. Otherwise something went wrong.
+            maybe_dump_reader_permit_diagnostics(*this, _permit_list, "semaphore could admit new reads yet there are waiters");
+            maybe_admit_waiters();
+        } else if (admit == can_admit::maybe) {
             evict_readers_in_background();
         }
         return fut;
@@ -932,7 +935,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     auto admit = can_admit::no;
-    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit, require_empty_waitlist::no)) == can_admit::yes) {
+    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit)) == can_admit::yes) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
