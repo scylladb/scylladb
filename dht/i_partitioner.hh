@@ -532,6 +532,7 @@ public:
 
     const dht::token& token() const noexcept { return _token; }
     const std::optional<partition_key>& key() const { return _key; }
+    int8_t weight() const { return _weight; }
 
     // Only when key() == std::nullopt
     token_bound get_token_bound() const { return token_bound(_weight); }
