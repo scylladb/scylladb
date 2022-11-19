@@ -104,6 +104,35 @@ If the examined table is a system table -- it belongs to one of the system keysp
 
     scylla sstable dump-data --system-schema system.local ./path/to/md-123456-big-Data.db
 
+.. _scylla-sstable-sstable-content:
+
+SStable Content
+---------------
+
+.. _SStable: /architecture/sstable
+
+All operations target either one specific sstable component or all of them as a whole.
+For more information about the sstable components and the format itself, visit SStable_.
+
+On a conceptual level, the data in SStables is represented by objects called mutation fragments. There are the following kinds of fragments:
+
+* ``partition-start`` (1) - represents the start of a partition, contains the partition key and partition tombstone (if any);
+* ``static-row`` (0-1) - contains the static columns if the schema (and the partition) has any;
+* ``clustering-row`` (0-N) - contains the regular columns for a given clustering row; if there are no clustering columns, a partition will have exactly one of these;
+* ``range-tombstone-change`` (0-N) - contains a (either start or end) bound of a range deletion;
+* ``partition-end`` (1) - represents the end of the partition;
+
+Numbers in parentheses represent the number of the fragment type in a partition.
+
+Data from the sstable is parsed into these fragments.
+This format allows you to represent a small part of a partition or an arbitrary number of partitions, even the entire content of an SStable.
+The ``partition-start`` and ``partition-end`` fragments are always present, even if a single row is read from a partition.
+If the stream contains multiple partitions, these follow each other in the stream, the ``partition-start`` fragment of the next partition following the ``partition-end`` fragment of the previous one.
+The stream is strictly ordered:
+* Partitions are ordered according to their token (hashes);
+* Fragments in the partition are ordered according to their order presented in the listing above, ``clustering-row`` and ``range-tombstone-change`` fragments can be intermingled, see below.
+* Clustering fragments (``clustering-row`` and ``range-tombstone-change``) are ordered between themselves according to the clustering order defined by the schema.
+
 Supported Operations
 --------------------
 The ``dump-*`` operations output JSON. For ``dump-data``, you can specify another output format.
