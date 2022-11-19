@@ -175,7 +175,7 @@ public:
             BOOST_FAIL(format("Expected row with key {}, but key is {}", ck, actual));
         }
         if (active_range_tombstone) {
-            BOOST_CHECK_EQUAL(*active_range_tombstone, _rt);
+            BOOST_REQUIRE_EQUAL(*active_range_tombstone, _rt);
         }
         return *this;
     }
