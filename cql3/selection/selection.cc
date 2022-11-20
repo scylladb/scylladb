@@ -422,11 +422,16 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
     }
 
     auto clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions)) {
+    bool has_multi_col_clustering_restrictions =
+        dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions) != nullptr;
+    if (has_multi_col_clustering_restrictions) {
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
-        return expr::is_satisfied_by(
+        bool multi_col_clustering_satisfied = expr::is_satisfied_by(
                 clustering_columns_restrictions->expression,
                 partition_key, clustering_key, static_row, row, selection, _options);
+        if (!multi_col_clustering_satisfied) {
+            return false;
+        }
     }
 
     auto static_row_iterator = static_row.iterator();
@@ -472,6 +477,13 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             break;
         case column_kind::clustering_key: {
             if (_skip_ck_restrictions) {
+                continue;
+            }
+            if (has_multi_col_clustering_restrictions) {
+                // Mixing multi column and single column restrictions on clustering
+                // key columns is forbidden.
+                // Since there are multi column restrictions we have to skip
+                // evaluating single column restrictions or we will get an error.
                 continue;
             }
             auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
