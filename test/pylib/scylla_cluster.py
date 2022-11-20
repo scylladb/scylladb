@@ -188,16 +188,13 @@ class ScyllaServer:
         self.ip_addr = await self.host_registry.lease_host()
         if not self.seeds:
             self.seeds = [self.ip_addr]
-        # Use the last part in host IP 127.151.3.27 -> 27
-        # There can be no duplicates within the same test run
-        # thanks to how host registry registers subnets, and
-        # different runs use different vardirs.
-        shortname = pathlib.Path(f"scylla-{self.ip_addr.rsplit('.', maxsplit=1)[-1]}")
+
+        shortname = f"scylla-{self.server_id}"
         self.workdir = self.vardir / shortname
 
         logging.info("installing Scylla server in %s...", self.workdir)
 
-        self.log_filename = self.vardir / shortname.with_suffix(".log")
+        self.log_filename = (self.vardir / shortname).with_suffix(".log")
 
         self.config_filename = self.workdir / "conf/scylla.yaml"
 
@@ -722,7 +719,7 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self, test_case_name: str) -> None:
+    async def _before_test(self, test_case_name: str) -> str:
         if self.cluster.is_dirty:
             await self.clusters.steal()
             await self.cluster.stop()
@@ -732,6 +729,7 @@ class ScyllaClusterManager:
         self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
+        return str(self.cluster)
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
@@ -812,8 +810,8 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text=f"{self.cluster.servers[server_id].host_id}")
 
     async def _before_test_req(self, request) -> aiohttp.web.Response:
-        await self._before_test(request.match_info['test_case_name'])
-        return aiohttp.web.Response(text="OK")
+        cluster_str = await self._before_test(request.match_info['test_case_name'])
+        return aiohttp.web.Response(text=cluster_str)
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
         assert self.cluster is not None
