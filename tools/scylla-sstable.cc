@@ -129,8 +129,10 @@ partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_co
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, const std::vector<sstring>& sstable_names) {
     std::vector<sstables::shared_sstable> sstables;
+    sstables.resize(sstable_names.size());
 
-    parallel_for_each(sstable_names, [schema, &sst_man, &sstables] (const sstring& sst_name) -> future<> {
+    parallel_for_each(sstable_names, [schema, &sst_man, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
+        const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
         const auto sst_path = std::filesystem::path(sst_name);
 
         if (const auto ftype_opt = co_await file_type(sst_path.c_str(), follow_symlink::yes)) {
@@ -150,7 +152,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         co_await sst->load();
 
-        sstables.push_back(std::move(sst));
+        sstables[i] = std::move(sst);
     }).get();
 
     return sstables;
@@ -385,14 +387,25 @@ class dumping_consumer : public sstable_consumer {
             _writer.StartObject();
             _writer.Key("is_live");
             _writer.Bool(cell.is_live());
+            _writer.Key("type");
+            if (type->is_counter()) {
+                if (cell.is_counter_update()) {
+                    _writer.String("counter-update");
+                } else {
+                    _writer.String("counter-shards");
+                }
+            } else if (type->is_collection()) {
+                _writer.String("frozen-collection");
+            } else {
+                _writer.String("regular");
+            }
             _writer.Key("timestamp");
             _writer.Int64(cell.timestamp());
             if (type->is_counter()) {
+                _writer.Key("value");
                 if (cell.is_counter_update()) {
-                    _writer.Key("value");
                     _writer.Int64(cell.counter_update_value());
                 } else {
-                    _writer.Key("shards");
                     write(counter_cell_view(cell));
                 }
             } else {
@@ -422,22 +435,26 @@ class dumping_consumer : public sstable_consumer {
             std::function<void(size_t, bytes_view)> write_key;
             std::function<void(size_t, atomic_cell_view)> write_value;
             if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-                write_key = [this, t] (size_t, bytes_view k) { _writer.Key(t->name_comparator()->to_string(k)); };
-                write_value = [this, t] (size_t, atomic_cell_view v) { write(v, t->value_comparator()); };
+                write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
+                write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
             } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-                write_key = [this] (size_t i, bytes_view) { _writer.Key(format("{}", i)); };
+                write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
                 write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
             }
 
             if (write_key && write_value) {
-                _writer.StartObject();
+                _writer.StartArray();
                 for (size_t i = 0; i < mv.cells.size(); ++i) {
+                    _writer.StartObject();
+                    _writer.Key("key");
                     write_key(i, mv.cells[i].first);
+                    _writer.Key("value");
                     write_value(i, mv.cells[i].second);
+                    _writer.EndObject();
                 }
-                _writer.EndObject();
+                _writer.EndArray();
             } else {
-                _writer.String("<unknown>");
+                _writer.Null();
             }
 
             _writer.EndObject();
@@ -450,7 +467,7 @@ class dumping_consumer : public sstable_consumer {
                     write(mv, cdef.type);
                 });
             } else {
-                _writer.String("<unknown>");
+                _writer.Null();
             }
         }
         void write(const row& r, column_kind kind) {
@@ -2008,7 +2025,13 @@ class json_mutation_stream_parser {
                             ret.ok = error("invalid clustering element type: {}, expected clustering-row or range-tombstone-change", *_string);
                         }
                     } else if (top(1) == state::in_column) {
-                        if (_key == "ttl") {
+                        if (_key == "type") {
+                            if (*_string != "regular") {
+                                ret.ok = error("unsupported cell type {}, currently only regular cells are supported", *_string);
+                            } else {
+                                ret.ok = true;
+                            }
+                        } else if (_key == "ttl") {
                             ret.ok = parse_ttl();
                         } else if (_key == "expiry") {
                             ret.ok = parse_expiry();
@@ -2291,7 +2314,7 @@ class json_mutation_stream_parser {
                     if (_key == "timestamp") {
                         return push(state::before_integer);
                     }
-                    if (_key == "ttl" || _key == "expiry" || _key == "value" || _key == "deletion_time") {
+                    if (_key == "type" || _key == "ttl" || _key == "expiry" || _key == "value" || _key == "deletion_time") {
                         return push(state::before_string);
                     }
                     return unexpected(_key);
@@ -2541,7 +2564,7 @@ $PARTITION := {
     },
     "tombstone: $TOMBSTONE, // optional
     "static_row": $COLUMNS, // optional
-    "clustering_fragments": [
+    "clustering_elements": [
         $CLUSTERING_ROW | $RANGE_TOMBSTONE_CHANGE,
         ...
     ]
@@ -2553,30 +2576,24 @@ $TOMBSTONE := {
 }
 
 $COLUMNS := {
-    "$column_name": $REGULAR_CELL | $COUNTER_CELL | $COLLECTION,
+    "$column_name": $REGULAR_CELL | $COUNTER_SHARDS_CELL | $COUNTER_UPDATE_CELL | $FROZEN_COLLECTION | $COLLECTION,
     ...
 }
 
-$REGULAR_CELL := $REGULAR_LIVE_CELL | $REGULAR_DEAD_CELL
-
-$REGULAR_LIVE_CELL := {
-    "is_live": true,
+$REGULAR_CELL := {
+    "is_live": Bool, // is the cell live or not
+    "type": "regular",
     "timestamp": Int64,
     "ttl": String, // gc_clock::duration - optional
     "expiry": String, // YYYY-MM-DD HH:MM:SS - optional
-    "value": String
+    "value": String // only if is_live == true
 }
 
-$REGULAR_DEAD_CELL := {
-    "is_live": false,
-    "timestamp": Int64,
-    "deletion_time": String // YYYY-MM-DD HH:MM:SS
-}
-
-$COUNTER_CELL := {
+$COUNTER_SHARDS_CELL := {
     "is_live": true,
+    "type": "counter-shards",
     "timestamp": Int64,
-    "shards": [$COUNTER_SHARD, ...]
+    "value": [$COUNTER_SHARD, ...]
 }
 
 $COUNTER_SHARD := {
@@ -2585,12 +2602,25 @@ $COUNTER_SHARD := {
     "clock": Int64
 }
 
+$COUNTER_UPDATE_CELL := {
+    "is_live": true,
+    "type": "counter-update",
+    "timestamp": Int64,
+    "value": Int64
+}
+
+$FROZEN_COLLECTION is the same as a $REGULAR_CELL, with type = "frozen-collection".
+
 $COLLECTION := {
+    "type": "collection",
     "tombstone": $TOMBSTONE, // optional
-    "cells": {
-        "$key": $REGULAR_CELL,
+    "cells": [
+        {
+            "key": String,
+            "value": $REGULAR_CELL
+        },
         ...
-    }
+    ]
 }
 
 $CLUSTERING_ROW := {
