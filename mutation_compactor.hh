@@ -10,6 +10,7 @@
 
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_fragment.hh"
+#include "mutation_fragment_stream_validator.hh"
 #include "range_tombstone_assembler.hh"
 #include "tombstone_gc.hh"
 #include "full_position.hh"
@@ -168,12 +169,15 @@ class compact_mutation_state {
 
     compaction_stats _stats;
 
+    mutation_fragment_stream_validating_filter _validator;
+
     // Remember if we requested to stop mid-partition.
     stop_iteration _stop = stop_iteration::no;
 private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration do_consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
+        _validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
         stop_iteration gc_consumer_stop = stop_iteration::no;
         stop_iteration consumer_stop = stop_iteration::no;
         if (rtc.tombstone() <= _partition_tombstone) {
@@ -275,7 +279,8 @@ public:
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _tombstone_gc_state(nullptr)
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_pos(position_in_partition::end_of_partition_tag_t())
+        , _last_pos(position_in_partition::for_partition_end())
+        , _validator("mutation_compactor for read", _schema, mutation_fragment_stream_validation_level::token)
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -290,13 +295,17 @@ public:
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_dk({dht::token(), partition_key::make_empty()})
-        , _last_pos(position_in_partition::end_of_partition_tag_t())
+        , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
+        // We already have a validator for compaction in the sstable writer, no need to validate twice
+        , _validator("mutation_compactor for compaction", _schema, mutation_fragment_stream_validation_level::none)
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
     }
 
     void consume_new_partition(const dht::decorated_key& dk) {
+        _validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view::for_partition_start(), {});
+        _validator(dk);
         _stop = stop_iteration::no;
         auto& pk = dk.key();
         _dk = &dk;
@@ -312,7 +321,7 @@ public:
         _max_purgeable = api::missing_timestamp;
         _gc_before = std::nullopt;
         _last_static_row.reset();
-        _last_pos = position_in_partition(position_in_partition::partition_start_tag_t());
+        _last_pos = position_in_partition::for_partition_start();
         _effective_tombstone = {};
         _current_emitted_tombstone = {};
         _current_emitted_gc_tombstone = {};
@@ -338,6 +347,7 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
+        _validator(mutation_fragment_v2::kind::static_row, sr.position(), {});
         _last_static_row = static_row(_schema, sr);
         _last_pos = position_in_partition(position_in_partition::static_row_tag_t());
         auto current_tombstone = _partition_tombstone;
@@ -370,6 +380,7 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration consume(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
+        _validator(mutation_fragment_v2::kind::clustering_row, cr.position(), {});
         if (!sstable_compaction()) {
             _last_pos = cr.position();
         }
@@ -441,6 +452,7 @@ public:
             do_consume(std::move(rtc), consumer, gc_consumer);
             _effective_tombstone = prev_tombstone;
         }
+        _validator.on_end_of_partition();
         if (!_empty_partition_in_gc_consumer) {
             gc_consumer.consume_end_of_partition();
         }
@@ -466,6 +478,7 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     auto consume_end_of_stream(Consumer& consumer, GCConsumer& gc_consumer) {
+        _validator.on_end_of_stream();
         if (_dk) {
             _last_dk = *_dk;
             _dk = &_last_dk;
@@ -518,6 +531,9 @@ public:
 
         noop_compacted_fragments_consumer nc;
 
+        if (next_fragment_region != partition_region::partition_start) {
+            _validator.reset(mutation_fragment_v2::kind::partition_start, position_in_partition_view::for_partition_start(), {});
+        }
         if (next_fragment_region == partition_region::clustered && _last_static_row) {
             // Stopping here would cause an infinite loop so ignore return value.
             consume(*std::exchange(_last_static_row, {}), consumer, nc);

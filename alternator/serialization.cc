@@ -279,7 +279,7 @@ position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema)
         return position_in_partition(region, weight, region == partition_region::clustered ? std::optional(std::move(ck)) : std::nullopt);
     }
     if (ck.is_empty()) {
-        return position_in_partition(position_in_partition::partition_start_tag_t());
+        return position_in_partition::for_partition_start();
     }
     return position_in_partition::for_key(std::move(ck));
 }

@@ -118,7 +118,7 @@ bool mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kin
     } else {
         switch (kind) {
             case mutation_fragment_v2::kind::partition_start:
-                _prev_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
+                _prev_pos = position_in_partition::for_partition_start();
                 break;
             case mutation_fragment_v2::kind::static_row:
                 _prev_pos = position_in_partition(position_in_partition::static_row_tag_t{});
@@ -229,6 +229,9 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
     if (mrlog.is_enabled(log_level::debug)) {
         std::string_view what;
         switch (_validation_level) {
+            case mutation_fragment_stream_validation_level::none:
+                what = "no";
+                break;
             case mutation_fragment_stream_validation_level::partition_region:
                 what = "partition region";
                 break;
@@ -248,6 +251,10 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
 
 bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos,
         std::optional<tombstone> new_current_tombstone) {
+    if (_validation_level < mutation_fragment_stream_validation_level::partition_region) {
+        return true;
+    }
+
     bool valid = false;
 
     mrlog.debug("[validator {}] {}:{} new_current_tombstone: {}", static_cast<void*>(this), kind, pos, new_current_tombstone);
@@ -314,6 +321,9 @@ bool mutation_fragment_stream_validating_filter::on_end_of_partition() {
 }
 
 void mutation_fragment_stream_validating_filter::on_end_of_stream() {
+    if (_validation_level < mutation_fragment_stream_validation_level::partition_region) {
+        return;
+    }
     mrlog.debug("[validator {}] EOS", static_cast<const void*>(this));
     if (!_validator.on_end_of_stream()) {
         on_validation_error(mrlog, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
