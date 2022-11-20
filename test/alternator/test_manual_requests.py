@@ -8,7 +8,9 @@
 import pytest
 import requests
 import json
+import urllib3
 from botocore.exceptions import BotoCoreError, ClientError
+from packaging.version import Version
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
@@ -100,8 +102,10 @@ def test_too_large_request(dynamodb, test_table):
 #    Content-Length header or chunked encoding (reproduces issue #8196).
 # 2. The client should be able to recognize this error as a 413 error, not
 #     some I/O error like broken pipe (reproduces issue #8195).
-@pytest.mark.xfail(reason="issue #8195, #8196")
+@pytest.mark.xfail(reason="issue #8196")
 def test_too_large_request_chunked(dynamodb, test_table):
+    if Version(urllib3.__version__) < Version('1.26'):
+        pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
     # To make a request very large, we just stuff it with a lot of spaces :-)
     spaces = ' ' * (17 * 1024 * 1024)
     req = get_signed_request(dynamodb, 'PutItem',
@@ -114,15 +118,16 @@ def test_too_large_request_chunked(dynamodb, test_table):
     # request succeeded, and the status_code was 200 instead of 413.
     assert response.status_code == 413
 
-@pytest.mark.xfail(reason="issue #8195")
 def test_too_large_request_content_length(dynamodb, test_table):
+    if Version(urllib3.__version__) < Version('1.26'):
+        pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
     spaces = ' ' * (17 * 1024 * 1024)
     req = get_signed_request(dynamodb, 'PutItem',
         '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     # In issue #8195, Alternator closed the connection early, causing the
-    # library to throw an exception (Broken Pipe) instead noticing the error
-    # code 413 which the server did send.
+    # library to incorrectly throw an exception (Broken Pipe) instead noticing
+    # the error code 413 which the server did send.
     assert response.status_code == 413
 
 def test_incorrect_json(dynamodb, test_table):
