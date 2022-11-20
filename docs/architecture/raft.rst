@@ -4,95 +4,231 @@ Raft Consensus Algorithm in ScyllaDB
 
 Introduction
 --------------
-ScyllaDB was originally designed, following Apache Cassandra, to use gossip for topology and schema updates and the Paxos consensus algorithm for 
-strong data consistency (:doc:`LWT </using-scylla/lwt>`). To achieve stronger consistency without performance penalty, ScyllaDB 5.0 is  turning to Raft - a consensus algorithm designed as an alternative to both gossip and Paxos.
+ScyllaDB was originally designed, following Apache Cassandra, to use gossip for topology and schema updates and the Paxos consensus algorithm for
+strong data consistency (:doc:`LWT </using-scylla/lwt>`). To achieve stronger consistency without performance penalty, ScyllaDB 5.x has turned to Raft - a consensus algorithm designed as an alternative to both gossip and Paxos.
 
 Raft is a consensus algorithm that implements a distributed, consistent, replicated log across members (nodes). Raft implements consensus by first electing a distinguished leader, then giving the leader complete responsibility for managing the replicated log. The leader accepts log entries from clients, replicates them on other servers, and tells servers when it is safe to apply log entries to their state machines.
 
 Raft uses a heartbeat mechanism to trigger a leader election. All servers start as followers and remain in the follower state as long as they receive valid RPCs (heartbeat) from a leader or candidate. A leader sends periodic heartbeats to all followers to maintain his authority (leadership). Suppose a follower receives no communication over a period called the election timeout. In that case, it assumes no viable leader and begins an election to choose a new leader.
 
-Leader selection is described in detail in the `raft paper <https://raft.github.io/raft.pdf>`_.
+Leader selection is described in detail in the `Raft paper <https://raft.github.io/raft.pdf>`_.
 
-Scylla 5.0 uses Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
+ScyllaDB 5.x may use Raft to maintain schema updates in every node (see below). Any schema update, like ALTER, CREATE or DROP TABLE, is first committed as an entry in the replicated Raft log, and, once stored on most replicas, applied to all nodes **in the same order**, even in the face of a node or network failures.
 
-Following Scylla 5.x releases will use Raft to guarantee consistent topology updates similarly.
+Following ScyllaDB 5.x releases will use Raft to guarantee consistent topology updates similarly.
 
 .. _raft-quorum-requirement:
 
 Quorum Requirement
 -------------------
 
-Raft requires at least a quorum of nodes in a cluster to be available. If multiple nodes fail 
-and the quorum is lost, the cluster is unavailable for schema updates. See :ref:`Handling Failures <raft-handliing-failures>` 
+Raft requires at least a quorum of nodes in a cluster to be available. If multiple nodes fail
+and the quorum is lost, the cluster is unavailable for schema updates. See :ref:`Handling Failures <raft-handling-failures>`
 for information on how to handle failures.
 
 
 Upgrade Considerations for SyllaDB 5.0 and Later
 ==================================================
 
-Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one 
+Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one
 of the DCs is down.
 **We recommend configuring three DCs per cluster to ensure that the cluster remains available and operational when one DC is down.**
 
 Enabling Raft
 ---------------
 
-Enabling Raft in ScyllaDB 5.0
-===============================
+Enabling Raft in ScyllaDB 5.0 and 5.1
+=====================================
 
-.. note:: 
-  In ScyllaDB 5.0:
+.. warning::
+  In ScyllaDB 5.0 and 5.1, Raft is an experimental feature.
 
-  * Raft is an experimental feature.
-  * Raft implementation only covers safe schema changes. See :ref:`Safe Schema Changes with Raft <raft-schema-changes>`.
+It is not possible to enable Raft in an existing cluster in ScyllaDB 5.0 and 5.1.
+In order to have a Raft-enabled cluster in these versions, you must create a new cluster with Raft enabled from the start.
 
-If you are creating a new cluster, add ``raft`` to the list of experimental features in your ``scylla.yaml`` file:
+.. warning::
 
-.. code-block:: yaml
-    
-    experimental_features:
-     - raft
+   **Do not** use Raft in production clusters in ScyllaDB 5.0 and 5.1. Such clusters won't be able to correctly upgrade to ScyllaDB 5.2.
 
-If you upgrade to ScyllaDB 5.0 from an earlier version, perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` 
-updating the ``scylla.yaml`` file for **each node** in the cluster to enable the experimental Raft feature:
-
-.. code-block:: yaml
-    
-    experimental_features:
-      - raft
-
-
-When all the nodes in the cluster and updated and restarted, the cluster will begin to use Raft for schema changes.
+   Use Raft only for testing and experimentation in clusters which can be thrown away.
 
 .. warning::
     Once enabled, Raft cannot be disabled on your cluster. The cluster nodes will fail to restart if you remove the Raft feature.
 
-Verifying that Raft Is Enabled
+When creating a new cluster, add ``raft`` to the list of experimental features in your ``scylla.yaml`` file:
+
+.. code-block:: yaml
+
+    experimental_features:
+     - raft
+
+.. _enabling-raft-existing-cluster:
+
+Enabling Raft in ScyllaDB 5.2 and further
+=========================================
+
+.. TODO include enterprise versions in this documentation
+
+.. note::
+  In ScyllaDB 5.2, Raft is Generally Available and can be safely used for consistent schema management.
+  In ScyllaDB 5.3 it will become enabled by default.
+  In further versions it will be mandatory.
+
+ScyllaDB 5.2 and later comes equipped with a procedure that can setup Raft-based consistent cluster management in an existing cluster. We refer to this as the **internal Raft upgrade procedure** (do not confuse with the :doc:`ScyllaDB version upgrade procedure </upgrade/upgrade-opensource/upgrade-guide-from-5.1-to-5.2/upgrade-guide-from-5.1-to-5.2-generic>`).
+
+.. warning::
+    Once enabled, Raft cannot be disabled on your cluster. The cluster nodes will fail to restart if you remove the Raft feature.
+
+To enable Raft in an existing cluster in Scylla 5.2 and beyond:
+
+* ensure that the schema is synchronized in the cluster by executing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` on each node and ensuring that the schema version is the same on all nodes,
+* then perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>`, updating the ``scylla.yaml`` file for **each node** in the cluster before restarting it to enable the ``consistent_cluster_management`` flag:
+
+.. code-block:: yaml
+
+   consistent_cluster_management: true
+
+When all the nodes in the cluster and updated and restarted, the cluster will start the **internal Raft upgrade procedure**.
+**You must then verify** that the internal Raft upgrade procedure has finished successfully. Refer to the :ref:`next section <verify-raft-procedure>`.
+
+You can also enable the ``consistent_cluster_management`` flag while performing :doc:`rolling upgrade from 5.1 to 5.2 </upgrade/upgrade-opensource/upgrade-guide-from-5.1-to-5.2/upgrade-guide-from-5.1-to-5.2-generic>`: update ``scylla.yaml`` before restarting each node. The internal Raft upgrade procedure will start as soon as the last node was upgraded and restarted. As above, this requires :ref:`verifying <verify-raft-procedure>` that this internal procedure successfully finishes.
+
+Finally, you can enable the ``consistent_cluster_management`` flag when creating a new cluster. This does not use the internal Raft upgrade procedure; instead, Raft is functioning in the cluster and managing schema right from the start.
+
+Until all nodes are restarted with ``consistent_cluster_management: true``, it is still possible to turn this option back off. Once enabled on every node, it must remain turned on (or the node will refuse to restart).
+
+.. _verify-raft-procedure:
+
+Verifying that the internal Raft upgrade procedure finished successfully
+========================================================================
+
+.. versionadded:: 5.2
+
+The internal Raft upgrade procedure starts as soon as every node in the cluster restarts with ``consistent_cluster_management`` flag enabled in ``scylla.yaml``.
+
+.. TODO: update the above sentence once 5.3 and later are released.
+
+The procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
+An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the internal Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
+
+To verify that the procedure finishes, look at the log of every Scylla node (using ``journalctl _COMM=scylla``). Search for the following patterns:
+
+* ``Starting internal upgrade-to-raft procedure`` denotes the start of the procedure,
+* ``Raft upgrade finished`` denotes the end.
+
+The following is an example of a log from a node which went through the procedure correctly. Some parts were truncated for brevity:
+
+.. code-block:: console
+
+    features - Feature SUPPORTS_RAFT_CLUSTER_MANAGEMENT is enabled
+    raft_group0 - finish_setup_after_join: SUPPORTS_RAFT feature enabled. Starting internal upgrade-to-raft procedure.
+    raft_group0_upgrade - starting in `use_pre_raft_procedures` state.
+    raft_group0_upgrade - Waiting until everyone is ready to start upgrade...
+    raft_group0_upgrade - Joining group 0...
+    raft_group0 - server 624fa080-8c0e-4e3d-acf6-10af473639ca joined group 0 with group id 8f8a1870-5c4e-11ed-bb13-fe59693a23c9
+    raft_group0_upgrade - Waiting until every peer has joined Raft group 0...
+    raft_group0_upgrade - Every peer is a member of Raft group 0.
+    raft_group0_upgrade - Waiting for schema to synchronize across all nodes in group 0...
+    raft_group0_upgrade - synchronize_schema: my version: a37a3b1e-5251-3632-b6b4-a9468a279834
+    raft_group0_upgrade - synchronize_schema: schema mismatches: {}. 3 nodes had a matching version.
+    raft_group0_upgrade - synchronize_schema: finished.
+    raft_group0_upgrade - Entering synchronize state.
+    raft_group0_upgrade - Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
+    raft_group0_upgrade - Waiting for all peers to enter synchronize state...
+    raft_group0_upgrade - All peers in synchronize state. Waiting for schema to synchronize...
+    raft_group0_upgrade - synchronize_schema: collecting schema versions from group 0 members...
+    raft_group0_upgrade - synchronize_schema: collected remote schema versions.
+    raft_group0_upgrade - synchronize_schema: my version: a37a3b1e-5251-3632-b6b4-a9468a279834
+    raft_group0_upgrade - synchronize_schema: schema mismatches: {}. 3 nodes had a matching version.
+    raft_group0_upgrade - synchronize_schema: finished.
+    raft_group0_upgrade - Schema synchronized.
+    raft_group0_upgrade - Raft upgrade finished.
+
+In a functioning cluster with good network connectivity the procedure should take no more than a few seconds.
+Network issues may cause the procedure to take longer, but if all nodes are alive and the network is eventually functional (each pair of nodes is eventually connected), the procedure will eventually finish.
+
+Note the following message, which appears in the log presented above:
+
+.. code-block:: console
+
+    Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
+
+During the procedure, there is a brief window while schema changes are disabled. This is when the schema change mechanism switches from the older unsafe algorithm to the safe Raft-based algorithm. If everything runs smoothly, this window will be unnoticeable; the procedure is designed to minimize that window's length. However, if the procedure gets stuck e.g. due to network connectivity problem, ScyllaDB will return the following error when trying to perform a schema change during this window:
+
+.. code-block:: console
+
+    Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations.
+    If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck
+    if there was a node failure.
+
+In the next example, one of the nodes had a power outage before the procedure could finish. The following shows a part of another node's logs:
+
+.. code-block:: console
+
+    raft_group0_upgrade - Entering synchronize state.
+    raft_group0_upgrade - Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
+    raft_group0_upgrade - Waiting for all peers to enter synchronize state...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.3 not in synchronize state yet...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
+    ...
+    raft_group0_upgrade - Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy. If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster. If that doesn 't help or some nodes are dead and irrecoverable, manual recovery may be required. Consult the relevant documentation.
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
+    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
+
+.. TODO: the 'Consult the relevant documentation' message must be updated to point to this doc.
+
+Note the following message:
+
+.. code-block:: console
+
+    raft_group0_upgrade - Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy. If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster. If that doesn 't help or some nodes are dead and irrecoverable, manual recovery may be required. Consult the relevant documentation.
+
+If the Raft upgrade procedure is stuck, this message will appear periodically in each node's logs.
+
+The message suggests the initial course of action:
+
+* Check if all nodes are alive.
+* If a node is down but can be restarted, restart it.
+* If all nodes are alive, ensure that the network is healthy: that every node is reachable from every other node.
+* If all nodes are alive and the network is healthy, perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of the cluster.
+
+One of the reasons why the procedure may get stuck is a pre-existing problem in schema definitions which causes schema to be unable to synchronize in the cluster. The procedure cannot proceed unless it ensures that schema is synchronized.
+If **all nodes are alive and the network is healthy**, you performed a rolling restart, but the issue still persists, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
+
+If some nodes are **dead and irrecoverable**, you'll need to perform a manual recovery procedure. Consult :ref:`the section about Raft recovery <recover-raft-procedure>`.
+
+
+Verifying that Raft is enabled
 ===============================
-You can verify that Raft is enabled on your cluster in one of the following ways:
 
-* Retrieve the list of supported features by running:
+.. versionadded:: 5.2
 
-   .. code-block:: sql
+You can verify that Raft is enabled on your cluster by performing the following query on each node:
 
-       cqlsh> SELECT supported_features FROM system.local;
-    
-  With Raft enabled, the list of supported features in the output includes ``SUPPORTS_RAFT_CLUSTER_MANAGEMENT``. For example:
+.. code-block:: sql
+
+   cqlsh> SELECT * FROM system.scylla_local WHERE key = 'group0_upgrade_state';
+
+The query should return:
 
    .. code-block:: console
-       :class: hide-copy-button
-       
-       supported_features
-       -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-       CDC,CDC_GENERATIONS_V2,COMPUTED_COLUMNS,CORRECT_COUNTER_ORDER,CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX,CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,CORRECT_STATIC_COMPACT_IN_MC,COUNTERS,DIGEST_FOR_NULL_VALUES,DIGEST_INSENSITIVE_TO_EXPIRY,DIGEST_MULTIPARTITION_READ,HINTED_HANDOFF_SEPARATE_CONNECTION,INDEXES,LARGE_PARTITIONS,LA_SSTABLE_FORMAT,LWT,MATERIALIZED_VIEWS,MC_SSTABLE_FORMAT,MD_SSTABLE_FORMAT,ME_SSTABLE_FORMAT,NONFROZEN_UDTS,PARALLELIZED_AGGREGATION,PER_TABLE_CACHING,PER_TABLE_PARTITIONERS,RANGE_SCAN_DATA_VARIANT,RANGE_TOMBSTONES,ROLES,ROW_LEVEL_REPAIR,SCHEMA_TABLES_V3,SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT,STREAM_WITH_RPC_STREAM,SUPPORTS_RAFT_CLUSTER_MANAGEMENT,TOMBSTONE_GC_OPTIONS,TRUNCATION_TABLE,UDA,UNBOUNDED_RANGE_TOMBSTONES,VIEW_VIRTUAL_COLUMNS,WRITE_FAILURE_REPLY,XXHASH
 
-* Retrieve the list of experimental features by running:
+     key                  | value
+    ----------------------+--------------------------
+     group0_upgrade_state | use_post_raft_procedures
 
-   .. code-block:: sql
+    (1 rows)
 
-       cqlsh> SELECT value FROM system.config WHERE name = 'experimental_features'
-    
-  With Raft enabled, the list of experimental features in the output includes ``raft``.
+on every node.
+
+If the query returns 0 rows, or ``value`` is ``synchronize`` or ``use_pre_raft_procedures``, it means that the cluster is in the middle of the internal Raft upgrade procedure; consult the :ref:`relevant section <verify-raft-procedure>`.
+
+If ``value`` is ``recovery``, it means that the cluster is in the middle of the manual recovery procedure. The procedure must be finished. Consult :ref:`the section about Raft recovery <recover-raft-procedure>`.
+
+If ``value`` is anything else, it might mean data corruption or a mistake when performing the manual recovery procedure. The value will be treated as if it was equal to ``recovery`` when the node is restarted.
 
 .. _raft-schema-changes:
 
@@ -100,23 +236,23 @@ Safe Schema Changes with Raft
 -------------------------------
 In ScyllaDB, schema is based on :doc:`Data Definition Language (DDL) </cql/ddl>`. In earlier ScyllaDB versions, schema changes were tracked via the gossip protocol, which might lead to schema conflicts if the updates are happening concurrently.
 
-Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum 
+Implementing Raft eliminates schema conflicts and allows full automation of DDL changes under any conditions, as long as a quorum
 of nodes in the cluster is available. The following examples illustrate how Raft provides the solution to problems with schema changes.
 
 * A network partition may lead to a split-brain case, where each subset of nodes has a different version of the schema.
-     
+
      With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Data manipulation statements on the minority can continue unaffected, provided the :ref:`quorum requirement <raft-quorum-requirement>` is satisfied.
 
-* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost. 
+* Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost.
 
-     With Raft, concurrent schema changes are safe. 
+     With Raft, concurrent schema changes are safe.
 
 
 
 In summary, Raft makes schema changes safe, but it requires that a quorum of nodes in the cluster is available.
 
 
-.. _raft-handliing-failures:
+.. _raft-handling-failures:
 
 Handling Failures
 ------------------
@@ -141,10 +277,10 @@ Examples
      - Try restarting the node. If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 2 nodes
      - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
-     - Restart at least 1 of the 2 nodes that are down to regain quorum. If you can’t recover at least 1 of the 2 nodes, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
+     - Restart at least 1 of the 2 nodes that are down to regain quorum. If you can’t recover at least 1 of the 2 nodes, consult the :ref:`manual Raft recovery section <recover-raft-procedure>`.
    * - 1 datacenter
      - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
-     - When the DC comes back online, restart the nodes. If the DC does not come back online and nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
+     - When the DC comes back online, restart the nodes. If the DC does not come back online and nodes are lost, consult the :ref:`manual Raft recovery section <recover-raft-procedure>`.
 
 
 .. list-table:: Cluster B: 2 datacenters, 6  nodes (3 nodes per DC)
@@ -159,10 +295,10 @@ Examples
      - Try restarting the node(s). If the node is dead, :doc:`replace it with a new node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
    * - 3 nodes
      - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
-     - Restart 1 of the 3 nodes that are down to regain quorum. If you can’t recover at least 1 of the 3 failed nodes, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
+     - Restart 1 of the 3 nodes that are down to regain quorum. If you can’t recover at least 1 of the 3 failed nodes, consult the :ref:`manual Raft recovery section <recover-raft-procedure>`.
    * - 1DC
      - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
-     - When the DCs come back online, restart the nodes. If the DC fails to come back online and the nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
+     - When the DCs come back online, restart the nodes. If the DC fails to come back online and the nodes are lost, consult the :ref:`manual Raft recovery section <recover-raft-procedure>`.
 
 
 .. list-table:: Cluster C: 3 datacenter, 9  nodes (3 nodes per DC)
@@ -175,13 +311,78 @@ Examples
    * - 1-4 nodes
      - Schema updates are possible and safe.
      - Try restarting the nodes. If the nodes are dead, :doc:`replace them with new nodes </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`.
-   * - 1 DC 
+   * - 1 DC
      - Schema updates are possible and safe.
      - When the DC comes back online, try restarting the nodes in the cluster. If the nodes are dead, :doc:`add 3 new nodes in a new region </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`.
    * - 2 DCs
      - Cluster is not fully operational. The data is available for reads and writes, but schema changes are impossible.
-     - When the DCs come back online, restart the nodes. If at least one DC fails to come back online and the nodes are lost, :doc:`restore the latest cluster backup into a new cluster </operating-scylla/procedures/backup-restore/restore/>`. You can contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
-     
+     - When the DCs come back online, restart the nodes. If at least one DC fails to come back online and the nodes are lost, consult the :ref:`manual Raft recovery section <recover-raft-procedure>`.
+
+.. _recover-raft-procedure:
+
+Raft manual recovery procedure
+==============================
+
+.. versionadded:: 5.2
+
+The manual Raft recovery procedure applies to the following situations:
+
+* :ref:`The internal Raft upgrade procedure <verify-raft-procedure>` got stuck because one of your nodes failed in the middle of the procedure and is irrecoverable,
+* or the cluster was running Raft but a majority of nodes (e.g. 2 our of 3) failed and are irrecoverable. Raft cannot progress unless a majority of nodes is available.
+
+.. warning::
+
+   Perform the manual recovery procedure **only** if you're dealing with **irrecoverable** nodes. If it is possible to restart your nodes, do that instead of manual recovery.
+
+.. warning::
+
+   Before proceeding, make sure that the irrecoverable nodes are truly dead, and not, for example, temporarily partitioned away due to a network failure. If it is possible for the 'dead' nodes to come back to life, they might communicate and interfere with the recovery procedure and cause unpredictable problems.
+
+   If you have no means of ensuring that these irrecoverable nodes won't come back to life and communicate with the rest of the cluster, setup firewall rules or otherwise isolate your alive nodes to reject any communication attempts from these dead nodes.
+
+During the manual recovery procedure you'll enter a special ``RECOVERY`` mode, remove all faulty nodes (using the standard :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`), delete the internal Raft data, and restart the cluster. This will cause the cluster to perform the internal Raft upgrade procedure again, initializing the Raft algorithm from scratch. The manual recovery procedure is applicable both to clusters which were not running Raft in the past and then had Raft enabled, and to clusters which were bootstrapped using Raft.
+
+.. warning::
+
+   Entering ``RECOVERY`` mode requires a node restart. Restarting an additional node while some nodes are already dead may lead to unavailability of data queries (assuming that you haven't lost it already). For example, if you're using the standard RF=3, CL=QUORUM setup, and you're recovering from a stuck of upgrade procedure because one of your nodes is dead, restarting another node will cause temporary data query unavailability (until the node finishes restarting). Prepare your service for downtime before proceeding.
+
+#. Perform the following query on **every alive node** in the cluster, using e.g. ``cqlsh``:
+
+   .. code-block:: cql
+
+        cqlsh> UPDATE system.scylla_local SET value = 'recovery' WHERE key = 'group0_upgrade_state';
+
+#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your alive nodes.
+
+#. Verify that all the nodes have entered ``RECOVERY`` mode when restarting; look for one of the following messages in their logs:
+
+    .. code-block:: console
+
+        group0_client - RECOVERY mode.
+        raft_group0 - setup_group0: Raft RECOVERY mode, skipping group 0 setup.
+        raft_group0_upgrade - RECOVERY mode. Not attempting upgrade.
+
+#. Remove all your dead nodes using the :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`.
+
+#. Remove existing Raft cluster data by performing the following queries on **every alive node** in the cluster, using e.g. ``cqlsh``:
+
+   .. code-block:: cql
+
+        cqlsh> TRUNCATE TABLE system.discovery;
+        cqlsh> TRUNCATE TABLE system.group0_history;
+        cqlsh> DELETE value FROM system.scylla_local WHERE key = 'raft_group0_id';
+
+#. Make sure that schema is synchronized in the cluster by executing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` on each node and verifying that the schema version is the same on all nodes.
+
+#. We can now leave ``RECOVERY`` mode. On **every alive node**, perform the following query:
+
+   .. code-block:: cql
+
+        cqlsh> DELETE FROM system.scylla_local WHERE key = 'group0_upgrade_state';
+
+#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your alive nodes.
+
+#. The Raft upgrade procedure will start anew. :ref:`Verify <verify-raft-procedure>` that it finishes successfully.
 
 .. _raft-learn-more:
 
