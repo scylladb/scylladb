@@ -944,7 +944,6 @@ def testIndexOnFrozenUDT(cql, test_keyspace):
             assert_invalid_message(cql, table, "ALLOW FILTERING",
                              "SELECT * FROM %s WHERE v = ?", udt1)
 
-@pytest.mark.xfail(reason="issues #8745")
 def testIndexOnFrozenCollectionOfUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as t:
         with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, v frozen<set<frozen<{t}>>>)") as table:
