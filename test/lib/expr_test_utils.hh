@@ -25,12 +25,18 @@ namespace test_utils {
 
 raw_value make_empty_raw();
 raw_value make_bool_raw(bool val);
+raw_value make_tinyint_raw(int8_t val);
+raw_value make_smallint_raw(int16_t val);
 raw_value make_int_raw(int32_t val);
+raw_value make_bigint_raw(int64_t val);
 raw_value make_text_raw(const sstring_view& text);
 
 constant make_empty_const(data_type type);
 constant make_bool_const(bool val);
+constant make_tinyint_const(int8_t val);
+constant make_smallint_const(int16_t val);
 constant make_int_const(int32_t val);
+constant make_bigint_const(int64_t val);
 constant make_text_const(const sstring_view& text);
 
 // This function implements custom serialization of collection values.
@@ -84,6 +90,8 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
 tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
 usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_view, constant>> field_values);
 
+::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");
+
 struct evaluation_inputs_data {
     std::vector<bytes> partition_key;
     std::vector<bytes> clustering_key;
@@ -98,6 +106,11 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     const schema_ptr& table_schema,
     const column_values& column_vals,
     const std::vector<raw_value>& bind_marker_values = {});
+
+// Creates a mock implementation of data_dictionary::database, useful in tests.
+std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> make_data_dictionary_database(
+    const schema_ptr& table_schema);
+
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3

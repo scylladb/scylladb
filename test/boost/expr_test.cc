@@ -492,10 +492,7 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable) {
                                                         },
                                                         {make_int_raw(123)});
 
-    expression bind_var = bind_variable{
-        .bind_index = 0,
-        .receiver = ::make_lw_shared<column_specification>(
-            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var_0", true), int32_type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var_0")};
 
     raw_value val = evaluate(bind_var, inputs);
     BOOST_REQUIRE_EQUAL(val, make_int_raw(123));
@@ -512,15 +509,9 @@ BOOST_AUTO_TEST_CASE(evaluate_two_bind_variables) {
                                                         },
                                                         {make_int_raw(123), make_int_raw(456)});
 
-    expression bind_variable0 =
-        bind_variable{.bind_index = 0,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_0", true), int32_type)};
+    expression bind_variable0 = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var_0")};
 
-    expression bind_variable1 =
-        bind_variable{.bind_index = 1,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<column_identifier>("bind_var_1", true), int32_type)};
+    expression bind_variable1 = bind_variable{.bind_index = 1, .receiver = make_receiver(int32_type, "bind_var_1")};
 
     raw_value val0 = evaluate(bind_variable0, inputs);
     BOOST_REQUIRE_EQUAL(val0, make_int_raw(123));
@@ -535,10 +526,7 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
 
     raw_value invalid_int_value = make_bool_raw(true);
 
-    expression bind_var =
-        bind_variable{.bind_index = 0,
-                      .receiver = ::make_lw_shared<column_specification>(
-                          "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), int32_type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type, "bind_var")};
 
     auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {{"pk", make_int_raw(123)}}, {invalid_int_value});
     BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
@@ -998,10 +986,7 @@ static void check_bind_variable_evaluate(constant check_value, expected_invalid_
                                  .with_column("r", check_value.type, column_kind::regular_column)
                                  .build();
 
-    expression bind_var = bind_variable{
-        .bind_index = 0,
-        .receiver = ::make_lw_shared<column_specification>(
-            "test_ks", "test_cf", ::make_shared<cql3::column_identifier>("bind_var", true), check_value.type)};
+    expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(check_value.type, "bind_var")};
 
     auto [inputs, inputs_data] = make_evaluation_inputs(
         test_schema, {{"pk", make_int_raw(0)}, {"r", raw_value::make_null()}}, {check_value.value});
@@ -1303,4 +1288,1228 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_maps_recurs
 
     constant map_with_empty_value2 = create_nested_map_with_value(make_int_const(1), make_empty_const(int32_type));
     check_bind_variable_evaluate(map_with_empty_value2, expected_valid);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_partition_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression pk_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("pk", true)};
+    expression prepared = prepare_expression(pk_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("pk"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_clustering_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression ck_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("ck", true)};
+    expression prepared = prepare_expression(ck_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("ck"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_regular_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression r_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)};
+    expression prepared = prepare_expression(r_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("r"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression s_unresolved_identifier =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("s", true)};
+    expression prepared = prepare_expression(s_unresolved_identifier, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = column_value(table_schema->get_column_definition("s"));
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// prepare_expression for a column_value should do nothing
+BOOST_AUTO_TEST_CASE(prepare_column_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cval = column_value(table_schema->get_column_definition("pk"));
+    expression prepared = prepare_expression(cval, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(cval, prepared);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_list) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = subscript{.val = column_value(table_schema->get_column_definition("r")),
+                                    .sub = make_int_const(123),
+                                    .type = boolean_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_map) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+
+    expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = subscript{
+        .val = column_value(table_schema->get_column_definition("r")), .sub = make_bool_const(true), .type = utf8_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_set) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", set_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_list_checks_type) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
+                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_token) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok =
+        token({::make_shared<column_identifier_raw>("p1", true), ::make_shared<column_identifier_raw>("p2", true),
+               ::make_shared<column_identifier_raw>("p3", true)});
+
+    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+
+    expression expected = token({column_value(table_schema->get_column_definition("p1")),
+                                 column_value(table_schema->get_column_definition("p2")),
+                                 column_value(table_schema->get_column_definition("p3"))});
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// prepare_expression(token) doesn't validate its arguments,
+// validation is done in a different place
+BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token(std::vector<expression>());
+
+    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(tok, prepared);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+             .type = cql3_type::raw::from(int32_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(int32_type);
+
+    expression prepared = prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = cast{.arg = make_int_const(123), .type = int32_type};
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_cast_int_short) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+             .type = cql3_type::raw::from(short_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
+
+    expression prepared = prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = cast{.arg = make_smallint_const(123), .type = short_type};
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_cast_text_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "123"},
+             .type = cql3_type::raw::from(short_type)};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
+
+    BOOST_REQUIRE_THROW(prepare_expression(cast_expr, db, "test_ks", table_schema.get(), receiver),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression null_expr = null{};
+
+    expression prepared = prepare_expression(null_expr, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+    expression expected = constant::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// null can't be prepared without a receiver because we are unable to infer the type.
+BOOST_AUTO_TEST_CASE(prepare_null_no_type_fails) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression null_expr = null{};
+    BOOST_REQUIRE_THROW(prepare_expression(null_expr, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_bind_variable) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression bind_var = bind_variable{.bind_index = 1, .receiver = nullptr};
+
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(int32_type);
+
+    expression prepared = prepare_expression(bind_var, db, "test_ks", table_schema.get(), receiver);
+
+    expression expected = bind_variable{
+        .bind_index = 1,
+        .receiver = receiver,
+    };
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_bind_variable_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression bind_var = bind_variable{.bind_index = 1, .receiver = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(bind_var, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+
+    // Can't infer type
+    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(boolean_type));
+    expression expected = make_bool_const(true);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int8) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(byte_type));
+    expression expected = make_tinyint_const(13);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int16) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(short_type));
+    expression expected = make_smallint_const(1337);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int32) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13377331"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+    expression expected = make_int_const(13377331);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int64) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337733113377331"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(long_type));
+    expression expected = make_bigint_const(1337733113377331);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_text) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "scylla_is_the_best"};
+
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(utf8_type));
+    expression expected = make_text_const("scylla_is_the_best");
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression untyped =
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "not_integer_text"};
+
+    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+            },
+        .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+            },
+        .type = nullptr};
+
+    data_type tup_type = tuple_type_impl::get_instance({int32_type, short_type, utf8_type});
+    ::lw_shared_ptr<column_specification> receiver = make_receiver(tup_type);
+
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), receiver);
+    expression expected =
+        make_tuple_const({make_int_const(123), make_smallint_const(456), make_text_const("some text")},
+                         {int32_type, short_type, utf8_type});
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_of_columns) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("c1", int32_type, column_kind::clustering_key)
+                                  .with_column("c2", utf8_type, column_kind::clustering_key)
+                                  .with_column("c3", byte_type, column_kind::clustering_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tup = tuple_constructor{
+        .elements = {unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c1", true)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c2", true)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c3", true)}},
+        .type = nullptr};
+
+    data_type tup_type = tuple_type_impl::get_instance({int32_type, utf8_type, byte_type});
+
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr);
+    expression expected = tuple_constructor{.elements =
+                                                {
+                                                    column_value(table_schema->get_column_definition("c1")),
+                                                    column_value(table_schema->get_column_definition("c2")),
+                                                    column_value(table_schema->get_column_definition("c3")),
+                                                },
+                                            .type = tup_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+            },
+        .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
+    expression expected =
+        make_list_const({make_bigint_const(123), make_bigint_const(456), make_bigint_const(789)}, long_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// preparing empty nonfrozen collections results in null
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_nonfrozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}, .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
+    expression expected = constant::make_null(list_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_frozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}, .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, false);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
+    expression expected = constant(make_list_raw({}), list_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+            },
+        .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                bind_variable{.bind_index = 1, .receiver = nullptr},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+            },
+        .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements = {make_bigint_const(123), bind_variable{.bind_index = 1, .receiver = bind_var_receiver},
+                     make_bigint_const(789)},
+        .type = list_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                     null{}},
+        .type = nullptr};
+
+    data_type list_type = list_type_impl::get_instance(long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+            },
+        .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(short_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+    expression expected =
+        make_set_const({make_smallint_const(123), make_smallint_const(456), make_smallint_const(789)}, short_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// preparing empty nonfrozen collections results in null
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_empty_nonfrozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::set, .elements = {}, .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(short_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+    expression expected = constant::make_null(set_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_empty_frozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::set, .elements = {}, .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(short_type, false);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+    expression expected = constant(make_set_raw({}), set_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+            },
+        .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_bind_var) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                bind_variable{.bind_index = 1, .receiver = nullptr},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+            },
+        .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+
+    // Can't directly compare because the bind variable receiver is created inside prepare_expression
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements = {make_bigint_const(789), bind_variable{.bind_index = 1, .receiver = bind_var_receiver},
+                     make_bigint_const(123)},
+        .type = set_type};
+}
+
+BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements =
+            {
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                null{},
+                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+            },
+        .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(short_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(set_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "2"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    expression expected = make_map_const({{make_smallint_const(1), make_bigint_const(10)},
+                                          {make_smallint_const(2), make_bigint_const(-20)},
+                                          {make_smallint_const(3), make_bigint_const(30)}},
+                                         short_type, long_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// preparing empty nonfrozen collections results in null
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_empty_nonfrozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::map, .elements = {}, .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+    expression expected = constant::make_null(map_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_empty_frozen) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{.style = collection_constructor::style_type::map, .elements = {}, .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, false);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+    expression expected = constant(make_map_raw({}), map_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "2"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {bind_variable{.bind_index = 1, .receiver = nullptr},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    tuple_constructor* prepared_tup = as_if<tuple_constructor>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_tup != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_tup->elements.size(), 2);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_tup->elements[0]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver->type == short_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {make_smallint_const(3), make_bigint_const(30)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{
+                    .elements = {bind_variable{.bind_index = 1, .receiver = bind_var_receiver}, make_bigint_const(-20)},
+                    .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{.elements = {make_smallint_const(1), make_bigint_const(10)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+            },
+        .type = map_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "3"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "30"}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "2"},
+                                               bind_variable{.bind_index = 1, .receiver = nullptr}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "1"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "10"}},
+                                  .type = nullptr},
+            },
+        .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    tuple_constructor* prepared_tup = as_if<tuple_constructor>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_tup != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_tup->elements.size(), 2);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_tup->elements[1]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {make_smallint_const(3), make_bigint_const(30)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{
+                    .elements = {make_smallint_const(2), bind_variable{.bind_index = 1, .receiver = bind_var_receiver}},
+                    .type = tuple_type_impl::get_instance({short_type, long_type})},
+                tuple_constructor{.elements = {make_smallint_const(1), make_bigint_const(10)},
+                                  .type = tuple_type_impl::get_instance({short_type, long_type})},
+            },
+        .type = map_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_key) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor =
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements =
+                {
+                    tuple_constructor{
+                        .elements =
+                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
+                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {null{}, untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                              .raw_text = "-20"}},
+                        .type = nullptr},
+                    tuple_constructor{
+                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "1"},
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                      .raw_text = "10"}},
+                        .type = nullptr},
+                },
+            .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type)),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_value) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::map,
+        .elements =
+            {
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "3"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "30"}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "2"},
+                                               null{}},
+                                  .type = nullptr},
+                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "1"},
+                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                                                                .raw_text = "10"}},
+                                  .type = nullptr},
+            },
+        .type = nullptr};
+
+    data_type map_type = map_type_impl::get_instance(short_type, long_type, true);
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(map_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// preparing the collection constructor should check that the type of constructor
+// matches the type of the receiver. style_type::set shouldn't be assignable to a list.
+BOOST_AUTO_TEST_CASE(prepare_collection_constructor_checks_style_type) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression set_constructor = collection_constructor{
+        .style = collection_constructor::style_type::set,
+        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}},
+        .type = nullptr};
+
+    data_type set_type = set_type_impl::get_instance(int32_type, true);
+    expression prepared =
+        prepare_expression(set_constructor, db, "test_ks", table_schema.get(), make_receiver(set_type));
+    expression expected = make_set_const({make_int_const(123)}, int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+
+    data_type list_type = list_type_impl::get_instance(int32_type, true);
+    BOOST_REQUIRE_THROW(
+        prepare_expression(set_constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
+        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field2", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), make_bigint_raw(987), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(column_identifier("field2", true), null{});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), raw_value::make_null(), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// prepare_expression will treat all missing as if they were specified with value null.
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_missing_field) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    raw_value expected_raw = make_tuple_raw({make_smallint_raw(152), raw_value::make_null(), make_text_raw("ututu")});
+    expression expected = constant(expected_raw, user_type);
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(
+        column_identifier("field2", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(
+        column_identifier("field1", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+    constructor_elements.emplace(column_identifier("field2", true),
+                                 bind_variable{.bind_index = 2, .receiver = nullptr});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    usertype_constructor* prepared_constructor = as_if<usertype_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
+
+    bind_variable* prepared_bind_var =
+        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    usertype_constructor::elements_map_type expected_constructor_elements;
+    expected_constructor_elements.emplace(column_identifier("field1", true), make_smallint_const(152));
+    expected_constructor_elements.emplace(column_identifier("field2", true),
+                                          bind_variable{.bind_index = 2, .receiver = bind_var_receiver});
+    expected_constructor_elements.emplace(column_identifier("field3", true), make_text_const("ututu"));
+
+    expression expected = usertype_constructor{.elements = expected_constructor_elements, .type = user_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+// A combination of a bind variable and a missing field.
+// prepare_expression should properly fill in the missing field in this case as well.
+BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing_field) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    usertype_constructor::elements_map_type constructor_elements;
+    constructor_elements.emplace(column_identifier("field2", true),
+                                 bind_variable{.bind_index = 2, .receiver = nullptr});
+    constructor_elements.emplace(
+        column_identifier("field3", true),
+        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+
+    expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
+
+    data_type user_type = user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2", "field3"},
+                                                       {short_type, long_type, utf8_type}, true);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(user_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    usertype_constructor* prepared_constructor = as_if<usertype_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
+
+    bind_variable* prepared_bind_var =
+        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    usertype_constructor::elements_map_type expected_constructor_elements;
+    expected_constructor_elements.emplace(column_identifier("field1", true), constant::make_null(short_type));
+    expected_constructor_elements.emplace(column_identifier("field2", true),
+                                          bind_variable{.bind_index = 2, .receiver = bind_var_receiver});
+    expected_constructor_elements.emplace(column_identifier("field3", true), make_text_const("ututu"));
+
+    expression expected = usertype_constructor{.elements = expected_constructor_elements, .type = user_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
 }

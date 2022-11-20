@@ -246,6 +246,21 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
 
     auto key_spec = maps::key_spec_of(*receiver);
     auto value_spec = maps::value_spec_of(*receiver);
+    const map_type_impl* map_type = dynamic_cast<const map_type_impl*>(&receiver->type->without_reversed());
+    if (map_type == nullptr) {
+        on_internal_error(expr_logger,
+                          format("map_prepare_expression bad non-map receiver type: {}", receiver->type->name()));
+    }
+    data_type map_element_tuple_type = tuple_type_impl::get_instance({map_type->get_keys_type(), map_type->get_values_type()});
+
+    // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+    // other words a non-frozen collection only exists if it has elements.  Return nullptr right
+    // away to simplify predicate evaluation.  See also
+    // https://issues.apache.org/jira/browse/CASSANDRA-5141
+    if (map_type->is_multi_cell() && c.elements.empty()) {
+        return constant::make_null(receiver->type);
+    }
+
     std::vector<expression> values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
@@ -264,7 +279,7 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
 
         values.emplace_back(tuple_constructor {
             .elements = {std::move(k), std::move(v)},
-            .type = entry_tuple.type
+            .type = map_element_tuple_type
         });
     }
 
@@ -687,9 +702,13 @@ bind_variable_test_assignment(const bind_variable& bv, data_dictionary::database
 }
 
 static
-bind_variable
+std::optional<bind_variable>
 bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
+    if (!receiver) {
+        return std::nullopt;
+    }
+
     return bind_variable {
         .bind_index = bv.bind_index,
         .receiver = receiver

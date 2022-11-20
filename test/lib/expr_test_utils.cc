@@ -26,7 +26,19 @@ raw_value make_bool_raw(bool val) {
     return make_raw(val);
 }
 
+raw_value make_tinyint_raw(int8_t val) {
+    return make_raw(val);
+}
+
+raw_value make_smallint_raw(int16_t val) {
+    return make_raw(val);
+}
+
 raw_value make_int_raw(int32_t val) {
+    return make_raw(val);
+}
+
+raw_value make_bigint_raw(int64_t val) {
     return make_raw(val);
 }
 
@@ -48,7 +60,19 @@ constant make_bool_const(bool val) {
     return make_const(val);
 }
 
+constant make_tinyint_const(int8_t val) {
+    return make_const(val);
+}
+
+constant make_smallint_const(int16_t val) {
+    return make_const(val);
+}
+
 constant make_int_const(int32_t val) {
+    return make_const(val);
+}
+
+constant make_bigint_const(int64_t val) {
     return make_const(val);
 }
 
@@ -289,6 +313,11 @@ usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_vie
     return usertype_constructor{.elements = std::move(elements_map), .type = std::move(type)};
 }
 
+::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring receiver_name) {
+    return ::make_lw_shared<column_specification>(
+        "test_ks", "test_cf", ::make_shared<cql3::column_identifier>(receiver_name, true), receiver_type);
+}
+
 // Creates evaluation_inputs that can be used to evaluate columns and bind variables using evaluate()
 std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evaluation_inputs(
     const schema_ptr& table_schema,
@@ -389,6 +418,110 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     return std::pair(std::move(inputs), std::move(data));
 }
 
+// A mock implementation of data_dictionary::database, used in tests
+class mock_database_impl : public data_dictionary::impl {
+    schema_ptr _table_schema;
+    ::lw_shared_ptr<data_dictionary::keyspace_metadata> _keyspace_metadata;
+
+    db::config _config;
+
+public:
+    explicit mock_database_impl(schema_ptr table_schema)
+        : _table_schema(table_schema),
+          _keyspace_metadata(data_dictionary::keyspace_metadata::new_keyspace(_table_schema->ks_name(),
+                                                                              "MockReplicationStrategy",
+                                                                              {},
+                                                                              false,
+                                                                              {_table_schema})) {}
+
+    static std::pair<data_dictionary::database, std::unique_ptr<mock_database_impl>> make(schema_ptr table_schema) {
+        std::unique_ptr<mock_database_impl> mock_db = std::make_unique<mock_database_impl>(table_schema);
+        data_dictionary::database db = make_database(mock_db.get(), nullptr);
+        return std::pair(std::move(db), std::move(mock_db));
+    }
+
+    virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db,
+                                                                       std::string_view name) const override {
+        if (_table_schema->ks_name() == name) {
+            return make_keyspace(this, nullptr);
+        }
+        return std::nullopt;
+    }
+    virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
+        return {make_keyspace(this, nullptr)};
+    }
+    virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
+        return {make_table(this, nullptr)};
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db,
+                                                                 std::string_view ks,
+                                                                 std::string_view tab) const override {
+        if (_table_schema->ks_name() == ks && _table_schema->cf_name() == tab) {
+            return make_table(this, nullptr);
+        }
+        return std::nullopt;
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db,
+                                                                 table_id id) const override {
+        if (_table_schema->id() == id) {
+            return make_table(this, nullptr);
+        }
+        return std::nullopt;
+    }
+    virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
+        throw std::bad_function_call();
+    }
+    virtual schema_ptr get_table_schema(data_dictionary::table t) const override { return _table_schema; }
+    virtual lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(
+        data_dictionary::keyspace ks) const override {
+        return _keyspace_metadata;
+    }
+
+    virtual bool is_internal(data_dictionary::keyspace ks) const override { return false; }
+    virtual const locator::abstract_replication_strategy& get_replication_strategy(
+        data_dictionary::keyspace ks) const override {
+        throw std::bad_function_call();
+    }
+    virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
+        return {view_ptr(_table_schema)};
+    }
+    virtual sstring get_available_index_name(data_dictionary::database db,
+                                             std::string_view ks_name,
+                                             std::string_view table_name,
+                                             std::optional<sstring> index_name_root) const override {
+        return {};
+    }
+    virtual std::set<sstring> existing_index_names(data_dictionary::database db,
+                                                   std::string_view ks_name,
+                                                   std::string_view cf_to_exclude = {}) const override {
+        return {};
+    }
+    virtual schema_ptr find_indexed_table(data_dictionary::database db,
+                                          std::string_view ks_name,
+                                          std::string_view index_name) const override {
+        return nullptr;
+    }
+    virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema&) const override {
+        return nullptr;
+    }
+    virtual const db::config& get_config(data_dictionary::database db) const override { return _config; }
+    virtual const db::extensions& get_extensions(data_dictionary::database db) const override {
+        return _config.extensions();
+    }
+    virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
+        throw std::bad_function_call();
+    }
+    virtual replica::database& real_database(data_dictionary::database db) const override {
+        throw std::bad_function_call();
+    }
+
+    virtual ~mock_database_impl() = default;
+};
+
+std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> make_data_dictionary_database(
+    const schema_ptr& table_schema) {
+    return mock_database_impl::make(table_schema);
+}
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3
