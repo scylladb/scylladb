@@ -435,7 +435,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
         // FIXME: push to upper layer so it happens once per row
         auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
-        return expr::is_satisfied_by(
+        bool multi_col_clustering_satisfied = expr::is_satisfied_by(
                 clustering_columns_restrictions,
                 expr::evaluation_inputs{
                     .partition_key = &partition_key,
@@ -444,6 +444,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                     .selection = &selection,
                     .options = &_options,
                 });
+        if (!multi_col_clustering_satisfied) {
+            return false;
+        }
     }
 
     auto static_row_iterator = static_row.iterator();
