@@ -35,7 +35,6 @@ if __name__ == '__main__':
         disable_writeback_cache = str2bool(cfg.get('DISABLE_WRITEBACK_CACHE'))
     else:
         disable_writeback_cache = 'no'
-    ami = str2bool(cfg.get('AMI'))
     
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
     parser.add_argument('--nic',
@@ -58,8 +57,6 @@ if __name__ == '__main__':
                         help='Set enforcing fastest available Linux clocksource')
     parser.add_argument('--disable-writeback-cache', action='store_true', default=disable_writeback_cache,
                         help='Disable disk writeback cache')
-    parser.add_argument('--ami', action='store_true', default=ami,
-                        help='AMI instance mode')
     args = parser.parse_args()
 
     if args.nic and not is_valid_nic(args.nic):
@@ -125,6 +122,4 @@ if __name__ == '__main__':
     if cfg.has_option('DISABLE_WRITEBACK_CACHE') and str2bool(cfg.get('DISABLE_WRITEBACK_CACHE')) != args.disable_writeback_cache:
         cfg.set('DISABLE_WRITEBACK_CACHE', bool2str(args.disable_writeback_cache))
         
-    if str2bool(cfg.get('AMI')) != args.ami:
-        cfg.set('AMI', bool2str(args.ami))
     cfg.commit()

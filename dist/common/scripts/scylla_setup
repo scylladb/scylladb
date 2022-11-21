@@ -224,8 +224,6 @@ if __name__ == '__main__':
                         help='specify swapfile directory (ex: /)')
     parser.add_argument('--swap-size', type=int,
                         help='specify swapfile size in GB')
-    parser.add_argument('--ami', action='store_true', default=False,
-                        help='setup AMI instance')
     parser.add_argument('--setup-nic-and-disks', action='store_true', default=False,
                         help='optimize NIC and disks')
     parser.add_argument('--developer-mode', action='store_true', default=False,
@@ -242,8 +240,6 @@ if __name__ == '__main__':
     if is_redhat_variant():
         parser.add_argument('--no-selinux-setup', action='store_true', default=False,
                             help='skip selinux setup')
-    parser.add_argument('--no-bootparam-setup', action='store_true', default=False,
-                        help='skip bootparam setup')
     parser.add_argument('--no-ntp-setup', action='store_true',
                         default=default_no_ntp_setup,
                         help='skip ntp setup')
