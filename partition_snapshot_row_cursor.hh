@@ -250,6 +250,19 @@ class partition_snapshot_row_cursor final {
                 if (pos) [[likely]] {
                     _heap.emplace_back(position_in_version{pos, std::move(rows), version_no, unique_owner, cont});
                 }
+            } else {
+                if (_reversed) [[unlikely]] {
+                    if (!rows.empty()) {
+                        pos = std::prev(rows.end());
+                    } else {
+                        _background_continuity = true;
+                    }
+                } else {
+                    _background_continuity = true; // Default continuity past the last entry
+                }
+                if (pos) [[likely]] {
+                    _heap.emplace_back(position_in_version{pos, std::move(rows), version_no, unique_owner, is_continuous::yes});
+                }
             }
             ++version_no;
             first = false;
@@ -380,22 +393,28 @@ public:
             _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
 
-            is_continuous cont = it->continuous();
-            if (_reversed) [[unlikely]] {
-                if (!match) {
-                    // lower_bound() in reverse order points to predecessor of it unless the keys are equal.
-                    if (it == rows.begin()) {
-                        _background_continuity |= bool(it->continuous());
-                        it = {};
+            is_continuous cont;
+            if (it) {
+                if (_reversed) [[unlikely]] {
+                    if (!match) {
+                        // lower_bound() in reverse order points to predecessor of it unless the keys are equal.
+                        if (it == rows.begin()) {
+                            _background_continuity |= bool(it->continuous());
+                            it = {};
+                        } else {
+                            cont = it->continuous();
+                            --it;
+                        }
                     } else {
-                        cont = it->continuous();
-                        --it;
+                        // We can put anything in the match case since this continuity will not be used
+                        // when advancing the cursor.
+                        cont = is_continuous::no;
                     }
                 } else {
-                    // We can put anything in the match case since this continuity will not be used
-                    // when advancing the cursor.
-                    cont = is_continuous::no;
+                    cont = it->continuous();
                 }
+            } else {
+                _background_continuity = true; // Default continuity past the last entry.
             }
 
             if (!it) {
