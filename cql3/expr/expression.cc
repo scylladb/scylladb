@@ -343,43 +343,37 @@ bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, con
     return limits(lhs_bytes, op, rhs_bytes, type_of(lhs)->without_reversed());
 }
 
-/// True iff collection (list, set, or map) contains value.
-bool contains(const data_value& collection, const raw_value_view& value) {
-    if (!value) {
-        // CONTAINS NULL should evaluate to NULL/false
-        return false;
-    }
-    auto col_type = static_pointer_cast<const collection_type_impl>(collection.type());
-    auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
-    return value.with_linearized([&] (bytes_view val) {
-        auto exists_in = [&](auto&& range) {
-            auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
-                return element_type->compare(element.serialize_nonnull(), val) == 0;
-            });
-            return found != range.end();
-        };
-        if (col_type->is_list()) {
-            return exists_in(value_cast<list_type_impl::native_type>(collection));
-        } else if (col_type->is_set()) {
-            return exists_in(value_cast<set_type_impl::native_type>(collection));
-        } else if (col_type->is_map()) {
-            auto data_map = value_cast<map_type_impl::native_type>(collection);
-            using entry = std::pair<data_value, data_value>;
-            return exists_in(data_map | transformed([] (const entry& e) { return e.second; }));
-        } else {
-            throw std::logic_error("unsupported collection type in a CONTAINS expression");
-        }
-    });
-}
-
 /// True iff a column is a collection containing value.
-bool contains(const expression& collection_val, const raw_value_view& value, const evaluation_inputs& inputs) {
-    const data_type collection_type = type_of(collection_val);
-    const managed_bytes_opt collection_bytes = evaluate(collection_val, inputs).to_managed_bytes_opt();
-    if (collection_bytes) {
-        return contains(collection_type->deserialize(managed_bytes_view(*collection_bytes)), value);
+bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+
+    const abstract_type& lhs_type = type_of(lhs)->without_reversed();
+    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(sides_bytes->first));
+
+    const collection_type_impl* collection_type = dynamic_cast<const collection_type_impl*>(&lhs_type);
+    data_type element_type =
+        collection_type->is_set() ? collection_type->name_comparator() : collection_type->value_comparator();
+
+    auto exists_in = [&](auto&& range) {
+        auto found = std::find_if(range.begin(), range.end(), [&](auto&& element) {
+            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), sides_bytes->second) == 0;
+        });
+        return found != range.end();
+    };
+    if (collection_type->is_list()) {
+        return exists_in(value_cast<list_type_impl::native_type>(lhs_collection));
+    } else if (collection_type->is_set()) {
+        return exists_in(value_cast<set_type_impl::native_type>(lhs_collection));
+    } else if (collection_type->is_map()) {
+        auto data_map = value_cast<map_type_impl::native_type>(lhs_collection);
+        using entry = std::pair<data_value, data_value>;
+        return exists_in(data_map | transformed([](const entry& e) { return e.second; }));
     } else {
-        return false;
+        on_internal_error(expr_logger, "unsupported collection type in a CONTAINS expression");
     }
 }
 
@@ -1688,8 +1682,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             break;
         }
         case oper_t::CONTAINS: {
-            cql3::raw_value val = evaluate(binop.rhs, inputs);
-            binop_result = contains(binop.lhs, val.view(), inputs);
+            binop_result = contains(binop.lhs, binop.rhs, inputs);
             break;
         }
         case oper_t::CONTAINS_KEY: {
