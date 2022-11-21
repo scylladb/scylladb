@@ -448,26 +448,27 @@ std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, con
 namespace {
 
 /// True iff cv matches the CQL LIKE pattern.
-bool like(const expression& string_val, const raw_value_view& pattern, const evaluation_inputs& inputs) {
-    if (!type_of(string_val)->is_string()) {
-        expression::printer val_printer {
-            .expr_to_print = string_val,
+bool_or_null like(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    data_type lhs_type = type_of(lhs)->underlying_type();
+    if (!lhs_type->is_string()) {
+        expression::printer lhs_printer {
+            .expr_to_print = lhs,
             .debug_mode = false
         };
         throw exceptions::invalid_request_exception(
-                format("LIKE is allowed only on string types, which {} is not", val_printer));
+                format("LIKE is allowed only on string types, which {} is not", lhs_printer));
     }
-    const managed_bytes_opt value = evaluate(string_val, inputs).to_managed_bytes_opt();
-    // TODO: reuse matchers.
-    if (pattern && value) {
-        return value->with_linearized([&pattern] (bytes_view linearized_value) {
-            return pattern.with_linearized([linearized_value] (bytes_view linearized_pattern) {
-                return like_matcher(linearized_pattern)(linearized_value);
-            });
-        });
-    } else {
-        return false;
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::LIKE, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
+    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(*sides_bytes);
+
+    bytes lhs_bytes = to_bytes(lhs_managed_bytes);
+    bytes rhs_bytes = to_bytes(rhs_managed_bytes);
+
+    return like_matcher(bytes_view(rhs_bytes))(bytes_view(lhs_bytes));
 }
 
 /// True iff the column value is in the set defined by rhs.
@@ -1693,8 +1694,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             break;
         }
         case oper_t::LIKE: {
-            cql3::raw_value val = evaluate(binop.rhs, inputs);
-            binop_result = like(binop.lhs, val.view(), inputs);
+            binop_result = like(binop.lhs, binop.rhs, inputs);
             break;
         }
         case oper_t::IN: {
