@@ -110,9 +110,6 @@ future<> modification_statement::check_access(query_processor& qp, const service
 
 future<std::vector<mutation>>
 modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
-    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
-        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
-    }
     auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
@@ -254,6 +251,10 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     inc_cql_stats(qs.get_client_state().is_internal());
+
+    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
+        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
+    }
 
     if (has_conditions()) {
         return execute_with_condition(qp, qs, options);
