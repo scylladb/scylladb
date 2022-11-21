@@ -329,16 +329,18 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const expression& col, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    auto lhs = evaluate(col, inputs).to_managed_bytes_opt();
-    if (!lhs) {
-        return false;
+     std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, op, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    const auto b = evaluate(rhs, inputs).to_managed_bytes_opt();
-    return b ? limits(*lhs, op, *b, type_of(col)->without_reversed()) : false;
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    return limits(lhs_bytes, op, rhs_bytes, type_of(lhs)->without_reversed());
 }
 
 /// True iff collection (list, set, or map) contains value.
