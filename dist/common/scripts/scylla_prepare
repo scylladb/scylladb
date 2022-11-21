@@ -139,12 +139,7 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
-    ami = cfg.get('AMI')
     mode = cfg.get('NETWORK_MODE')
-
-    if ami == 'yes' and os.path.exists('/etc/scylla/ami_disabled'):
-        os.remove('/etc/scylla/ami_disabled')
-        sys.exit(1)
 
     if mode == 'virtio':
         tap = cfg.get('TAP')
