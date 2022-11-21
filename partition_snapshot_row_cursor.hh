@@ -134,6 +134,7 @@ class partition_snapshot_row_cursor final {
     bool _dummy{};
     const bool _unique_owner;
     const bool _reversed;
+    const bool _digest_requested;
     position_in_partition _position; // table domain
     partition_snapshot::change_mark _change_mark;
 
@@ -185,6 +186,9 @@ class partition_snapshot_row_cursor final {
             boost::range::pop_heap(_heap, heap_less);
             memory::on_alloc_point();
             rows_entry& e = *_heap.back().it;
+            if (_digest_requested) {
+                e.row().cells().prepare_hash(_schema, column_kind::regular_column);
+            }
             _dummy &= bool(e.dummy());
             _continuous |= bool(_heap.back().continuous);
             _current_row.push_back(_heap.back());
@@ -310,11 +314,12 @@ public:
     // When reversed, s must be a reversed schema relative to snp->schema()
     // Positions and fragments accepted and returned by the cursor are from the domain of s.
     // Iterators are from the table's schema domain.
-    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false, bool digest_requested = false)
         : _schema(s)
         , _snp(snp)
         , _unique_owner(unique_owner)
         , _reversed(reversed)
+        , _digest_requested(digest_requested)
         , _position(position_in_partition::static_row_tag_t{})
     { }
 
