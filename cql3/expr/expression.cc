@@ -341,56 +341,6 @@ bool limits(const expression& col, oper_t op, const expression& rhs, const evalu
     return b ? limits(*lhs, op, *b, type_of(col)->without_reversed()) : false;
 }
 
-/// True iff the column values are limited by t in the manner prescribed by op.
-bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expression& e,
-            const evaluation_inputs& inputs) {
-    if (!is_slice(op)) { // For EQ or NEQ, use equal().
-        throw std::logic_error("limits() called on non-slice op");
-    }
-    const cql3::raw_value tup = evaluate(e, inputs);
-    const auto& rhs = get_tuple_elements(tup, *type_of(e));
-    if (rhs.size() != columns_tuple.elements.size()) {
-        throw exceptions::invalid_request_exception(
-                format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
-                       columns_tuple.elements.size(), rhs.size()));
-    }
-    for (size_t i = 0; i < rhs.size(); ++i) {
-        auto& cv = columns_tuple.elements[i];
-        auto lhs = evaluate(cv, inputs).to_managed_bytes_opt();
-        if (!lhs || !rhs[i]) {
-            // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null, but
-            // let's not rely on grammar constraints that can be later relaxed.
-            //
-            // NULL = always fails comparison
-            return false;
-        }
-        const auto cmp = type_of(cv)->without_reversed().compare(
-                *lhs,
-                *rhs[i]);
-        // If the components aren't equal, then we just learned the LHS/RHS order.
-        if (cmp < 0) {
-            if (op == oper_t::LT || op == oper_t::LTE) {
-                return true;
-            } else if (op == oper_t::GT || op == oper_t::GTE) {
-                return false;
-            } else {
-                throw std::logic_error("Unknown slice operator");
-            }
-        } else if (cmp > 0) {
-            if (op == oper_t::LT || op == oper_t::LTE) {
-                return false;
-            } else if (op == oper_t::GT || op == oper_t::GTE) {
-                return true;
-            } else {
-                throw std::logic_error("Unknown slice operator");
-            }
-        }
-        // Otherwise, we don't know the LHS/RHS order, so check the next component.
-    }
-    // Getting here means LHS == RHS.
-    return op == oper_t::LTE || op == oper_t::GTE;
-}
-
 /// True iff collection (list, set, or map) contains value.
 bool contains(const data_value& collection, const raw_value_view& value) {
     if (!value) {
