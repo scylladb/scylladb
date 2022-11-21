@@ -1,6 +1,6 @@
-======================
-Troubleshooting Scylla
-======================
+=========================
+Troubleshooting ScyllaDB
+=========================
 
 .. toctree::
    :hidden:
@@ -8,6 +8,7 @@ Troubleshooting Scylla
    
    support/index   
    startup/index
+   upgrade/index
    cluster/index
    modeling/index
    storage/index
@@ -24,13 +25,14 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   :id: "getting-started"
   :class: my-panel
 
-  * :doc:`Errors and Scylla Customer Support <support/index>`
-  * :doc:`Scylla Startup <startup/index>`
-  * :doc:`Scylla Cluster and Node <cluster/index>`
+  * :doc:`Errors and ScyllaDB Customer Support <support/index>`
+  * :doc:`ScyllaDB Startup <startup/index>`
+  * :doc:`ScyllaDB Cluster and Node <cluster/index>`
+  * :doc:`ScyllaDB Upgrade <upgrade/index>`
   * :doc:`Data Modeling <modeling/index>`
   * :doc:`Data Storage and SSTables <storage/index>`
   * :doc:`CQL errors <CQL/index>`
-  * :doc:`Scylla Monitoring and Scylla Manager <monitor/index>`
+  * :doc:`ScyllaDB Monitoring and Scylla Manager <monitor/index>`
 
 Also check out the `Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on Scylla University, which covers how to troubleshoot different issues when running a Scylla cluster.
 
