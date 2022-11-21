@@ -233,21 +233,6 @@ bool equal(const expression& lhs, const expression& rhs, const evaluation_inputs
     return equal(lhs, evaluate(rhs, inputs).to_managed_bytes_opt(), inputs);
 }
 
-/// True iff columns' values equal t.
-bool equal(const tuple_constructor& columns_tuple_lhs, const expression& t_rhs, const evaluation_inputs& inputs) {
-    const cql3::raw_value tup = evaluate(t_rhs, inputs);
-    const auto& rhs = get_tuple_elements(tup, *type_of(t_rhs));
-    if (rhs.size() != columns_tuple_lhs.elements.size()) {
-        throw exceptions::invalid_request_exception(
-                format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
-                       columns_tuple_lhs.elements.size(), rhs.size()));
-    }
-    return boost::equal(columns_tuple_lhs.elements, rhs,
-    [&] (const expression& lhs, const managed_bytes_opt& b) {
-        return equal(lhs, b, inputs);
-    });
-}
-
 /// True iff lhs is limited by rhs in the manner prescribed by op.
 bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abstract_type& type) {
     const auto cmp = type.compare(lhs, rhs);
