@@ -516,105 +516,30 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 }
 
 bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs) {
-    return expr::visit(overloaded_functor{
-            [&] (const column_value& col) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(col, opr.rhs, inputs);
-                } else if (opr.op == oper_t::NEQ) {
-                    return !equal(col, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(col, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::CONTAINS) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return contains(col, val.view(), inputs);
-                } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return contains_key(col, val.view(), inputs);
-                } else if (opr.op == oper_t::LIKE) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return like(col, val.view(), inputs);
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(col, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
-                }
-            },
-            [&] (const subscript& sub) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(sub, opr.rhs, inputs);
-                } else if (opr.op == oper_t::NEQ) {
-                    return !equal(sub, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(sub, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::CONTAINS) {
-                    throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
-                } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    throw exceptions::unsupported_operation_exception("CONTAINS KEY lhs is subscripted");
-                } else if (opr.op == oper_t::LIKE) {
-                    throw exceptions::unsupported_operation_exception("LIKE lhs is subscripted");
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(sub, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
-                }
-            },
-            [&] (const tuple_constructor& cvs) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(cvs, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(cvs, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(cvs, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(
-                            format("Unhandled multi-column binary_operator: {}", opr));
-                }
-            },
-            [] (const token& tok) -> bool {
-                // The RHS value was already used to ensure we fetch only rows in the specified
-                // token range.  It is impossible for any fetched row not to match now.
-                return true;
-            },
-            [] (const constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: A constant cannot serve as the LHS of a binary expression");
-            },
-            [] (const conjunction&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a conjunction cannot serve as the LHS of a binary expression");
-            },
-            [] (const binary_operator&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: binary operators cannot be nested");
-            },
-            [] (const unresolved_identifier&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as the LHS of a binary expression");
-            },
-            [] (const column_mutation_attribute&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: column_mutation_attribute cannot serve as the LHS of a binary expression");
-            },
-            [] (const function_call&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: function_call cannot serve as the LHS of a binary expression");
-            },
-            [] (const cast&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: cast cannot serve as the LHS of a binary expression");
-            },
-            [] (const field_selection&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: field_selection cannot serve as the LHS of a binary expression");
-            },
-            [] (const null&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: null cannot serve as the LHS of a binary expression");
-            },
-            [] (const bind_variable&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: bind_variable cannot serve as the LHS of a binary expression");
-            },
-            [] (const untyped_constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: untyped_constant cannot serve as the LHS of a binary expression");
-            },
-            [] (const collection_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: collection_constructor cannot serve as the LHS of a binary expression");
-            },
-            [] (const usertype_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: usertype_constructor cannot serve as the LHS of a binary expression");
-            },
-        }, opr.lhs);
+    if (is<token>(opr.lhs)) {
+        // The RHS value was already used to ensure we fetch only rows in the specified
+        // token range. It is impossible for any fetched row not to match now.
+        // When token restrictions are present we forbid all other restrictions on partition key.
+        // This means that the partition range is defined solely by restrictions on token.
+        // When is_satisifed_by is used by filtering we can be sure that the token restrictions
+        // are fulfilled. In the future it will be possible to evaluate() a token,
+        // and we will be able to get rid of this risky if.
+        return true;
+    }
+
+    raw_value binop_eval_result = evaluate(opr, inputs);
+
+    if (binop_eval_result.is_null()) {
+        return false;
+    }
+    if (binop_eval_result.is_unset_value()) {
+        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to UNSET_VALUE: {}", opr));
+    }
+    if (binop_eval_result.is_empty_value()) {
+        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to EMPTY_VALUE: {}", opr));
+    }
+
+    return binop_eval_result.view().deserialize<bool>(*boolean_type);
 }
 
 } // anonymous namespace
