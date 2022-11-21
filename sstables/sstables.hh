@@ -907,21 +907,6 @@ public:
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
 };
 
-// When we compact sstables, we have to atomically instantiate the new
-// sstable and delete the old ones.  Otherwise, if we compact A+B into C,
-// and if A contained some data that was tombstoned by B, and if B was
-// deleted but A survived, then data from A will be resurrected.
-//
-// There are two violators of the requirement to atomically delete
-// sstables: first sstable instantiation and deletion on disk is atomic
-// only wrt. itself, not other sstables, and second when an sstable is
-// shared among shard, so actual on-disk deletion of an sstable is deferred
-// until all shards agree it can be deleted.
-//
-// This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts);
-future<> replay_pending_delete_log(sstring log_file);
-
 // Validate checksums
 //
 // Sstables have two kind of checksums: per-chunk checksums and a
@@ -976,5 +961,8 @@ public:
 // safely removes the table directory.
 // swallows all errors and just reports them to the log.
 future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
+
+// similar to sstable::unlink, but works on a TOC file name
+future<> remove_by_toc_name(sstring sstable_toc_name);
 
 } // namespace sstables

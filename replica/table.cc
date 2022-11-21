@@ -1086,7 +1086,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 
     auto f = seastar::try_with_gate(_t._sstable_deletion_gate, [this, sstables_to_remove = desc.old_sstables] {
        return with_semaphore(_t._sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] {
-           return sstables::delete_atomically(std::move(sstables_to_remove));
+           return sstables::sstable_directory::delete_atomically(std::move(sstables_to_remove));
        });
     });
 
@@ -1699,7 +1699,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             if (r.enable_backlog_tracker) {
                 remove_sstable_from_backlog_tracker(p->cg.get_backlog_tracker(), r.sst);
             }
-            return sstables::delete_atomically({r.sst});
+            return sstables::sstable_directory::delete_atomically({r.sst});
         }).then([p] {
             return make_ready_future<db::replay_position>(p->rp);
         });

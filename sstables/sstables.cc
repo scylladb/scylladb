@@ -2816,8 +2816,7 @@ fsync_directory(const io_error_handler& error_handler, sstring dirname) {
     });
 }
 
-static future<>
-remove_by_toc_name(sstring sstable_toc_name) {
+future<> remove_by_toc_name(sstring sstable_toc_name) {
     sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
     sstring new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
 
@@ -3038,13 +3037,6 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 }
 
 future<>
-delete_sstables(std::vector<sstring> tocs) {
-    return parallel_for_each(tocs, [] (const sstring& name) {
-        return remove_by_toc_name(name);
-    });
-}
-
-future<>
 sstable::unlink() noexcept {
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
@@ -3079,107 +3071,6 @@ sstable::unlink() noexcept {
 
     co_await std::move(remove_fut);
     _stats.on_delete();
-}
-
-future<>
-delete_atomically(std::vector<shared_sstable> ssts) {
-    if (ssts.empty()) {
-        return make_ready_future<>();
-    }
-    return seastar::async([ssts = std::move(ssts)] {
-        sstring sstdir;
-        min_max_tracker<generation_type> gen_tracker;
-
-        for (const auto& sst : ssts) {
-            gen_tracker.update(sst->generation());
-
-            if (sstdir.empty()) {
-                sstdir = sst->get_dir();
-            } else {
-                // All sstables are assumed to be in the same column_family, hence
-                // sharing their base directory.
-                assert (sstdir == sst->get_dir());
-            }
-        }
-
-        sstring pending_delete_dir = sstdir + "/" + sstable::pending_delete_dir_basename();
-        sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
-        sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
-        sstlog.trace("Writing {}", tmp_pending_delete_log);
-        try {
-            touch_directory(pending_delete_dir).get();
-            auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-            // Create temporary pending_delete log file.
-            auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
-            // Write all toc names into the log file.
-            file_output_stream_options options;
-            options.buffer_size = 4096;
-            auto w = file_writer::make(std::move(f), options, tmp_pending_delete_log).get0();
-
-            for (const auto& sst : ssts) {
-                auto toc = sst->component_basename(component_type::TOC);
-                w.write(toc.c_str(), toc.size());
-                w.write("\n", 1);
-            }
-
-            w.flush();
-            w.close();
-
-            auto dir_f = open_directory(pending_delete_dir).get0();
-            // Once flushed and closed, the temporary log file can be renamed.
-            rename_file(tmp_pending_delete_log, pending_delete_log).get();
-
-            // Guarantee that the changes above reached the disk.
-            dir_f.flush().get();
-            dir_f.close().get();
-            sstlog.debug("{} written successfully.", pending_delete_log);
-        } catch (...) {
-            sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
-        }
-
-        parallel_for_each(ssts, [] (shared_sstable sst) {
-            return sst->unlink();
-        }).get();
-
-        // Once all sstables are deleted, the log file can be removed.
-        // Note: the log file will be removed also if unlink failed to remove
-        // any sstable and ignored the error.
-        try {
-            remove_file(pending_delete_log).get();
-            sstlog.debug("{} removed.", pending_delete_log);
-        } catch (...) {
-            sstlog.warn("Error removing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
-        }
-    });
-}
-
-// FIXME: Go through maybe_delete_large_partitions_entry on recovery
-// since this is an indication we crashed in the middle of delete_atomically
-future<> replay_pending_delete_log(sstring pending_delete_log) {
-    sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
-    return seastar::async([pending_delete_log = std::move(pending_delete_log)] {
-        sstring pending_delete_dir = parent_path(pending_delete_log);
-        assert(sstable::is_pending_delete_dir(fs::path(pending_delete_dir)));
-        try {
-            auto sstdir = parent_path(pending_delete_dir);
-            auto f = open_file_dma(pending_delete_log, open_flags::ro).get0();
-            auto size = f.size().get0();
-            auto in = make_file_input_stream(f);
-            auto text = in.read_exactly(size).get0();
-            in.close().get();
-            f.close().get();
-
-            sstring all(text.begin(), text.end());
-            std::vector<sstring> basenames;
-            boost::split(basenames, all, boost::is_any_of("\n"), boost::token_compress_on);
-            auto tocs = boost::copy_range<std::vector<sstring>>(basenames
-                    | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); })
-                    | boost::adaptors::transformed([&sstdir] (auto&& basename) { return sstdir + "/" + basename; }));
-            delete_sstables(tocs).get();
-        } catch (...) {
-            sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
-        }
-    });
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
