@@ -216,21 +216,95 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
     }
 }
 
+// This class represents a value that can be one of three things:
+// false, true or null.
+// It could be represented by std::optional<bool>, but optional
+// can be implicitly casted to bool, which might cause mistakes.
+// (bool)(std::make_optional<bool>(false)) will return true,
+// despite the fact that the represented value is `false`.
+// To avoid any such problems this class is introduced
+// along with the is_true() method, which can be used
+// to check if the value held is indeed `true`.
+class bool_or_null {
+    std::optional<bool> value;
+public:
+    bool_or_null(bool val) : value(val) {}
+    bool_or_null(null_value) : value(std::nullopt) {}
+
+    static bool_or_null null() {
+        return bool_or_null(null_value{});
+    }
+    bool has_value() const {
+        return value.has_value();
+    }
+    bool is_null() const {
+        return !has_value();
+    }
+    const bool& get_value() const {
+        return *value;
+    }
+    const bool is_true() const {
+        return has_value() && get_value();
+    }
+};
+
 /// True iff lhs's value equals rhs.
-bool equal(const expression& lhs, const managed_bytes_opt& rhs, const evaluation_inputs& inputs) {
-    if (!rhs) {
-        return false;
+bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, const evaluation_inputs& inputs) {
+    raw_value lhs_value = evaluate(lhs, inputs);
+    if (lhs_value.is_unset_value()) {
+        throw exceptions::invalid_request_exception("UNSET_VALUE found on left-hand side of an equality operator");
     }
-    const auto value = evaluate(lhs, inputs).to_managed_bytes_opt();
-    if (!value) {
-        return false;
+    if (lhs_value.is_null() || !rhs_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    return type_of(lhs)->equal(managed_bytes_view(*value), managed_bytes_view(*rhs));
+    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
+
+    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-/// Convenience overload for expression.
-bool equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    return equal(lhs, evaluate(rhs, inputs).to_managed_bytes_opt(), inputs);
+static std::optional<std::pair<managed_bytes, managed_bytes>> evaluate_binop_sides(const expression& lhs,
+                                                                                   const expression& rhs,
+                                                                                   const oper_t op,
+                                                                                   const evaluation_inputs& inputs) {
+    raw_value lhs_value = evaluate(lhs, inputs);
+    raw_value rhs_value = evaluate(rhs, inputs);
+
+    if (lhs_value.is_unset_value()) {
+        throw exceptions::invalid_request_exception(
+            format("UNSET_VALUE found on left-hand side of a binary operator with operation {}", op));
+    }
+    if (rhs_value.is_unset_value()) {
+        throw exceptions::invalid_request_exception(
+            format("UNSET_VALUE found on right-hand side of a binary operator with operation {}", op));
+    }
+    if (lhs_value.is_null() || rhs_value.is_null()) {
+        return std::nullopt;
+    }
+    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
+    managed_bytes rhs_bytes = std::move(rhs_value).to_managed_bytes();
+    return std::pair(std::move(lhs_bytes), std::move(rhs_bytes));
+}
+
+bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::EQ, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+}
+
+bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::NEQ, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    return !type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
@@ -455,7 +529,7 @@ bool is_one_of(const expression& col, const expression& rhs, const evaluation_in
     }
 
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(col, b, inputs);
+        return equal(col, b, inputs).is_true();
     });
 }
 
@@ -464,7 +538,7 @@ bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const eval
     cql3::raw_value in_list = evaluate(rhs, inputs);
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list, *type_of(rhs)), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(c, b, inputs);
+            return equal(c, b, inputs).is_true();
         });
     });
 }
@@ -1643,7 +1717,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
         throw exceptions::invalid_request_exception("Can't evaluate a binary operator with SCYLLA_CLUSTERING_BOUND");
     }
 
-    bool binop_result;
+    bool_or_null binop_result(false);
 
     switch (binop.op) {
         case oper_t::EQ: {
@@ -1651,7 +1725,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             break;
         }
         case oper_t::NEQ: {
-            binop_result = !equal(binop.lhs, binop.rhs, inputs);
+            binop_result = not_equal(binop.lhs, binop.rhs, inputs);
             break;
         }
         case oper_t::LT:
@@ -1698,7 +1772,11 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
         }
     };
 
-    return raw_value::make_value(boolean_type->decompose(binop_result));
+    if (binop_result.is_null()) {
+        return raw_value::make_null();
+    }
+
+    return raw_value::make_value(boolean_type->decompose(binop_result.get_value()));
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
