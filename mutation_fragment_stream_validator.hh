@@ -166,8 +166,14 @@ struct invalid_mutation_fragment_stream : public std::runtime_error {
 /// Implements the FlattenedConsumerFilter concept.
 class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validator _validator;
-    sstring _name;
+    sstring _name_storage;
+    std::string_view _name_view; // always valid
     mutation_fragment_stream_validation_level _validation_level;
+
+private:
+    sstring full_name() const;
+
+    mutation_fragment_stream_validating_filter(const char* name_literal, sstring name_value, const schema& s, mutation_fragment_stream_validation_level level);
 
 public:
     /// Constructor.
@@ -175,7 +181,11 @@ public:
     /// \arg name is used in log messages to identify the validator, the
     ///     schema identity is added automatically
     /// \arg compare_keys enable validating clustering key monotonicity
-    mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, mutation_fragment_stream_validation_level level);
+    mutation_fragment_stream_validating_filter(sstring name, const schema& s, mutation_fragment_stream_validation_level level);
+    mutation_fragment_stream_validating_filter(const char* name, const schema& s, mutation_fragment_stream_validation_level level);
+
+    mutation_fragment_stream_validating_filter(mutation_fragment_stream_validating_filter&&) = delete;
+    mutation_fragment_stream_validating_filter(const mutation_fragment_stream_validating_filter&) = delete;
 
     bool operator()(const dht::decorated_key& dk);
     bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
