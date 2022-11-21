@@ -472,25 +472,22 @@ bool_or_null like(const expression& lhs, const expression& rhs, const evaluation
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
-    const cql3::raw_value in_list = evaluate(rhs, inputs);
-    if (in_list.is_null()) {
-        return false;
+bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
-    return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(col, b, inputs).is_true();
-    });
-}
-
-/// True iff the tuple of column values is in the set defined by rhs.
-bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const evaluation_inputs& inputs) {
-    cql3::raw_value in_list = evaluate(rhs, inputs);
-    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list, *type_of(rhs)), [&] (const std::vector<managed_bytes_opt>& el) {
-        return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(c, b, inputs).is_true();
-        });
-    });
+    expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
+    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
+    for (const managed_bytes& elem : list_elems) {
+        if (equal(lhs_constant, elem, evaluation_inputs{}).is_true()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const value_set empty_value_set = value_list{};
