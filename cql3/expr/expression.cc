@@ -378,25 +378,28 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 }
 
 /// True iff a column is a map containing \p key.
-bool contains_key(const expression& collection_val, cql3::raw_value_view key, const evaluation_inputs& inputs) {
-    if (!key) {
-        // CONTAINS_KEY NULL should evaluate to NULL/false
-        return false;
+bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS_KEY, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    const data_type collection_type = type_of(collection_val);
-    const managed_bytes_opt collection_bytes = evaluate(collection_val, inputs).to_managed_bytes_opt();
-    if (!collection_bytes) {
-        return false;
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    data_type lhs_type = type_of(lhs);
+    const map_type_impl::native_type data_map =
+        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(lhs_bytes)));
+    data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type)->name_comparator();
+
+    for (const std::pair<data_value, data_value>& map_element : data_map) {
+        bytes serialized_element_key = map_element.first.serialize_nonnull();
+        if (key_type->compare(managed_bytes_view(rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
+            0) {
+            return true;
+        };
     }
-    const auto data_map = value_cast<map_type_impl::native_type>(collection_type->deserialize(managed_bytes_view(*collection_bytes)));
-    auto key_type = static_pointer_cast<const collection_type_impl>(collection_type)->name_comparator();
-    auto found = key.with_linearized([&] (bytes_view k_bv) {
-        using entry = std::pair<data_value, data_value>;
-        return std::find_if(data_map.begin(), data_map.end(), [&] (const entry& element) {
-            return key_type->compare(element.first.serialize_nonnull(), k_bv) == 0;
-        });
-    });
-    return found != data_map.end();
+
+    return false;
 }
 
 /// Fetches the next cell value from iter and returns its (possibly null) value.
@@ -1686,8 +1689,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             break;
         }
         case oper_t::CONTAINS_KEY: {
-            cql3::raw_value val = evaluate(binop.rhs, inputs);
-            binop_result = contains_key(binop.lhs, val.view(), inputs);
+            binop_result = contains_key(binop.lhs, binop.rhs, inputs);
             break;
         }
         case oper_t::LIKE: {
