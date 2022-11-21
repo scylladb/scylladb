@@ -49,6 +49,14 @@
 
 extern logging::logger apilog;
 
+namespace std {
+
+std::ostream& operator<<(std::ostream& os, const api::table_info& ti) {
+    return os << "table{name=" << ti.name << ", id=" << ti.id << "}";
+}
+
+} // namespace std
+
 namespace api {
 
 const locator::token_metadata& http_context::get_token_metadata() {
@@ -100,6 +108,55 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, con
     return parse_tables(ks_name, ctx, it->second);
 }
 
+std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, sstring value) {
+    std::vector<table_info> res;
+    try {
+        if (value.empty()) {
+            const auto& cf_meta_data = ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data();
+            res.reserve(cf_meta_data.size());
+            for (const auto& [name, schema] : cf_meta_data) {
+                res.emplace_back(table_info{name, schema->id()});
+            }
+        } else {
+            std::vector<sstring> names = split(value, ",");
+            res.reserve(names.size());
+            const auto& db = ctx.db.local();
+            for (const auto& table_name : names) {
+                res.emplace_back(table_info{table_name, db.find_uuid(ks_name, table_name)});
+            }
+        }
+    } catch (const replica::no_such_keyspace& e) {
+        throw bad_param_exception(e.what());
+    } catch (const replica::no_such_column_family& e) {
+        throw bad_param_exception(e.what());
+    }
+    return res;
+}
+
+std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+    auto it = query_params.find(param_name);
+    return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
+}
+
+// Run on all tables, skipping dropped tables
+future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
+    std::exception_ptr ex;
+    for (const auto& ti : local_tables) {
+        apilog.debug("Starting {} on {}.{}", op, keyspace, ti);
+        try {
+            co_await func(db.find_column_family(ti.id));
+        } catch (const replica::no_such_column_family& e) {
+            apilog.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
+        } catch (...) {
+            ex = std::current_exception();
+            apilog.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
+        }
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    }
+}
+
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
     ss::token_range r;
     r.start_token = d._start_token;
@@ -118,16 +175,13 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<sstring>)>;
+using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<table_info>)>;
 
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        if (column_families.empty()) {
-            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-        }
-        return f(ctx, std::move(req), std::move(keyspace), std::move(column_families));
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
     };
 }
 
@@ -609,92 +663,106 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        if (column_families.empty()) {
-            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-        }
-        apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, column_families);
-        return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-            auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
-                return db.find_uuid(keyspace, cf_name);
-            }));
-            // major compact smaller tables first, to increase chances of success if low on space.
-            std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
-                return db.find_column_family(id).get_stats().live_disk_space_used;
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, table_infos);
+        try {
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+                auto local_tables = table_infos;
+                // major compact smaller tables first, to increase chances of success if low on space.
+                std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
+                    try {
+                        return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                    } catch (const replica::no_such_column_family& e) {
+                        return int64_t(-1);
+                    }
+                });
+                co_await run_on_existing_tables("force_keyspace_compaction", db, keyspace, local_tables, [] (replica::table& t) {
+                    return t.compact_all_sstables();
+                });
             });
-            // as a table can be dropped during loop below, let's find it before issuing major compaction request.
-            for (auto& id : table_ids) {
-                co_await db.find_column_family(id).compact_all_sstables();
-            }
-            co_return;
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
-        });
+        } catch (...) {
+            apilog.error("force_keyspace_compaction: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
+            throw;
+        }
+
+        co_return json_void();
     });
 
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        if (column_families.empty()) {
-            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
+        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
+            auto msg = "Can not perform cleanup operation when topology changes";
+            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
+            co_await coroutine::return_exception(std::runtime_error(msg));
         }
-        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, column_families);
-        return ss.local().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
-                column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
-            if (!is_cleanup_allowed) {
-                return make_exception_future<json::json_return_type>(
-                        std::runtime_error("Can not perform cleanup operation when topology changes"));
-            }
-            return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-                auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
-                    return db.find_uuid(keyspace, table_name);
-                }));
+        try {
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+                auto local_tables = table_infos;
                 // cleanup smaller tables first, to increase chances of success if low on space.
-                std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
-                    return db.find_column_family(id).get_stats().live_disk_space_used;
+                std::ranges::sort(local_tables, std::less<>(), [&] (const table_info& ti) {
+                    try {
+                        return db.find_column_family(ti.id).get_stats().live_disk_space_used;
+                    } catch (const replica::no_such_column_family& e) {
+                        return int64_t(-1);
+                    }
                 });
                 auto& cm = db.get_compaction_manager();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-                // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
-                for (auto& id : table_ids) {
-                    replica::table& t = db.find_column_family(id);
-                    co_await t.perform_cleanup_compaction(owned_ranges_ptr);
-                }
-                co_return;
-            }).then([]{
-                return make_ready_future<json::json_return_type>(0);
+                co_await run_on_existing_tables("force_keyspace_cleanup", db, keyspace, local_tables, [&] (replica::table& t) {
+                    return t.perform_cleanup_compaction(owned_ranges_ptr);
+                });
             });
-        });
+        } catch (...) {
+            apilog.error("force_keyspace_cleanup: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(0);
     });
 
-    ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> tables) -> future<json::json_return_type> {
-        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, tables);
-        co_return co_await ctx.db.map_reduce0([&keyspace, &tables] (replica::database& db) -> future<bool> {
-            bool needed = false;
-            for (const auto& table : tables) {
-                auto& t = db.find_column_family(keyspace, table);
-                needed |= co_await t.perform_offstrategy_compaction();
-            }
-            co_return needed;
-        }, false, std::plus<bool>());
+    ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
+        bool res = false;
+        try {
+            res = co_await ctx.db.map_reduce0([&] (replica::database& db) -> future<bool> {
+                bool needed = false;
+                co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, keyspace, table_infos, [&needed] (replica::table& t) -> future<> {
+                    needed |= co_await t.perform_offstrategy_compaction();
+                });
+                co_return needed;
+            }, false, std::plus<bool>());
+        } catch (...) {
+            apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(res);
     }));
 
-    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
-        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, column_families, exclude_current_version);
-        return ctx.db.invoke_on_all([=] (replica::database& db) {
-            auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-            return do_for_each(column_families, [=, &db](sstring cfname) {
-                auto& cm = db.get_compaction_manager();
-                auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
+        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
+        try {
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
+                co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
+                    return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                });
             });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
-        });
+        } catch (...) {
+            apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(0);
     }));
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
@@ -1382,7 +1450,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) {
+    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
         auto rp = req_params({
             {"keyspace", {mandatory::yes}},
             {"cf", {""}},
@@ -1418,10 +1487,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             }
         }
 
-        auto f = make_ready_future<>();
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-            f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
+            co_await coroutine::parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
                 // We always pass here db::snapshot_ctl::snap_views::no since:
                 // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
                 // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
@@ -1450,28 +1518,25 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             return stats;
         };
 
-        return f.then([&ctx, keyspace, column_families, opts, &reduce_compaction_stats] {
-            return ctx.db.map_reduce0([=] (replica::database& db) {
-                return map_reduce(column_families, [=, &db] (sstring cfname) {
+        try {
+            auto opt_stats = co_await db.map_reduce0([&] (replica::database& db) {
+                return map_reduce(column_families, [&] (sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
                     return cm.perform_sstable_scrub(cf.as_table_state(), opts);
                 }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
             }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
-        }).then_wrapped([] (auto f) {
-            if (f.failed()) {
-                auto ex = f.get_exception();
-                if (try_catch<sstables::compaction_aborted_exception>(ex)) {
-                    return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::aborted));
-                } else {
-                    return make_exception_future<json::json_return_type>(std::move(ex));
-                }
-            } else if (f.get()->validation_errors) {
-                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::validation_errors));
-            } else {
-                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::successful));
+            if (opt_stats && opt_stats->validation_errors) {
+                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
             }
-        });
+        } catch (const sstables::compaction_aborted_exception&) {
+            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
+        } catch (...) {
+            apilog.error("scrub keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
 }
 
