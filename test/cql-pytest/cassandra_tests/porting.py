@@ -125,6 +125,10 @@ def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+def assert_invalid_syntax_message(cql, table, message, cmd, *args):
+    with pytest.raises(SyntaxException, match=re.escape(message)):
+        execute(cql, table, cmd, *args)
+
 def assert_invalid_message_re(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=message):
         execute(cql, table, cmd, *args)
@@ -148,6 +152,8 @@ def assert_row_count(result, expected):
 def assert_empty(result):
     assert len(list(result)) == 0
 
+assertEmpty = assert_empty
+
 # Result objects contain some strange types specific to the CQL driver, which
 # normally compare well against normal Python types, but in some cases of nested
 # types they do not, and require some cleanup:
@@ -167,6 +173,8 @@ def assert_rows(result, *expected):
     for r,e in zip(allresults, expected):
         r = [result_cleanup(col) for col in r]
         assert r == e
+
+assertRows = assert_rows
 
 # To compare two lists of items (each is a dict) without regard for order,
 # The following function, multiset() converts the list into a multiset
@@ -200,6 +208,8 @@ def assert_rows_ignoring_order(result, *expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     assert multiset(allresults) == multiset(expected)
+
+assertRowsIgnoringOrder = assert_rows_ignoring_order
 
 # Unfortunately, collections.Counter objects don't implement comparison
 # operators <, <=, >, >=, as sets do. Lets implement the c1 <= c2:
@@ -271,3 +281,7 @@ def wait_for_index(cql, table, index):
 # The number of arguments is assumed to be even.
 def user_type(*args):
     return collections.namedtuple('user_type', args[::2])(*args[1::2])
+
+# a row(...) used in assertRows can simply be a list
+def row(*args):
+    return list(args)
