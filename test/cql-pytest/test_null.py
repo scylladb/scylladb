@@ -52,7 +52,6 @@ def test_insert_null_key(cql, table1):
 
 # Same as test_insert_null_key() above, just adds IF NOT EXISTS and
 # reproduces issue #11954.
-@pytest.mark.skip(reason="#11954 crashes Scylla")
 def test_insert_null_key_lwt(cql, table1):
     s = unique_key_string()
     with pytest.raises(InvalidRequest, match='null value'):
