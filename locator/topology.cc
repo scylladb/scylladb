@@ -12,6 +12,7 @@
 
 #include "log.hh"
 #include "locator/topology.hh"
+#include "locator/production_snitch_base.hh"
 #include "utils/stall_free.hh"
 #include "utils/fb_utilities.hh"
 
@@ -140,7 +141,16 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
         return _pending_locations.at(ep);
     }
 
-    on_internal_error(tlogger, format("Node {} is not in topology", ep));
+    // FIXME -- this shouldn't happen. After topology is stable and is
+    // correctly populated with endpoints, this should be replaced with
+    // on_internal_error()
+    static thread_local endpoint_dc_rack default_location = {
+        .dc = locator::production_snitch_base::default_dc,
+        .rack = locator::production_snitch_base::default_rack,
+    };
+
+    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, current_backtrace());
+    return default_location;
 }
 
 // FIXME -- both methods below should rather return data from the
