@@ -98,6 +98,16 @@ private:
     virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
         return boost::copy_range<std::vector<data_dictionary::keyspace>>(unwrap(db).keyspaces | boost::adaptors::transformed([this] (const keyspace& ks) { return wrap(ks); }));
     }
+    virtual std::vector<sstring> get_user_keyspaces(data_dictionary::database db) const override {
+        return boost::copy_range<std::vector<sstring>>(
+            unwrap(db).keyspaces 
+            | boost::adaptors::transformed([] (const keyspace& ks) { return ks.metadata->name(); })
+            | boost::adaptors::filtered([] (const sstring& ks) {return !is_internal_keyspace(ks); })
+        );
+    }
+    virtual std::vector<sstring> get_all_keyspaces(data_dictionary::database db) const override {
+        return boost::copy_range<std::vector<sstring>>(unwrap(db).keyspaces | boost::adaptors::transformed([this] (const keyspace& ks) { return ks.metadata->name(); }));
+    }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
         return boost::copy_range<std::vector<data_dictionary::table>>(unwrap(db).tables | boost::adaptors::transformed([this] (const table& ks) { return wrap(ks); }));
     }

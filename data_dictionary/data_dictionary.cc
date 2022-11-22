@@ -82,6 +82,16 @@ database::get_keyspaces() const {
     return _ops->get_keyspaces(*this);
 }
 
+std::vector<sstring> 
+database::get_user_keyspaces() const {
+    return _ops->get_user_keyspaces(*this);
+}
+
+std::vector<sstring> 
+database::get_all_keyspaces() const {
+    return _ops->get_all_keyspaces(*this);
+}
+
 std::vector<table>
 database::get_tables() const {
     return _ops->get_tables(*this);

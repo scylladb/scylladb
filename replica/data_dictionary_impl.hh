@@ -54,6 +54,12 @@ public:
         }
         return ret;
     }
+    virtual std::vector<sstring> get_user_keyspaces(data_dictionary::database db) const override {
+        return unwrap(db).get_user_keyspaces();
+    }
+    virtual std::vector<sstring> get_all_keyspaces(data_dictionary::database db) const override {
+        return unwrap(db).get_all_keyspaces();
+    }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
         std::vector<data_dictionary::table> ret;
         auto&& tables = unwrap(db).get_column_families();
