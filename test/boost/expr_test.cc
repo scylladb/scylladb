@@ -2780,3 +2780,34 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains) {
 
     test_evaluate_binop_null_unset(oper_t::CONTAINS, map_val, make_int_const(5));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains_key) {
+    expression map_val = make_int_int_map_const({{1, 2}, {3, 4}, {5, 6}});
+
+    expression true_contains_key_binop = binary_operator(map_val, oper_t::CONTAINS_KEY, make_int_const(5));
+    BOOST_REQUIRE_EQUAL(evaluate(true_contains_key_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_contains_key_binop = binary_operator(map_val, oper_t::CONTAINS_KEY, make_int_const(6));
+    BOOST_REQUIRE_EQUAL(evaluate(false_contains_key_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_contains_key_empty = binary_operator(map_val, oper_t::CONTAINS_KEY, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_contains_key_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_with_empty =
+        make_map_const({{make_empty_const(int32_type), make_int_const(2)}, {make_int_const(3), make_int_const(4)}},
+                       int32_type, int32_type);
+    expression map_with_empty_contains_key_empty =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_key_existing_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_existing_int, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_key_nonexisting_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_nonexisting_int, evaluation_inputs{}),
+                        make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::CONTAINS_KEY, map_val, make_int_const(5));
+}
