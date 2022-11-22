@@ -33,7 +33,7 @@ bool host_filter::can_hint_for(const locator::topology& topo, gms::inet_address 
     case enabled_kind::enabled_for_all:
         return true;
     case enabled_kind::enabled_selectively:
-        return _dcs.contains(topo.get_datacenter(ep));
+        return topo.has_endpoint(ep, locator::topology::pending::yes) && _dcs.contains(topo.get_datacenter(ep));
     case enabled_kind::disabled_for_all:
         return false;
     }
