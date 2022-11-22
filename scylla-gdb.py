@@ -3989,6 +3989,8 @@ class scylla_netw(gdb.Command):
         servers = [
             std_unique_ptr(ms['_server']['_M_elems'][0]),
             std_unique_ptr(ms['_server']['_M_elems'][1]),
+            std_unique_ptr(ms['_server_tls']['_M_elems'][0]),
+            std_unique_ptr(ms['_server_tls']['_M_elems'][1]),
         ]
         for srv in servers:
             if srv:
