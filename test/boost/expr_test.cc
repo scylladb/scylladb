@@ -2644,3 +2644,24 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gt) {
 
     test_evaluate_binop_null_unset(oper_t::GT, make_int_const(234), make_int_const(-3434));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
+    expression true_gte_binop = binary_operator(make_int_const(20), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(true_gte_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression true_gte_binop2 = binary_operator(make_int_const(10), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(true_gte_binop2, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_gte_binop = binary_operator(make_int_const(-10), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(false_gte_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_gte_empty =
+        binary_operator(make_empty_const(int32_type), oper_t::GTE, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_gte_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression int_min_gte_empty =
+        binary_operator(make_int_const(std::numeric_limits<int32_t>::min()), oper_t::GTE, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(int_min_gte_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::GTE, make_int_const(234), make_int_const(-3434));
+}
