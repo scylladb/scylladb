@@ -431,6 +431,7 @@ private:
      * against l2.
      */
     bool is_worth_merging_for_range_query(
+        const locator::topology& topo,
         inet_address_vector_replica_set& merged,
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) const;
