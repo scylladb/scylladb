@@ -2513,3 +2513,56 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
+
+// Test how evaluating a given binary operator behaves when null and unset are present.
+// A binary with null on either side should evaluate to null.
+// When UNSET_VALUE is present evaluating should throw an exception.
+static void test_evaluate_binop_null_unset(oper_t op, expression valid_lhs, expression valid_rhs) {
+    constant lhs_null_val = constant::make_null(type_of(valid_lhs));
+    constant rhs_null_val = constant::make_null(type_of(valid_rhs));
+    constant lhs_unset_val = constant::make_unset_value(type_of(valid_lhs));
+    constant rhs_unset_val = constant::make_unset_value(type_of(valid_rhs));
+
+    expression valid_binop = binary_operator(valid_lhs, op, valid_rhs);
+    BOOST_REQUIRE(evaluate(valid_binop, evaluation_inputs{}).is_value());
+
+    expression binop_lhs_null = binary_operator(lhs_null_val, op, valid_rhs);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_lhs_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_rhs_null = binary_operator(valid_lhs, op, rhs_null_val);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_rhs_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_both_null = binary_operator(lhs_null_val, op, rhs_null_val);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_both_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_lhs_unset = binary_operator(lhs_unset_val, op, valid_rhs);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_rhs_unset = binary_operator(valid_lhs, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_both_unset = binary_operator(lhs_unset_val, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_both_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_lhs_null_rhs_unset = binary_operator(lhs_null_val, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_null_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_lhs_unset_rhs_null = binary_operator(lhs_unset_val, op, rhs_null_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset_rhs_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq) {
+    expression true_eq_binop = binary_operator(make_int_const(1), oper_t::EQ, make_int_const(1));
+    BOOST_REQUIRE_EQUAL(evaluate(true_eq_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_eq_binop = binary_operator(make_int_const(1), oper_t::EQ, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_eq_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_eq = binary_operator(make_empty_const(int32_type), oper_t::EQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_eq, evaluation_inputs{}), make_bool_raw(true));
+
+    expression empty_neq = binary_operator(make_int_const(0), oper_t::EQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::EQ, make_int_const(123), make_int_const(456));
+}
