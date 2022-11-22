@@ -271,3 +271,10 @@ def test_base64_missing_padding(dynamodb, test_table_b):
     assert r.status_code == 400
     r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
     assert r.status_code == 400
+
+# Tests the case where non base64 text is placed as binary data value.
+def test_base64_malformed(dynamodb, test_table_b):
+    r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400

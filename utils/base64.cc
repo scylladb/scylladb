@@ -17,11 +17,12 @@ static class base64_chars {
 public:
     static constexpr const char to[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int8_t from[255];
+    static constexpr uint8_t invalid_char = 255;
+    uint8_t from[255];
     base64_chars() {
         static_assert(sizeof(to) == 64 + 1);
         for (int i = 0; i < 255; i++) {
-            from[i] = -1; // signal invalid character
+            from[i] = invalid_char; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
             from[(unsigned) to[i]] = i;
@@ -82,10 +83,8 @@ static std::string base64_decode_string(std::string_view in) {
     ret.reserve(in.size() * 3 / 4);
     for (unsigned char c : in) {
         uint8_t dc = base64_chars.from[c];
-        if (dc == 255) {
-            // Any unexpected character, include the "=" character usually
-            // used for padding, signals the end of the decode.
-            break;
+        if (dc == base64_chars::invalid_char) {
+           throw std::invalid_argument(format("Invalid Base64 character: '{}'", char(c)));
         }
         chunk4[i++] = dc;
         if (i == 4) {
