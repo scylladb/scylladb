@@ -2811,3 +2811,31 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains_key) {
 
     test_evaluate_binop_null_unset(oper_t::CONTAINS_KEY, map_val, make_int_const(5));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
+    expression true_is_not_binop = binary_operator(make_int_const(1), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(true_is_not_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_is_not_binop =
+        binary_operator(constant::make_null(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(false_is_not_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression forbidden_is_not_binop = binary_operator(make_int_const(1), oper_t::IS_NOT, make_int_const(2));
+    BOOST_REQUIRE_THROW(evaluate(forbidden_is_not_binop, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression empty_is_not_null =
+        binary_operator(make_empty_const(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_is_not_null, evaluation_inputs{}), make_bool_raw(true));
+
+    expression unset_is_not_null =
+        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(unset_is_not_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression int_is_not_unset =
+        binary_operator(make_int_const(123), oper_t::IS_NOT, constant::make_unset_value(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(int_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression unset_is_not_unset =
+        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_unset_value(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(unset_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
