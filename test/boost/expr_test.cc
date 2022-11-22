@@ -2566,3 +2566,20 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq) {
 
     test_evaluate_binop_null_unset(oper_t::EQ, make_int_const(123), make_int_const(456));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
+    expression true_neq_binop = binary_operator(make_int_const(1), oper_t::NEQ, make_int_const(1000));
+    BOOST_REQUIRE_EQUAL(evaluate(true_neq_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_neq_binop = binary_operator(make_int_const(2), oper_t::NEQ, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_neq_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_neq_empty =
+        binary_operator(make_empty_const(int32_type), oper_t::NEQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_neq_0 = binary_operator(make_empty_const(int32_type), oper_t::NEQ, make_int_const(0));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq_0, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::NEQ, make_int_const(123), make_int_const(456));
+}
