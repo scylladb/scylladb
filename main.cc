@@ -1638,17 +1638,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // only Alternator uses it for its TTL feature. But in the
                 // future if we add a CQL interface to it, we may want to
                 // start this outside the Alternator if().
-                if (cfg->check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
-                    supervisor::notify("starting the expiration service");
-                    es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
-                             std::ref(proxy), std::ref(gossiper)).get();
-                    stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
-                        es.stop().get();
-                    });
-                    with_scheduling_group(maintenance_scheduling_group, [&es] {
-                        return es.invoke_on_all(&alternator::expiration_service::start);
-                    }).get();
-                }
+                supervisor::notify("starting the expiration service");
+                es.start(seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db)),
+                         std::ref(proxy), std::ref(gossiper)).get();
+                stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
+                    es.stop().get();
+                });
+                with_scheduling_group(maintenance_scheduling_group, [&es] {
+                    return es.invoke_on_all(&alternator::expiration_service::start);
+                }).get();
             }
             ss.local().register_protocol_server(alternator_ctl);
 
