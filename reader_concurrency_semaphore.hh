@@ -178,7 +178,28 @@ private:
     resources _initial_resources;
     resources _resources;
 
-    expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
+    class wait_queue {
+        expiring_fifo<entry, expiry_handler, db::timeout_clock> _admission_queue;
+    public:
+        wait_queue(expiry_handler eh) : _admission_queue(eh) { }
+        size_t size() const {
+            return _admission_queue.size();
+        }
+        bool empty() const {
+            return _admission_queue.empty();
+        }
+        void push_back(entry&& e, db::timeout_clock::time_point timeout) {
+            _admission_queue.push_back(std::move(e), timeout);
+        }
+        entry& front() {
+            return _admission_queue.front();
+        }
+        void pop_front() {
+            _admission_queue.pop_front();
+        }
+    };
+
+    wait_queue _wait_list;
     queue<entry> _ready_list;
 
     sstring _name;
