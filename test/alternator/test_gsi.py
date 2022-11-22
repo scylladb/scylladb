@@ -167,6 +167,24 @@ def test_gsi_empty_value(test_table_gsi_2):
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
 
+def test_gsi_empty_value_with_range_key(test_table_gsi_3):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': '', 'b': random_string()})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': ''})
+
+# Dynamodb supports special way of setting NULL value.
+# It's different than non existing value.
+def test_gsi_null_value(test_table_gsi_2):
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': None})
+
+def test_gsi_null_value_with_range_key(test_table_gsi_3):
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': None, 'b': random_string()})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': None})
+
 # Verify that a GSI is correctly listed in describe_table
 def test_gsi_describe(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
@@ -1226,7 +1244,7 @@ def test_gsi_list_tables(dynamodb, test_table_gsi_random_name):
 # skipped while filling the GSI - even if Scylla actually capable of
 # representing such empty view keys (see issue #9375).
 # Reproduces issue #5022 and #9424.
-@pytest.mark.xfail(reason="issue #5022, #9424")
+@pytest.mark.xfail(reason="issue #11567, #9424")
 def test_gsi_backfill_empty_string(dynamodb):
     # First create, and fill, a table without GSI:
     with new_test_table(dynamodb,
