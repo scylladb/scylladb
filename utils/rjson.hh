@@ -335,7 +335,11 @@ rjson::value from_string_map(const std::map<sstring, sstring>& map);
 sstring quote_json_string(const sstring& value);
 
 inline bytes base64_decode(const value& v) {
-  return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
+    try {
+        return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
+    } catch (std::invalid_argument& e) {
+        throw rjson::error(e.what()); // so that it's converted to user error in alternator
+    }
 }
 
 } // end namespace rjson

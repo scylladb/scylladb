@@ -9,8 +9,10 @@ import pytest
 import requests
 import json
 import urllib3
+import base64
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
+from util import random_bytes
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
@@ -241,3 +243,31 @@ def test_exception_escape_raw(dynamodb, test_table_s):
     # In issue #10278, the JSON parsing fails:
     r = json.loads(response.text)
     assert 'ValidationException' in r['__type']
+
+def put_item_binary_data_in_key(dynamodb, test_table_b, item_data):
+    payload = '{"TableName": "%s", "Item": {"p": {"B": "%s"}}}' % (test_table_b.name, item_data)
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+def put_item_binary_data_in_non_key(dynamodb, test_table_b, item_data):
+    payload ='''{
+        "TableName": "%s",
+        "Item": {
+            "p": {
+                "B": "%s"
+            },
+            "c": {
+                "B": "%s"
+            }
+        }
+    }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# Reproduces issue #6487 where setting binary values with missing "=" padding characters
+# was allowed in Scylla.
+def test_base64_missing_padding(dynamodb, test_table_b):
+    r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
+    assert r.status_code == 400
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
+    assert r.status_code == 400
