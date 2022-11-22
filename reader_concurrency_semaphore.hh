@@ -75,7 +75,9 @@ public:
         // Total number of reads admitted, via all admission paths.
         uint64_t reads_admitted = 0;
         // Total number of reads enqueued to wait for admission.
-        uint64_t reads_enqueued = 0;
+        uint64_t reads_enqueued_for_admission = 0;
+        // Total number of reads enqueued to wait for memory.
+        uint64_t reads_enqueued_for_memory = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -179,23 +181,37 @@ private:
     resources _resources;
 
     class wait_queue {
+        // Stores entries for permits waiting to be admitted.
         expiring_fifo<entry, expiry_handler, db::timeout_clock> _admission_queue;
+        // Stores entries for serialized permits waiting to obtain memory.
+        expiring_fifo<entry, expiry_handler, db::timeout_clock> _memory_queue;
     public:
-        wait_queue(expiry_handler eh) : _admission_queue(eh) { }
+        wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
         size_t size() const {
-            return _admission_queue.size();
+            return _admission_queue.size() + _memory_queue.size();
         }
         bool empty() const {
-            return _admission_queue.empty();
+            return _admission_queue.empty() && _memory_queue.empty();
         }
-        void push_back(entry&& e, db::timeout_clock::time_point timeout) {
+        void push_to_admission_queue(entry&& e, db::timeout_clock::time_point timeout) {
             _admission_queue.push_back(std::move(e), timeout);
         }
+        void push_to_memory_queue(entry&& e, db::timeout_clock::time_point timeout) {
+            _memory_queue.push_back(std::move(e), timeout);
+        }
         entry& front() {
-            return _admission_queue.front();
+            if (_memory_queue.empty()) {
+                return _admission_queue.front();
+            } else {
+                return _memory_queue.front();
+            }
         }
         void pop_front() {
-            _admission_queue.pop_front();
+            if (_memory_queue.empty()) {
+                _admission_queue.pop_front();
+            } else {
+                _memory_queue.pop_front();
+            }
         }
     };
 
@@ -214,6 +230,7 @@ private:
     gate _close_readers_gate;
     gate _permit_gate;
     std::optional<future<>> _execution_loop_future;
+    reader_permit::impl* _blessed_permit = nullptr;
 
 private:
     void do_detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
@@ -228,7 +245,8 @@ private:
 
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<> enqueue_waiter(reader_permit permit, read_func func);
+    enum class wait_on { admission, memory };
+    future<> enqueue_waiter(reader_permit permit, read_func func, wait_on wait);
     void evict_readers_in_background();
     future<> do_wait_admission(reader_permit permit, read_func func = {});
 
@@ -241,6 +259,16 @@ private:
     can_admit can_admit_read(const reader_permit& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
+
+    // Request more memory for the permit.
+    // Request is instantly granted while memory consumption of all reads is
+    // below _kill_limit_multiplier.
+    // After memory consumption goes above the above limit, only one reader
+    // (permit) is allowed to make progress, this method will block for all other
+    // one, until:
+    // * The blessed read finishes and a new blessed permit is choosen.
+    // * Memory consumption falls below the limit.
+    future<> request_memory(reader_permit::impl& permit, size_t memory);
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
@@ -257,6 +285,8 @@ private:
     void close_reader(flat_mutation_reader_v2 reader);
 
     future<> execution_loop() noexcept;
+
+    uint64_t get_serialize_limit() const;
 
 public:
     struct no_limits { };

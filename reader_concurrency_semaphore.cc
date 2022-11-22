@@ -88,6 +88,8 @@ class reader_permit::impl
     db::timeout_clock::time_point _timeout;
     query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
     uint64_t _sstables_read = 0;
+    size_t _requested_memory = 0;
+    std::optional<shared_future<>> _memory_future;
 
 private:
     void on_permit_used() {
@@ -110,6 +112,10 @@ private:
         if (_used_branches) {
             _state = reader_permit::state::active_used;
             on_permit_used();
+            if (_blocked_branches) {
+                _state = reader_permit::state::active_blocked;
+                on_permit_blocked();
+            }
         } else {
             _state = reader_permit::state::active_unused;
         }
@@ -117,6 +123,9 @@ private:
 
     void on_permit_inactive(reader_permit::state st) {
         _state = st;
+        if (_marked_as_blocked) {
+            on_permit_unblocked();
+        }
         if (_marked_as_used) {
             on_permit_unused();
         }
@@ -198,8 +207,13 @@ public:
         return _state;
     }
 
-    void on_waiting() {
-        on_permit_inactive(reader_permit::state::waiting);
+    void on_waiting_for_admission() {
+        on_permit_inactive(reader_permit::state::waiting_for_admission);
+    }
+
+    void on_waiting_for_memory(future<> fut) {
+        on_permit_inactive(reader_permit::state::waiting_for_memory);
+        _memory_future.emplace(std::move(fut));
     }
 
     void on_admission() {
@@ -207,6 +221,17 @@ public:
         on_permit_active();
         consume(_base_resources);
         _base_resources_consumed = true;
+    }
+
+    void on_granted_memory() {
+        if (_state == reader_permit::state::waiting_for_memory) {
+            on_permit_active();
+        }
+        consume({0, std::exchange(_requested_memory, 0)});
+    }
+
+    future<> get_memory_future() {
+        return _memory_future->get_future();
     }
 
     void on_register_as_inactive() {
@@ -236,6 +261,13 @@ public:
     void signal(reader_resources res) {
         _resources -= res;
         _semaphore.signal(res);
+    }
+
+    future<resource_units> request_memory(size_t memory) {
+        _requested_memory += memory;
+        return _semaphore.request_memory(*this, memory).then([this, memory] {
+            return resource_units(reader_permit(shared_from_this()), {0, ssize_t(memory)}, resource_units::already_consumed_tag{});
+        });
     }
 
     reader_resources resources() const {
@@ -373,12 +405,24 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const sche
 {
 }
 
-void reader_permit::on_waiting() {
-    _impl->on_waiting();
+void reader_permit::on_waiting_for_admission() {
+    _impl->on_waiting_for_admission();
+}
+
+void reader_permit::on_waiting_for_memory(future<> fut) {
+    _impl->on_waiting_for_memory(std::move(fut));
 }
 
 void reader_permit::on_admission() {
     _impl->on_admission();
+}
+
+void reader_permit::on_granted_memory() {
+    _impl->on_granted_memory();
+}
+
+future<> reader_permit::get_memory_future() {
+    return _impl->get_memory_future();
 }
 
 reader_permit::~reader_permit() {
@@ -414,6 +458,10 @@ reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
 
 reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
     return resource_units(*this, res);
+}
+
+future<reader_permit::resource_units> reader_permit::request_memory(size_t memory) {
+    return _impl->request_memory(memory);
 }
 
 reader_resources reader_permit::consumed_resources() const {
@@ -474,8 +522,11 @@ void reader_permit::on_finish_sstable_read() noexcept {
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
     switch (s) {
-        case reader_permit::state::waiting:
-            os << "waiting";
+        case reader_permit::state::waiting_for_admission:
+            os << "waiting_for_admission";
+            break;
+        case reader_permit::state::waiting_for_memory:
+            os << "waiting_for_memory";
             break;
         case reader_permit::state::active_unused:
             os << "active/unused";
@@ -665,6 +716,13 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             }
         }
     }
+}
+
+uint64_t reader_concurrency_semaphore::get_serialize_limit() const {
+    if (!_serialize_limit_multiplier() || _serialize_limit_multiplier() == std::numeric_limits<uint32_t>::max() || is_unlimited()) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return _initial_resources.memory * _serialize_limit_multiplier();
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
@@ -893,16 +951,23 @@ std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_vi
     return {};
 }
 
-future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, read_func func) {
+future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, read_func func, wait_on wait) {
     if (auto ex = check_queue_size("wait")) {
         return make_exception_future<>(std::move(ex));
     }
     promise<> pr;
     auto fut = pr.get_future();
-    permit.on_waiting();
     auto timeout = permit.timeout();
-    _wait_list.push_back(entry(std::move(pr), std::move(permit), std::move(func)), timeout);
-    ++_stats.reads_enqueued;
+    if (wait == wait_on::admission) {
+        permit.on_waiting_for_admission();
+        _wait_list.push_to_admission_queue(entry(std::move(pr), std::move(permit), std::move(func)), timeout);
+        ++_stats.reads_enqueued_for_admission;
+    } else {
+        permit.on_waiting_for_memory(std::move(fut));
+        fut = permit.get_memory_future();
+        _wait_list.push_to_memory_queue(entry(std::move(pr), std::move(permit), std::move(func)), timeout);
+        ++_stats.reads_enqueued_for_memory;
+    }
     return fut;
 }
 
@@ -928,6 +993,23 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
 
 reader_concurrency_semaphore::can_admit
 reader_concurrency_semaphore::can_admit_read(const reader_permit& permit) const noexcept {
+    if (_resources.memory < 0) [[unlikely]] {
+        const auto consumed_memory = consumed_resources().memory;
+        if (consumed_memory >= get_serialize_limit()) {
+            if (_blessed_permit) {
+                // blessed permit is never in the wait list
+                return can_admit::no;
+            } else {
+                auto res = permit.get_state() == reader_permit::state::waiting_for_memory ? can_admit::yes : can_admit::no;
+                return res;
+            }
+        }
+    }
+
+    if (permit.get_state() == reader_permit::state::waiting_for_memory) {
+        return can_admit::yes;
+    }
+
     if (!_ready_list.empty()) {
         return can_admit::no;
     }
@@ -954,7 +1036,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
 
     const auto admit = can_admit_read(permit);
     if (admit != can_admit::yes || !_wait_list.empty()) {
-        auto fut = enqueue_waiter(std::move(permit), std::move(func));
+        auto fut = enqueue_waiter(std::move(permit), std::move(func), wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
             // This is a contradiction: the semaphore could admit waiters yet it has waiters.
             // Normally, the semaphore should admit waiters as soon as it can.
@@ -981,8 +1063,13 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit)) == can_admit::yes) {
         auto& x = _wait_list.front();
         try {
-            x.permit.on_admission();
-            ++_stats.reads_admitted;
+            if (x.permit.get_state() == reader_permit::state::waiting_for_memory) {
+                _blessed_permit = x.permit._impl.get();
+                x.permit.on_granted_memory();
+            } else {
+                x.permit.on_admission();
+                ++_stats.reads_admitted;
+            }
             if (x.func) {
                 _ready_list.push(std::move(x));
             } else {
@@ -999,6 +1086,29 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     }
 }
 
+future<> reader_concurrency_semaphore::request_memory(reader_permit::impl& permit, size_t memory) {
+    // Already blocked on memory?
+    if (permit.get_state() == reader_permit::state::waiting_for_memory) {
+        return permit.get_memory_future();
+    }
+
+    if (_resources.memory > 0 || (consumed_resources().memory + memory) < get_serialize_limit()) {
+        permit.on_granted_memory();
+        return make_ready_future<>();
+    }
+
+    if (!_blessed_permit) {
+        _blessed_permit = &permit;
+    }
+
+    if (_blessed_permit == &permit) {
+        permit.on_granted_memory();
+        return make_ready_future<>();
+    }
+
+    return enqueue_waiter(reader_permit(permit.shared_from_this()), {}, wait_on::memory);
+}
+
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
     _permit_gate.enter();
     _permit_list.push_back(permit);
@@ -1010,6 +1120,10 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
     permit.unlink();
     _permit_gate.leave();
     --_stats.current_permits;
+    if (_blessed_permit == &permit) {
+        _blessed_permit = nullptr;
+        maybe_admit_waiters();
+    }
 }
 
 void reader_concurrency_semaphore::on_permit_used() noexcept {

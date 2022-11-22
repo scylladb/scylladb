@@ -2065,7 +2065,10 @@ class scylla_memory(gdb.Command):
         initial_memory = int(semaphore["_initial_resources"]["memory"])
         used_count = initial_count - int(semaphore["_resources"]["count"])
         used_memory = initial_memory - int(semaphore["_resources"]["memory"])
-        waiters = int(semaphore["_wait_list"]["_size"])
+        try:
+            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+        except gdb.error: # 5.1 compatibility
+            waiters = int(semaphore["_wait_list"]["_size"])
         return f'{semaphore_name:<24} {used_count:>3}/{initial_count:>3}, {used_memory:>13}/{initial_memory:>13}, queued: {waiters}'
 
     @staticmethod
@@ -5145,11 +5148,17 @@ class scylla_read_stats(gdb.Command):
         else:
             inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
 
+
+        try:
+            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+        except gdb.error: # 5.1 compatibility
+            waiters = int(semaphore["_wait_list"]["_size"])
+
         gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
                 semaphore_name,
                 initial_count - int(semaphore['_resources']['count']), initial_count,
                 initial_memory - int(semaphore['_resources']['memory']), initial_memory,
-                int(semaphore['_wait_list']['_size']), inactive_read_count))
+                waiters, inactive_read_count))
 
         gdb.write("{:>10} {:5} {:>12} {}\n".format('permits', 'count', 'memory', 'table/description/state'))
 

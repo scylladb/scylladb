@@ -619,7 +619,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
         const auto stats_after = semaphore.get_stats();
         BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
-        // Deliberately not checking `reads_enqueued`, a read can be enqueued temporarily during the admission process.
+        // Deliberately not checking `reads_enqueued_for_admission`, a read can be enqueued temporarily during the admission process.
 
         if (can_admit == expected_can_admit) {
             testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
@@ -644,7 +644,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         {
             const auto stats_after = semaphore.get_stats();
             BOOST_REQUIRE(!enqueued_permit_fut.available());
-            BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued + 1);
+            BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission + 1);
             BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
         }
@@ -711,7 +711,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
         const auto stats_after = semaphore.get_stats();
         BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + 1);
-        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued);
+        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission);
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
     require_can_admit(true, "semaphore in initial state");
@@ -768,7 +768,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
         const auto stats_after = semaphore.get_stats();
         BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
-        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued + 1);
+        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission + 1);
         BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
 
         auto cookie2 = post_enqueue_hook(cookie1);
@@ -1007,7 +1007,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // * no more count resources left
     auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout);
     BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
@@ -1068,7 +1068,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(1, 3 * 1024));
 
     auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
 
     semaphore.set_resources({4, 4 * 1024});
