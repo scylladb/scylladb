@@ -1065,7 +1065,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"udf", feature::UDF},
         {"cdc", feature::UNUSED},
         {"alternator-streams", feature::ALTERNATOR_STREAMS},
-        {"alternator-ttl", feature::ALTERNATOR_TTL},
+        {"alternator-ttl", feature::UNUSED },
         {"raft", feature::RAFT},
         {"broadcast-tables", feature::BROADCAST_TABLES},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},

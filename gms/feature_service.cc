@@ -60,9 +60,6 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
         fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_TTL)) {
-        fcfg._disabled_features.insert("ALTERNATOR_TTL"s);
-    }
     if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
     }
