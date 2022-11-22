@@ -648,6 +648,11 @@ future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 
+// Returns a sorted and deoverlapped list of ranges that are
+// the result of subtracting all ranges from ranges_to_subtract.
+// ranges_to_subtract must be sorted and deoverlapped.
+future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& ranges, dht::partition_range_vector ranges_to_subtract);
+
 } // dht
 
 namespace std {

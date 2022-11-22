@@ -20,6 +20,7 @@
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 #include "test/boost/total_order_check.hh"
 
 template <typename... Args>
@@ -535,4 +536,70 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
             dht::find_first_token_for_shard(sharder, prev_token(last_token), third_boundary, (last_shard + 2) % cpu_count));
     BOOST_REQUIRE_EQUAL(prev_token(first_boundary),
             dht::find_first_token_for_shard(sharder, prev_token(last_token), prev_token(first_boundary), (last_shard + 2) % cpu_count));
+}
+
+// dht::subtract_ranges is used by cleanup_compaction
+// get_ranges_for_invalidation.
+SEASTAR_THREAD_TEST_CASE(test_dht_subtract_ranges) {
+    simple_schema ss;
+    const auto& schema = *ss.schema();
+
+    auto get_random_token = [] () {
+        auto t = tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max());
+        return dht::token::from_int64(t);
+    };
+
+    auto get_random_ring_position = [&] (dht::token token, dht::ring_position::token_bound bound) {
+        if (!tests::random::get_int<size_t>(100)) {
+            return bound == dht::ring_position::token_bound::start ? dht::ring_position::min() : dht::ring_position::max();
+        }
+        return dht::ring_position(token, bound);
+    };
+
+    auto get_random_ranges = [&] (size_t max_count) {
+        auto count = tests::random::get_int<size_t>(1, max_count);
+        dht::partition_range_vector ranges;
+        ranges.reserve(count);
+
+        for (auto i = 0; i < count; i++) {
+            dht::token t0 = get_random_token();
+            dht::token t1 = get_random_token();
+            if (t1 < t0) {
+                std::swap(t1, t0);
+            }
+            dht::ring_position rp0 = get_random_ring_position(t0, dht::ring_position::token_bound::start);
+            dht::ring_position rp1 = get_random_ring_position(t1, dht::ring_position::token_bound::end);
+            ranges.emplace_back(dht::partition_range(rp0, rp1));
+        }
+
+        return dht::partition_range::deoverlap(ranges, dht::ring_position_comparator(schema));
+    };
+
+    size_t max_size = 10;
+    auto ranges = get_random_ranges(max_size);
+    auto ranges_to_subtract = get_random_ranges(max_size);
+
+    auto res = dht::subtract_ranges(schema, ranges, ranges_to_subtract).get();
+
+    testlog.trace("ranges={}", ranges);
+    testlog.trace("ranges_to_subtract={}", ranges_to_subtract);
+    testlog.trace("res={}", res);
+
+    auto cmp = dht::ring_position_comparator(schema);
+    for (const auto& r : res) {
+        // verify that the resulting range does not intersect with ranges_to_subtract
+        for (const auto& rts : ranges_to_subtract) {
+            BOOST_REQUIRE(!rts.overlaps(r, cmp));
+        }
+
+        // verify that the resulting range is contained in some source ranges
+        bool contained = false;
+        for (const auto& r0 : ranges) {
+            if (r0.contains(r, cmp)) {
+                contained = true;
+                break;
+            }
+        }
+        BOOST_REQUIRE(contained);
+    }
 }

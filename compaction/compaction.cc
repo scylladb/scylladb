@@ -28,6 +28,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "dht/i_partitioner.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_writer.hh"
 #include "sstables/progress_monitor.hh"
@@ -1188,21 +1189,8 @@ private:
             return dht::partition_range::make({sst->get_first_decorated_key(), true},
                                               {sst->get_last_decorated_key(), true});
         }));
-        // optimize set of potentially overlapping ranges by deoverlapping them.
-        non_owned_ranges = dht::partition_range::deoverlap(std::move(non_owned_ranges), dht::ring_position_comparator(*_schema));
 
-        // subtract *each* owned range from the partition range of *each* sstable*,
-        // such that we'll be left only with a set of non-owned ranges.
-        for (auto& owned_range : owned_ranges) {
-            dht::partition_range_vector new_non_owned_ranges;
-            for (auto& non_owned_range : non_owned_ranges) {
-                auto ret = non_owned_range.subtract(owned_range, dht::ring_position_comparator(*_schema));
-                new_non_owned_ranges.insert(new_non_owned_ranges.end(), ret.begin(), ret.end());
-                seastar::thread::maybe_yield();
-            }
-            non_owned_ranges = std::move(new_non_owned_ranges);
-        }
-        return non_owned_ranges;
+        return dht::subtract_ranges(*_schema, non_owned_ranges, std::move(owned_ranges)).get();
     }
 protected:
     virtual compaction_completion_desc
