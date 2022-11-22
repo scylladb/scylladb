@@ -245,9 +245,8 @@ public:
 };
 
 template <typename Char>
-temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit& permit) {
-    return temporary_buffer<Char>(buf.get_write(), buf.size(),
-            make_deleter(buf.release(), [units = permit.consume_memory(buf.size())] () mutable { units.reset(); }));
+temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit::resource_units units) {
+    return temporary_buffer<Char>(buf.get_write(), buf.size(), make_object_deleter(buf.release(), std::move(units)));
 }
 
 inline temporary_buffer<char> make_new_tracked_temporary_buffer(size_t size, reader_permit& permit) {
