@@ -24,7 +24,6 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
     co_await utils::clear_gently(_current_locations);
-    co_await utils::clear_gently(_pending_locations);
     _datacenters.clear();
     co_return;
 }
@@ -32,7 +31,7 @@ future<> topology::clear_gently() noexcept {
 topology::topology(config cfg)
         : _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
-    _pending_locations[utils::fb_utilities::get_broadcast_address()] = std::move(cfg.local_dc_rack);
+    update_endpoint(utils::fb_utilities::get_broadcast_address(), cfg.local_dc_rack);
 }
 
 future<topology> topology::clone_gently() const {
@@ -55,29 +54,13 @@ future<topology> topology::clone_gently() const {
         ret._current_locations.emplace(p);
     }
     co_await coroutine::maybe_yield();
-    ret._pending_locations.reserve(_pending_locations.size());
-    for (const auto& p : _pending_locations) {
-        ret._pending_locations.emplace(p);
-    }
-    co_await coroutine::maybe_yield();
     ret._datacenters = _datacenters;
     ret._sort_by_proximity = _sort_by_proximity;
     co_return ret;
 }
 
-void topology::remove_pending_location(const inet_address& ep) {
-    if (ep != utils::fb_utilities::get_broadcast_address()) {
-        _pending_locations.erase(ep);
-    }
-}
-
-void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend)
+void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 {
-    if (pend) {
-        _pending_locations[ep] = std::move(dr);
-        return;
-    }
-
     auto current = _current_locations.find(ep);
 
     if (current != _current_locations.end()) {
@@ -92,7 +75,6 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pend
     _dc_racks[dr.dc][dr.rack].insert(ep);
     _datacenters.insert(dr.dc);
     _current_locations[ep] = std::move(dr);
-    remove_pending_location(ep);
 }
 
 void topology::remove_endpoint(inet_address ep)
@@ -100,7 +82,6 @@ void topology::remove_endpoint(inet_address ep)
     auto cur_dc_rack = _current_locations.find(ep);
 
     if (cur_dc_rack == _current_locations.end()) {
-        remove_pending_location(ep);
         return;
     }
 
@@ -126,21 +107,22 @@ void topology::remove_endpoint(inet_address ep)
         }
     }
 
-    _current_locations.erase(cur_dc_rack);
+    // Keep the local endpoint around
+    // Just unlist it from _dc_endpoints and _dc_racks
+    // This is needed after it is decommissioned
+    if (ep != utils::fb_utilities::get_broadcast_address()) {
+        _current_locations.erase(cur_dc_rack);
+    }
 }
 
-bool topology::has_endpoint(inet_address ep, pending with_pending) const
+bool topology::has_endpoint(inet_address ep) const
 {
-    return _current_locations.contains(ep) || (with_pending && _pending_locations.contains(ep));
+    return _current_locations.contains(ep);
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     if (_current_locations.contains(ep)) {
         return _current_locations.at(ep);
-    }
-
-    if (_pending_locations.contains(ep)) {
-        return _pending_locations.at(ep);
     }
 
     // FIXME -- this shouldn't happen. After topology is stable and is
