@@ -6107,17 +6107,14 @@ void storage_proxy::allow_replaying_hints() noexcept {
 
 future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
     if (new_filter == _hints_manager.get_host_filter()) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return _hints_directory_initializer.ensure_created_and_verified().then([this] {
-        return _hints_directory_initializer.ensure_rebalanced();
-    }).then([this] {
-        // This function is idempotent
-        return _hints_resource_manager.register_manager(_hints_manager);
-    }).then([this, new_filter = std::move(new_filter)] () mutable {
-        return _hints_manager.change_host_filter(std::move(new_filter));
-    });
+    co_await _hints_directory_initializer.ensure_created_and_verified();
+    co_await _hints_directory_initializer.ensure_rebalanced();
+    // This function is idempotent
+    co_await _hints_resource_manager.register_manager(_hints_manager);
+    co_await _hints_manager.change_host_filter(std::move(new_filter));
 }
 
 const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
