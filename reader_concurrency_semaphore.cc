@@ -256,8 +256,8 @@ public:
     }
 
     void consume(reader_resources res) {
-        _resources += res;
         _semaphore.consume(res);
+        _resources += res;
     }
 
     void signal(reader_resources res) {
