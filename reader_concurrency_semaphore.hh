@@ -15,6 +15,7 @@
 #include <seastar/core/expiring_fifo.hh>
 #include "reader_permit.hh"
 #include "readers/flat_mutation_reader_v2.hh"
+#include "utils/updateable_value.hh"
 
 namespace bi = boost::intrusive;
 
@@ -182,6 +183,8 @@ private:
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
+    utils::updateable_value<uint32_t> _serialize_limit_multiplier;
+    utils::updateable_value<uint32_t> _kill_limit_multiplier;
     inactive_reads_type _inactive_reads;
     stats _stats;
     permit_list_type _permit_list;
@@ -243,7 +246,9 @@ public:
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
-            size_t max_queue_length);
+            size_t max_queue_length,
+            utils::updateable_value<uint32_t> serialize_limit_multiplier,
+            utils::updateable_value<uint32_t> kill_limit_multiplier);
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
@@ -258,8 +263,10 @@ public:
     reader_concurrency_semaphore(for_tests, sstring name,
             int count = std::numeric_limits<int>::max(),
             ssize_t memory = std::numeric_limits<ssize_t>::max(),
-            size_t max_queue_length = std::numeric_limits<size_t>::max())
-        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length)
+            size_t max_queue_length = std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler), std::move(kill_limit_multipler))
     {}
 
     virtual ~reader_concurrency_semaphore();
