@@ -2839,3 +2839,27 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
         binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_unset_value(int32_type));
     BOOST_REQUIRE_THROW(evaluate(unset_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
+    expression true_like_binop = binary_operator(make_text_const("some_text"), oper_t::LIKE, make_text_const("some_%"));
+    BOOST_REQUIRE_EQUAL(evaluate(true_like_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_like_binop =
+        binary_operator(make_text_const("some_text"), oper_t::LIKE, make_text_const("some_other_%"));
+    BOOST_REQUIRE_EQUAL(evaluate(false_like_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    // Binary representation of an empty value is the same as empty string
+    BOOST_REQUIRE_EQUAL(make_text_raw(""), make_empty_raw());
+
+    expression empty_like_text = binary_operator(make_empty_const(utf8_type), oper_t::LIKE, make_text_const("%"));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_like_text, evaluation_inputs{}), make_bool_raw(true));
+
+    expression text_like_empty = binary_operator(make_text_const(""), oper_t::LIKE, make_empty_const(utf8_type));
+    BOOST_REQUIRE_EQUAL(evaluate(text_like_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression empty_like_empty =
+        binary_operator(make_empty_const(utf8_type), oper_t::LIKE, make_empty_const(utf8_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_like_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::LIKE, make_text_const("some_text"), make_text_const("some_%"));
+}
