@@ -2665,3 +2665,30 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
 
     test_evaluate_binop_null_unset(oper_t::GTE, make_int_const(234), make_int_const(-3434));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
+    // IN expects a list as its rhs, sets are not allowed
+    expression in_list = make_int_list_const({1, 3, 5});
+
+    expression true_in_binop = binary_operator(make_int_const(3), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(true_in_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_in_binop = binary_operator(make_int_const(2), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(false_in_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_in_list = binary_operator(make_empty_const(int32_type), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_in_list, evaluation_inputs{}), make_bool_raw(false));
+
+    expression list_with_empty =
+        make_list_const({make_int_const(1), make_empty_const(int32_type), make_int_const(3)}, int32_type);
+    expression empty_in_list_with_empty = binary_operator(make_empty_const(int32_type), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_in_list_with_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression existing_int_in_list_with_empty = binary_operator(make_int_const(3), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(existing_int_in_list_with_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression nonexisting_int_in_list_with_empty = binary_operator(make_int_const(321), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(nonexisting_int_in_list_with_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::IN, make_int_const(5), in_list);
+}
