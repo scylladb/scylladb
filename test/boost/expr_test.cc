@@ -2583,3 +2583,23 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
 
     test_evaluate_binop_null_unset(oper_t::NEQ, make_int_const(123), make_int_const(456));
 }
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
+    expression true_lt_binop = binary_operator(make_int_const(1), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(true_lt_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_lt_binop = binary_operator(make_int_const(10), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_lt_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression false_lt_binop2 = binary_operator(make_int_const(2), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_lt_binop2, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_lt_empty = binary_operator(make_empty_const(int32_type), oper_t::LT, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lt_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_lt_int_min =
+        binary_operator(make_empty_const(int32_type), oper_t::LT, make_int_const(std::numeric_limits<int32_t>::min()));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lt_int_min, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::LT, make_int_const(123), make_int_const(456));
+}
