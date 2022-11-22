@@ -3249,7 +3249,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
     // one network round trip. To generate less traffic, only closest replicas send data, others send
     // digests that are used to check consistency. For this optimization to work, we need to sort the
     // list of participants by proximity to this instance.
-    sort_endpoints_by_proximity(live_endpoints);
+    sort_endpoints_by_proximity(erm.get_topology(), live_endpoints);
 
     return paxos_participants{std::move(live_endpoints), required_participants, dead};
 }
@@ -5325,10 +5325,10 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 }
 
 bool storage_proxy::is_worth_merging_for_range_query(
+        const locator::topology& topo,
         inet_address_vector_replica_set& merged,
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) const {
-    const auto& topo = get_token_metadata_ptr()->get_topology();
     auto has_remote_node = [&topo, my_dc = topo.get_datacenter()] (inet_address_vector_replica_set& l) {
         for (auto&& ep : l) {
             if (my_dc != topo.get_datacenter(ep)) {
@@ -5455,7 +5455,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
 
             // Estimate whether merging will be a win or not
-            if (!is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
+            if (!is_worth_merging_for_range_query(erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
@@ -5985,8 +5985,8 @@ inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator:
     return eps;
 }
 
-void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const {
-    get_token_metadata_ptr()->get_topology().sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const {
+    topo.sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
     auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
     if (it != eps.end() && it != eps.begin()) {
@@ -5996,7 +5996,7 @@ void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set&
 
 inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
     auto eps = get_live_endpoints(erm, token);
-    sort_endpoints_by_proximity(eps);
+    sort_endpoints_by_proximity(erm.get_topology(), eps);
     return eps;
 }
 

@@ -322,7 +322,7 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const;
+    void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
     inet_address_vector_replica_set get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
@@ -431,6 +431,7 @@ private:
      * against l2.
      */
     bool is_worth_merging_for_range_query(
+        const locator::topology& topo,
         inet_address_vector_replica_set& merged,
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) const;
