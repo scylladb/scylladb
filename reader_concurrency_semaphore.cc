@@ -63,7 +63,9 @@ void reader_permit::resource_units::add(resource_units&& o) {
 }
 
 void reader_permit::resource_units::reset(reader_resources res) {
-    _permit.consume(res);
+    if (res.non_zero()) {
+        _permit.consume(res);
+    }
     if (_resources.non_zero()) {
         _permit.signal(_resources);
     }
