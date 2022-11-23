@@ -105,7 +105,7 @@ Procedure
        |/ State=Normal/Leaving/Joining/Moving
        --  Address    Load       Tokens       Owns    Host ID                               Rack
            UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
-       UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
+           UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
    
     Use ``nodetool gossipinfo`` to see ``192.168.1.204`` is in HIBERNATE status.
 
