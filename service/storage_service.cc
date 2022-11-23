@@ -391,9 +391,12 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = _db.local().get_config().host_id;
     if (!replacing_a_node_with_diff_ip) {
-        // Replacing node with a different ip should own the host_id only after
-        // the replacing node becomes NORMAL status. It is updated in
-        // handle_state_normal().
+        auto endpoint = get_broadcast_address();
+        auto eps = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (eps) {
+            auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
+            slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
+        }
         tmptr->update_host_id(local_host_id, get_broadcast_address());
     }
 
@@ -1732,10 +1735,8 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     auto dc_rack = get_dc_rack_for(replace_address);
     auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
-    // use the replacee's host Id as our own so we receive hints, etc
-    auto host_id = _gossiper.get_host_id(replace_address);
-    co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
-    const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
+    auto replace_host_id = _gossiper.get_host_id(replace_address);
+    slogger.info("Host {}/{} is replacing {}/{} using a different address", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
