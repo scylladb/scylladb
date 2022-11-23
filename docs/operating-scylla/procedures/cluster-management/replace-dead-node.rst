@@ -131,7 +131,7 @@ Procedure
          /192.168.1.203
          generation:1553759866
          heartbeat:2147483647
-        HOST_ID:655ae64d-e3fb-45cc-9792-2b648b151b67
+        HOST_ID:675ed9f4-6564-6dbd-can8-43fddce952gy
          STATUS:shutdown,true
          RELEASE_VERSION:3.0.8
          X3:3
@@ -155,7 +155,7 @@ Procedure
        --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
        UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
        UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-       UN  192.168.1.204  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1 
+       UN  192.168.1.204  124.42 KB  256     32.6%             655ae64d-e3fb-45cc-9792-2b648b151b67   B1 
 
 #. Run the ``nodetool repair`` command on the node that was replaced to make sure that the data is synced with the other nodes in the cluster. You can use `Scylla Manager <https://manager.docs.scylladb.com/>`_ to run the repair.
 
