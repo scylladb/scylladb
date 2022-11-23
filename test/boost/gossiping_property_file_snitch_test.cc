@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
 #include "utils/fb_utilities.hh"
+#include "gms/gossiper.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
@@ -20,9 +21,10 @@
 namespace fs = std::filesystem;
 
 static fs::path test_files_subdir("test/resource/snitch_property_files");
+static sharded<gms::gossiper> gossiper;
 
 static future<> create_snitch(locator::snitch_config cfg) {
-    return locator::i_endpoint_snitch::snitch_instance().start(cfg).then([] {
+    return locator::i_endpoint_snitch::snitch_instance().start(cfg, std::ref(gossiper)).then([] {
         return locator::i_endpoint_snitch::snitch_instance().invoke_on_all(&locator::snitch_ptr::start);
     });
 }
@@ -62,14 +64,14 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 return i_endpoint_snitch::snitch_instance().invoke_on(0,
                         [cpu0_dc, cpu0_rack,
                          res, my_address] (snitch_ptr& inst) {
-                    *cpu0_dc =inst->get_datacenter();
-                    *cpu0_rack = inst->get_rack();
+                    *cpu0_dc =inst->get_datacenter(my_address);
+                    *cpu0_rack = inst->get_rack(my_address);
                 }).then([cpu0_dc, cpu0_rack, res, my_address] {
                     return i_endpoint_snitch::snitch_instance().invoke_on_all(
                             [cpu0_dc, cpu0_rack,
                              res, my_address] (snitch_ptr& inst) {
-                        if (*cpu0_dc != inst->get_datacenter() ||
-                            *cpu0_rack != inst->get_rack()) {
+                        if (*cpu0_dc != inst->get_datacenter(my_address) ||
+                            *cpu0_rack != inst->get_rack(my_address)) {
                             *res = false;
                         }
                     }).then([res] {

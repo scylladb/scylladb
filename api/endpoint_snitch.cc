@@ -8,7 +8,6 @@
 
 #include "locator/token_metadata.hh"
 #include "locator/snitch_base.hh"
-#include "locator/production_snitch_base.hh"
 #include "endpoint_snitch.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "utils/fb_utilities.hh"
@@ -23,24 +22,12 @@ void set_endpoint_snitch(http_context& ctx, routes& r) {
 
     httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&ctx](const_req req) {
         auto& topology = ctx.shared_token_metadata.local().get()->get_topology();
-        auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep, locator::topology::pending::yes)) {
-            // Cannot return error here, nodetool status can race, request
-            // info about just-left node and not handle it nicely
-            return sstring(locator::production_snitch_base::default_dc);
-        }
-        return topology.get_datacenter(ep);
+        return topology.get_datacenter(host_or_broadcast(req));
     });
 
     httpd::endpoint_snitch_info_json::get_rack.set(r, [&ctx](const_req req) {
         auto& topology = ctx.shared_token_metadata.local().get()->get_topology();
-        auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep, locator::topology::pending::yes)) {
-            // Cannot return error here, nodetool status can race, request
-            // info about just-left node and not handle it nicely
-            return sstring(locator::production_snitch_base::default_rack);
-        }
-        return topology.get_rack(ep);
+        return topology.get_rack(host_or_broadcast(req));
     });
 
     httpd::endpoint_snitch_info_json::get_snitch_name.set(r, [] (const_req req) {

@@ -9,6 +9,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/ec2_snitch.hh"
+#include "gms/gossiper.hh"
 #include "utils/fb_utilities.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
@@ -37,8 +38,9 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     snitch_config cfg;
     cfg.name = "Ec2Snitch";
     cfg.properties_file_name = fname.string();
-    auto start = [cfg] {
-        return i_endpoint_snitch::snitch_instance().start(cfg).then([] {
+    sharded<gms::gossiper> g;
+    auto start = [cfg, &g] {
+        return i_endpoint_snitch::snitch_instance().start(cfg, std::ref(g)).then([] {
             return i_endpoint_snitch::snitch_instance().invoke_on_all(&snitch_ptr::start);
         });
     };
@@ -58,14 +60,14 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 return i_endpoint_snitch::snitch_instance().invoke_on(0,
                         [cpu0_dc, cpu0_rack,
                          res, my_address] (snitch_ptr& inst) {
-                    *cpu0_dc =inst->get_datacenter();
-                    *cpu0_rack = inst->get_rack();
+                    *cpu0_dc =inst->get_datacenter(my_address);
+                    *cpu0_rack = inst->get_rack(my_address);
                 }).then([cpu0_dc, cpu0_rack, res, my_address] {
                     return i_endpoint_snitch::snitch_instance().invoke_on_all(
                             [cpu0_dc, cpu0_rack,
                              res, my_address] (snitch_ptr& inst) {
-                        if (*cpu0_dc != inst->get_datacenter() ||
-                            *cpu0_rack != inst->get_rack()) {
+                        if (*cpu0_dc != inst->get_datacenter(my_address) ||
+                            *cpu0_rack != inst->get_rack(my_address)) {
                             *res = false;
                         }
                     }).then([res] {

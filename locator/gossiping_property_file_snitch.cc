@@ -40,9 +40,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
-        : production_snitch_base(cfg)
-        , _file_reader_cpu_id(cfg.io_cpu_id)
-        , _listen_address(cfg.listen_address) {
+        : production_snitch_base(cfg), _file_reader_cpu_id(cfg.io_cpu_id) {
     if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }

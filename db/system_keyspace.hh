@@ -107,6 +107,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     future<> setup_version(sharded<netw::messaging_service>& ms);
     future<> check_health();
     static future<> force_blocking_flush(sstring cfname);
+    future<> build_dc_rack_info();
     future<> build_bootstrap_info();
     future<> cache_truncation_record();
     template <typename Value>
@@ -284,7 +285,7 @@ public:
     /**
      * Return a map of IP addresses containing a map of dc and rack info
      */
-    future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> load_dc_rack_info();
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> load_dc_rack_info();
     locator::endpoint_dc_rack local_dc_rack() const;
 
     enum class bootstrap_state {

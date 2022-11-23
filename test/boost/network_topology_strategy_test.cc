@@ -172,14 +172,14 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 }
 
 std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_point>& pts) {
-    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
+    auto topo = std::make_unique<locator::topology>();
 
     // This resembles rack_inferring_snitch dc/rack generation which is
     // still in use by this test via token_metadata internals
     for (const auto& p : pts) {
         auto rack = std::to_string(uint8_t(p.host.bytes()[2]));
         auto dc = std::to_string(uint8_t(p.host.bytes()[1]));
-        topo->update_endpoint(p.host, { dc, rack }, locator::topology::pending::no);
+        topo->update_endpoint(p.host, { dc, rack });
     }
 
     return topo;
@@ -193,12 +193,13 @@ void simple_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    sharded<gms::gossiper> g;
     sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg).get();
+    snitch.start(cfg, std::ref(g)).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -277,12 +278,13 @@ void heavy_origin_test() {
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    sharded<gms::gossiper> g;
     sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
-    snitch.start(cfg).get();
+    snitch.start(cfg, std::ref(g)).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -557,13 +559,13 @@ std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<ss
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
-    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
+    auto topo = std::make_unique<locator::topology>();
 
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo->update_endpoint(node, { dc, to_sstring(r) }, locator::topology::pending::no);
+        topo->update_endpoint(node, { dc, to_sstring(r) });
     }
 
     return topo;
@@ -592,7 +594,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
-        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); });
         auto topo = generate_topology(datacenters, nodes);
 
         std::unordered_set<dht::token> random_tokens;

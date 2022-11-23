@@ -1269,8 +1269,8 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(cql_serialization_format::latest_version),
-                            snitch->get_datacenter(),
-                            snitch->get_rack(),
+                            snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
+                            snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
                             sstring(cfg.partitioner()),
                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
                             utils::fb_utilities::get_broadcast_address().addr(),
@@ -1285,31 +1285,38 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
         ::join(",", feats)).discard_result();
 }
 
+// Changing the real load_dc_rack_info into a future would trigger a tidal wave of futurization that would spread
+// even into simple string operations like get_rack() / get_dc(). We will cache those at startup, and then change
+// our view of it every time we do updates on those values.
+//
 // The cache must be distributed, because the values themselves may not update atomically, so a shard reading that
 // is different than the one that wrote, may see a corrupted value. invoke_on_all will be used to guarantee that all
 // updates are propagated correctly.
 struct local_cache {
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
     locator::endpoint_dc_rack _local_dc_rack_info;
     system_keyspace::bootstrap_state _state;
 };
 
-future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> system_keyspace::load_dc_rack_info() {
-    auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
+future<> system_keyspace::build_dc_rack_info() {
+    return execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
+        return do_for_each(*msg, [this] (auto& row) {
+            net::inet_address peer = row.template get_as<net::inet_address>("peer");
+            if (!row.has("data_center") || !row.has("rack")) {
+                return make_ready_future<>();
+            }
+            gms::inet_address gms_addr(std::move(peer));
+            sstring dc = row.template get_as<sstring>("data_center");
+            sstring rack = row.template get_as<sstring>("rack");
 
-    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> ret;
-    for (const auto& row : *msg) {
-        net::inet_address peer = row.template get_as<net::inet_address>("peer");
-        if (!row.has("data_center") || !row.has("rack")) {
-            continue;
-        }
-        gms::inet_address gms_addr(std::move(peer));
-        sstring dc = row.template get_as<sstring>("data_center");
-        sstring rack = row.template get_as<sstring>("rack");
-
-        ret.emplace(gms_addr, locator::endpoint_dc_rack{ dc, rack });
-    }
-
-    co_return ret;
+            locator::endpoint_dc_rack  element = { dc, rack };
+            return container().invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (auto& sys_ks) {
+                sys_ks._cache->_cached_dc_rack_info.emplace(gms_addr, element);
+            });
+        }).then([msg] {
+            // Keep msg alive.
+        });
+    });
 }
 
 future<> system_keyspace::build_bootstrap_info() {
@@ -1337,6 +1344,7 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
 
     co_await setup_version(ms);
     co_await update_schema_version(_db.local().get_version());
+    co_await build_dc_rack_info();
     co_await build_bootstrap_info();
     co_await check_health();
     co_await db::schema_tables::save_system_keyspace_schema(_qp.local());
@@ -1598,6 +1606,20 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
     return make_ready_future<>();
 }
 
+template <>
+future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring column_name, sstring value) {
+    return container().invoke_on_all([ep = std::move(ep),
+                                       column_name = std::move(column_name),
+                                       value = std::move(value)] (auto& sys_ks) {
+        if (column_name == "data_center") {
+            sys_ks._cache->_cached_dc_rack_info[ep].dc = value;
+        } else if (column_name == "rack") {
+            sys_ks._cache->_cached_dc_rack_info[ep].rack = value;
+        }
+        return make_ready_future<>();
+    });
+}
+
 template <typename Value>
 future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
@@ -1657,6 +1679,9 @@ future<> system_keyspace::update_schema_version(table_schema_version version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
+    co_await container().invoke_on_all([ep] (auto& sys_ks) {
+        sys_ks._cache->_cached_dc_rack_info.erase(ep);
+    });
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
     co_await execute_cql(req, ep.addr()).discard_result();
@@ -1883,7 +1908,7 @@ public:
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
-                if (tm.is_member(endpoint)) {
+                if (tm.get_topology().has_endpoint(endpoint)) {
                     sstring dc = tm.get_topology().get_location(endpoint).dc;
                     set_cell(cr, "dc", dc);
                 }
@@ -2793,6 +2818,11 @@ future<locator::host_id> system_keyspace::set_local_host_id(locator::host_id hos
     co_return host_id;
 }
 
+std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
+system_keyspace::load_dc_rack_info() {
+    return _cache->_cached_dc_rack_info;
+}
+
 locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {
     return _cache->_local_dc_rack_info;
 }
@@ -3354,8 +3384,8 @@ future<> system_keyspace::start() {
     // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
     // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
-    _cache->_local_dc_rack_info.rack = snitch->get_rack();
+    _cache->_local_dc_rack_info.dc = snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+    _cache->_local_dc_rack_info.rack = snitch->get_rack(utils::fb_utilities::get_broadcast_address());
 
     co_return;
 }

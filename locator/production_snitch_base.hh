@@ -42,11 +42,14 @@ public:
 
     explicit production_snitch_base(snitch_config);
 
-    virtual sstring get_rack() const override;
-    virtual sstring get_datacenter() const override;
+    virtual sstring get_rack(inet_address endpoint) override;
+    virtual sstring get_datacenter(inet_address endpoint) override;
     virtual void set_backreference(snitch_ptr& d) override;
 
 private:
+    std::optional<sstring> get_endpoint_info(inet_address endpoint, gms::application_state key);
+    sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
+                              const sstring& default_val);
     virtual void set_my_dc_and_rack(const sstring& new_dc, const sstring& new_rack) override;
     virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
@@ -73,6 +76,7 @@ protected:
     void throw_incomplete_file() const;
 
 protected:
+    std::optional<addr2dc_rack_map> _saved_endpoints;
     std::string _prop_file_contents;
     sstring _prop_file_name;
     std::unordered_map<sstring, sstring> _prop_values;

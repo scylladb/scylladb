@@ -72,7 +72,7 @@ int main(int ac, char ** av) {
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{}).get();
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
 
             messaging.start(listen).get();

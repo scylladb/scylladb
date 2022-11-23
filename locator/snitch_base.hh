@@ -47,9 +47,6 @@ struct snitch_config {
     unsigned io_cpu_id = 0;
     bool broadcast_rpc_address_specified_by_user = false;
 
-    // Gossiping-property-file specific
-    gms::inet_address listen_address;
-
     // GCE-specific
     sstring gce_meta_server_url = "";
 };
@@ -61,14 +58,14 @@ public:
     static future<> reset_snitch(snitch_config cfg);
 
     /**
-     * returns a String representing the rack local node belongs to
+     * returns a String representing the rack this endpoint belongs to
      */
-    virtual sstring get_rack() const = 0;
+    virtual sstring get_rack(inet_address endpoint) = 0;
 
     /**
-     * returns a String representing the datacenter local node belongs to
+     * returns a String representing the datacenter this endpoint belongs to
      */
-    virtual sstring get_datacenter() const = 0;
+    virtual sstring get_datacenter(inet_address endpoint) = 0;
 
     /**
      * returns whatever info snitch wants to gossip
@@ -206,10 +203,17 @@ struct snitch_ptr : public peering_sharded_service<snitch_ptr> {
         return _ptr ? true : false;
     }
 
-    snitch_ptr(const snitch_config cfg);
+    snitch_ptr(const snitch_config cfg, sharded<gms::gossiper>&);
+
+    gms::gossiper& get_local_gossiper() noexcept { return _gossiper.local(); }
+    const gms::gossiper& get_local_gossiper() const noexcept { return _gossiper.local(); }
+
+    sharded<gms::gossiper>& get_gossiper() noexcept { return _gossiper; }
+    const sharded<gms::gossiper>& get_gossiper() const noexcept { return _gossiper; }
 
 private:
     ptr_type _ptr;
+    sharded<gms::gossiper>& _gossiper;
 };
 
 /**
@@ -239,7 +243,7 @@ inline future<> i_endpoint_snitch::reset_snitch(snitch_config cfg) {
         // (1) create a new snitch
         distributed<snitch_ptr> tmp_snitch;
         try {
-            tmp_snitch.start(cfg).get();
+            tmp_snitch.start(cfg, std::ref(get_local_snitch_ptr().get_gossiper())).get();
 
             // (2) start the local instances of the new snitch
             tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
@@ -291,8 +295,8 @@ class snitch_base : public i_endpoint_snitch {
 public:
     //
     // Sons have to implement:
-    // virtual sstring get_rack()        = 0;
-    // virtual sstring get_datacenter()  = 0;
+    // virtual sstring get_rack(inet_address endpoint)        = 0;
+    // virtual sstring get_datacenter(inet_address endpoint)  = 0;
     //
 
     virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
