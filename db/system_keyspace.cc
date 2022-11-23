@@ -2895,7 +2895,7 @@ future<> system_keyspace::get_repair_history(::table_id table_id, repair_history
     sstring req = format("SELECT * from system.{} WHERE table_uuid = {}", REPAIR_HISTORY, table_id);
     co_await _qp.local().query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
         repair_history_entry ent;
-        ent.id = row.get_as<tasks::task_id>("repair_uuid");
+        ent.id = tasks::task_id(row.get_as<utils::UUID>("repair_uuid"));
         ent.table_uuid = ::table_id(row.get_as<utils::UUID>("table_uuid"));
         ent.range_start = row.get_as<int64_t>("range_start");
         ent.range_end = row.get_as<int64_t>("range_end");
