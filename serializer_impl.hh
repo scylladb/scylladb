@@ -835,7 +835,16 @@ private:
         }
     };
 
+    friend class vector_deserializer<T, !IsForward>;
 
+    explicit vector_deserializer(input_stream in, size_t size)
+        : _in(std::move(in))
+        , _size(size)
+    {
+        if constexpr (!IsForward) {
+            fill_substreams();
+        }
+    }
 public:
     vector_deserializer() noexcept
         : _in(simple_input_stream())
@@ -849,6 +858,23 @@ public:
         if constexpr (!IsForward) {
             fill_substreams();
         }
+    }
+
+    vector_deserializer(vector_deserializer&& o) = default;
+    vector_deserializer& operator=(const vector_deserializer& o) = delete;
+    vector_deserializer& operator=(vector_deserializer&& o) = default;
+    vector_deserializer(const vector_deserializer& o) = delete;
+
+    template<bool B> vector_deserializer<T, B> to_forward() &&;
+    template<>
+    vector_deserializer<T, true> to_forward<true>() && {
+        static_assert(IsForward, "cannot convert reverse vector deserializer into forward one");
+        return std::move(*this);
+    }
+    template<>
+    vector_deserializer<T, false> to_forward<false>() && {
+        static_assert(IsForward, "cannot convert reverse vector deserializer");
+        return vector_deserializer<T, false>(std::move(_in), _size);
     }
 
     // Get the number of items in the vector
