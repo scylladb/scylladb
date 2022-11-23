@@ -534,8 +534,8 @@ public:
 
     sstring to_string() const;
 
-    /// True iff the partition range or slice is empty specifically due to a =NULL restriction.
-    bool range_or_slice_eq_null(const query_options& options) const;
+    /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
+    void validate_primary_key(const query_options& options) const;
 };
 
 }

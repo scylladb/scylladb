@@ -51,9 +51,9 @@ def test_insert_missing_key(cql, table1):
 # This reproduces issue #7852.
 def test_insert_null_key(cql, table1):
     s = unique_key_string()
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match='Invalid null value in condition for column c'):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{s}', null)")
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match='Invalid null value in condition for column p'):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES (null, '{s}')")
     # Try the same thing with prepared statement, where a "None" stands for
     # a null. Note that this is completely different from UNSET_VALUE - only

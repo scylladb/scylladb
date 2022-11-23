@@ -251,9 +251,7 @@ modification_statement::execute_without_checking_exception_message(query_process
 }
 
 void modification_statement::validate_primary_key_restrictions(const query_options& options) const {
-    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
-        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
-    }
+    _restrictions->validate_primary_key(options);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
