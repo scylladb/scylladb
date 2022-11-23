@@ -136,6 +136,8 @@ private:
     int _sstable_level = 0;
     std::optional<position_in_partition> _min_clustering_pos;
     std::optional<position_in_partition> _max_clustering_pos;
+    std::optional<position_in_partition> _first_clustering_pos;
+    std::optional<position_in_partition> _last_clustering_pos;
     bool _has_legacy_counter_shards = false;
     uint64_t _columns_count = 0;
     uint64_t _rows_count = 0;
@@ -158,6 +160,8 @@ public:
         if (!schema.clustering_key_size()) {
             _min_clustering_pos.emplace(position_in_partition_view::before_all_clustered_rows());
             _max_clustering_pos.emplace(position_in_partition_view::after_all_clustered_rows());
+            _first_clustering_pos.emplace(position_in_partition_view::before_all_clustered_rows());
+            _last_clustering_pos.emplace(position_in_partition_view::after_all_clustered_rows());
         }
     }
 
@@ -208,6 +212,8 @@ public:
 
     // pos must be in the clustered region
     void update_min_max_components(position_in_partition_view pos);
+
+    void update_first_and_last_clustering_positions(position_in_partition_view pos);
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);

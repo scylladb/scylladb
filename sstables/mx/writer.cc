@@ -728,6 +728,7 @@ private:
         _pi_write_m.last_clustering = info;
         _prev_row_start = pos;
         maybe_add_pi_block();
+        _collector.update_first_and_last_clustering_positions(clustered.position());
     }
     void write_promoted_index();
     void consume(rt_marker&& marker);

@@ -51,4 +51,14 @@ void metadata_collector::update_min_max_components(position_in_partition_view po
     }
 }
 
+void metadata_collector::update_first_and_last_clustering_positions(position_in_partition_view pos) {
+    if (pos.region() != partition_region::clustered) {
+        throw std::runtime_error(fmt::format("update_first_and_last_clustering_positions() expects positions in the clustering region, got {}", pos));
+    }
+    if (!_first_clustering_pos) [[unlikely]] {
+        _first_clustering_pos = pos;
+    }
+    _last_clustering_pos = pos;
+}
+
 } // namespace sstables
