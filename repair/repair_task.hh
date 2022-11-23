@@ -13,7 +13,7 @@
 
 class repair_task_impl : public tasks::task_manager::task::impl {
 public:
-    repair_task_impl(tasks::task_manager::module_ptr module, tasks::task_id id, unsigned sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, tasks::task_id parent_id)
+    repair_task_impl(tasks::task_manager::module_ptr module, tasks::task_id id, unsigned sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, tasks::task_id parent_id) noexcept
         : tasks::task_manager::task::impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(type), std::move(entity), parent_id) {
         _status.progress_units = "ranges";
     }
@@ -26,6 +26,50 @@ protected:
     }
 
     virtual future<> run() override = 0;
+};
+
+class user_requested_repair_task_impl : public repair_task_impl {
+private:
+    lw_shared_ptr<locator::global_effective_replication_map> _germs;
+    std::vector<sstring> _cfs;
+    dht::token_range_vector _ranges;
+    std::vector<sstring> _hosts;
+    std::vector<sstring> _data_centers;
+    std::unordered_set<gms::inet_address> _ignore_nodes;
+public:
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, lw_shared_ptr<locator::global_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes) noexcept
+        : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity), tasks::task_id::create_null_id())
+        , _germs(germs)
+        , _cfs(std::move(cfs))
+        , _ranges(std::move(ranges))
+        , _hosts(std::move(hosts))
+        , _data_centers(std::move(data_centers))
+        , _ignore_nodes(std::move(ignore_nodes))
+    {}
+protected:
+    future<> run() override;
+
+    // TODO: implement progress for user-requested repairs
+};
+
+class data_sync_repair_task_impl : public repair_task_impl {
+private:
+    dht::token_range_vector _ranges;
+    std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
+    streaming::stream_reason _reason;
+    shared_ptr<node_ops_info> _ops_info;
+public:
+    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string type, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
+        : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(type), std::move(entity), tasks::task_id::create_null_id())
+        , _ranges(std::move(ranges))
+        , _neighbors(std::move(neighbors))
+        , _reason(reason)
+        , _ops_info(ops_info) 
+    {}
+protected:
+    future<> run() override;
+
+    // TODO: implement progress for data-sync repairs
 };
 
 // The repair_module tracks ongoing repair operations and their progress.
@@ -47,11 +91,12 @@ private:
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
-    static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     seastar::condition_variable _done_cond;
     void start(repair_uniq_id id);
     void done(repair_uniq_id id, bool succeeded);
 public:
+    static constexpr size_t max_repair_memory_per_range = 32 * 1024 * 1024;
+
     repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept;
 
     repair_service& get_repair_service() noexcept {
@@ -74,7 +119,6 @@ public:
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
     named_semaphore& range_parallelism_semaphore();
-    static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
