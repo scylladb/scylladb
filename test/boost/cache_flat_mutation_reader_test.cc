@@ -56,7 +56,7 @@ static clustering_key make_ck(int value) {
 }
 
 static void add_row(mutation& m, int ck, int value) {
-    m.set_clustered_cell(make_ck(ck), "v", data_value(value), 1);
+    m.set_clustered_cell(make_ck(ck), "v", data_value(value), api::new_timestamp());
 }
 
 static void add_tombstone(mutation& m, range_tombstone rt) {
