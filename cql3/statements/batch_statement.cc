@@ -262,7 +262,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         throw new InvalidRequestException("Invalid empty serial consistency level");
 #endif
     for (size_t i = 0; i < _statements.size(); ++i) {
-        _statements[i].statement->validate_primary_key_restrictions(options.for_statement(i));
+        _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
     }
 
     if (_has_conditions) {
