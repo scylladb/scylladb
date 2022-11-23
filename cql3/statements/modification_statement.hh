@@ -231,6 +231,8 @@ public:
     // True if this statement needs to read only static column values to check if it can be applied.
     bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 
+    void validate_primary_key_restrictions(const query_options& options) const;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
 

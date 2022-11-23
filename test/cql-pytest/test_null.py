@@ -65,6 +65,31 @@ def test_insert_null_key_lwt(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
+# Contains the same checks as test_insert_null_key() and test_insert_null_key_lwt() above, just inside a batch
+def test_insert_null_key_in_batch(cql, table1):
+    s = unique_key_string()
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES ('{s}', null);APPLY BATCH;")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES ('{s}', null) IF NOT EXISTS;APPLY BATCH;")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES (null, '{s}');APPLY BATCH;")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES (null, '{s}') IF NOT EXISTS;APPLY BATCH;")
+
+    # Try the same thing with prepared statement.
+    stmt = cql.prepare(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES (?, ?);APPLY BATCH;")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [s, None])
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [None, s])
+
+    stmt = cql.prepare(f"BEGIN BATCH INSERT INTO {table1} (p,c) VALUES (?, ?) IF NOT EXISTS;APPLY BATCH;")
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [s, None])
+    with pytest.raises(InvalidRequest, match='null value'):
+        cql.execute(stmt, [None, s])
+
 # Tests handling of "key_column in ?" where ? is bound to null.
 # Reproduces issue #8265.
 def test_primary_key_in_null(cql, table1):
