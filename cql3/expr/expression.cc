@@ -1683,41 +1683,33 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
     bool_or_null binop_result(false);
 
     switch (binop.op) {
-        case oper_t::EQ: {
+        case oper_t::EQ:
             binop_result = equal(binop.lhs, binop.rhs, inputs);
             break;
-        }
-        case oper_t::NEQ: {
+        case oper_t::NEQ:
             binop_result = not_equal(binop.lhs, binop.rhs, inputs);
             break;
-        }
         case oper_t::LT:
         case oper_t::LTE:
         case oper_t::GT:
-        case oper_t::GTE: {
+        case oper_t::GTE:
             binop_result = limits(binop.lhs, binop.op, binop.rhs, inputs);
             break;
-        }
-        case oper_t::CONTAINS: {
+        case oper_t::CONTAINS:
             binop_result = contains(binop.lhs, binop.rhs, inputs);
             break;
-        }
-        case oper_t::CONTAINS_KEY: {
+        case oper_t::CONTAINS_KEY:
             binop_result = contains_key(binop.lhs, binop.rhs, inputs);
             break;
-        }
-        case oper_t::LIKE: {
+        case oper_t::LIKE:
             binop_result = like(binop.lhs, binop.rhs, inputs);
             break;
-        }
-        case oper_t::IN: {
+        case oper_t::IN:
             binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
             break;
-        }
-        case oper_t::IS_NOT: {
+        case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
             break;
-        }
     };
 
     if (binop_result.is_null()) {
