@@ -8,6 +8,12 @@ Scylla Auditing Guide
 Auditing allows the administrator to monitor activities on a Scylla cluster, including queries and data changes. 
 The information is stored in a Syslog or a Scylla table.
 
+Prerequisite
+------------
+
+Enable ScyllaDB :doc:`Authentication </operating-scylla/security/authentication>` and :doc:`Authorization </operating-scylla/security/enable-authorization>`.
+
+
 Enabling Audit
 ---------------
 
