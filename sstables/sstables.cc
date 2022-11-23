@@ -1172,6 +1172,15 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
+static clustering_key_prefix make_ckey_prefix(const utils::chunked_vector<disk_string<uint16_t>>& column_names) {
+    std::vector<bytes> key_bytes;
+    key_bytes.reserve(column_names.size());
+    for (auto& value : column_names) {
+        key_bytes.emplace_back(bytes_view(value));
+    }
+    return clustering_key_prefix(std::move(key_bytes));
+}
+
 void sstable::set_min_max_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
@@ -1185,13 +1194,7 @@ void sstable::set_min_max_position_range() {
     }
 
     auto pip = [] (const utils::chunked_vector<disk_string<uint16_t>>& column_names, bound_kind kind) {
-        std::vector<bytes> key_bytes;
-        key_bytes.reserve(column_names.size());
-        for (auto& value : column_names) {
-            key_bytes.emplace_back(bytes_view(value));
-        }
-        auto ckp = clustering_key_prefix(std::move(key_bytes));
-        return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
+        return position_in_partition(position_in_partition::range_tag_t(), kind, make_ckey_prefix(column_names));
     };
 
     _min_max_position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
