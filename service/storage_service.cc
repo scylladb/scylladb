@@ -497,7 +497,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
                 slogger.info("Sleeping before replacing {}...", *replace_addr);
-                co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
+                co_await sleep_abortable(2 * get_ring_delay(), _abort_source);
 
                 // check for operator errors...
                 const auto tmptr = get_token_metadata_ptr();
