@@ -93,6 +93,7 @@ public:
     void insert(cache_entry&);
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
+    void insert(mutation_partition_v2&) noexcept;
     void insert(rows_entry&) noexcept;
     void remove(rows_entry&) noexcept;
     // Inserts e such that it will be evicted right before more_recent in the absence of later touches.
@@ -152,7 +153,12 @@ void cache_tracker::insert(rows_entry& more_recent, rows_entry& entry) noexcept 
 
 inline
 void cache_tracker::insert(partition_version& pv) noexcept {
-    for (rows_entry& row : pv.partition().clustered_rows()) {
+    insert(pv.partition());
+}
+
+inline
+void cache_tracker::insert(mutation_partition_v2& p) noexcept {
+    for (rows_entry& row : p.clustered_rows()) {
         insert(row);
     }
 }
