@@ -1042,12 +1042,6 @@ shared_ptr<const abstract_type> data_type_for<cql_duration>() {
     return duration_type;
 }
 
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<tasks::task_id>() {
-    return uuid_type;
-}
-
 namespace std {
 
 template <>
