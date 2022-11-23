@@ -341,37 +341,44 @@ token_metadata_impl::ring_range(const token& start) const {
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
-    auto ret = co_await clone_only_token_map();
-    ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
-    for (const auto& p : _bootstrap_tokens) {
-        ret._bootstrap_tokens.emplace(p);
-        co_await coroutine::maybe_yield();
-    }
-    ret._leaving_endpoints = _leaving_endpoints;
-    ret._replacing_endpoints = _replacing_endpoints;
-    for (const auto& p : _pending_ranges_interval_map) {
-        ret._pending_ranges_interval_map.emplace(p);
-        co_await coroutine::maybe_yield();
-    }
-    ret._ring_version = _ring_version;
-    co_return ret;
+    return clone_only_token_map().then([this] (token_metadata_impl ret) {
+      return do_with(std::move(ret), [this] (token_metadata_impl& ret) {
+        ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
+        return do_for_each(_bootstrap_tokens, [&ret] (const auto& p) {
+            ret._bootstrap_tokens.emplace(p);
+        }).then([this, &ret] {
+            ret._leaving_endpoints = _leaving_endpoints;
+            ret._replacing_endpoints = _replacing_endpoints;
+        }).then([this, &ret] {
+            return do_for_each(_pending_ranges_interval_map,
+                    [this, &ret] (const auto& p) {
+                ret._pending_ranges_interval_map.emplace(p);
+            });
+        }).then([this, &ret] {
+            ret._ring_version = _ring_version;
+            return make_ready_future<token_metadata_impl>(std::move(ret));
+        });
+      });
+    });
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone_sorted_tokens) const noexcept {
-    auto ret = token_metadata_impl(shallow_copy{}, *this);
-    ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
-    for (const auto& p : _token_to_endpoint_map) {
-        ret._token_to_endpoint_map.emplace(p);
-        co_await coroutine::maybe_yield();
-    }
-    ret._normal_token_owners = _normal_token_owners;
-    ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
-    ret._topology = co_await _topology.clone_gently();
-    if (clone_sorted_tokens) {
-        ret._sorted_tokens = _sorted_tokens;
-        co_await coroutine::maybe_yield();
-    }
-    co_return ret;
+    return do_with(token_metadata_impl(shallow_copy{}, *this), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
+        ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
+        return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
+            ret._token_to_endpoint_map.emplace(p);
+        }).then([this, &ret] {
+            ret._normal_token_owners = _normal_token_owners;
+            ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
+        }).then([this, &ret] {
+            ret._topology = _topology;
+        }).then([this, &ret, clone_sorted_tokens] {
+            if (clone_sorted_tokens) {
+                ret._sorted_tokens = _sorted_tokens;
+            }
+            return make_ready_future<token_metadata_impl>(std::move(ret));
+        });
+    });
 }
 
 future<> token_metadata_impl::clear_gently() noexcept {
@@ -1243,6 +1250,176 @@ void
 token_metadata::invalidate_cached_rings() {
     _impl->invalidate_cached_rings();
 }
+
+/////////////////// class topology /////////////////////////////////////////////
+inline future<> topology::clear_gently() noexcept {
+    co_await utils::clear_gently(_dc_endpoints);
+    co_await utils::clear_gently(_dc_racks);
+    co_await utils::clear_gently(_current_locations);
+    co_await utils::clear_gently(_pending_locations);
+    co_return;
+}
+
+topology::topology(config cfg)
+        : _sort_by_proximity(!cfg.disable_proximity_sorting)
+{
+    _pending_locations[utils::fb_utilities::get_broadcast_address()] = std::move(cfg.local_dc_rack);
+}
+
+topology::topology(const topology& other)
+        : _dc_endpoints(other._dc_endpoints)
+        , _dc_racks(other._dc_racks)
+        , _current_locations(other._current_locations)
+        , _pending_locations(other._pending_locations)
+        , _sort_by_proximity(other._sort_by_proximity)
+{
+}
+
+void topology::remove_pending_location(const inet_address& ep) {
+    if (ep != utils::fb_utilities::get_broadcast_address()) {
+        _pending_locations.erase(ep);
+    }
+}
+
+void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pending pend)
+{
+    if (pend) {
+        _pending_locations[ep] = std::move(dr);
+        return;
+    }
+
+    auto current = _current_locations.find(ep);
+
+    if (current != _current_locations.end()) {
+        if (current->second.dc == dr.dc && current->second.rack == dr.rack) {
+            return;
+        }
+        remove_endpoint(ep);
+    }
+
+    _dc_endpoints[dr.dc].insert(ep);
+    _dc_racks[dr.dc][dr.rack].insert(ep);
+    _current_locations[ep] = std::move(dr);
+    remove_pending_location(ep);
+}
+
+void topology::remove_endpoint(inet_address ep)
+{
+    auto cur_dc_rack = _current_locations.find(ep);
+
+    if (cur_dc_rack == _current_locations.end()) {
+        remove_pending_location(ep);
+        return;
+    }
+
+    _dc_endpoints[cur_dc_rack->second.dc].erase(ep);
+
+    auto& racks = _dc_racks[cur_dc_rack->second.dc];
+    auto& eps = racks[cur_dc_rack->second.rack];
+    eps.erase(ep);
+    if (eps.empty()) {
+        racks.erase(cur_dc_rack->second.rack);
+    }
+
+    _current_locations.erase(cur_dc_rack);
+}
+
+bool topology::has_endpoint(inet_address ep, pending with_pending) const
+{
+    return _current_locations.contains(ep) || (with_pending && _pending_locations.contains(ep));
+}
+
+const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
+    if (_current_locations.contains(ep)) {
+        return _current_locations.at(ep);
+    }
+
+    if (_pending_locations.contains(ep)) {
+        return _pending_locations.at(ep);
+    }
+
+    on_internal_error(tlogger, format("Node {} is not in topology", ep));
+}
+
+// FIXME -- both methods below should rather return data from the
+// get_location() result, but to make it work two things are to be fixed:
+// - topology should be aware of internal-ip conversions
+// - topology should be pre-populated with data loaded from system ks
+
+sstring topology::get_rack() const {
+    return get_rack(utils::fb_utilities::get_broadcast_address());
+}
+
+sstring topology::get_rack(inet_address ep) const {
+    return get_location(ep).rack;
+}
+
+sstring topology::get_datacenter() const {
+    return get_datacenter(utils::fb_utilities::get_broadcast_address());
+}
+
+sstring topology::get_datacenter(inet_address ep) const {
+    return get_location(ep).dc;
+}
+
+void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
+    if (_sort_by_proximity) {
+        std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
+            return compare_endpoints(address, a1, a2) < 0;
+        });
+    }
+}
+
+int topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+    //
+    // if one of the Nodes IS the Node we are comparing to and the other one
+    // IS NOT - then return the appropriate result.
+    //
+    if (address == a1 && address != a2) {
+        return -1;
+    }
+
+    if (address == a2 && address != a1) {
+        return 1;
+    }
+
+    // ...otherwise perform the similar check in regard to Data Center
+    sstring address_datacenter = get_datacenter(address);
+    sstring a1_datacenter = get_datacenter(a1);
+    sstring a2_datacenter = get_datacenter(a2);
+
+    if (address_datacenter == a1_datacenter &&
+        address_datacenter != a2_datacenter) {
+        return -1;
+    } else if (address_datacenter == a2_datacenter &&
+               address_datacenter != a1_datacenter) {
+        return 1;
+    } else if (address_datacenter == a2_datacenter &&
+               address_datacenter == a1_datacenter) {
+        //
+        // ...otherwise (in case Nodes belong to the same Data Center) check
+        // the racks they belong to.
+        //
+        sstring address_rack = get_rack(address);
+        sstring a1_rack = get_rack(a1);
+        sstring a2_rack = get_rack(a2);
+
+        if (address_rack == a1_rack && address_rack != a2_rack) {
+            return -1;
+        }
+
+        if (address_rack == a2_rack && address_rack != a1_rack) {
+            return 1;
+        }
+    }
+    //
+    // We don't differentiate between Nodes if all Nodes belong to different
+    // Data Centers, thus make them equal.
+    //
+    return 0;
+}
+
+/////////////////// class topology end /////////////////////////////////////////
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
