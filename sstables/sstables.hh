@@ -588,7 +588,7 @@ private:
 
     future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
-            std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
+            std::optional<scylla_metadata::large_data_stats> ld_stats, clustering_position_metadata cpm, sstring origin);
 
     future<> read_filter(const io_priority_class& pc);
 

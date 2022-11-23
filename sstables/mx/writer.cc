@@ -1477,7 +1477,7 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
+    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), std::move(ld_stats), _collector.make_clustering_position_metadata(), _cfg.origin);
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }

@@ -150,7 +150,7 @@ private:
      */
     hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
-    void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<position_in_partition>& from);
+    void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<position_in_partition>& from) const;
 public:
     explicit metadata_collector(const schema& schema, sstring name, const locator::host_id& host_id)
         : _schema(schema)
@@ -214,6 +214,7 @@ public:
     void update_min_max_components(position_in_partition_view pos);
 
     void update_first_and_last_clustering_positions(position_in_partition_view pos);
+    clustering_position_metadata make_clustering_position_metadata() const;
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);

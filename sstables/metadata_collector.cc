@@ -14,7 +14,7 @@ logging::logger mdclogger("metadata_collector");
 
 namespace sstables {
 
-void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to, const std::optional<position_in_partition>& from) {
+void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to, const std::optional<position_in_partition>& from) const {
     if (!from) {
         mdclogger.trace("{}: convert: empty", _name);
         return;
@@ -59,6 +59,30 @@ void metadata_collector::update_first_and_last_clustering_positions(position_in_
         _first_clustering_pos = pos;
     }
     _last_clustering_pos = pos;
+}
+
+clustering_position_metadata metadata_collector::make_clustering_position_metadata() const {
+    auto to_exclusive = [] (bool is_first_pos, bound_weight w) -> std::optional<uint8_t> {
+        switch (w) {
+        case bound_weight::equal:
+            return std::nullopt;
+        case bound_weight::before_all_prefixed:
+            return (is_first_pos) ? false /*bound_kind::incl_start*/ : true /*bound_kind::excl_end*/;
+        case bound_weight::after_all_prefixed:
+            return (is_first_pos) ? true /*bound_kind::excl_start*/ : false /*bound_kind::incl_end*/;
+        }
+        abort();
+    };
+    clustering_position_metadata cpm;
+    if (_first_clustering_pos) {
+        convert(cpm.first_clustering_position.pos, _first_clustering_pos);
+        cpm.first_clustering_position.exclusive = to_exclusive(true, _first_clustering_pos->get_bound_weight());
+    }
+    if (_last_clustering_pos) {
+        convert(cpm.last_clustering_position.pos, _last_clustering_pos);
+        cpm.last_clustering_position.exclusive = to_exclusive(false, _last_clustering_pos->get_bound_weight());
+    }
+    return cpm;
 }
 
 } // namespace sstables
