@@ -16,7 +16,7 @@
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
 #include "mutation_fragment_v2.hh"
-#include "mutation_consumer_concepts.hh"
+#include "mutation_consumer.hh"
 #include "range_tombstone_change_generator.hh"
 #include "utils/preempt.hh"
 
@@ -58,12 +58,6 @@ template<>
 struct mutation_consume_result<void> {
     stop_iteration stop;
     mutation_consume_cookie cookie;
-};
-
-enum class consume_in_reverse {
-    no = 0,
-    yes,
-    legacy_half_reverse,
 };
 
 class mutation final {
