@@ -476,7 +476,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (!is_replacing()) {
             auto tmptr = get_token_metadata_ptr();
 
-            if (tmptr->is_normal_token_owner(get_broadcast_address())) {
+            if (tmptr->is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             slogger.info("getting bootstrap token");
@@ -866,7 +866,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
     // continue.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (tmptr->is_normal_token_owner(endpoint)) {
+    if (tmptr->is_member(endpoint)) {
         // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
         // isLeaving is true, we have only missed LEFT. Waiting time between completing
         // leave operation and rebootstrapping is relatively short, so the latter is quite
@@ -895,7 +895,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
 
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (tmptr->is_normal_token_owner(endpoint)) {
+    if (tmptr->is_member(endpoint)) {
         slogger.info("Node {} state jump to normal", endpoint);
     }
     std::unordered_set<inet_address> endpoints_to_remove;
@@ -973,7 +973,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
         }
     }
 
-    bool is_normal_token_owner = tmptr->is_normal_token_owner(endpoint);
+    bool is_member = tmptr->is_member(endpoint);
     bool do_notify_joined = false;
 
     if (endpoints_to_remove.contains(endpoint)) [[unlikely]] {
@@ -988,7 +988,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
         // Update pending ranges after update of normal tokens immediately to avoid
         // a race where natural endpoint was updated to contain node A, but A was
         // not yet removed from pending endpoints
-        if (!is_normal_token_owner) {
+        if (!is_member) {
             auto dc_rack = get_dc_rack_for(endpoint);
             slogger.debug("handle_state_normal: update_topology: endpoint={} dc={} rack={}", endpoint, dc_rack.dc, dc_rack.rack);
             tmptr->update_topology(endpoint, std::move(dc_rack));
@@ -1004,7 +1004,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     for (auto ep : endpoints_to_remove) {
         co_await remove_endpoint(ep);
     }
-    slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
+    slogger.debug("handle_state_normal: endpoint={} is_member={} endpoint_to_remove={} owned_tokens={}", endpoint, is_member, endpoints_to_remove.contains(endpoint), owned_tokens);
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         co_await update_peer_info(endpoint);
         try {
@@ -1040,7 +1040,7 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
     // leave). This way we'll get pending ranges right.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (!tmptr->is_normal_token_owner(endpoint)) {
+    if (!tmptr->is_member(endpoint)) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
@@ -1107,7 +1107,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
         }
         co_return;
     }
-    if (get_token_metadata().is_normal_token_owner(endpoint)) {
+    if (get_token_metadata().is_member(endpoint)) {
         auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(endpoint);
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
@@ -1172,8 +1172,8 @@ future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_stat
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
-    bool is_normal_token_owner = get_token_metadata().is_normal_token_owner(endpoint);
-    if (is_normal_token_owner) {
+    bool is_member = get_token_metadata().is_member(endpoint);
+    if (is_member) {
         co_await notify_up(endpoint);
     }
     bool replacing_pending_ranges = _replacing_nodes_pending_ranges_updater.contains(endpoint);
@@ -1181,14 +1181,14 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
         _replacing_nodes_pending_ranges_updater.erase(endpoint);
     }
 
-    if (!is_normal_token_owner || replacing_pending_ranges) {
+    if (!is_member || replacing_pending_ranges) {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
         if (replacing_pending_ranges) {
             slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
             co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
         }
-        if (!is_normal_token_owner) {
+        if (!is_member) {
             tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::topology::pending::yes);
         }
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -1235,7 +1235,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             co_return;
         }
-        if (get_token_metadata().is_normal_token_owner(endpoint)) {
+        if (get_token_metadata().is_member(endpoint)) {
             slogger.debug("endpoint={} on_change:     updating system.peers table", endpoint);
             co_await do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
@@ -1966,7 +1966,7 @@ future<> storage_service::decommission() {
             auto tmptr = ss.get_token_metadata_ptr();
             auto& db = ss._db.local();
             auto endpoint = ss.get_broadcast_address();
-            if (!tmptr->is_normal_token_owner(endpoint)) {
+            if (!tmptr->is_member(endpoint)) {
                 throw std::runtime_error("local node is not a member of the token ring yet");
             }
 
@@ -2827,7 +2827,7 @@ future<std::unordered_multimap<dht::token_range, inet_address>> storage_service:
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
-    if (temp.is_normal_token_owner(endpoint)) {
+    if (temp.is_member(endpoint)) {
         temp.remove_endpoint(endpoint);
     }
 

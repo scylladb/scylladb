@@ -229,7 +229,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm) cons
 future<std::unordered_multimap<inet_address, dht::token_range>>
 abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
-    if (!tm.is_normal_token_owner(endpoint)) {
+    if (!tm.is_member(endpoint)) {
         co_return ret;
     }
     bool is_everywhere_topology = get_type() == replication_strategy_type::everywhere_topology;
