@@ -1068,6 +1068,10 @@ indexed_table_select_statement::do_execute(query_processor& qp,
         // Obviously, if there are no clustering columns, then we can work at
         // the granularity of whole partitions.
         whole_partitions = true;
+    } else if (_schema->get_column_definition(to_bytes(_index.target_column()))->is_static()) {
+        // Index table for a static index does not have the original tables'
+        // clustering key columns, so we must not fetch them.
+        whole_partitions = true;
     } else {
         if (_index.depends_on(*(_schema->clustering_key_columns().begin()))) {
             // Searching on the *first* clustering column means in each of
