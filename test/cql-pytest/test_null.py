@@ -176,6 +176,8 @@ def test_delete_null_key(cql, table1):
         cql.execute(f"DELETE FROM {table1} WHERE p='p' AND c=null")
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p='p' AND c=?"), [None])
+    with pytest.raises(InvalidRequest, match='null value.*p'):
+        cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p IN ?"), [None])
 
 # Test what SELECT does with the restriction "WHERE v=NULL".
 # In SQL, "WHERE v=NULL" doesn't match anything - because nothing is equal

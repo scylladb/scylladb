@@ -1945,7 +1945,7 @@ sstring statement_restrictions::to_string() const {
 static void validate_primary_key_restrictions(const query_options& options, const std::vector<expr::expression>& restrictions) {
     for (const auto& r: restrictions) {
         for_each_expression<binary_operator>(r, [&](const binary_operator& binop) {
-            if (binop.op != oper_t::EQ) {
+            if (binop.op != oper_t::EQ && binop.op != oper_t::IN) {
                 return;
             }
             const auto* c = as_if<column_value>(&binop.lhs);
