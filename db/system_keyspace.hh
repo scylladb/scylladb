@@ -380,12 +380,12 @@ public:
      * none exists.
      */
     future<locator::host_id> load_local_host_id();
-
+private:
     /**
-     * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
+     * Sets the local host ID explicitly.  Used only internally when intializing the host_id
      */
-    future<locator::host_id> set_local_host_id(locator::host_id host_id);
-
+    future<locator::host_id> set_local_random_host_id();
+public:
     static api::timestamp_type schema_creation_timestamp();
 
     /**
