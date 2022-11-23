@@ -30,6 +30,7 @@ in individual sections
         | sstable_origin
         | scylla_build_id
         | scylla_version
+        | clustering_position_metadata
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -54,6 +55,10 @@ Scylla executable that created the sstable.
 
 `scylla_version` (tag 8): a string containing the version of the
 Scylla executable that created the sstable.
+
+`clustering_position_metadata` (tag 9): stores the very first and very last clustering
+keys in this sstable. This is used, when working with SSTable runs, which had their
+large partitions split across several SSTables.
 
 ## sharding_metadata subcomponent
 
@@ -140,3 +145,12 @@ row, and cell sizes and about number of rows in partition.
 For each entry, it keeps the largest value for the entry type,
 the respective large_data threshold and the number of entities
 that are above the threshold.
+
+## clustering_position_metadata subcomponent
+
+    clustering_position_metadata = first_clustering_position last_clustering_position
+    first_clustering_position = disk_clustering_position
+    last_clustering_position = disk_clustering_position
+    disk_clustering_position =  pos exclusive
+    pos = array<string>             // each entry represents a clustering key component
+    exclusive = optional<byte>      // 0=inclusive, 1=exclusive. position doesn't refer to range bound if disengaged

@@ -529,6 +529,7 @@ enum class scylla_metadata_type : uint32_t {
     SSTableOrigin = 6,
     ScyllaBuildId = 7,
     ScyllaVersion = 8,
+    ClusteringPositionMetadata = 9,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -563,6 +564,24 @@ struct large_data_stats_entry {
     auto describe_type(sstable_version_types v, Describer f) { return f(max_value, threshold, above_threshold); }
 };
 
+struct clustering_position_metadata {
+    // A clustering position is represented as a set of disk_string<>, each entry representing a clustering component.
+    // If the position refers to a range bound, exclusive will be engaged. Otherwise, it refers to a single point
+    // like a regular clustering key.
+    struct disk_clustering_position {
+        disk_array<uint32_t, disk_string<uint16_t>> pos;
+        std::optional<uint8_t> exclusive; // Not a range bound if disengaged.
+
+        template <typename Describer>
+        auto describe_type(sstable_version_types v, Describer f) { return f(pos, exclusive); }
+    };
+    disk_clustering_position first_clustering_position;
+    disk_clustering_position last_clustering_position;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(first_clustering_position, last_clustering_position); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
@@ -578,7 +597,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataStats, large_data_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableOrigin, sstable_origin>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaBuildId, scylla_build_id>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ClusteringPositionMetadata, clustering_position_metadata>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -605,6 +625,11 @@ struct scylla_metadata {
     std::optional<run_id> get_optional_run_identifier() const {
         auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
         return m ? std::make_optional(m->id) : std::nullopt;
+    }
+
+    std::optional<clustering_position_metadata> get_optional_clustering_position_metadata() const {
+        auto* m = data.get<scylla_metadata_type::ClusteringPositionMetadata, clustering_position_metadata>();
+        return m ? std::make_optional(*m) : std::nullopt;
     }
 
     template <typename Describer>

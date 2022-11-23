@@ -1352,6 +1352,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
         case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
+        case sstables::scylla_metadata_type::ClusteringPositionMetadata: return "clustering_position_metadata";
     }
     std::abort();
 }
@@ -1449,6 +1450,22 @@ public:
     template <typename Size>
     void operator()(const sstables::disk_string<Size>& val) const {
         _writer.String(disk_string_to_string(val));
+    }
+
+    void operator()(const sstables::clustering_position_metadata& val) const {
+        auto write_pos = [this] (sstring_view name, const auto& v) {
+            _writer.Key(name);
+            _writer.StartArray();
+            for (const auto& e : v.pos.elements) {
+                _writer.String(to_sstring_view(e.value));
+            }
+            _writer.EndArray();
+        };
+        _writer.StartObject();
+        write_pos("first_clustering_position", val.first_clustering_position);
+        write_pos("last_clustering_position", val.last_clustering_position);
+        _writer.EndObject();
+
     }
 
     template <sstables::scylla_metadata_type E, typename T>
