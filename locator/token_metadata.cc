@@ -155,7 +155,7 @@ public:
 public:
     void remove_endpoint(inet_address endpoint);
 
-    bool is_member(inet_address endpoint) const;
+    bool is_normal_token_owner(inet_address endpoint) const;
 
     bool is_leaving(inet_address endpoint) const;
 
@@ -422,8 +422,8 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
         co_return;
     }
 
-    if (!is_member(endpoint)) {
-        on_internal_error(tlogger, format("token_metadata_impl: {} must be member to update normal tokens", endpoint));
+    if (!_topology.has_endpoint(endpoint)) {
+        on_internal_error(tlogger, format("token_metadata_impl: {} must be a member of topology to update normal tokens", endpoint));
     }
 
     bool should_sort_tokens = false;
@@ -556,8 +556,8 @@ const std::unordered_map<inet_address, host_id>& token_metadata_impl::get_endpoi
     return _endpoint_to_host_id_map;
 }
 
-bool token_metadata_impl::is_member(inet_address endpoint) const {
-    return _topology.has_endpoint(endpoint);
+bool token_metadata_impl::is_normal_token_owner(inet_address endpoint) const {
+    return _normal_token_owners.contains(endpoint);
 }
 
 void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
@@ -1118,8 +1118,8 @@ token_metadata::remove_endpoint(inet_address endpoint) {
 }
 
 bool
-token_metadata::is_member(inet_address endpoint) const {
-    return _impl->is_member(endpoint);
+token_metadata::is_normal_token_owner(inet_address endpoint) const {
+    return _impl->is_normal_token_owner(endpoint);
 }
 
 bool

@@ -1908,7 +1908,7 @@ public:
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
-                if (tm.get_topology().has_endpoint(endpoint)) {
+                if (tm.is_normal_token_owner(endpoint)) {
                     sstring dc = tm.get_topology().get_location(endpoint).dc;
                     set_cell(cr, "dc", dc);
                 }
