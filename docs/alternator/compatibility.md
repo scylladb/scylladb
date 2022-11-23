@@ -151,7 +151,7 @@ time will not disappear exactly at that time, but only after some delay.
 DynamoDB guarantees that the expiration delay will be less than 48 hours
 (though for small tables the delay is often much shorter).
 
-In Alternator, the expiration delay is configurable - it  can it can be be set
+In Alternator, the expiration delay is configurable - it can be set
 with the `--alternator-ttl-period-in-seconds` configuration option.
 The default is 24 hours.
 
