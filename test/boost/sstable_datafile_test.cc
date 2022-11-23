@@ -3340,9 +3340,9 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
 
                 if (with_static_row) {
                     ss.add_static_row(mut1, "svalue");
-                    if (!first_position) {
-                        first_position = position_in_partition::for_static_row();
-                    }
+                    // Even though static row comes first, sstable's position metadata only accounts for clustering positions.
+                    // Static row must be either replicated across all fragments, like tombstone, or consumed first in incremental
+                    // reader if present in a given sstable run.
                 }
 
                 for (size_t ck = 0; ck < ckeys_per_partition; ck++) {
@@ -3377,7 +3377,12 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
             auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get0();
             BOOST_REQUIRE(last_position_opt);
 
-            BOOST_REQUIRE(eq(*first_position_opt, *first_position));
+            // find_first_position_in_partition() returns static row if present as first position, but new metadata doesn't
+            // account for static row as well as partition tombstones, as they'll need special treatment in the sstable run
+            // reader implementation.
+            if (!with_static_row) {
+                BOOST_REQUIRE(eq(*first_position_opt, *first_position));
+            }
             BOOST_REQUIRE(eq(*last_position_opt, *last_position));
 
             BOOST_REQUIRE(eq(sst->first_partition_first_position(), *first_position));

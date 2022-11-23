@@ -1280,25 +1280,36 @@ sstable::find_first_position_in_partition(reader_permit permit, const dht::decor
     co_return std::move(ret);
 }
 
-future<> sstable::load_first_and_last_position_in_partition() {
+void sstable::load_first_and_last_position_in_partition() {
     if (!_schema->clustering_key_size()) {
-        co_return;
+        return;
     }
 
-    auto& sem = _manager.sstable_metadata_concurrency_sem();
-    reader_permit permit = co_await sem.obtain_permit(&*_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout);
-    auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
-    auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
-
-    // Allow loading to proceed even if we were unable to load this metadata as the lack of it
-    // will not affect correctness.
-    if (!first_pos_opt || !last_pos_opt) {
-        sstlog.warn("Unable to retrieve metadata for first and last keys of {}. Not a critical error.", get_filename());
-        co_return;
+    auto cpm = _components->scylla_metadata->get_optional_clustering_position_metadata();
+    if (!cpm) {
+        sstlog.debug("Clustering position metadata not found for {}", get_filename());
+        return;
     }
 
-    _first_partition_first_position = std::move(*first_pos_opt);
-    _last_partition_last_position = std::move(*last_pos_opt);
+    const auto& first_clustering_position = cpm->first_clustering_position;
+    const auto& last_clustering_position = cpm->last_clustering_position;
+
+    auto to_bound_kind = [] (bool is_first_pos, bool exclusive) {
+        if (exclusive) {
+            return (is_first_pos) ? bound_kind::excl_start : bound_kind::excl_end;
+        }
+        return (is_first_pos) ? bound_kind::incl_start : bound_kind::incl_end;
+    };
+
+    auto pip = [&] (const utils::chunked_vector<disk_string<uint16_t>>& column_names, bool is_first_pos, const std::optional<uint8_t> exclusive) {
+        if (!exclusive) {
+            return position_in_partition(position_in_partition::clustering_row_tag_t(), make_ckey_prefix(column_names));
+        }
+        return position_in_partition(position_in_partition::range_tag_t(), to_bound_kind(is_first_pos, *exclusive), make_ckey_prefix(column_names));
+    };
+
+    _first_partition_first_position = pip(first_clustering_position.pos.elements, true, first_clustering_position.exclusive);
+    _last_partition_last_position = pip(last_clustering_position.pos.elements, false, last_clustering_position.exclusive);
 }
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
@@ -1430,6 +1441,7 @@ future<> sstable::update_info_for_opened_data() {
     }).then([this] {
         this->set_min_max_position_range();
         this->set_first_and_last_keys();
+        load_first_and_last_position_in_partition();
         _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
 
         // Get disk usage for this sstable (includes all components).
@@ -1454,8 +1466,6 @@ future<> sstable::update_info_for_opened_data() {
                 _bytes_on_disk += bytes;
             });
         });
-    }).then([this] {
-        return load_first_and_last_position_in_partition();
     });
 }
 

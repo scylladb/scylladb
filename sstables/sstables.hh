@@ -629,7 +629,7 @@ private:
 
     // Loads first position of the first partition, and last position of the last
     // partition. Does nothing if schema defines no clustering key.
-    future<> load_first_and_last_position_in_partition();
+    void load_first_and_last_position_in_partition();
 
     future<> create_data() noexcept;
 

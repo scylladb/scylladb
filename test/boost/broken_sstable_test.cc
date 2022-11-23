@@ -61,8 +61,9 @@ SEASTAR_TEST_CASE(test_empty_index) {
                  .with_column("val", int32_type)
                  .set_compressor_params(compression_parameters::no_compression())
                  .build();
-    future<sstable_ptr> fut = env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc);
-    BOOST_REQUIRE_EXCEPTION(fut.get0(), malformed_sstable_exception, exception_predicate::message_matches(
+    sstable_ptr sstp = env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get0();
+    auto fut = sstables::test(sstp).read_indexes(env.make_reader_permit());
+    BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_matches(
         "index_consume_entry_context \\(state=.*\\): cannot finish parsing current entry, no more data in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
   });
 }
