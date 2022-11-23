@@ -442,7 +442,7 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
                                 auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e), cmp);
                                 if (insert_result.second) {
-                                    clogger.trace("csm {}: inserted dummy at {}", fmt::ptr(this), _upper_bound);
+                                    clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, _upper_bound);
                                     _snp->tracker()->insert(*insert_result.first);
                                 }
                                 if (_read_context.is_reversed()) [[unlikely]] {
@@ -529,7 +529,7 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
                                                                           is_continuous::yes));
                         auto insert_result = rows.insert(std::move(e2), table_cmp);
                         if (insert_result.second) {
-                            clogger.trace("csm {}: inserted dummy at {}", fmt::ptr(this), insert_result.first->position());
+                            clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
                             _snp->tracker()->insert(*insert_result.first);
                         }
                         clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
@@ -557,7 +557,7 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
                         // from _next_row.ensure_entry_in_latest().
                         auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e2), table_cmp);
                         if (insert_result.second) {
-                            clogger.trace("csm {}: inserted dummy at {}", fmt::ptr(this), insert_result.first->position());
+                            clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
                             _snp->tracker()->insert(*insert_result.first);
                         }
                         clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
