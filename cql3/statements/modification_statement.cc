@@ -247,6 +247,12 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
+void modification_statement::validate_primary_key_restrictions(const query_options& options) const {
+    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
+        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
+    }
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (has_conditions() && options.get_protocol_version() == 1) {
@@ -257,9 +263,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     inc_cql_stats(qs.get_client_state().is_internal());
 
-    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
-        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
-    }
+    validate_primary_key_restrictions(options);
 
     if (has_conditions()) {
         return execute_with_condition(qp, qs, options);
