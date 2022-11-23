@@ -67,6 +67,7 @@ private:
     future<> do_accept_gently(const column_mapping&, Visitor& visitor) const;
 
     struct accept_ordered_cookie {
+        schema_ptr schema;
         bool accepted_partition_tombstone = false;
         bool accepted_static_row = false;
 

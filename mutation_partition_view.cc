@@ -275,10 +275,21 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
 }
 
 template <bool is_preemptible, consume_in_reverse reverse>
-mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
+mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
     // TODO: next patches will actually use the reverse parameter
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+
+    if (!cookie.schema) {
+        if constexpr (reverse == consume_in_reverse::yes) {
+            // FIXME: not yet
+            // cookie.schema = schema.make_reversed();
+            cookie.schema = schema.shared_from_this();
+        } else {
+            cookie.schema = schema.shared_from_this();
+        }
+    }
+    const class schema& s = *cookie.schema;
     const column_mapping& cm = s.get_column_mapping();
 
     if (!cookie.accepted_partition_tombstone) {
