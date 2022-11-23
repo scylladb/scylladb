@@ -13,7 +13,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_partition_view.hh"
-#include "mutation_consumer_concepts.hh"
+#include "mutation_consumer.hh"
 #include "range_tombstone_change_generator.hh"
 #include "schema.hh"
 
@@ -195,10 +195,10 @@ public:
     // will be called each time the consume is stopping, regardless of whether
     // you are pausing or the consumption is ending for good.
     template<FlattenedConsumerV2 Consumer>
-    auto consume(schema_ptr s, Consumer& consumer) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
+    auto consume(schema_ptr s, Consumer& consumer, consume_in_reverse reverse = consume_in_reverse::no) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     template<FlattenedConsumerV2 Consumer>
-    auto consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>;
+    auto consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor, consume_in_reverse reverse = consume_in_reverse::no) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>;
 
     // Consumes the frozen mutation's content.
     //
@@ -210,10 +210,10 @@ public:
     // will be called each time the consume is stopping, regardless of whether
     // you are pausing or the consumption is ending for good.
     template<FlattenedConsumerV2 Consumer>
-    auto consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
+    auto consume_gently(schema_ptr s, Consumer& consumer, consume_in_reverse reverse = consume_in_reverse::no) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
 
     template<FlattenedConsumerV2 Consumer>
-    auto consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>>;
+    auto consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor, consume_in_reverse reverse = consume_in_reverse::no) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>>;
 
     unsigned shard_of(const schema& s) const {
         return dht::shard_of(s, dht::get_token(s, key()));
@@ -286,11 +286,11 @@ public:
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())> {
+auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor, consume_in_reverse reverse) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())> {
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        partition().accept_ordered(*s, adaptor);
+        partition().accept_ordered(*s, adaptor, reverse);
         return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
@@ -299,18 +299,18 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume(schema_ptr s, Consumer& consumer) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
+auto frozen_mutation::consume(schema_ptr s, Consumer& consumer, consume_in_reverse reverse) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
     frozen_mutation_consumer_adaptor adaptor(s, consumer);
-    return consume(s, adaptor);
+    return consume(s, adaptor, reverse);
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>> {
+auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor, consume_in_reverse reverse) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>> {
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
         auto p = partition();
-        co_await p.accept_gently_ordered(*s, adaptor);
+        co_await p.accept_gently_ordered(*s, adaptor, reverse);
         co_return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
@@ -319,7 +319,7 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
+auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer, consume_in_reverse reverse) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
     frozen_mutation_consumer_adaptor adaptor(s, consumer);
-    co_return co_await consume_gently(s, adaptor);
+    co_return co_await consume_gently(s, adaptor, reverse);
 }

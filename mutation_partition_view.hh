@@ -14,6 +14,7 @@
 #include "atomic_cell.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
+#include "mutation_consumer.hh"
 
 namespace ser {
 class mutation_partition_view;
@@ -83,7 +84,7 @@ private:
         accept_ordered_cookie cookie;
     };
 
-    template <bool is_preemptible>
+    template <bool is_preemptible, consume_in_reverse reverse>
     accept_ordered_result do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv, accept_ordered_cookie cookie) const;
 
 public:
@@ -96,8 +97,8 @@ public:
     void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     future<> accept_gently(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     void accept(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
-    void accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv) const;
-    future<> accept_gently_ordered(const schema&, mutation_partition_view_virtual_visitor& mpvvv) const;
+    void accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv, consume_in_reverse reverse) const;
+    future<> accept_gently_ordered(const schema&, mutation_partition_view_virtual_visitor& mpvvv, consume_in_reverse reverse) const;
 
     std::optional<clustering_key> first_row_key() const;
     std::optional<clustering_key> last_row_key() const;

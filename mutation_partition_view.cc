@@ -10,6 +10,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "mutation_consumer.hh"
 #include "mutation_partition_view.hh"
 #include "schema.hh"
 #include "atomic_cell.hh"
@@ -273,8 +274,9 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
     }
 }
 
-template <bool is_preemptible>
+template <bool is_preemptible, consume_in_reverse reverse>
 mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
+    // TODO: next patches will actually use the reverse parameter
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
     const column_mapping& cm = s.get_column_mapping();
@@ -405,16 +407,36 @@ void mutation_partition_view::accept(const column_mapping& cm, mutation_partitio
     do_accept(cm, visitor);
 }
 
-void mutation_partition_view::accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
-    do_accept_ordered<false>(s, visitor, accept_ordered_cookie{});
+void mutation_partition_view::accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, consume_in_reverse reverse) const {
+    switch (reverse) {
+    case consume_in_reverse::no:
+        do_accept_ordered<false, consume_in_reverse::no>(s, visitor, accept_ordered_cookie{});
+        break;
+    case consume_in_reverse::yes:
+        do_accept_ordered<false, consume_in_reverse::yes>(s, visitor, accept_ordered_cookie{});
+        break;
+    }
 }
 
-future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
-    accept_ordered_result res;
-    do {
-        res = do_accept_ordered<true>(s, visitor, std::move(res.cookie));
-        co_await coroutine::maybe_yield();
-    } while (!res.stop);
+future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, consume_in_reverse reverse) const {
+    switch (reverse) {
+    case consume_in_reverse::no: {
+        accept_ordered_result res;
+        do {
+            res = do_accept_ordered<true, consume_in_reverse::no>(s, visitor, std::move(res.cookie));
+            co_await coroutine::maybe_yield();
+        } while (!res.stop);
+        break;
+    }
+    case consume_in_reverse::yes: {
+        accept_ordered_result res;
+        do {
+            res = do_accept_ordered<true, consume_in_reverse::yes>(s, visitor, std::move(res.cookie));
+            co_await coroutine::maybe_yield();
+        } while (!res.stop);
+        break;
+    }
+    }
 }
 
 std::optional<clustering_key> mutation_partition_view::first_row_key() const
