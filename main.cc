@@ -423,7 +423,6 @@ sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
-sharded<locator::snitch_ptr> *the_snitch;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -521,7 +520,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::forward_service> forward_service;
     sharded<gms::gossiper> gossiper;
-    sharded<locator::snitch_ptr> snitch;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -549,7 +547,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
 
         return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
           try {
@@ -715,11 +713,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
             supervisor::notify("creating snitch");
-            debug::the_snitch = &snitch;
             snitch_config snitch_cfg;
             snitch_cfg.name = cfg->endpoint_snitch();
             snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
             snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
+            sharded<locator::snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
             snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
                 snitch.stop().get();
@@ -949,7 +947,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks),
                 std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
-                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch)).get();
+                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1146,9 +1144,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // FIXME -- this sys_ks start should really be up above, where its instance
             // start, but we only have query processor started that late
-            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
-                return sys_ks.start(snitch.local());
-            }).get();
+            sys_ks.invoke_on_all(&db::system_keyspace::start).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
             group0_client.init().get();
@@ -1185,7 +1181,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 1. messaging is on the way with its preferred ip cache
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
-            sys_ks.local().setup(snitch, messaging).get();
+            sys_ks.local().setup(messaging).get();
 
             supervisor::notify("starting schema commit log");
 
@@ -1277,10 +1273,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }).get();
             api::set_server_gossip(ctx, gossiper).get();
-            api::set_server_snitch(ctx, snitch).get();
-            auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
-                api::unset_server_snitch(ctx).get();
-            });
+            api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx, ss).get();
             api::set_server_load_sstable(ctx).get();
             static seastar::sharded<memory_threshold_guard> mtg;

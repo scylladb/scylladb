@@ -1262,14 +1262,15 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
     auto& cfg = _db.local().get_config();
     sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     return execute_cql(req, sstring(db::system_keyspace::LOCAL),
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(cql_serialization_format::latest_version),
-                            local_dc_rack().dc,
-                            local_dc_rack().rack,
+                            snitch->get_datacenter(),
+                            snitch->get_rack(),
                             sstring(cfg.partitioner()),
                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
                             utils::fb_utilities::get_broadcast_address().addr(),
@@ -1331,7 +1332,7 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-future<> system_keyspace::setup(sharded<locator::snitch_ptr>& snitch, sharded<netw::messaging_service>& ms) {
+future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
 
     co_await setup_version(ms);
@@ -1343,7 +1344,8 @@ future<> system_keyspace::setup(sharded<locator::snitch_ptr>& snitch, sharded<ne
     co_await db::schema_tables::save_system_schema(_qp.local(), NAME);
     co_await cache_truncation_record();
 
-    if (snitch.local()->prefer_local()) {
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (snitch->prefer_local()) {
         auto preferred_ips = co_await get_preferred_ips();
         co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
             return ms.init_local_preferred_ip_cache(preferred_ips);
@@ -3338,7 +3340,7 @@ system_keyspace::system_keyspace(sharded<cql3::query_processor>& qp, sharded<rep
 system_keyspace::~system_keyspace() {
 }
 
-future<> system_keyspace::start(const locator::snitch_ptr& snitch) {
+future<> system_keyspace::start() {
     assert(_qp.local_is_initialized() && _db.local_is_initialized());
 
     if (this_shard_id() == 0) {
@@ -3351,6 +3353,7 @@ future<> system_keyspace::start(const locator::snitch_ptr& snitch) {
     // This should be coupled with setup_version()'s part committing these values into
     // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
     // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
     _cache->_local_dc_rack_info.rack = snitch->get_rack();
 

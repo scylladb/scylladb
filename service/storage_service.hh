@@ -144,7 +144,6 @@ private:
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
-    sharded<locator::snitch_ptr>& _snitch;
 
     // Engaged on shard 0 after `join_cluster`.
     service::raft_group0* _group0;
@@ -178,8 +177,7 @@ public:
         sharded<repair_service>& repair,
         sharded<streaming::stream_manager>& stream_manager,
         endpoint_lifecycle_notifier& elc_notif,
-        sharded<db::batchlog_manager>& bm,
-        sharded<locator::snitch_ptr>& snitch);
+        sharded<db::batchlog_manager>& bm);
 
     // Needed by distributed<>
     future<> stop();

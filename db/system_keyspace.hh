@@ -56,7 +56,6 @@ namespace gms {
 
 namespace locator {
     class endpoint_dc_rack;
-    class snitch_ptr;
 } // namespace locator
 
 namespace gms {
@@ -227,7 +226,7 @@ public:
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
-    future<> setup(sharded<locator::snitch_ptr>& snitch, sharded<netw::messaging_service>& ms);
+    future<> setup(sharded<netw::messaging_service>& ms);
     future<> update_schema_version(table_schema_version version);
 
     /*
@@ -467,7 +466,7 @@ public:
 
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
     ~system_keyspace();
-    future<> start(const locator::snitch_ptr&);
+    future<> start();
     future<> stop();
     future<> shutdown();
 

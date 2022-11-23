@@ -39,7 +39,7 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
         auto my_address = utils::fb_utilities::get_broadcast_address();
-        sharded<snitch_ptr> snitch;
+        sharded<snitch_ptr>& snitch = i_endpoint_snitch::snitch_instance();
 
         try {
             path fname1(test_files_subdir);
@@ -60,7 +60,7 @@ future<> one_test(const std::string& property_fname1,
                 return;
             }
 
-            snitch.invoke_on(0,
+            i_endpoint_snitch::snitch_instance().invoke_on(0,
                     [cpu0_dc, cpu0_rack, my_address] (snitch_ptr& inst) {
                 *cpu0_dc =inst->get_datacenter();
                 *cpu0_rack = inst->get_rack();
@@ -69,7 +69,7 @@ future<> one_test(const std::string& property_fname1,
             snitch_config cfg;
             cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
             cfg.properties_file_name = fname2.string();
-            i_endpoint_snitch::reset_snitch(snitch, cfg).get();
+            i_endpoint_snitch::reset_snitch(cfg).get();
 
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed "
@@ -81,7 +81,7 @@ future<> one_test(const std::string& property_fname1,
             auto res = make_lw_shared<bool>(true);
 
             // Check that the returned DC and Rack values are different now
-            snitch.invoke_on(0,
+            i_endpoint_snitch::snitch_instance().invoke_on(0,
                     [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
                 *cpu0_dc_new =inst->get_datacenter();
                 *cpu0_rack_new = inst->get_rack();
@@ -94,7 +94,7 @@ future<> one_test(const std::string& property_fname1,
             }
 
             // Check that the new DC and Rack values have been propagated to all CPUs
-            snitch.invoke_on_all(
+            i_endpoint_snitch::snitch_instance().invoke_on_all(
                     [cpu0_dc_new, cpu0_rack_new, res, my_address] (snitch_ptr& inst) {
                 if (*cpu0_dc_new != inst->get_datacenter() ||
                     *cpu0_rack_new != inst->get_rack()) {
@@ -116,7 +116,7 @@ future<> one_test(const std::string& property_fname1,
                 // Verify that the returned DC and Rack values remained the same
                 // despite the insuccessful reset_snitch() call.
                 //
-                snitch.invoke_on(0,
+                i_endpoint_snitch::snitch_instance().invoke_on(0,
                         [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
                     *cpu0_dc_new =inst->get_datacenter();
                     *cpu0_rack_new = inst->get_rack();

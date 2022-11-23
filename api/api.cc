@@ -148,14 +148,8 @@ future<> unset_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
 }
 
-future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch) {
-    return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", [&snitch] (http_context& ctx, routes& r) {
-        set_endpoint_snitch(ctx, r, snitch);
-    });
-}
-
-future<> unset_server_snitch(http_context& ctx) {
-    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_endpoint_snitch(ctx, r); });
+future<> set_server_snitch(http_context& ctx) {
+    return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", set_endpoint_snitch);
 }
 
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {

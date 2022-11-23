@@ -91,8 +91,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<repair_service>& repair,
     sharded<streaming::stream_manager>& stream_manager,
     endpoint_lifecycle_notifier& elc_notif,
-    sharded<db::batchlog_manager>& bm,
-    sharded<locator::snitch_ptr>& snitch)
+    sharded<db::batchlog_manager>& bm)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -101,7 +100,6 @@ storage_service::storage_service(abort_source& abort_source,
         , _migration_manager(mm)
         , _repair(repair)
         , _stream_manager(stream_manager)
-        , _snitch(snitch)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
@@ -121,8 +119,9 @@ storage_service::storage_service(abort_source& abort_source,
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(commit_error.connect([this] { do_isolate_on_error(disk_error::commit); }))));
 
-    if (_snitch.local_is_initialized()) {
-        _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
+    auto& snitch = locator::i_endpoint_snitch::snitch_instance();
+    if (snitch.local_is_initialized()) {
+        _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
 }
 
@@ -337,7 +336,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes);
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
-        _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
+        _gossiper.check_snitch_name_matches();
         // Check if the node is already removed from the cluster
         auto local_host_id = _db.local().get_config().host_id;
         auto my_ip = get_broadcast_address();
@@ -426,11 +425,12 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens));
     }
-    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch->get_name()));
     app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
     app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
-    for (auto&& s : _snitch.local()->get_app_states()) {
+    for (auto&& s : snitch->get_app_states()) {
         app_states.emplace(s.first, std::move(s.second));
     }
 
@@ -1249,7 +1249,8 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
 }
 
 future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {
-    if (!_snitch.local()->prefer_local()) {
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (!snitch->prefer_local()) {
         co_return;
     }
 
@@ -1602,7 +1603,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round(initial_contact_nodes).get();
             _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
-            _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
+            _gossiper.check_snitch_name_matches();
             auto addr = get_broadcast_address();
             if (!_gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(fmt::format("A node with address {} already exists, cancelling join. "
@@ -3339,10 +3340,10 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
-    auto& snitch = _snitch.local();
-    co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
         auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         auto dr = locator::endpoint_dc_rack {
             .dc = snitch->get_datacenter(),
             .rack = snitch->get_rack(),
@@ -3352,6 +3353,7 @@ future<> storage_service::snitch_reconfigured() {
     });
 
     if (_gossiper.is_enabled()) {
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         co_await _gossiper.add_local_application_state(snitch->get_app_states());
     }
 }

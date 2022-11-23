@@ -614,7 +614,7 @@ private:
 public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
-    void check_snitch_name_matches(sstring local_snitch_name) const;
+    void check_snitch_name_matches() const;
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
 private:
