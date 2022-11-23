@@ -63,6 +63,20 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     }
 }
 
+std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token_metadata_ptr tmptr, size_t num_tokens, dht::check_token_endpoint check) {
+    if (num_tokens < 1) {
+        throw std::runtime_error("num_tokens must be >= 1");
+    }
+
+    if (num_tokens == 1) {
+        blogger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+    }
+
+    auto tokens = get_random_tokens(std::move(tmptr), num_tokens);
+    blogger.info("Get random bootstrap_tokens={}", tokens);
+    return tokens;
+}
+
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, const db::config& cfg, dht::check_token_endpoint check) {
     std::unordered_set<sstring> initial_tokens;
     sstring tokens_string = cfg.initial_token();
@@ -87,19 +101,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         blogger.info("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
-
-    size_t num_tokens = cfg.num_tokens();
-    if (num_tokens < 1) {
-        throw std::runtime_error("num_tokens must be >= 1");
-    }
-
-    if (num_tokens == 1) {
-        blogger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
-    }
-
-    auto tokens = get_random_tokens(std::move(tmptr), num_tokens);
-    blogger.info("Get random bootstrap_tokens={}", tokens);
-    return tokens;
+    return get_random_bootstrap_tokens(tmptr, cfg.num_tokens(), check);
 }
 
 std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens) {
