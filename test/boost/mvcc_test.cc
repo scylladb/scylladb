@@ -683,12 +683,6 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
                 auto actual = read_using_cursor(*snap);
 
                 assert_that(s, actual).has_same_continuity(expected);
-
-                // Drop empty rows
-                can_gc_fn never_gc = [] (tombstone) { return false; };
-                actual.compact_for_compaction(*s, never_gc, m1.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
-                expected.compact_for_compaction(*s, never_gc, m1.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
-
                 assert_that(s, actual).is_equal_to_compacted(expected);
             }
         }
