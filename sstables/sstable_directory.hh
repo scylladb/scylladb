@@ -34,11 +34,6 @@ bool manifest_json_filter(const std::filesystem::path&, const directory_entry& e
 // or the main directory.
 class sstable_directory {
 public:
-    using lack_of_toc_fatal = bool_class<class lack_of_toc_fatal_tag>;
-    using need_mutate_level = bool_class<class need_mutate_level_tag>;
-    using enable_dangerous_direct_import_of_cassandra_counters = bool_class<class enable_dangerous_direct_import_of_cassandra_counters_tag>;
-    using allow_loading_materialized_view = bool_class<class allow_loading_materialized_view_tag>;
-
     using sstable_object_from_existing_fn =
         noncopyable_function<sstables::shared_sstable(std::filesystem::path,
                                                       sstables::generation_type,
@@ -48,6 +43,16 @@ public:
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
     using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+
+    // Flags below control how to behave when scanning new SSTables.
+    struct process_flags {
+        bool need_mutate_level = false;
+        bool throw_on_missing_toc = false;
+        bool enable_dangerous_direct_import_of_cassandra_counters = false;
+        bool allow_loading_materialized_view = false;
+        bool sort_sstables_according_to_owner = true;
+    };
+
 private:
     using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
     using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -77,12 +82,6 @@ private:
     const size_t _load_parallelism;
     semaphore& _load_semaphore;
 
-    // Flags below control how to behave when scanning new SSTables.
-    need_mutate_level _need_mutate_level;
-    lack_of_toc_fatal _throw_on_missing_toc;
-    enable_dangerous_direct_import_of_cassandra_counters _enable_dangerous_direct_import_of_cassandra_counters;
-    allow_loading_materialized_view _allow_loading_materialized_view;
-
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
 
@@ -106,8 +105,8 @@ private:
     // the amount of data resharded per shard, so a coordinator may redistribute this.
     sstable_info_vector _shared_sstable_info;
 
-    future<> process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner = true);
-    void validate(sstables::shared_sstable sst) const;
+    future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
+    void validate(sstables::shared_sstable sst, process_flags flags) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
     future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
@@ -125,10 +124,6 @@ public:
             ::io_priority_class io_prio,
             unsigned load_parallelism,
             semaphore& load_semaphore,
-            need_mutate_level need_mutate,
-            lack_of_toc_fatal fatal_nontoc,
-            enable_dangerous_direct_import_of_cassandra_counters eddiocc,
-            allow_loading_materialized_view,
             sstable_object_from_existing_fn sstable_from_existing);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
@@ -156,7 +151,7 @@ public:
     // This function doesn't change on-storage state. If files are to be removed, a separate call
     // (commit_file_removals()) has to be issued. This is to make sure that all instances of this
     // class in a sharded service have the opportunity to validate its files.
-    future<> process_sstable_dir(bool sort_sstables_according_to_owner = true);
+    future<> process_sstable_dir(process_flags flags);
 
     // Sort the sstable according to owner
     future<> sort_sstable(sstables::shared_sstable sst);
@@ -177,19 +172,13 @@ public:
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
                      unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
 
-    // Default filter will include all sstables
     using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
-    static sstable_filter_func_t default_sstable_filter() {
-        return [] (const sstables::shared_sstable&) {
-            return true;
-        };
-    }
 
     // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
     future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
                      sstables::compaction_sstable_creator_fn creator,
                      sstables::reshape_mode mode,
-                     sstable_filter_func_t sstable_filter = default_sstable_filter());
+                     sstable_filter_func_t sstable_filter);
 
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this

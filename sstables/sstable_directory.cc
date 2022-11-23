@@ -35,19 +35,11 @@ sstable_directory::sstable_directory(fs::path sstable_dir,
         ::io_priority_class io_prio,
         unsigned load_parallelism,
         semaphore& load_semaphore,
-        need_mutate_level need_mutate_level,
-        lack_of_toc_fatal throw_on_missing_toc,
-        enable_dangerous_direct_import_of_cassandra_counters eddiocc,
-        allow_loading_materialized_view allow_mv,
         sstable_object_from_existing_fn sstable_from_existing)
     : _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _load_parallelism(load_parallelism)
     , _load_semaphore(load_semaphore)
-    , _need_mutate_level(need_mutate_level)
-    , _throw_on_missing_toc(throw_on_missing_toc)
-    , _enable_dangerous_direct_import_of_cassandra_counters(eddiocc)
-    , _allow_loading_materialized_view(allow_mv)
     , _sstable_object_from_existing_sstable(std::move(sstable_from_existing))
     , _unshared_remote_sstables(smp::count)
 {}
@@ -81,18 +73,18 @@ sstable_directory::handle_component(scan_state& state, sstables::entry_descripto
     }
 }
 
-void sstable_directory::validate(sstables::shared_sstable sst) const {
+void sstable_directory::validate(sstables::shared_sstable sst, process_flags flags) const {
     schema_ptr s = sst->get_schema();
     if (s->is_counter() && !sst->has_scylla_component()) {
         sstring error = "Direct loading non-Scylla SSTables containing counters is not supported.";
-        if (_enable_dangerous_direct_import_of_cassandra_counters) {
+        if (flags.enable_dangerous_direct_import_of_cassandra_counters) {
             dirlog.info("{} But trying to continue on user's request.", error);
         } else {
             dirlog.error("{} Use sstableloader instead.", error);
             throw std::runtime_error(fmt::format("{} Use sstableloader instead.", error));
         }
     }
-    if (s->is_view() && !_allow_loading_materialized_view) {
+    if (s->is_view() && !flags.allow_loading_materialized_view) {
         throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
     }
     if (!sst->is_uploaded()) {
@@ -101,22 +93,22 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
 }
 
 future<>
-sstable_directory::process_descriptor(sstables::entry_descriptor desc, bool sort_sstables_according_to_owner) {
+sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
     auto sst = _sstable_object_from_existing_sstable(_sstable_dir, desc.generation, desc.version, desc.format);
-    return sst->load(_io_priority).then([this, sst] {
-        validate(sst);
-        if (_need_mutate_level) {
+    return sst->load(_io_priority).then([this, sst, flags] {
+        validate(sst, flags);
+        if (flags.need_mutate_level) {
             dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
             return sst->mutate_sstable_level(0);
         } else {
             return make_ready_future<>();
         }
-    }).then([sst, sort_sstables_according_to_owner, this] {
-        if (sort_sstables_according_to_owner) {
+    }).then([sst, flags, this] {
+        if (flags.sort_sstables_according_to_owner) {
             return sort_sstable(sst);
         } else {
             dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
@@ -157,7 +149,7 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<>
-sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
+sstable_directory::process_sstable_dir(process_flags flags) {
     dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
 
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
@@ -215,11 +207,11 @@ sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await parallel_for_each_restricted(state.descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
-        return process_descriptor(std::move(desc), sort_sstables_according_to_owner);
+        return process_descriptor(std::move(desc), flags);
     });
 
     // For files missing TOC, it depends on where this is coming from.
@@ -227,7 +219,7 @@ sstable_directory::process_sstable_dir(bool sort_sstables_according_to_owner) {
     // we refuse to proceed. If this coming from, say, an import, then we just delete,
     // log and proceed.
     for (auto& path : state.generations_found | boost::adaptors::map_values) {
-        if (_throw_on_missing_toc) {
+        if (flags.throw_on_missing_toc) {
             throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _sstable_dir.native(), path.native()));
         } else {
             dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _sstable_dir.native());

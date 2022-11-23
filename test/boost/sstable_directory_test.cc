@@ -23,8 +23,8 @@
 
 class distributed_loader_for_tests {
 public:
-    static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, bool sort_sstables_according_to_owner = true) {
-        return replica::distributed_loader::process_sstable_dir(dir, sort_sstables_according_to_owner);
+    static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstable_directory::process_flags flags) {
+        return replica::distributed_loader::process_sstable_dir(dir, flags);
     }
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
@@ -132,10 +132,6 @@ highest_generation_seen(sharded<sstables::sstable_directory>& dir) {
 static void with_sstable_directory(
     std::filesystem::path path,
     unsigned load_parallelism,
-    sstable_directory::need_mutate_level need_mutate,
-    sstable_directory::lack_of_toc_fatal fatal_nontoc,
-    sstable_directory::enable_dangerous_direct_import_of_cassandra_counters eddiocc,
-    sstable_directory::allow_loading_materialized_view almv,
     sstable_directory::sstable_object_from_existing_fn sstable_from_existing,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
@@ -157,7 +153,7 @@ static void with_sstable_directory(
         return sstable_from_existing(std::move(dir), gen, v, f);
     };
 
-    sstdir.start(std::move(path), default_priority_class(), load_parallelism, std::ref(sstdir_sem), need_mutate, fatal_nontoc, eddiocc, almv, std::move(wrapped_sfe)).get();
+    sstdir.start(std::move(path), default_priority_class(), load_parallelism, std::ref(sstdir_sem), std::move(wrapped_sfe)).get();
 
     func(sstdir);
 }
@@ -172,13 +168,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
     f.close().get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     // No generation found on empty directory.
     BOOST_REQUIRE_EQUAL(max_generation_seen, 0);
@@ -197,13 +189,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
     remove_file(sst->filename(sstables::component_type::Statistics)).get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
+    auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
   });
@@ -222,13 +210,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
         f.close().get();
 
         with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-                auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
+                auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
                 BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
         });
     });
@@ -242,13 +226,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::yes,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true });
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
   });
@@ -262,13 +242,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
         link_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
         with_sstable_directory(dir.path(), 1,
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::yes,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
                 sstable_from_existing_file(env),
                 [] (sharded<sstables::sstable_directory>& sstdir) {
-            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir);
+            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true });
             BOOST_REQUIRE_NO_THROW(expect_ok.get());
         });
     });
@@ -283,24 +259,16 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
     remove_file(sst->filename(sstables::component_type::TOC)).get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::yes,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
-    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal);
+    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, { .throw_on_missing_toc = true });
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_ok) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
   });
@@ -320,13 +288,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     auto tempstat = fs::canonical(fs::path(tempstr));
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [&dir, &tempstat] (sharded<sstables::sstable_directory>& sstdir_ok) {
-    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok);
+    auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
     lister::scan_dir(dir.path(), lister::dir_entry_types::of<directory_entry_type::regular>(), [tempstat] (fs::path parent_dir, directory_entry de) {
         BOOST_REQUIRE(fs::canonical(parent_dir / fs::path(de.name)) != tempstat);
@@ -337,13 +301,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     remove_file(sst->filename(sstables::component_type::Statistics)).get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
-    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal);
+    auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
   }).get();
@@ -358,13 +318,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::yes,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     BOOST_REQUIRE_EQUAL(max_generation_seen, 3333);
    });
@@ -404,13 +360,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
     }
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::yes,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
    });
   }).get();
@@ -432,13 +384,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
     }
 
    with_sstable_directory(dir.path(), 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::yes,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
-    distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+    distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
    });
   }).get();
@@ -463,13 +411,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
         }).get();
 
         with_sstable_directory(path, 1,
-            sstable_directory::need_mutate_level::no,
-            sstable_directory::lack_of_toc_fatal::no,
-            sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-            sstable_directory::allow_loading_materialized_view::no,
             sstable_from_existing_file(e),
         [&] (sharded<sstable_directory>& sstdir) {
-            distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+            distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
 
             // Collect all sstable file names
             sstdir.invoke_on_all([&] (sstable_directory& d) {
@@ -551,16 +495,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         }
 
       with_sstable_directory(upload_path, 1,
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::yes,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
                 [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                     auto& cf = e.local_db().find_column_family("ks", "cf");
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
@@ -600,16 +540,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         }
 
       with_sstable_directory(upload_path, 1,
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::yes,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
                 [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                     auto& cf = e.local_db().find_column_family("ks", "cf");
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
@@ -649,16 +585,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         }
 
       with_sstable_directory(upload_path, 1,
-                sstable_directory::need_mutate_level::no,
-                sstable_directory::lack_of_toc_fatal::yes,
-                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
-                sstable_directory::allow_loading_materialized_view::no,
                 [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                     auto& cf = e.local_db().find_column_family("ks", "cf");
                     return cf.make_sstable(dir.native(), gen, v, f);
                 },
                 [&, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
-        distributed_loader_for_tests::process_sstable_dir(sstdir).get();
+        distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
