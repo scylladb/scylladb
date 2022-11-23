@@ -777,6 +777,19 @@ bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return clustering_columns_restrictions_size() < _schema->clustering_key_size();
 }
 
+const column_definition& statement_restrictions::unrestricted_column(column_kind kind) const {
+    const auto& restrictions = get_restrictions(kind);
+    const auto sorted_cols = expr::get_sorted_column_defs(restrictions);
+    for (size_t i = 0, count = _schema->columns_count(kind); i < count; ++i) {
+        if (i >= sorted_cols.size() || sorted_cols[i]->component_index() != i) {
+            return _schema->column_at(kind, i);
+        }
+    }
+    on_internal_error(rlogger, format(
+            "no missing columns with kind {} found in expression {}",
+            to_sstring(kind), restrictions));
+};
+
 bool statement_restrictions::clustering_columns_restrictions_have_supporting_index(
         const secondary_index::secondary_index_manager& index_manager,
         expr::allow_local_index allow_local) const {

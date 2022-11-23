@@ -19,6 +19,20 @@ def table1(cql, test_keyspace):
     yield table
     cql.execute("DROP TABLE " + table)
 
+@pytest.fixture(scope="module")
+def table2(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (id text, a int, b int, c list<int>, PRIMARY KEY((id),a,b))")
+    yield table
+    cql.execute("DROP TABLE " + table)
+
+@pytest.fixture(scope="module")
+def table3(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (id1 text, id2 text, a int, c list<int>, PRIMARY KEY((id1,id2),a))")
+    yield table
+    cql.execute("DROP TABLE " + table)
+
 # An item cannot be inserted without a key. Verify that before we get into
 # the really interesting test below - trying to pass "null" as the value of
 # the key.
@@ -64,6 +78,51 @@ def test_insert_null_key_lwt(cql, table1):
         cql.execute(stmt, [s, None])
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
+
+# INSERT statements must specify all components of the primary key,
+# and the corresponding query parameters, if any, must not be null.
+# If INSERT or DELETE statement is missing a non-last element of
+# the primary key, the error message generated contained
+# an invalid column name (#12046).
+# The problem occurred if the query contains a column with the list type,
+# otherwise statement_restrictions::process_clustering_columns_restrictions
+# checks that all the components of the key are specified.
+def test_insert_with_list_column_and_missing_clustering_key_part(cql, table2):
+    key = unique_key_string()
+    with pytest.raises(InvalidRequest,
+                       match='Missing mandatory PRIMARY KEY part a|Some clustering keys are missing: a'):
+        cql.execute(cql.prepare(f"INSERT INTO {table2} (id,b,c) VALUES ('{key}',1,null)"))
+    with pytest.raises(InvalidRequest,
+                       match='Missing mandatory PRIMARY KEY part b|Some clustering keys are missing: b'):
+        cql.execute(cql.prepare(f"INSERT INTO {table2} (id,a,c) VALUES ('{key}',1,null)"))
+
+# The same as test_insert_with_list_column_and_missing_clustering_key_part but for
+# different code path in modification_statement::process_where_clause.
+# We need DELETE here to have require_full_clustering_key() == false.
+# We use DELETE c FROM t syntax to make list column c mentioned in the statement
+# (it's also important to trigger the relevant code path), but
+# also to not bother with providing condition for it in the WHERE clause.
+def test_delete_with_list_column_and_missing_clustering_key_part(cql, table2):
+    key = unique_key_string()
+    cql.execute(cql.prepare(f"INSERT INTO {table2} (id,a,b,c) VALUES ('{key}',1,1,[1])"))
+    assert list(cql.execute(f"SELECT c FROM {table2} WHERE id='{key}' AND a=1 AND b=1"))[0][0] == [1]
+    with pytest.raises(InvalidRequest,
+                       match="Primary key column 'a' must be specified in order to modify column 'c'|"
+                             'PRIMARY KEY column "b" cannot be restricted as preceding column "a" is not restricted'):
+        cql.execute(cql.prepare(f"DELETE c FROM {table2} WHERE id='{key}' AND b=1"))
+    cql.execute(cql.prepare(f"DELETE c FROM {table2} WHERE id='{key}' AND a=1 AND b=1"))
+    assert list(cql.execute(f"SELECT c FROM {table2} WHERE id='{key}' AND a=1 AND b=1"))[0][0] is None
+
+# The same as test_insert_with_list_column_and_missing_clustering_key_part but
+# for partition key.
+def test_insert_with_list_column_and_missing_partition_key_part(cql, table3):
+    key = unique_key_string()
+    with pytest.raises(InvalidRequest,
+                       match='Missing mandatory PRIMARY KEY part id1|Some partition key parts are missing: id1'):
+        cql.execute(cql.prepare(f"INSERT INTO {table3} (id2,a,c) VALUES ('{key}',1,[1])"))
+    with pytest.raises(InvalidRequest,
+                       match='Missing mandatory PRIMARY KEY part id2|Some partition key parts are missing: id2'):
+        cql.execute(cql.prepare(f"INSERT INTO {table3} (id1,a,c) VALUES ('{key}',1,[1])"))
 
 # Tests handling of "key_column in ?" where ? is bound to null.
 # Reproduces issue #8265.

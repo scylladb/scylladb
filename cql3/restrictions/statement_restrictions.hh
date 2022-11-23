@@ -240,6 +240,15 @@ public:
      * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.
      */
     bool has_unrestricted_clustering_columns() const;
+
+    /**
+     * Returns the first unrestricted column for restrictions of the specified kind.
+     * It's an error to call this function if there are no such columns.
+     *
+     * @param kind supported values are column_kind::partition_key and column_kind::clustering_key;
+     * @return the <code>column_definition</code> for the unrestricted column.
+     */
+    const column_definition& unrestricted_column(column_kind kind) const;
 private:
     void add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
     void add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
