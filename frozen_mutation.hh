@@ -16,6 +16,7 @@
 #include "mutation_consumer.hh"
 #include "range_tombstone_change_generator.hh"
 #include "schema.hh"
+#include <exception>
 
 class mutation;
 class flat_mutation_reader_v2;
@@ -294,7 +295,7 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
         return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
-                "frozen_mutation::consume(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
+                "frozen_mutation::consume(): failed consuming mutation {} of {}.{}: {}", key(), s->ks_name(), s->cf_name(), std::current_exception())));
     }
 }
 
@@ -314,7 +315,7 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
         co_return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
-                "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
+                "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}: {}", key(), s->ks_name(), s->cf_name(), std::current_exception())));
     }
 }
 
