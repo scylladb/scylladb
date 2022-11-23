@@ -93,6 +93,11 @@ To upgrade:
    If you use a cloud image with a preinstalled version of ScyllaDB (for example, AMI), you need to install an additional 
    package ``scylla-enterprise-machine-image`` with the ``sudo yum install scylla-enterprise-machine-image`` command.
 
+   CentOS only:
+   
+   If you use a cloud image with a preinstalled version of ScyllaDB (for example, AMI), you need to install an additional 
+   package ``scylla-enterprise-machine-image`` with the ``sudo yum install scylla-enterprise-machine-image`` command.
+
 Start the node
 --------------
 
