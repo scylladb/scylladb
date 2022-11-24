@@ -192,6 +192,8 @@ rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = defaul
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
 rjson::value from_string(const char* str, size_t size);
+rjson::value from_string(const std::string& str);
+rjson::value from_string(const sstring& str);
 rjson::value from_string(std::string_view view);
 
 // Returns a pointer to JSON member if it exists, nullptr otherwise

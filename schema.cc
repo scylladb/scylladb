@@ -1760,7 +1760,7 @@ column_computation_ptr column_computation::deserialize(bytes_view raw) {
 
 bytes legacy_token_column_computation::serialize() const {
     rjson::value serialized = rjson::empty_object();
-    rjson::add(serialized, "type", rjson::from_string("token"));
+    rjson::add(serialized, "type", rjson::from_string(std::string_view("token")));
     return to_bytes(rjson::print(serialized));
 }
 
@@ -1770,7 +1770,7 @@ bytes legacy_token_column_computation::compute_value(const schema& schema, const
 
 bytes token_column_computation::serialize() const {
     rjson::value serialized = rjson::empty_object();
-    rjson::add(serialized, "type", rjson::from_string("token_v2"));
+    rjson::add(serialized, "type", rjson::from_string(std::string_view("token_v2")));
     return to_bytes(rjson::print(serialized));
 }
 
@@ -1793,7 +1793,7 @@ bytes collection_column_computation::serialize() const {
             type = "collection_entries";
             break;
     }
-    rjson::add(serialized, "type", rjson::from_string(type));
+    rjson::add(serialized, "type", rjson::from_string(std::string_view(type)));
     rjson::add(serialized, "collection_name", rjson::from_string(sstring(_collection_name.begin(), _collection_name.end())));
     return to_bytes(rjson::print(serialized));
 }

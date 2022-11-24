@@ -470,7 +470,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     auto ttl = std::chrono::seconds(opts.ttl());
     
-    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
+    rjson::add(stream_desc, "StreamStatus", rjson::from_string(std::string_view(status)));
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
 
