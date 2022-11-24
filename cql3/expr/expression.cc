@@ -252,7 +252,7 @@ public:
 bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, const evaluation_inputs& inputs) {
     raw_value lhs_value = evaluate(lhs, inputs);
     if (lhs_value.is_unset_value()) {
-        throw exceptions::invalid_request_exception("UNSET_VALUE found on left-hand side of an equality operator");
+        throw exceptions::invalid_request_exception("unset value found on left-hand side of an equality operator");
     }
     if (lhs_value.is_null() || !rhs_bytes.has_value()) {
         return bool_or_null::null();
@@ -271,11 +271,11 @@ static std::optional<std::pair<managed_bytes, managed_bytes>> evaluate_binop_sid
 
     if (lhs_value.is_unset_value()) {
         throw exceptions::invalid_request_exception(
-            format("UNSET_VALUE found on left-hand side of a binary operator with operation {}", op));
+            format("unset value found on left-hand side of a binary operator with operation {}", op));
     }
     if (rhs_value.is_unset_value()) {
         throw exceptions::invalid_request_exception(
-            format("UNSET_VALUE found on right-hand side of a binary operator with operation {}", op));
+            format("unset value found on right-hand side of a binary operator with operation {}", op));
     }
     if (lhs_value.is_null() || rhs_value.is_null()) {
         return std::nullopt;
@@ -493,12 +493,12 @@ bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evalu
 bool is_not_null(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
     cql3::raw_value lhs_val = evaluate(lhs, inputs);
     if (lhs_val.is_unset_value()) {
-        throw exceptions::invalid_request_exception("UNSET_VALUE found on left hand side of IS NOT operator");
+        throw exceptions::invalid_request_exception("unset value found on left hand side of IS NOT operator");
     }
 
     cql3::raw_value rhs_val = evaluate(rhs, inputs);
     if (rhs_val.is_unset_value()) {
-        throw exceptions::invalid_request_exception("UNSET_VALUE found on right hand side of IS NOT operator");
+        throw exceptions::invalid_request_exception("unset value found on right hand side of IS NOT operator");
     }
     if (!rhs_val.is_null()) {
         throw exceptions::invalid_request_exception("IS NOT operator accepts only NULL as its right side");
@@ -555,7 +555,7 @@ bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs
         return false;
     }
     if (binop_eval_result.is_unset_value()) {
-        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to UNSET_VALUE: {}", opr));
+        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to unset value: {}", opr));
     }
     if (binop_eval_result.is_empty_value()) {
         on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to EMPTY_VALUE: {}", opr));
