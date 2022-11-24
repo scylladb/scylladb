@@ -6,7 +6,6 @@ Scylla Enterprise Features
    :maxdepth: 2
    :hidden:
 
-   Lightweight Transactions </using-scylla/lwt/>
    Workload Prioritization </using-scylla/workload-prioritization/>
    In-memory tables </using-scylla/in-memory/>
    Global Secondary Indexes </using-scylla/secondary-indexes/>
