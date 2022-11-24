@@ -496,24 +496,24 @@ def testWithUnsetValues(cql, test_keyspace):
         # Test commented out because the Python driver can't send an
         # UNSET_VALUE for the partition key (it is needed to decide
         # which coordinator to send the request to!)
-        #assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * from %s WHERE k = ?", UNSET_VALUE)
-        assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * from %s WHERE k IN ?", UNSET_VALUE)
+        #assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k IN ?", UNSET_VALUE)
         # Test commented out because the Python driver can't send an
         # UNSET_VALUE for the partition key (it is needed to decide
         # which coordinator to send the request to!)
-        #assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * from %s WHERE k IN(?)", UNSET_VALUE)
-        #assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * from %s WHERE k IN(?,?)", 1, UNSET_VALUE)
+        #assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k IN(?)", UNSET_VALUE)
+        #assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k IN(?,?)", 1, UNSET_VALUE)
         # clustering column
         # Reproduces #10358:
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE k = 1 AND i = ?", UNSET_VALUE)
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE k = 1 AND i IN ?", UNSET_VALUE)
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE k = 1 AND i IN(?)", UNSET_VALUE)
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE k = 1 AND i IN(?,?)", 1, UNSET_VALUE)
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE i = ? ALLOW FILTERING", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = 1 AND i = ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = 1 AND i IN ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = 1 AND i IN(?)", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = 1 AND i IN(?,?)", 1, UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE i = ? ALLOW FILTERING", UNSET_VALUE)
         # indexed column
-        assert_invalid_message(cql, table, "Unsupported unset value for column s", "SELECT * from %s WHERE s = ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE s = ?", UNSET_VALUE)
         # range
-        assert_invalid_message(cql, table, "Invalid unset value for column i", "SELECT * from %s WHERE k = 1 AND i > ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "SELECT * from %s WHERE k = 1 AND i > ?", UNSET_VALUE)
 
 def testInvalidSliceRestrictionOnPartitionKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b int, c text)") as table:
