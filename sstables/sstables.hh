@@ -634,13 +634,6 @@ private:
     future<> create_data() noexcept;
 
 public:
-    // Finds first position_in_partition in a given partition.
-    // If reversed is false, then the first position is actually the first row (can be the static one).
-    // If reversed is true, then the first position is the last row (can be static if partition has a single static row).
-    future<std::optional<position_in_partition>>
-    find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed,
-            const io_priority_class& pc = default_priority_class());
-
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte

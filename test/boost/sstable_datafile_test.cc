@@ -3371,20 +3371,6 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
                 BOOST_REQUIRE(sst->max_position().key() == last_position->key());
             }
 
-            auto first_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_first_decorated_key(), false).get0();
-            BOOST_REQUIRE(first_position_opt);
-
-            auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get0();
-            BOOST_REQUIRE(last_position_opt);
-
-            // find_first_position_in_partition() returns static row if present as first position, but new metadata doesn't
-            // account for static row as well as partition tombstones, as they'll need special treatment in the sstable run
-            // reader implementation.
-            if (!with_static_row) {
-                BOOST_REQUIRE(eq(*first_position_opt, *first_position));
-            }
-            BOOST_REQUIRE(eq(*last_position_opt, *last_position));
-
             BOOST_REQUIRE(eq(sst->first_partition_first_position(), *first_position));
             BOOST_REQUIRE(eq(sst->last_partition_last_position(), *last_position));
         };
