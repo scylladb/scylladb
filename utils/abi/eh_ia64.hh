@@ -23,7 +23,7 @@ namespace abi {
 struct cxa_exception { 
     std::type_info* exceptionType;
     void (*exceptionDestructor)(void*); 
-    std::unexpected_handler unexpectedHandler;
+    void (*unexpectedHandler)();
     std::terminate_handler terminateHandler;
     cxa_exception* nextException;
 
