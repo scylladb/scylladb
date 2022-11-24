@@ -860,6 +860,8 @@ Other considerations:
 - Adding new columns (see ``ALTER TABLE`` below) is a constant time operation. There is thus no need to try to
   anticipate future usage when creating a table.
 
+.. _ddl-per-parition-rate-limit:
+
 Limiting the rate of requests per partition
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -928,6 +930,7 @@ The ``ALTER TABLE`` statement can:
   The same note applies to the set of ``compression`` sub-options.
 - Change or add any of the ``Encryption options`` above.
 - Change or add any of the :ref:`CDC options <cdc-options>` above.
+- Change or add per-partition rate limits. See :ref:`Limiting the rate of requests per partition <ddl-per-parition-rate-limit>`.
 
 .. warning:: Dropping a column assumes that the timestamps used for the value of this column are "real" timestamp in
    microseconds. Using "real" timestamps in microseconds is the default is and is **strongly** recommended, but as
@@ -936,16 +939,6 @@ The ``ALTER TABLE`` statement can:
 
 .. warning:: Once a column is dropped, it is allowed to re-add a column with the same name as the dropped one
    **unless** the type of the dropped column was a (non-frozen) column (due to an internal technical limitation).
-
-Limiting the rate of requests per partition
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-You can limit the read rates and writes rates into a partition by applying 
-a ScyllaDB CQL extension to the CREATE TABLE or ALTER TABLE statements. 
-See `Per-partition rate limit <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-partition-rate-limit>`_ 
-for details.
-
- .. REMOVE IN FUTURE VERSIONS - Remove the URL above (temporary solution) and replace it with a relative link (once the solution is applied).
 
 .. _drop-table-statement:
 
