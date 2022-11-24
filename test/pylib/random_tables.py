@@ -65,6 +65,14 @@ class IntType(ValueType):
         return seed
 
 
+class BigIntType(ValueType):
+    def __init__(self):
+        self.name: str = 'bigint'
+
+    def val(self, seed: int) -> int:
+        return seed
+
+
 class TextType(ValueType):
     def __init__(self):
         self.name: str = 'text'
@@ -212,6 +220,13 @@ class RandomTable():
         return await self.manager.cql.run_async(f"INSERT INTO {self.full_name} ({self.all_col_names})"
                                                 f"VALUES ({', '.join(['%s'] * len(self.columns)) })",
                                                 parameters=[c.val(seed) for c in self.columns])
+
+    async def delete_pk(self, pk: int, if_exists: bool = True) -> asyncio.Future:
+        """Delete a row with a given pk"""
+        assert self.manager.cql is not None
+        return await self.manager.cql.run_async(f"DELETE FROM {self.full_name} "
+                                                f"WHERE pk = {pk} "
+                                                f"{'IF EXISTS' if if_exists else ''}")
 
     async def add_index(self, column: Union[Column, str], name: str = None) -> str:
         if isinstance(column, int):
