@@ -1125,7 +1125,6 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
                              UNSET_VALUE)
 
-@pytest.mark.xfail(reason="#10358")
 def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, d frozen<set<int>>, e frozen<map<int, int>>, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1348,7 +1347,6 @@ def testAllowFilteringOnPartitionKeyWithDistinct(cql, test_keyspace):
             assert_invalid_message(cql, table, "queries must only request partition key columns",
                     "SELECT DISTINCT pk0, pk1, ck0 FROM %s ALLOW FILTERING")
 
-@pytest.mark.xfail(reason="#10358")
 def testAllowFilteringOnPartitionKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY ((a, b), c))") as table:
         execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)")
