@@ -1108,6 +1108,7 @@ public:
     compaction::table_state& as_table_state() const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
+    future<> make_directory_for_column_family();
 
     friend class compaction_group;
 };
@@ -1191,7 +1192,6 @@ public:
     }
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);

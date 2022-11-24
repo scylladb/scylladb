@@ -661,7 +661,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         std::exception_ptr ex;
 
         try {
-            co_await ks.make_directory_for_column_family(cfname, uuid);
+            co_await metadata.global_table()->make_directory_for_column_family();
 
             co_await metadata.start();
             co_await distributed_loader::populate_column_family(metadata, sstables::staging_dir, allow_offstrategy_compaction::no);
