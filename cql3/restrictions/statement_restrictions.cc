@@ -777,6 +777,19 @@ bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return clustering_columns_restrictions_size() < _schema->clustering_key_size();
 }
 
+const column_definition& statement_restrictions::unrestricted_column(column_kind kind) const {
+    const auto& restrictions = get_restrictions(kind);
+    const auto sorted_cols = expr::get_sorted_column_defs(restrictions);
+    for (size_t i = 0, count = _schema->columns_count(kind); i < count; ++i) {
+        if (i >= sorted_cols.size() || sorted_cols[i]->component_index() != i) {
+            return _schema->column_at(kind, i);
+        }
+    }
+    on_internal_error(rlogger, format(
+            "no missing columns with kind {} found in expression {}",
+            to_sstring(kind), restrictions));
+};
+
 bool statement_restrictions::clustering_columns_restrictions_have_supporting_index(
         const secondary_index::secondary_index_manager& index_manager,
         expr::allow_local_index allow_local) const {
@@ -1929,15 +1942,28 @@ sstring statement_restrictions::to_string() const {
     return _where ? expr::to_string(*_where) : "";
 }
 
-static bool has_eq_null(const query_options& options, const expression& expr) {
-    return find_binop(expr, [&] (const binary_operator& binop) {
-        return binop.op == oper_t::EQ && evaluate(binop.rhs, options).is_null();
-    });
+static void validate_primary_key_restrictions(const query_options& options, const std::vector<expr::expression>& restrictions) {
+    for (const auto& r: restrictions) {
+        for_each_expression<binary_operator>(r, [&](const binary_operator& binop) {
+            if (binop.op != oper_t::EQ && binop.op != oper_t::IN) {
+                return;
+            }
+            const auto* c = as_if<column_value>(&binop.lhs);
+            if (!c) {
+                return;
+            }
+            if (evaluate(binop.rhs, options).is_null()) {
+                throw exceptions::invalid_request_exception(format("Invalid null value in condition for column {}",
+                    c->col->name_as_text()));
+            }
+        });
+    }
 }
 
-bool statement_restrictions::range_or_slice_eq_null(const query_options& options) const {
-    return boost::algorithm::any_of(_partition_range_restrictions, std::bind_front(has_eq_null, std::cref(options)))
-            || boost::algorithm::any_of(_clustering_prefix_restrictions, std::bind_front(has_eq_null, std::cref(options)));
+void statement_restrictions::validate_primary_key(const query_options& options) const {
+    validate_primary_key_restrictions(options, _partition_range_restrictions);
+    validate_primary_key_restrictions(options, _clustering_prefix_restrictions);
 }
+
 } // namespace restrictions
 } // namespace cql3

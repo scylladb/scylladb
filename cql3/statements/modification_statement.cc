@@ -112,9 +112,6 @@ future<> modification_statement::check_access(query_processor& qp, const service
 
 future<std::vector<mutation>>
 modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
-    if (_restrictions->range_or_slice_eq_null(options)) { // See #7852 and #9290.
-        throw exceptions::invalid_request_exception("Invalid null value in condition for a key column");
-    }
     auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
@@ -262,6 +259,8 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     inc_cql_stats(qs.get_client_state().is_internal());
+
+    _restrictions->validate_primary_key(options);
 
     if (has_conditions()) {
         return execute_with_condition(qp, qs, options);
@@ -418,24 +417,23 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
         // Those tables don't have clustering columns so we wouldn't reach this code, thus
         // the check seems redundant.
         if (require_full_clustering_key()) {
-            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
-            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+                _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text()));
         }
         // In general, we can't modify specific columns if not all clustering columns have been specified.
         // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
         if (!has_slice(ck_restrictions)) {
-            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
             for (auto&& op : _column_operations) {
                 if (!op->column.is_static()) {
                     throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
-                        col.name_as_text(), op->column.name_as_text()));
+                        _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text(), op->column.name_as_text()));
                 }
             }
         }
     }
     if (_restrictions->has_partition_key_unrestricted_components()) {
-        auto& col = s->column_at(column_kind::partition_key, _restrictions->partition_key_restrictions_size());
-        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+            _restrictions->unrestricted_column(column_kind::partition_key).name_as_text()));
     }
     if (has_conditions()) {
         validate_where_clause_for_conditions();
