@@ -10,6 +10,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_directory.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
@@ -51,6 +52,10 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
     return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+}
+
+future<> sstables_manager::initialize_storage(std::vector<sstring> dirs) {
+    return sstable_directory::initialize_storage(std::move(dirs));
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {

@@ -398,6 +398,10 @@ sstables::shared_sstable table::make_sstable() {
     return make_sstable(_config.datadir);
 }
 
+future<> table::make_directory_for_column_family() {
+    return get_sstables_manager().initialize_storage(_config.all_datadirs);
+}
+
 void table::notify_bootstrap_or_replace_start() {
     _is_bootstrap_or_replace = true;
 }

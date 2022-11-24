@@ -18,6 +18,7 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
+#include "utils/disk-error-handler.hh"
 #include "replica/database.hh"
 
 static logging::logger dirlog("sstable_directory");
@@ -564,6 +565,14 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
     }
+}
+
+future<> sstable_directory::initialize_storage(std::vector<sstring> dirs) {
+    co_await parallel_for_each(dirs, [] (sstring cfdir) {
+        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
+    });
+    co_await io_check([cfdirs0 = dirs[0]] { return touch_directory(cfdirs0 + "/upload"); });
+    co_await io_check([cfdirs0 = dirs[0]] { return touch_directory(cfdirs0 + "/staging"); });
 }
 
 }

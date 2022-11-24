@@ -1281,21 +1281,6 @@ keyspace::column_family_directory(const sstring& base_path, const sstring& name,
     return format("{}/{}-{}", base_path, name, uuid_sstring);
 }
 
-future<>
-table::make_directory_for_column_family() {
-    std::vector<sstring> cfdirs;
-    for (auto& extra : _config.all_datadirs) {
-        cfdirs.push_back(extra);
-    }
-    return parallel_for_each(cfdirs, [] (sstring cfdir) {
-        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/upload"); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/staging"); });
-    });
-}
-
 column_family& database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }
