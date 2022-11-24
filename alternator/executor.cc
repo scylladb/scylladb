@@ -115,8 +115,7 @@ std::string json_string::to_json() const {
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::add(descr, "TableStatus", "ACTIVE");
-    auto schema_id_str = schema.id().to_sstring();
-    rjson::add(descr, "TableId", rjson::from_string(schema_id_str));
+    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
     executor::supplement_table_stream_info(descr, schema, sp);
 }

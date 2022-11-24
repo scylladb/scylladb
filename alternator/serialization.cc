@@ -210,7 +210,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
         std::string b64 = base64_encode(cell);
         return rjson::from_string(b64);
     } if (column.type == utf8_type) {
-        return rjson::from_string(std::string(reinterpret_cast<const char*>(cell.data()), cell.size()));
+        return rjson::from_string(reinterpret_cast<const char*>(cell.data()), cell.size());
     } else if (column.type == decimal_type) {
         // FIXME: use specialized Alternator number type, not the more
         // general "decimal_type". A dedicated type can be more efficient
@@ -348,7 +348,7 @@ rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
     auto n1 = unwrap_number(v1, "UpdateExpression");
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
-    std::string str_ret = std::string((n1 + n2).to_string());
+    sstring str_ret = (n1 + n2).to_string();
     rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }
@@ -357,7 +357,7 @@ rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
     auto n1 = unwrap_number(v1, "UpdateExpression");
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
-    std::string str_ret = std::string((n1 - n2).to_string());
+    sstring str_ret = (n1 - n2).to_string();
     rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }

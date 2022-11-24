@@ -129,13 +129,13 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
         rjson::value operator()(const index_target::multiple_columns& columns) const {
             rjson::value json_array = rjson::empty_array();
             for (const auto& column : columns) {
-                rjson::push_back(json_array, rjson::from_string(column->to_string()));
+                rjson::push_back(json_array, rjson::from_string(column->text()));
             }
             return json_array;
         }
 
         rjson::value operator()(const index_target::single_column& column) const {
-            return rjson::from_string(column->to_string());
+            return rjson::from_string(column->text());
         }
     };
 
