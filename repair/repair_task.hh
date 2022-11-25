@@ -53,6 +53,10 @@ public:
         , _data_centers(std::move(data_centers))
         , _ignore_nodes(std::move(ignore_nodes))
     {}
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
 protected:
     future<> run() override;
 
@@ -75,6 +79,10 @@ public:
                 (void)abort();
             });
         }
+    }
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable(!_abort_subscription);
     }
 protected:
     future<> run() override;
