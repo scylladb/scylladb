@@ -836,23 +836,15 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
     // (if they are still a member of group 0); hence we provide `my_id` to skip us in the search.
     auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
     if (!their_id) {
-        // The address map is updated with the ID of every member of the configuration.
-        // We could not find them in the address map. This could mean two things:
-        // 1. they are not a member.
-        // 2. They are a member, but we don't know about it yet; e.g. we just upgraded
-        //    and joined group 0 but the leader is still pushing entires to us (including config entries)
-        //    and we don't yet have the entry which contains `their_id`.
+        // This may mean that the node is a member of group 0 but due to a bug we're missing
+        // an entry from the address map so we're not able to identify the member that must be removed.
+        // In this case group 0 will have a 'garbage' member corresponding to a node that has left,
+        // and that member may be a voter, which is bad because group 0's availability is reduced.
         //
-        // To handle the second case we perform a read barrier now and check the address again.
-        // Ignore the returned guard, we don't need it.
-        group0_log.info("remove_from_group0({}): did not find them in group 0 configuration, synchronizing Raft before retrying...", node);
-        co_await _raft_gr.group0().read_barrier(&_abort_source);
-
-        their_id = _raft_gr.address_map().find_replace_id(node, my_id);
-        if (!their_id) {
-            group0_log.info("remove_from_group0({}): did not find them in group 0 configuration. Skipping.", node);
-            co_return;
-        }
+        // TODO: there is no API to remove members from group 0 manually. #12153
+        group0_log.error("remove_from_group0({}): could not find the Raft ID of this node."
+                         " Manual removal from group 0 may be required.", node);
+        co_return;
     }
 
     group0_log.info(
@@ -860,6 +852,10 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
         node, *their_id);
 
     co_await remove_from_raft_config(*their_id);
+
+    group0_log.info(
+        "remove_from_group0({}): finished removing from group 0 configuration (Raft ID: {})",
+        node, *their_id);
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
