@@ -85,8 +85,6 @@ protected:
 };
 
 class shard_repair_task_impl : public repair_task_impl {
-private:
-    std::exception_ptr _ex;
 public:
     repair_service& rs;
     seastar::sharded<replica::database>& db;
@@ -113,13 +111,11 @@ public:
     int ranges_index = 0;
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
-    optimized_optional<abort_source::subscription> _abort_subscription;
     bool _hints_batchlog_flushed = false;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             const sstring& keyspace,
-            std::exception_ptr ex,
             repair_service& repair,
             locator::effective_replication_map_ptr erm_,
             const dht::token_range_vector& ranges_,
@@ -129,7 +125,6 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ignore_nodes_,
             streaming::stream_reason reason_,
-            abort_source* as,
             bool hints_batchlog_flushed);
     virtual tasks::is_internal is_internal() const noexcept override {
         return tasks::is_internal::yes;
