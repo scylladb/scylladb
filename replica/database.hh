@@ -350,6 +350,7 @@ class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
         std::vector<sstring> all_datadirs;
+        sstring location;
         sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
@@ -621,6 +622,8 @@ public:
     sstring dir() const {
         return _config.datadir;
     }
+
+    const sstring& location() const noexcept { return _config.location; }
 
     seastar::gate& async_gate() { return _async_gate; }
 

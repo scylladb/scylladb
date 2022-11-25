@@ -1244,7 +1244,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     for (auto& extra : db_config.data_file_directories()) {
         cfg.all_datadirs.push_back(column_family_directory(format("{}/{}", extra, _config.location), s.cf_name(), s.id()));
     }
-    cfg.datadir = cfg.all_datadirs[0];
+    cfg.location = column_family_directory(_config.location, s.cf_name(), s.id());
+    cfg.datadir = format("{}/{}", db_config.data_file_directories()[0], cfg.location);
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
