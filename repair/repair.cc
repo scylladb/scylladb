@@ -63,28 +63,6 @@ void node_ops_info::check_abort() {
     }
 }
 
-future<> node_ops_info::start() {
-    if (as) {
-        co_await _sas.start();
-        _abort_subscription = as->subscribe([this] () noexcept {
-            _abort_done = _sas.invoke_on_all([] (abort_source& as) noexcept {
-                as.request_abort();
-            });
-        });
-    }
-}
-
-future<> node_ops_info::stop() noexcept {
-    if (as) {
-        co_await std::exchange(_abort_done, make_ready_future<>());
-        co_await _sas.stop();
-    }
-}
-
-abort_source* node_ops_info::local_abort_source() {
-    return as ? &_sas.local() : nullptr;
-}
-
 node_ops_metrics::node_ops_metrics(shared_ptr<repair_module> module)
     : _module(module)
 {
