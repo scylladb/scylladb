@@ -1029,7 +1029,7 @@ struct sleep_with_exponential_backoff {
     static constexpr std::chrono::seconds _max_retry_period{16};
     future<> operator()(abort_source& as) {
         co_await sleep_abortable(_retry_period, as);
-        _retry_period = std::max(_retry_period * 2, _max_retry_period);
+        _retry_period = std::min(_retry_period * 2, _max_retry_period);
     }
 };
 
