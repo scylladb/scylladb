@@ -740,7 +740,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             slogger.info("Replace: removing {} from group 0...", *replace_addr);
             assert(_group0);
             _group0->remove_from_group0(*replace_addr).get();
-            slogger.info("Replace: {} removed from group 0.", *replace_addr);
 
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
@@ -2509,7 +2508,6 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
                 assert(ss._group0);
                 ss._group0->remove_from_group0(endpoint).get();
-                slogger.info("removenode[{}]: node {} removed from group 0", uuid, endpoint);
 
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
