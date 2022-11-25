@@ -903,10 +903,12 @@ table::stop() {
     }
     co_await _async_gate.close();
     co_await await_pending_ops();
-    co_await _compaction_group->stop();
+    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::stop));
     co_await _sstable_deletion_gate.close();
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
-        _compaction_group->clear_sstables();
+        for (const compaction_group_ptr& cg : compaction_groups()) {
+            cg->clear_sstables();
+        }
         _sstables = make_compound_sstable_set();
     }));
     _cache.refresh_snapshot();
