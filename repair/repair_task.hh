@@ -63,17 +63,15 @@ class data_sync_repair_task_impl : public repair_task_impl {
 private:
     dht::token_range_vector _ranges;
     std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
-    shared_ptr<node_ops_info> _ops_info;
     optimized_optional<abort_source::subscription> _abort_subscription;
 public:
     data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
         , _ranges(std::move(ranges))
         , _neighbors(std::move(neighbors))
-        , _ops_info(ops_info) 
     {
-        if (_ops_info && _ops_info->as) {
-            _abort_subscription = _ops_info->as->subscribe([this] () noexcept {
+        if (ops_info && ops_info->as) {
+            _abort_subscription = ops_info->as->subscribe([this] () noexcept {
                 (void)abort();
             });
         }
