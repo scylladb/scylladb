@@ -62,6 +62,11 @@ future<> sstables_manager::initialize_storage(sstring location) {
     return sstable_directory::initialize_storage(std::move(dirs));
 }
 
+
+future<> sstables_manager::initialize_keyspace_storage(sstring dir) {
+    return sstable_directory::initialize_keyspace_storage(std::move(dir));
+}
+
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     sstable_writer_config cfg;
 

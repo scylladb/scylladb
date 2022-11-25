@@ -1362,7 +1362,8 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     }
 
     if (datadir != "") {
-        co_await io_check([&datadir] { return touch_directory(datadir); });
+        auto& sstm = system ? get_system_sstables_manager() : get_user_sstables_manager();
+        co_await sstm.initialize_keyspace_storage(datadir);
     }
 }
 

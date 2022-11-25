@@ -85,6 +85,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
     future<> initialize_storage(sstring location);
+    future<> initialize_keyspace_storage(sstring dir);
 
     sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
 

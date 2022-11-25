@@ -575,4 +575,10 @@ future<> sstable_directory::initialize_storage(std::vector<sstring> dirs) {
     co_await io_check([cfdirs0 = dirs[0]] { return touch_directory(cfdirs0 + "/staging"); });
 }
 
+future<> sstable_directory::initialize_keyspace_storage(sstring dir) {
+    // FIXME: is this really needed? The initialize_storage() calls
+    // recursive_touch_directory() anyway
+    co_await io_check([&dir] { return touch_directory(dir); });
+}
+
 }

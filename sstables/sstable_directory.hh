@@ -227,6 +227,7 @@ public:
     static future<> replay_pending_delete_log(std::filesystem::path log_file);
 
     static future<> initialize_storage(std::vector<sstring> dirs);
+    static future<> initialize_keyspace_storage(sstring dir);
 };
 
 }
