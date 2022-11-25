@@ -1211,7 +1211,6 @@ public:
     }
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
-    sstring column_family_directory(const sstring& name, table_id uuid) const;
 
     future<> ensure_populated() const;
     void mark_as_populated();

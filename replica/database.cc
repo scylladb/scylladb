@@ -1275,11 +1275,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 sstring
-keyspace::column_family_directory(const sstring& name, table_id uuid) const {
-    return column_family_directory(_config.datadir, name, uuid);
-}
-
-sstring
 keyspace::column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const {
     auto uuid_sstring = uuid.to_sstring();
     boost::erase_all(uuid_sstring, "-");
