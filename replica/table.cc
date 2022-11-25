@@ -1228,13 +1228,18 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
             cg.set_main_sstables(std::move(new_sstables));
         }
     };
-    compaction_group_sstable_set_updater cg_set_updater(*this, *_compaction_group, new_cs);
+    std::vector<compaction_group_sstable_set_updater> cg_sstable_set_updaters;
 
-    cg_set_updater.prepare(new_cs);
-
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        compaction_group_sstable_set_updater updater(*this, *cg, new_cs);
+        updater.prepare(new_cs);
+        cg_sstable_set_updaters.push_back(std::move(updater));
+    }
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
-    cg_set_updater.execute();
+    for (auto& updater : cg_sstable_set_updaters) {
+        updater.execute();
+    }
     refresh_compound_sstable_set();
 }
 
