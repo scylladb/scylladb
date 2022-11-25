@@ -1665,7 +1665,7 @@ future<> table::flush(std::optional<db::replay_position> pos) {
 }
 
 bool table::can_flush() const {
-    return _compaction_group->can_flush();
+    return std::ranges::any_of(compaction_groups(), std::mem_fn(&compaction_group::can_flush));
 }
 
 future<> compaction_group::clear_memtables() {
