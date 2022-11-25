@@ -88,6 +88,7 @@ public:
     future<> initialize_keyspace_storage(sstring dir);
 
     sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
+    future<> remove_table_directory_if_has_no_snapshots(sstring location);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }

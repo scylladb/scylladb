@@ -1043,7 +1043,8 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
 
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    auto table_dir = fs::path(table_shards[this_shard_id()]->dir());
+    auto& sstm = table_shards[this_shard_id()]->get_sstables_manager();
+    sstring location = table_shards[this_shard_id()]->location();
     std::optional<sstring> snapshot_name_opt;
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
@@ -1060,7 +1061,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
         return table_shards[this_shard_id()]->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+    co_await sstm.remove_table_directory_if_has_no_snapshots(location);
 }
 
 const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {

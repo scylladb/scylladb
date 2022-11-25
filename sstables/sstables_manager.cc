@@ -68,6 +68,11 @@ future<> sstables_manager::initialize_keyspace_storage(sstring location) {
     return sstable_directory::initialize_keyspace_storage(std::move(dir));
 }
 
+future<> sstables_manager::remove_table_directory_if_has_no_snapshots(sstring location) {
+    auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
+    return sstables::remove_table_directory_if_has_no_snapshots(fs::path(std::move(dir)));
+}
+
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     sstable_writer_config cfg;
 
