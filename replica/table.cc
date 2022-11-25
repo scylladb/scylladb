@@ -1683,7 +1683,7 @@ future<> compaction_group::clear_memtables() {
 future<> table::clear() {
     auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
 
-    co_await _compaction_group->clear_memtables();
+    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::clear_memtables));
 
     co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
