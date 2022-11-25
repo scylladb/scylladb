@@ -335,7 +335,7 @@ api::timestamp_type compaction_group::min_memtable_timestamp() const {
 }
 
 api::timestamp_type table::min_memtable_timestamp() const {
-    return _compaction_group->min_memtable_timestamp();
+    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_timestamp)));
 }
 
 // Not performance critical. Currently used for testing only.
