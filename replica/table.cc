@@ -1605,12 +1605,12 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
 
 future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
-        return make_ready_future<>();
+        co_return;
     }
     auto op = _pending_flushes_phaser.start();
-    return _compaction_group->flush().then([this, op = std::move(op), fp = _highest_rp] {
-        _flush_rp = std::max(_flush_rp, fp);
-    });
+    auto fp = _highest_rp;
+    co_await _compaction_group->flush();
+    _flush_rp = std::max(_flush_rp, fp);
 }
 
 bool table::can_flush() const {
