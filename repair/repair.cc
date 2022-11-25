@@ -439,8 +439,8 @@ void repair_module::abort_all_repairs() {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
             auto& impl = dynamic_cast<shard_repair_task_impl&>(*it->second->_impl);
-            // FIXME: use generic repair task abort method
-            impl.abort_repair_info();
+            // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
+            (void)impl.abort();
         }
     }
     rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
@@ -477,10 +477,6 @@ future<> repair_module::run(repair_uniq_id id, std::function<void ()> func) {
             return make_exception_future(std::move(ep));
         });
     });
-}
-
-void shard_repair_task_impl::check_in_shutdown() {
-    rs.get_repair_module().check_in_shutdown();
 }
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -578,14 +574,8 @@ void shard_repair_task_impl::check_failed_ranges() {
     }
 }
 
-void shard_repair_task_impl::abort_repair_info() noexcept {
-    aborted = true;
-}
-
-void shard_repair_task_impl::check_in_abort() {
-    if (aborted) {
-        throw std::runtime_error(format("repair[{}]: aborted on shard {}", id.uuid(), id.shard()));
-    }
+void shard_repair_task_impl::check_in_abort_or_shutdown() {
+    _as.check();
 }
 
 repair_neighbors shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
@@ -601,8 +591,7 @@ size_t shard_repair_task_impl::ranges_size() {
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
-    check_in_shutdown();
-    check_in_abort();
+    check_in_abort_or_shutdown();
     ranges_index++;
     repair_neighbors r_neighbors = get_repair_neighbors(range);
     auto neighbors = std::move(r_neighbors.all);
@@ -616,7 +605,8 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
             auto status = format("failed: mandatory neighbor={} is not alive", node);
             rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                     id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
-            abort_repair_info();
+            // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
+            (void)abort();
             co_await coroutine::return_exception(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                 node, _status.keyspace, mandatory_neighbors)));
         }

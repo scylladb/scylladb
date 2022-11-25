@@ -128,9 +128,7 @@ public:
         return tasks::is_internal::yes;
     }
     void check_failed_ranges();
-    void abort_repair_info() noexcept;
-    void check_in_abort();
-    void check_in_shutdown();
+    void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
