@@ -137,10 +137,10 @@ public:
 
 future<raft::server_id> load_or_create_my_raft_id(db::system_keyspace& sys_ks) {
     assert(this_shard_id() == 0);
-    auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+    auto id = raft::server_id{co_await sys_ks.get_raft_server_id()};
     if (id == raft::server_id{}) {
         id = raft::server_id::create_random_id();
-        co_await db::system_keyspace::set_raft_server_id(id.id);
+        co_await sys_ks.set_raft_server_id(id.id);
     }
     co_return id;
 }
