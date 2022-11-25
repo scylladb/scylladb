@@ -27,7 +27,7 @@ future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, s
             return make_ready_future<>();
         }        
         auto& cf = _db.local().find_column_family(pair.second);
-        return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
+        return cf.snapshot_exists(_db.local().get_config(), name).then([ks_name = std::move(ks_name), name] (bool exists) {
             if (exists) {
                 throw std::runtime_error(format("Keyspace {}: snapshot {} already exists.", ks_name, name));
             }

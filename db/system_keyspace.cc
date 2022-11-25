@@ -2074,7 +2074,7 @@ public:
                     if (table->schema()->ks_name() != ks_name) {
                         continue;
                     }
-                    const auto unordered_snapshots = co_await table->get_snapshot_details();
+                    const auto unordered_snapshots = co_await table->get_snapshot_details(db.get_config());
                     snapshots_by_tables.emplace(table->schema()->cf_name(), std::map<sstring, replica::table::snapshot_details>(unordered_snapshots.begin(), unordered_snapshots.end()));
                 }
                 co_return snapshots_by_tables;

@@ -577,7 +577,7 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details(e.local_db().get_config()).get0();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
@@ -589,7 +589,7 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details(e.local_db().get_config()).get0().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
@@ -639,7 +639,7 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
 SEASTAR_TEST_CASE(snapshot_list_inexistent) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details(e.local_db().get_config()).get0();
         BOOST_REQUIRE_EQUAL(details.size(), 0);
         return make_ready_future<>();
     });
@@ -756,7 +756,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details(e.local_db().get_config()).get0();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
@@ -779,7 +779,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details(e.local_db().get_config()).get0().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
@@ -806,7 +806,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details(e.local_db().get_config()).get0();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
@@ -821,7 +821,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details(e.local_db().get_config()).get0().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);

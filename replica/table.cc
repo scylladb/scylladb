@@ -1659,7 +1659,7 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
     }
 }
 
-future<bool> table::snapshot_exists(sstring tag) {
+future<bool> table::snapshot_exists(const db::config& cfg, sstring tag) {
     sstring jsondir = _config.datadir + "/snapshots/" + tag;
     return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
@@ -1674,7 +1674,7 @@ future<bool> table::snapshot_exists(sstring tag) {
     });
 }
 
-future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
+future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details(const db::config& cfg) {
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         for (auto& datadir : _config.all_datadirs) {

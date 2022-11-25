@@ -837,7 +837,7 @@ public:
     // sitting in the memtable, will be compacted with shadowed data.
     future<> compact_all_sstables();
 
-    future<bool> snapshot_exists(sstring name);
+    future<bool> snapshot_exists(const db::config& cfg, sstring name);
 
     db::replay_position set_low_replay_position_mark();
 
@@ -852,7 +852,7 @@ private:
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
 
-    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
+    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details(const db::config& cfg);
 
     /*!
      * \brief write the schema to a 'schema.cql' file at the given directory.
