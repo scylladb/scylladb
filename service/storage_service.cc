@@ -986,11 +986,10 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
         }
 
         if (!is_normal_token_owner) {
-            auto dc_rack = get_dc_rack_for(endpoint);
-            slogger.debug("handle_state_normal: update_topology: endpoint={} dc={} rack={}", endpoint, dc_rack.dc, dc_rack.rack);
-            tmptr->update_topology(endpoint, std::move(dc_rack));
             do_notify_joined = true;
         }
+
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     }
 
