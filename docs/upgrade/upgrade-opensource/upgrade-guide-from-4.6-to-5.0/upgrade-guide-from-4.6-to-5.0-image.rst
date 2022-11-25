@@ -10,5 +10,5 @@
 .. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 4.6 to 5.0
 .. _SCYLLA_METRICS: ../metric-update-4.6-to-5.0
 .. include:: /upgrade/_common/upgrade-guide-v5-ubuntu-and-debian-p1.rst
-.. include:: /upgrade/_common/upgrade-image.rst
+.. include:: /upgrade/_common/upgrade-image-opensource.rst
 .. include:: /upgrade/_common/upgrade-guide-v5-ubuntu-and-debian-p2.rst
