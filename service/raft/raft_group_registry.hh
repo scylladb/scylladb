@@ -22,6 +22,10 @@ class gossiper;
 class echo_pinger;
 }
 
+namespace db {
+class system_keyspace;
+}
+
 namespace service {
 
 class raft_rpc;
@@ -48,6 +52,8 @@ struct raft_server_for_group {
 class direct_fd_pinger;
 class direct_fd_proxy;
 class gossiper_state_change_subscriber_proxy;
+
+future<raft::server_id> load_or_create_my_raft_id(db::system_keyspace&);
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -86,16 +92,29 @@ private:
     // Group 0 id, valid only on shard 0 after boot/upgrade is over
     std::optional<raft::group_id> _group0_id;
 
+    // My Raft ID. Shared between different Raft groups.
+    // Once set, must not be changed.
+    //
+    // FIXME: ideally we'd like this to be passed to the constructor.
+    // However storage_proxy/query_processor/system_keyspace are unavailable
+    // when we start raft_group_registry so we have to set it later,
+    // after system_keyspace is initialized.
+    std::optional<raft::server_id> _my_id;
+
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
     raft_group_registry(bool is_enabled, raft_address_map&,
             netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
-    // Called manually at start
-    seastar::future<> start();
+    // If is_enabled(),
+    // Called manually at start on every shard, after system_keyspace is initialized.
+    seastar::future<> start(raft::server_id my_id);
     // Called by sharded<>::stop()
     seastar::future<> stop();
+
+    // Must not be called before `start`.
+    const raft::server_id& get_my_raft_id();
 
     // Called by before stopping the database.
     // May be called multiple times.

@@ -8,6 +8,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_address_map.hh"
+#include "db/system_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
@@ -65,7 +66,6 @@ public:
         return _alive_set.contains(srv);
     }
 };
-
 // }}} direct_fd_proxy
 
 // {{{ gossiper_state_change_subscriber_proxy
@@ -134,6 +134,16 @@ public:
 };
 
 // }}} gossiper_state_change_subscriber_proxy
+
+future<raft::server_id> load_or_create_my_raft_id(db::system_keyspace& sys_ks) {
+    assert(this_shard_id() == 0);
+    auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
+    if (id == raft::server_id{}) {
+        id = raft::server_id::create_random_id();
+        co_await db::system_keyspace::set_raft_server_id(id.id);
+    }
+    co_return id;
+}
 
 raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map& address_map,
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
@@ -291,11 +301,14 @@ future<> raft_group_registry::stop_servers() noexcept {
     co_await g.close();
 }
 
-seastar::future<> raft_group_registry::start() {
-    if (!_is_enabled) {
-        co_return;
-    }
+seastar::future<> raft_group_registry::start(raft::server_id my_id) {
+    assert(_is_enabled);
+    assert(!_my_id);
+
+    _my_id = my_id;
+
     _gossiper.register_(_gossiper_proxy);
+
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
@@ -303,6 +316,13 @@ seastar::future<> raft_group_registry::start() {
 
     _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
         direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+}
+
+const raft::server_id& raft_group_registry::get_my_raft_id() {
+    if (!_my_id) {
+        on_internal_error(rslog, "get_my_raft_id(): Raft ID not initialized");
+    }
+    return *_my_id;
 }
 
 seastar::future<> raft_group_registry::stop() {

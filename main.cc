@@ -1113,7 +1113,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
-            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
@@ -1150,6 +1149,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return sys_ks.start(snitch.local());
             }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+
+            if (raft_gr.local().is_enabled()) {
+                auto my_raft_id = service::load_or_create_my_raft_id(sys_ks.local()).get();
+                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
+                    return raft_gr.start(my_raft_id);
+                }).get();
+            }
 
             group0_client.init().get();
 
