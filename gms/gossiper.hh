@@ -82,23 +82,6 @@ struct gossip_config {
     uint32_t skip_wait_for_gossip_to_settle = -1;
 };
 
-class gossiper;
-
-// Caches the gossiper's generation number, which is required for sending gossip echo messages.
-// Call `ping` to send a gossip echo message to the given address using the last known generation number.
-// The generation number is updated by gossiper's loop and replicated to every shard.
-class echo_pinger {
-    friend class gossiper;
-    gossiper& _gossiper;
-    int64_t _generation_number{0};
-
-    future<> update_generation_number(int64_t n);
-    echo_pinger(gossiper& g) : _gossiper(g) {}
-
-public:
-    future<> ping(const gms::inet_address&, abort_source&);
-};
-
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -112,7 +95,6 @@ public:
  * the Failure Detector.
  */
 class gossiper : public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
-    friend class echo_pinger;
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
@@ -621,12 +603,6 @@ private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
-
-public:
-    echo_pinger& get_echo_pinger() { return _echo_pinger; }
-
-private:
-    echo_pinger _echo_pinger;
 };
 
 

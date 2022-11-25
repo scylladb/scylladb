@@ -71,4 +71,12 @@ inline constexpr uint8_t group0_upgrade_state_last = 3;
 
 std::ostream& operator<<(std::ostream&, group0_upgrade_state);
 
+struct wrong_destination {
+    raft::server_id reached_id;
+};
+
+struct direct_fd_ping_reply {
+    std::variant<std::monostate, wrong_destination> result;
+};
+
 } // namespace service

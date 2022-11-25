@@ -19,7 +19,6 @@
 
 namespace gms {
 class gossiper;
-class echo_pinger;
 }
 
 namespace db {
@@ -144,16 +143,15 @@ public:
     bool is_enabled() const { return _is_enabled; }
 };
 
-// Implementation of `direct_failure_detector::pinger` which uses gossip echo messages for pinging.
+// Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
 // Translates `raft::server_id`s to `gms::inet_address`es before pinging.
-// The actual pinging is performed by `echo_pinger`.
 class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
-    gms::echo_pinger& _echo_pinger;
+    netw::messaging_service& _ms;
     raft_address_map& _address_map;
 
 public:
-    direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map& address_map)
-            : _echo_pinger(pinger), _address_map(address_map) {}
+    direct_fd_pinger(netw::messaging_service& ms, raft_address_map& address_map)
+            : _ms(ms), _address_map(address_map) {}
 
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;

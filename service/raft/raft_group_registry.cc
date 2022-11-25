@@ -263,6 +263,23 @@ void raft_group_registry::init_rpc_verbs() {
             return rpc.execute_modify_config(from, std::move(add), std::move(del));
         });
     });
+
+    ser::raft_rpc_verbs::register_direct_fd_ping(&_ms,
+            [this] (const rpc::client_info&, raft::server_id dst) -> future<direct_fd_ping_reply> {
+        // XXX: update address map here as well?
+
+        const raft::server_id& my_id = get_my_raft_id();
+        if (my_id != dst) {
+            co_return direct_fd_ping_reply {
+                .result = wrong_destination {
+                    .reached_id = my_id,
+                },
+            };
+        }
+        co_return direct_fd_ping_reply {
+            .result = std::monostate{},
+        };
+    });
 }
 
 future<> raft_group_registry::uninit_rpc_verbs() {
@@ -277,7 +294,8 @@ future<> raft_group_registry::uninit_rpc_verbs() {
         ser::raft_rpc_verbs::unregister_raft_read_quorum_reply(&_ms),
         ser::raft_rpc_verbs::unregister_raft_execute_read_barrier_on_leader(&_ms),
         ser::raft_rpc_verbs::unregister_raft_add_entry(&_ms),
-        ser::raft_rpc_verbs::unregister_raft_modify_config(&_ms)
+        ser::raft_rpc_verbs::unregister_raft_modify_config(&_ms),
+        ser::raft_rpc_verbs::unregister_direct_fd_ping(&_ms)
     ).discard_result();
 }
 
@@ -424,13 +442,22 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 raft_group_registry::~raft_group_registry() = default;
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
-    auto addr = _address_map.find(raft::server_id{id});
+    auto dst_id = raft::server_id{std::move(id)};
+    auto addr = _address_map.find(dst_id);
     if (!addr) {
         co_return false;
     }
 
     try {
-        co_await _echo_pinger.ping(*addr, as);
+        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, netw::msg_addr(*addr), as, dst_id);
+        if (auto* wrong_dst = std::get_if<wrong_destination>(&reply.result)) {
+            // This may happen e.g. when node B is replacing node A with the same IP.
+            // When we ping node A, the pings will reach node B instead.
+            // B will detect they were destined for node A and return wrong_destination.
+            rslog.trace("ping(id = {}, ip_addr = {}): wrong destination (reached {})",
+                        dst_id, *addr, wrong_dst->reached_id);
+            co_return false;
+        }
     } catch (seastar::rpc::closed_error&) {
         co_return false;
     }

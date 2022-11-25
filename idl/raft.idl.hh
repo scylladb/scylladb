@@ -106,3 +106,17 @@ verb [[with_client_info, with_timeout]] raft_add_entry (raft::group_id, raft::se
 verb [[with_client_info, with_timeout]] raft_modify_config (raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::config_member> add, std::vector<raft::server_id> del) -> raft::add_entry_reply;
 
 } // namespace raft
+
+namespace service {
+
+struct wrong_destination {
+    raft::server_id reached_id;
+};
+
+struct direct_fd_ping_reply {
+    std::variant<std::monostate, service::wrong_destination> result;
+};
+
+verb [[with_client_info, cancellable]] direct_fd_ping (raft::server_id dst_id) -> service::direct_fd_ping_reply;
+
+} // namespace service
