@@ -2042,7 +2042,8 @@ keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
     if (_cfg.data_file_directories().size() > 0) {
-        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
+        cfg.location = ksm.name();
+        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], cfg.location);
         for (auto& extra : _cfg.data_file_directories()) {
             cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
         }
@@ -2052,6 +2053,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_cache = _cfg.enable_cache();
 
     } else {
+        cfg.location = "";
         cfg.datadir = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;

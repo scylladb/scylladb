@@ -1121,6 +1121,7 @@ class keyspace {
 public:
     struct config {
         std::vector<sstring> all_datadirs;
+        sstring location;
         sstring datadir;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
@@ -1207,6 +1208,8 @@ public:
     const sstring& datadir() const {
         return _config.datadir;
     }
+
+    const sstring& location() const noexcept { return _config.location; }
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
 
