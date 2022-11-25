@@ -63,7 +63,8 @@ future<> sstables_manager::initialize_storage(sstring location) {
 }
 
 
-future<> sstables_manager::initialize_keyspace_storage(sstring dir) {
+future<> sstables_manager::initialize_keyspace_storage(sstring location) {
+    auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
     return sstable_directory::initialize_keyspace_storage(std::move(dir));
 }
 

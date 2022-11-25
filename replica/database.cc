@@ -1353,7 +1353,6 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
-    auto& datadir = ks.datadir();
 
     // keyspace created by either cql or migration 
     // is by definition populated
@@ -1361,9 +1360,9 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
         ks.mark_as_populated();
     }
 
-    if (datadir != "") {
+    if (ks.location() != "") {
         auto& sstm = system ? get_system_sstables_manager() : get_user_sstables_manager();
-        co_await sstm.initialize_keyspace_storage(datadir);
+        co_await sstm.initialize_keyspace_storage(ks.location());
     }
 }
 
