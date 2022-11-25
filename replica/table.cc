@@ -1660,7 +1660,7 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     }
     auto op = _pending_flushes_phaser.start();
     auto fp = _highest_rp;
-    co_await _compaction_group->flush();
+    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::flush));
     _flush_rp = std::max(_flush_rp, fp);
 }
 
