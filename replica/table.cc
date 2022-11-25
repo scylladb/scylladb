@@ -1155,7 +1155,9 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 future<>
 table::compact_all_sstables() {
     co_await flush();
-    co_await _compaction_manager.perform_major_compaction(as_table_state());
+    co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
+        return _compaction_manager.perform_major_compaction(cg.as_table_state());
+    });
 }
 
 void table::start_compaction() {
