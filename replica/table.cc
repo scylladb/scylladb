@@ -399,7 +399,7 @@ sstables::shared_sstable table::make_sstable() {
 }
 
 future<> table::make_directory_for_column_family() {
-    return get_sstables_manager().initialize_storage(_config.all_datadirs);
+    return get_sstables_manager().initialize_storage(_config.location);
 }
 
 void table::notify_bootstrap_or_replace_start() {

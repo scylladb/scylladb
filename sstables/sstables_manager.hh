@@ -84,7 +84,7 @@ public:
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
-    future<> initialize_storage(std::vector<sstring> dirs);
+    future<> initialize_storage(sstring location);
 
     sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
 
