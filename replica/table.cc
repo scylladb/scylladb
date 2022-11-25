@@ -1198,7 +1198,11 @@ future<bool> table::perform_offstrategy_compaction() {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
-    return _compaction_manager.perform_offstrategy(as_table_state());
+    bool performed = false;
+    co_await parallel_foreach_compaction_group([this, &performed] (compaction_group& cg) -> future<> {
+        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state());
+    });
+    co_return performed;
 }
 
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges) {
