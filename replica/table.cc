@@ -1595,9 +1595,17 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
     }
 }
 
+sstring directory_for_table_snapshots(sstring data_file_dir, sstring location) {
+    return format("{}/{}", data_file_dir, location);
+}
+
+sstring directory_for_table_snapshots(const db::config& cfg, sstring location) {
+    return directory_for_table_snapshots(cfg.data_file_directories()[0], location);
+}
+
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name) {
-    auto jsondir = table_shards[this_shard_id()]->_config.datadir + "/snapshots/" + name;
+    auto jsondir = directory_for_table_snapshots(sharded_db.local().get_config(), table_shards[this_shard_id()]->location()) + "/snapshots/" + name;
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
@@ -1660,7 +1668,7 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
 }
 
 future<bool> table::snapshot_exists(const db::config& cfg, sstring tag) {
-    sstring jsondir = _config.datadir + "/snapshots/" + tag;
+    sstring jsondir = directory_for_table_snapshots(cfg, _config.location) + "/snapshots/" + tag;
     return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
             f.get0();
@@ -1675,9 +1683,10 @@ future<bool> table::snapshot_exists(const db::config& cfg, sstring tag) {
 }
 
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details(const db::config& cfg) {
-    return seastar::async([this] {
+    return seastar::async([this, &cfg] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
-        for (auto& datadir : _config.all_datadirs) {
+        for (auto& extra : cfg.data_file_directories()) {
+            auto datadir = directory_for_table_snapshots(extra, _config.location);
             fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get0();
             if (!file_exists) {
