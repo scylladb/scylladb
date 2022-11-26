@@ -1110,7 +1110,10 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
+    // FIXME: get rid of it once no users.
     compaction::table_state& as_table_state() const noexcept;
+    // Safely iterate through table states, while performing async operations on them.
+    future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
     friend class compaction_group;
 };

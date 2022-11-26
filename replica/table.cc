@@ -2674,6 +2674,12 @@ compaction::table_state& table::as_table_state() const noexcept {
     return _compaction_group->as_table_state();
 }
 
+future<> table::parallel_foreach_table_state(std::function<future<>(table_state&)> action) {
+    return parallel_foreach_compaction_group([action = std::move(action)] (compaction_group& cg) -> future<> {
+       return action(cg.as_table_state());
+    });
+}
+
 data_dictionary::table
 table::as_data_dictionary() const {
     static constinit data_dictionary_impl _impl;
