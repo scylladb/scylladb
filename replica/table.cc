@@ -2409,7 +2409,9 @@ table::disable_auto_compaction() {
     //   for new submissions
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
-        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &as_table_state(), sstables::compaction_type::Compaction);
+        return parallel_foreach_compaction_group([this] (compaction_group& cg) {
+            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &cg.as_table_state(), sstables::compaction_type::Compaction);
+        });
     });
 }
 
