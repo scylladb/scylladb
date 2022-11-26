@@ -130,6 +130,9 @@ void task_manager::task::add_child(foreign_task_ptr&& child) {
 }
 
 void task_manager::task::start() {
+    if (_impl->_status.state != task_state::created) {
+        on_fatal_internal_error(tmlogger, format("{} task with id = {} was started twice", _impl->_module->get_name(), id()));
+    }
     _impl->_status.start_time = db_clock::now();
 
     try {

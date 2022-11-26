@@ -1288,7 +1288,6 @@ future<> repair_service::sync_data_using_repair(
     assert(this_shard_id() == 0);
     auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_info);
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
-    task->start();
     co_await task->done();
 }
 
