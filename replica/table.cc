@@ -1327,12 +1327,17 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
 // garbage-collect a tombstone that covers data in an sstable that may not be
 // successfully deleted.
 lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undeleted() const {
-    if (as_table_state().compacted_undeleted_sstables().empty()) {
+    bool no_compacted_undeleted_sstable = std::ranges::all_of(compaction_groups(), [] (const compaction_group_ptr& cg) {
+        return cg->compacted_undeleted_sstables().empty();
+    });
+    if (no_compacted_undeleted_sstable) {
         return get_sstables();
     }
     auto ret = make_lw_shared<sstable_list>(*_sstables->all());
-    for (auto&& s : as_table_state().compacted_undeleted_sstables()) {
-        ret->insert(s);
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        for (auto&& s: cg->compacted_undeleted_sstables()) {
+            ret->insert(s);
+        }
     }
     return ret;
 }
