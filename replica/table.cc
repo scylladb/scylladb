@@ -993,8 +993,10 @@ void table::rebuild_statistics() {
     _sstables->for_each_sstable([this] (const sstables::shared_sstable& tab) {
         update_stats_for_new_sstable(tab->bytes_on_disk());
     });
-    for (auto& tab : as_table_state().compacted_undeleted_sstables()) {
-        update_stats_for_new_sstable(tab->bytes_on_disk());
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        for (auto& tab: cg->compacted_undeleted_sstables()) {
+            update_stats_for_new_sstable(tab->bytes_on_disk());
+        }
     }
 }
 
