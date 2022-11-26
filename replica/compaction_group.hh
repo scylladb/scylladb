@@ -98,6 +98,8 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
+    // Triggers regular compaction.
+    void trigger_compaction();
 
     compaction_backlog_tracker& get_backlog_tracker();
 

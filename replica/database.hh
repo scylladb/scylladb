@@ -608,7 +608,6 @@ private:
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
-    void do_trigger_compaction();
 
     dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
@@ -902,7 +901,7 @@ public:
 
     void start_compaction();
     void trigger_compaction();
-    void try_trigger_compaction() noexcept;
+    void try_trigger_compaction(compaction_group& cg) noexcept;
     // Triggers offstrategy compaction, if needed, in the background.
     void trigger_offstrategy_compaction();
     // Performs offstrategy compaction, if needed, returning

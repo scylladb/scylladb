@@ -597,7 +597,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
             add_sstable(cg, sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
-        try_trigger_compaction();
+        try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
         co_return co_await _cache.update(std::move(adder), *m);
@@ -1167,22 +1167,23 @@ void table::start_compaction() {
 }
 
 void table::trigger_compaction() {
-    // Submitting compaction job to compaction manager.
-    do_trigger_compaction(); // see below
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        cg->trigger_compaction();
+    }
 }
 
-void table::try_trigger_compaction() noexcept {
+void table::try_trigger_compaction(compaction_group& cg) noexcept {
     try {
-        trigger_compaction();
+        cg.trigger_compaction();
     } catch (...) {
         tlogger.error("Failed to trigger compaction: {}", std::current_exception());
     }
 }
 
-void table::do_trigger_compaction() {
+void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
-    if (!_async_gate.is_closed()) {
-        _compaction_manager.submit(as_table_state());
+    if (!_t._async_gate.is_closed()) {
+        _t._compaction_manager.submit(as_table_state());
     }
 }
 
