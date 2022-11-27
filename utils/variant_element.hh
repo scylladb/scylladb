@@ -14,19 +14,11 @@
 namespace utils {
 
 // Given type T and an std::variant Variant, return std::true_type if T is a variant element
-// This is also the recursion base case (empty variant), so return false.
-template <typename T, typename Variant>
-struct is_variant_element : std::false_type {
-};
+template <class T, class Variant>
+struct is_variant_element;
 
-// Match - return true
-template <typename T, typename... Elements>
-struct is_variant_element<T, std::variant<T, Elements...>> : std::true_type {
-};
-
-// No match - recurse
-template <typename T, typename U, typename... Elements>
-struct is_variant_element<T, std::variant<U, Elements...>> : is_variant_element<T, std::variant<Elements...>> {
+template <class T, class... Elements>
+struct is_variant_element<T, std::variant<Elements...>> : std::bool_constant<(std::is_same_v<T, Elements> || ...)> {
 };
 
 // Givent type T and std::variant, true if T is one of the variant elements.
