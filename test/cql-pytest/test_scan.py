@@ -173,6 +173,35 @@ def test_restriction_token_and_nontoken(cql, test_keyspace):
         result = list(cql.execute(f"SELECT p,c FROM {table} WHERE token(p) <= {sometoken} AND p = {somep}"))
         assert result == [(somep,0), (somep,1)]
 
+# Until #4244 is fixed Scylla should forbid combining restrictions on both
+# token and partition key columns. Correctness of some functions depends
+# on the assumption that when a token restriction is present there
+# no restrictions on partition key columns. One such function is is_satisfied_by,
+# which needs to be modified when #4244 gets fixed
+def test_restriction_token_and_nontoken_forbidden(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY") as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p = 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE p = 0 AND token(p) = 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) < 0 AND p = 1")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) > 0 AND token(p) < 10 AND p = 1")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) > 0 AND token(p) < 0 AND p = 1")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p < 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p <= 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p > 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p >= 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p != 0")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT p FROM {table} WHERE token(p) = 0 AND p IN (0, 1, 2)")
 
 # Regression test for #9482
 def test_scan_ending_with_static_row(cql, test_keyspace):

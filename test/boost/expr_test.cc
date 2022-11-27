@@ -2513,3 +2513,353 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
+
+// Test how evaluating a given binary operator behaves when null and unset are present.
+// A binary with null on either side should evaluate to null.
+// When UNSET_VALUE is present evaluating should throw an exception.
+static void test_evaluate_binop_null_unset(oper_t op, expression valid_lhs, expression valid_rhs) {
+    constant lhs_null_val = constant::make_null(type_of(valid_lhs));
+    constant rhs_null_val = constant::make_null(type_of(valid_rhs));
+    constant lhs_unset_val = constant::make_unset_value(type_of(valid_lhs));
+    constant rhs_unset_val = constant::make_unset_value(type_of(valid_rhs));
+
+    expression valid_binop = binary_operator(valid_lhs, op, valid_rhs);
+    BOOST_REQUIRE(evaluate(valid_binop, evaluation_inputs{}).is_value());
+
+    expression binop_lhs_null = binary_operator(lhs_null_val, op, valid_rhs);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_lhs_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_rhs_null = binary_operator(valid_lhs, op, rhs_null_val);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_rhs_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_both_null = binary_operator(lhs_null_val, op, rhs_null_val);
+    BOOST_REQUIRE_EQUAL(evaluate(binop_both_null, evaluation_inputs{}), raw_value::make_null());
+
+    expression binop_lhs_unset = binary_operator(lhs_unset_val, op, valid_rhs);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_rhs_unset = binary_operator(valid_lhs, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_both_unset = binary_operator(lhs_unset_val, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_both_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_lhs_null_rhs_unset = binary_operator(lhs_null_val, op, rhs_unset_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_null_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression binop_lhs_unset_rhs_null = binary_operator(lhs_unset_val, op, rhs_null_val);
+    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset_rhs_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq) {
+    expression true_eq_binop = binary_operator(make_int_const(1), oper_t::EQ, make_int_const(1));
+    BOOST_REQUIRE_EQUAL(evaluate(true_eq_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_eq_binop = binary_operator(make_int_const(1), oper_t::EQ, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_eq_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_eq = binary_operator(make_empty_const(int32_type), oper_t::EQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_eq, evaluation_inputs{}), make_bool_raw(true));
+
+    expression empty_neq = binary_operator(make_int_const(0), oper_t::EQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::EQ, make_int_const(123), make_int_const(456));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
+    expression true_neq_binop = binary_operator(make_int_const(1), oper_t::NEQ, make_int_const(1000));
+    BOOST_REQUIRE_EQUAL(evaluate(true_neq_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_neq_binop = binary_operator(make_int_const(2), oper_t::NEQ, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_neq_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_neq_empty =
+        binary_operator(make_empty_const(int32_type), oper_t::NEQ, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_neq_0 = binary_operator(make_empty_const(int32_type), oper_t::NEQ, make_int_const(0));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_neq_0, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::NEQ, make_int_const(123), make_int_const(456));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
+    expression true_lt_binop = binary_operator(make_int_const(1), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(true_lt_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_lt_binop = binary_operator(make_int_const(10), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_lt_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression false_lt_binop2 = binary_operator(make_int_const(2), oper_t::LT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_lt_binop2, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_lt_empty = binary_operator(make_empty_const(int32_type), oper_t::LT, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lt_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_lt_int_min =
+        binary_operator(make_empty_const(int32_type), oper_t::LT, make_int_const(std::numeric_limits<int32_t>::min()));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lt_int_min, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::LT, make_int_const(123), make_int_const(456));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lte) {
+    expression true_lte_binop = binary_operator(make_int_const(1), oper_t::LTE, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(true_lte_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression true_lte_binop2 = binary_operator(make_int_const(12), oper_t::LTE, make_int_const(12));
+    BOOST_REQUIRE_EQUAL(evaluate(true_lte_binop2, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_lte_binop = binary_operator(make_int_const(123), oper_t::LTE, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_lte_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_lte_empty =
+        binary_operator(make_empty_const(int32_type), oper_t::LTE, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lte_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression empty_lte_int_min =
+        binary_operator(make_empty_const(int32_type), oper_t::LT, make_int_const(std::numeric_limits<int32_t>::min()));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_lte_int_min, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::LTE, make_int_const(123), make_int_const(456));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gt) {
+    expression true_gt_binop = binary_operator(make_int_const(2), oper_t::GT, make_int_const(1));
+    BOOST_REQUIRE_EQUAL(evaluate(true_gt_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_gt_binop = binary_operator(make_int_const(1), oper_t::GT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_gt_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression false_gt_binop2 = binary_operator(make_int_const(2), oper_t::GT, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(false_gt_binop2, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_gt_empty = binary_operator(make_empty_const(int32_type), oper_t::GT, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_gt_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression int_min_gt_empty =
+        binary_operator(make_int_const(std::numeric_limits<int32_t>::min()), oper_t::GT, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(int_min_gt_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::GT, make_int_const(234), make_int_const(-3434));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
+    expression true_gte_binop = binary_operator(make_int_const(20), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(true_gte_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression true_gte_binop2 = binary_operator(make_int_const(10), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(true_gte_binop2, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_gte_binop = binary_operator(make_int_const(-10), oper_t::GTE, make_int_const(10));
+    BOOST_REQUIRE_EQUAL(evaluate(false_gte_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_gte_empty =
+        binary_operator(make_empty_const(int32_type), oper_t::GTE, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_gte_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression int_min_gte_empty =
+        binary_operator(make_int_const(std::numeric_limits<int32_t>::min()), oper_t::GTE, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(int_min_gte_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::GTE, make_int_const(234), make_int_const(-3434));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
+    // IN expects a list as its rhs, sets are not allowed
+    expression in_list = make_int_list_const({1, 3, 5});
+
+    expression true_in_binop = binary_operator(make_int_const(3), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(true_in_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_in_binop = binary_operator(make_int_const(2), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(false_in_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression empty_in_list = binary_operator(make_empty_const(int32_type), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_in_list, evaluation_inputs{}), make_bool_raw(false));
+
+    expression list_with_empty =
+        make_list_const({make_int_const(1), make_empty_const(int32_type), make_int_const(3)}, int32_type);
+    expression empty_in_list_with_empty = binary_operator(make_empty_const(int32_type), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_in_list_with_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression existing_int_in_list_with_empty = binary_operator(make_int_const(3), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(existing_int_in_list_with_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression nonexisting_int_in_list_with_empty = binary_operator(make_int_const(321), oper_t::IN, list_with_empty);
+    BOOST_REQUIRE_EQUAL(evaluate(nonexisting_int_in_list_with_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::IN, make_int_const(5), in_list);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_list_contains) {
+    expression list_val = make_int_list_const({1, 3, 5});
+
+    expression list_contains_true = binary_operator(list_val, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(list_contains_true, evaluation_inputs{}), make_bool_raw(true));
+
+    expression list_contains_false = binary_operator(list_val, oper_t::CONTAINS, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(list_contains_false, evaluation_inputs{}), make_bool_raw(false));
+
+    expression list_contains_empty = binary_operator(list_val, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(list_contains_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression list_with_empty =
+        make_list_const({make_int_const(1), make_empty_const(int32_type), make_int_const(3)}, int32_type);
+    expression list_with_empty_contains_empty =
+        binary_operator(list_with_empty, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(list_with_empty_contains_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression list_with_empty_contains_existing_int =
+        binary_operator(list_with_empty, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(list_with_empty_contains_existing_int, evaluation_inputs{}), make_bool_raw(true));
+
+    expression list_with_empty_contains_nonexisting_int =
+        binary_operator(list_with_empty, oper_t::CONTAINS, make_int_const(321));
+    BOOST_REQUIRE_EQUAL(evaluate(list_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::CONTAINS, list_val, make_int_const(5));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_set_contains) {
+    expression set_val = make_int_set_const({1, 3, 5});
+
+    expression set_contains_true = binary_operator(set_val, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(set_contains_true, evaluation_inputs{}), make_bool_raw(true));
+
+    expression set_contains_false = binary_operator(set_val, oper_t::CONTAINS, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(evaluate(set_contains_false, evaluation_inputs{}), make_bool_raw(false));
+
+    expression set_contains_empty = binary_operator(set_val, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(set_contains_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression set_with_empty =
+        make_set_const({make_empty_const(int32_type), make_int_const(2), make_int_const(3)}, int32_type);
+    expression set_with_empty_contains_empty =
+        binary_operator(set_with_empty, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(set_with_empty_contains_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression set_with_empty_contains_existing_int =
+        binary_operator(set_with_empty, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(set_with_empty_contains_existing_int, evaluation_inputs{}), make_bool_raw(true));
+
+    expression set_with_empty_contains_nonexisting_int =
+        binary_operator(set_with_empty, oper_t::CONTAINS, make_int_const(321));
+    BOOST_REQUIRE_EQUAL(evaluate(set_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::CONTAINS, set_val, make_int_const(5));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains) {
+    expression map_val = make_int_int_map_const({{1, 2}, {3, 4}, {5, 6}});
+
+    expression map_contains_true = binary_operator(map_val, oper_t::CONTAINS, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(evaluate(map_contains_true, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_contains_false = binary_operator(map_val, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(map_contains_false, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_contains_empty = binary_operator(map_val, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_contains_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_with_empty =
+        make_map_const({{make_int_const(1), make_empty_const(int32_type)}, {make_int_const(3), make_int_const(4)}},
+                       int32_type, int32_type);
+    expression map_with_empty_contains_empty =
+        binary_operator(map_with_empty, oper_t::CONTAINS, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_existing_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_existing_int, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_nonexisting_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::CONTAINS, map_val, make_int_const(5));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains_key) {
+    expression map_val = make_int_int_map_const({{1, 2}, {3, 4}, {5, 6}});
+
+    expression true_contains_key_binop = binary_operator(map_val, oper_t::CONTAINS_KEY, make_int_const(5));
+    BOOST_REQUIRE_EQUAL(evaluate(true_contains_key_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_contains_key_binop = binary_operator(map_val, oper_t::CONTAINS_KEY, make_int_const(6));
+    BOOST_REQUIRE_EQUAL(evaluate(false_contains_key_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_contains_key_empty = binary_operator(map_val, oper_t::CONTAINS_KEY, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_contains_key_empty, evaluation_inputs{}), make_bool_raw(false));
+
+    expression map_with_empty =
+        make_map_const({{make_empty_const(int32_type), make_int_const(2)}, {make_int_const(3), make_int_const(4)}},
+                       int32_type, int32_type);
+    expression map_with_empty_contains_key_empty =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_empty_const(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_key_existing_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_existing_int, evaluation_inputs{}), make_bool_raw(true));
+
+    expression map_with_empty_contains_key_nonexisting_int =
+        binary_operator(map_with_empty, oper_t::CONTAINS_KEY, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_nonexisting_int, evaluation_inputs{}),
+                        make_bool_raw(false));
+
+    test_evaluate_binop_null_unset(oper_t::CONTAINS_KEY, map_val, make_int_const(5));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
+    expression true_is_not_binop = binary_operator(make_int_const(1), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(true_is_not_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_is_not_binop =
+        binary_operator(constant::make_null(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(false_is_not_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    expression forbidden_is_not_binop = binary_operator(make_int_const(1), oper_t::IS_NOT, make_int_const(2));
+    BOOST_REQUIRE_THROW(evaluate(forbidden_is_not_binop, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression empty_is_not_null =
+        binary_operator(make_empty_const(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_is_not_null, evaluation_inputs{}), make_bool_raw(true));
+
+    expression unset_is_not_null =
+        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(unset_is_not_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression int_is_not_unset =
+        binary_operator(make_int_const(123), oper_t::IS_NOT, constant::make_unset_value(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(int_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression unset_is_not_unset =
+        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_unset_value(int32_type));
+    BOOST_REQUIRE_THROW(evaluate(unset_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
+    expression true_like_binop = binary_operator(make_text_const("some_text"), oper_t::LIKE, make_text_const("some_%"));
+    BOOST_REQUIRE_EQUAL(evaluate(true_like_binop, evaluation_inputs{}), make_bool_raw(true));
+
+    expression false_like_binop =
+        binary_operator(make_text_const("some_text"), oper_t::LIKE, make_text_const("some_other_%"));
+    BOOST_REQUIRE_EQUAL(evaluate(false_like_binop, evaluation_inputs{}), make_bool_raw(false));
+
+    // Binary representation of an empty value is the same as empty string
+    BOOST_REQUIRE_EQUAL(make_text_raw(""), make_empty_raw());
+
+    expression empty_like_text = binary_operator(make_empty_const(utf8_type), oper_t::LIKE, make_text_const("%"));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_like_text, evaluation_inputs{}), make_bool_raw(true));
+
+    expression text_like_empty = binary_operator(make_text_const(""), oper_t::LIKE, make_empty_const(utf8_type));
+    BOOST_REQUIRE_EQUAL(evaluate(text_like_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    expression empty_like_empty =
+        binary_operator(make_empty_const(utf8_type), oper_t::LIKE, make_empty_const(utf8_type));
+    BOOST_REQUIRE_EQUAL(evaluate(empty_like_empty, evaluation_inputs{}), make_bool_raw(true));
+
+    test_evaluate_binop_null_unset(oper_t::LIKE, make_text_const("some_text"), make_text_const("some_%"));
+}

@@ -240,7 +240,7 @@ def testSetContainsWithIndex(cql, test_keyspace):
             #assert_invalid_message(cql, table, "Unsupported null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
-            assert_invalid_message(cql, table, "Unsupported unset value for column categories",
+            assert_invalid_message(cql, table, "unset value",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
@@ -270,7 +270,7 @@ def testListContainsWithIndex(cql, test_keyspace):
             #assert_invalid_message(cql, table, "Unsupported null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
-            assert_invalid_message(cql, table, "Unsupported unset value for column categories",
+            assert_invalid_message(cql, table, "unset value",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
@@ -315,7 +315,7 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
             #assert_invalid_message(cql, table, "Unsupported null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
 
-            assert_invalid_message(cql, table, "Unsupported unset value for column categories",
+            assert_invalid_message(cql, table, "unset value",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, UNSET_VALUE)
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
@@ -352,7 +352,7 @@ def testMapValueContainsWithIndex(cql, test_keyspace):
             #assert_invalid_message(cql, table, "Unsupported null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
-            assert_invalid_message(cql, table, "Unsupported unset value for column categories",
+            assert_invalid_message(cql, table, "unset value",
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, UNSET_VALUE)
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
@@ -1021,13 +1021,13 @@ def testFilteringWithoutIndices(cql, test_keyspace):
 
         # Checks filtering with unset
         # Reproduces #10358
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column s",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE s = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              UNSET_VALUE)
 
@@ -1106,16 +1106,16 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
 
         # Checks filtering with unset
         # Reproduces #10358:
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column d",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE d CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
         assert_invalid_message(cql, table, "Unsupported unset map key for column e",
@@ -1125,7 +1125,6 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
                              UNSET_VALUE)
 
-@pytest.mark.xfail(reason="#10358")
 def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, d frozen<set<int>>, e frozen<map<int, int>>, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1257,25 +1256,25 @@ def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
 
         # Checks filtering with unset
         # Reproduces #10358:
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column d",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE d = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column d",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE d CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
         assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
@@ -1348,7 +1347,6 @@ def testAllowFilteringOnPartitionKeyWithDistinct(cql, test_keyspace):
             assert_invalid_message(cql, table, "queries must only request partition key columns",
                     "SELECT DISTINCT pk0, pk1, ck0 FROM %s ALLOW FILTERING")
 
-@pytest.mark.xfail(reason="#10358")
 def testAllowFilteringOnPartitionKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY ((a, b), c))") as table:
         execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (11, 12, 13, 14)")
@@ -1416,10 +1414,10 @@ def testAllowFilteringOnPartitionKey(cql, test_keyspace):
 
         # Checks filtering with unset
         # Reproduces #10358
-        assert_invalid_message(cql, table, "Unsupported unset value for column a",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a = ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column a",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a > ? ALLOW FILTERING",
                              UNSET_VALUE)
 
@@ -1635,16 +1633,16 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
 
         # Checks filtering with unset
         # Reproduces #10358
-        assert_invalid_message(cql, table, "Unsupported unset value for column c",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND c CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column d",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND d CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset value for column e",
+        assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
         assert_invalid_message(cql, table, "Unsupported unset map key for column e",

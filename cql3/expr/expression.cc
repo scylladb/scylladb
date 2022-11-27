@@ -216,36 +216,95 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
     }
 }
 
+// This class represents a value that can be one of three things:
+// false, true or null.
+// It could be represented by std::optional<bool>, but optional
+// can be implicitly casted to bool, which might cause mistakes.
+// (bool)(std::make_optional<bool>(false)) will return true,
+// despite the fact that the represented value is `false`.
+// To avoid any such problems this class is introduced
+// along with the is_true() method, which can be used
+// to check if the value held is indeed `true`.
+class bool_or_null {
+    std::optional<bool> value;
+public:
+    bool_or_null(bool val) : value(val) {}
+    bool_or_null(null_value) : value(std::nullopt) {}
+
+    static bool_or_null null() {
+        return bool_or_null(null_value{});
+    }
+    bool has_value() const {
+        return value.has_value();
+    }
+    bool is_null() const {
+        return !has_value();
+    }
+    const bool& get_value() const {
+        return *value;
+    }
+    const bool is_true() const {
+        return has_value() && get_value();
+    }
+};
+
 /// True iff lhs's value equals rhs.
-bool equal(const expression& lhs, const managed_bytes_opt& rhs, const evaluation_inputs& inputs) {
-    if (!rhs) {
-        return false;
+bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, const evaluation_inputs& inputs) {
+    raw_value lhs_value = evaluate(lhs, inputs);
+    if (lhs_value.is_unset_value()) {
+        throw exceptions::invalid_request_exception("unset value found on left-hand side of an equality operator");
     }
-    const auto value = evaluate(lhs, inputs).to_managed_bytes_opt();
-    if (!value) {
-        return false;
+    if (lhs_value.is_null() || !rhs_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    return type_of(lhs)->equal(managed_bytes_view(*value), managed_bytes_view(*rhs));
+    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
+
+    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-/// Convenience overload for expression.
-bool equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    return equal(lhs, evaluate(rhs, inputs).to_managed_bytes_opt(), inputs);
-}
+static std::optional<std::pair<managed_bytes, managed_bytes>> evaluate_binop_sides(const expression& lhs,
+                                                                                   const expression& rhs,
+                                                                                   const oper_t op,
+                                                                                   const evaluation_inputs& inputs) {
+    raw_value lhs_value = evaluate(lhs, inputs);
+    raw_value rhs_value = evaluate(rhs, inputs);
 
-/// True iff columns' values equal t.
-bool equal(const tuple_constructor& columns_tuple_lhs, const expression& t_rhs, const evaluation_inputs& inputs) {
-    const cql3::raw_value tup = evaluate(t_rhs, inputs);
-    const auto& rhs = get_tuple_elements(tup, *type_of(t_rhs));
-    if (rhs.size() != columns_tuple_lhs.elements.size()) {
+    if (lhs_value.is_unset_value()) {
         throw exceptions::invalid_request_exception(
-                format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
-                       columns_tuple_lhs.elements.size(), rhs.size()));
+            format("unset value found on left-hand side of a binary operator with operation {}", op));
     }
-    return boost::equal(columns_tuple_lhs.elements, rhs,
-    [&] (const expression& lhs, const managed_bytes_opt& b) {
-        return equal(lhs, b, inputs);
-    });
+    if (rhs_value.is_unset_value()) {
+        throw exceptions::invalid_request_exception(
+            format("unset value found on right-hand side of a binary operator with operation {}", op));
+    }
+    if (lhs_value.is_null() || rhs_value.is_null()) {
+        return std::nullopt;
+    }
+    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
+    managed_bytes rhs_bytes = std::move(rhs_value).to_managed_bytes();
+    return std::pair(std::move(lhs_bytes), std::move(rhs_bytes));
+}
+
+bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::EQ, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+}
+
+bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::NEQ, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    return !type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
@@ -270,127 +329,77 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const expression& col, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    auto lhs = evaluate(col, inputs).to_managed_bytes_opt();
-    if (!lhs) {
-        return false;
+     std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, op, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    const auto b = evaluate(rhs, inputs).to_managed_bytes_opt();
-    return b ? limits(*lhs, op, *b, type_of(col)->without_reversed()) : false;
-}
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
-/// True iff the column values are limited by t in the manner prescribed by op.
-bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expression& e,
-            const evaluation_inputs& inputs) {
-    if (!is_slice(op)) { // For EQ or NEQ, use equal().
-        throw std::logic_error("limits() called on non-slice op");
-    }
-    const cql3::raw_value tup = evaluate(e, inputs);
-    const auto& rhs = get_tuple_elements(tup, *type_of(e));
-    if (rhs.size() != columns_tuple.elements.size()) {
-        throw exceptions::invalid_request_exception(
-                format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
-                       columns_tuple.elements.size(), rhs.size()));
-    }
-    for (size_t i = 0; i < rhs.size(); ++i) {
-        auto& cv = columns_tuple.elements[i];
-        auto lhs = evaluate(cv, inputs).to_managed_bytes_opt();
-        if (!lhs || !rhs[i]) {
-            // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null, but
-            // let's not rely on grammar constraints that can be later relaxed.
-            //
-            // NULL = always fails comparison
-            return false;
-        }
-        const auto cmp = type_of(cv)->without_reversed().compare(
-                *lhs,
-                *rhs[i]);
-        // If the components aren't equal, then we just learned the LHS/RHS order.
-        if (cmp < 0) {
-            if (op == oper_t::LT || op == oper_t::LTE) {
-                return true;
-            } else if (op == oper_t::GT || op == oper_t::GTE) {
-                return false;
-            } else {
-                throw std::logic_error("Unknown slice operator");
-            }
-        } else if (cmp > 0) {
-            if (op == oper_t::LT || op == oper_t::LTE) {
-                return false;
-            } else if (op == oper_t::GT || op == oper_t::GTE) {
-                return true;
-            } else {
-                throw std::logic_error("Unknown slice operator");
-            }
-        }
-        // Otherwise, we don't know the LHS/RHS order, so check the next component.
-    }
-    // Getting here means LHS == RHS.
-    return op == oper_t::LTE || op == oper_t::GTE;
-}
-
-/// True iff collection (list, set, or map) contains value.
-bool contains(const data_value& collection, const raw_value_view& value) {
-    if (!value) {
-        // CONTAINS NULL should evaluate to NULL/false
-        return false;
-    }
-    auto col_type = static_pointer_cast<const collection_type_impl>(collection.type());
-    auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
-    return value.with_linearized([&] (bytes_view val) {
-        auto exists_in = [&](auto&& range) {
-            auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
-                return element_type->compare(element.serialize_nonnull(), val) == 0;
-            });
-            return found != range.end();
-        };
-        if (col_type->is_list()) {
-            return exists_in(value_cast<list_type_impl::native_type>(collection));
-        } else if (col_type->is_set()) {
-            return exists_in(value_cast<set_type_impl::native_type>(collection));
-        } else if (col_type->is_map()) {
-            auto data_map = value_cast<map_type_impl::native_type>(collection);
-            using entry = std::pair<data_value, data_value>;
-            return exists_in(data_map | transformed([] (const entry& e) { return e.second; }));
-        } else {
-            throw std::logic_error("unsupported collection type in a CONTAINS expression");
-        }
-    });
+    return limits(lhs_bytes, op, rhs_bytes, type_of(lhs)->without_reversed());
 }
 
 /// True iff a column is a collection containing value.
-bool contains(const column_value& col, const raw_value_view& value, const evaluation_inputs& inputs) {
-    const auto collection = get_value(col, inputs);
-    if (collection) {
-        return contains(col.col->type->deserialize(managed_bytes_view(*collection)), value);
+bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
+    }
+
+    const abstract_type& lhs_type = type_of(lhs)->without_reversed();
+    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(sides_bytes->first));
+
+    const collection_type_impl* collection_type = dynamic_cast<const collection_type_impl*>(&lhs_type);
+    data_type element_type =
+        collection_type->is_set() ? collection_type->name_comparator() : collection_type->value_comparator();
+
+    auto exists_in = [&](auto&& range) {
+        auto found = std::find_if(range.begin(), range.end(), [&](auto&& element) {
+            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), sides_bytes->second) == 0;
+        });
+        return found != range.end();
+    };
+    if (collection_type->is_list()) {
+        return exists_in(value_cast<list_type_impl::native_type>(lhs_collection));
+    } else if (collection_type->is_set()) {
+        return exists_in(value_cast<set_type_impl::native_type>(lhs_collection));
+    } else if (collection_type->is_map()) {
+        auto data_map = value_cast<map_type_impl::native_type>(lhs_collection);
+        using entry = std::pair<data_value, data_value>;
+        return exists_in(data_map | transformed([](const entry& e) { return e.second; }));
     } else {
-        return false;
+        on_internal_error(expr_logger, "unsupported collection type in a CONTAINS expression");
     }
 }
 
 /// True iff a column is a map containing \p key.
-bool contains_key(const column_value& col, cql3::raw_value_view key, const evaluation_inputs& inputs) {
-    if (!key) {
-        // CONTAINS_KEY NULL should evaluate to NULL/false
-        return false;
+bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS_KEY, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
-    auto type = col.col->type;
-    const auto collection = get_value(col, inputs);
-    if (!collection) {
-        return false;
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+
+    data_type lhs_type = type_of(lhs);
+    const map_type_impl::native_type data_map =
+        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(lhs_bytes)));
+    data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type)->name_comparator();
+
+    for (const std::pair<data_value, data_value>& map_element : data_map) {
+        bytes serialized_element_key = map_element.first.serialize_nonnull();
+        if (key_type->compare(managed_bytes_view(rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
+            0) {
+            return true;
+        };
     }
-    const auto data_map = value_cast<map_type_impl::native_type>(type->deserialize(managed_bytes_view(*collection)));
-    auto key_type = static_pointer_cast<const collection_type_impl>(type)->name_comparator();
-    auto found = key.with_linearized([&] (bytes_view k_bv) {
-        using entry = std::pair<data_value, data_value>;
-        return std::find_if(data_map.begin(), data_map.end(), [&] (const entry& element) {
-            return key_type->compare(element.first.serialize_nonnull(), k_bv) == 0;
-        });
-    });
-    return found != data_map.end();
+
+    return false;
 }
 
 /// Fetches the next cell value from iter and returns its (possibly null) value.
@@ -439,44 +448,62 @@ std::vector<managed_bytes_opt> get_non_pk_values(const selection& selection, con
 namespace {
 
 /// True iff cv matches the CQL LIKE pattern.
-bool like(const column_value& cv, const raw_value_view& pattern, const evaluation_inputs& inputs) {
-    if (!cv.col->type->is_string()) {
+bool_or_null like(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    data_type lhs_type = type_of(lhs)->underlying_type();
+    if (!lhs_type->is_string()) {
+        expression::printer lhs_printer {
+            .expr_to_print = lhs,
+            .debug_mode = false
+        };
         throw exceptions::invalid_request_exception(
-                format("LIKE is allowed only on string types, which {} is not", cv.col->name_as_text()));
+                format("LIKE is allowed only on string types, which {} is not", lhs_printer));
     }
-    auto value = get_value(cv, inputs);
-    // TODO: reuse matchers.
-    if (pattern && value) {
-        return value->with_linearized([&pattern] (bytes_view linearized_value) {
-            return pattern.with_linearized([linearized_value] (bytes_view linearized_pattern) {
-                return like_matcher(linearized_pattern)(linearized_value);
-            });
-        });
-    } else {
-        return false;
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::LIKE, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
+    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(*sides_bytes);
+
+    bytes lhs_bytes = to_bytes(lhs_managed_bytes);
+    bytes rhs_bytes = to_bytes(rhs_managed_bytes);
+
+    return like_matcher(bytes_view(rhs_bytes))(bytes_view(lhs_bytes));
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const expression& col, const expression& rhs, const evaluation_inputs& inputs) {
-    const cql3::raw_value in_list = evaluate(rhs, inputs);
-    if (in_list.is_null()) {
-        return false;
+bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
+    if (!sides_bytes.has_value()) {
+        return bool_or_null::null();
     }
+    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
-    return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
-        return equal(col, b, inputs);
-    });
+    expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
+    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
+    for (const managed_bytes& elem : list_elems) {
+        if (equal(lhs_constant, elem, evaluation_inputs{}).is_true()) {
+            return true;
+        }
+    }
+    return false;
 }
 
-/// True iff the tuple of column values is in the set defined by rhs.
-bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const evaluation_inputs& inputs) {
-    cql3::raw_value in_list = evaluate(rhs, inputs);
-    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list, *type_of(rhs)), [&] (const std::vector<managed_bytes_opt>& el) {
-        return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(c, b, inputs);
-        });
-    });
+bool is_not_null(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+    cql3::raw_value lhs_val = evaluate(lhs, inputs);
+    if (lhs_val.is_unset_value()) {
+        throw exceptions::invalid_request_exception("unset value found on left hand side of IS NOT operator");
+    }
+
+    cql3::raw_value rhs_val = evaluate(rhs, inputs);
+    if (rhs_val.is_unset_value()) {
+        throw exceptions::invalid_request_exception("unset value found on right hand side of IS NOT operator");
+    }
+    if (!rhs_val.is_null()) {
+        throw exceptions::invalid_request_exception("IS NOT operator accepts only NULL as its right side");
+    }
+    return !lhs_val.is_null();
 }
 
 const value_set empty_value_set = value_list{};
@@ -511,105 +538,30 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 }
 
 bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs) {
-    return expr::visit(overloaded_functor{
-            [&] (const column_value& col) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(col, opr.rhs, inputs);
-                } else if (opr.op == oper_t::NEQ) {
-                    return !equal(col, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(col, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::CONTAINS) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return contains(col, val.view(), inputs);
-                } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return contains_key(col, val.view(), inputs);
-                } else if (opr.op == oper_t::LIKE) {
-                    cql3::raw_value val = evaluate(opr.rhs, inputs);
-                    return like(col, val.view(), inputs);
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(col, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
-                }
-            },
-            [&] (const subscript& sub) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(sub, opr.rhs, inputs);
-                } else if (opr.op == oper_t::NEQ) {
-                    return !equal(sub, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(sub, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::CONTAINS) {
-                    throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
-                } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    throw exceptions::unsupported_operation_exception("CONTAINS KEY lhs is subscripted");
-                } else if (opr.op == oper_t::LIKE) {
-                    throw exceptions::unsupported_operation_exception("LIKE lhs is subscripted");
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(sub, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
-                }
-            },
-            [&] (const tuple_constructor& cvs) {
-                if (opr.op == oper_t::EQ) {
-                    return equal(cvs, opr.rhs, inputs);
-                } else if (is_slice(opr.op)) {
-                    return limits(cvs, opr.op, opr.rhs, inputs);
-                } else if (opr.op == oper_t::IN) {
-                    return is_one_of(cvs, opr.rhs, inputs);
-                } else {
-                    throw exceptions::unsupported_operation_exception(
-                            format("Unhandled multi-column binary_operator: {}", opr));
-                }
-            },
-            [] (const token& tok) -> bool {
-                // The RHS value was already used to ensure we fetch only rows in the specified
-                // token range.  It is impossible for any fetched row not to match now.
-                return true;
-            },
-            [] (const constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: A constant cannot serve as the LHS of a binary expression");
-            },
-            [] (const conjunction&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a conjunction cannot serve as the LHS of a binary expression");
-            },
-            [] (const binary_operator&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: binary operators cannot be nested");
-            },
-            [] (const unresolved_identifier&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as the LHS of a binary expression");
-            },
-            [] (const column_mutation_attribute&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: column_mutation_attribute cannot serve as the LHS of a binary expression");
-            },
-            [] (const function_call&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: function_call cannot serve as the LHS of a binary expression");
-            },
-            [] (const cast&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: cast cannot serve as the LHS of a binary expression");
-            },
-            [] (const field_selection&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: field_selection cannot serve as the LHS of a binary expression");
-            },
-            [] (const null&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: null cannot serve as the LHS of a binary expression");
-            },
-            [] (const bind_variable&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: bind_variable cannot serve as the LHS of a binary expression");
-            },
-            [] (const untyped_constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: untyped_constant cannot serve as the LHS of a binary expression");
-            },
-            [] (const collection_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: collection_constructor cannot serve as the LHS of a binary expression");
-            },
-            [] (const usertype_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: usertype_constructor cannot serve as the LHS of a binary expression");
-            },
-        }, opr.lhs);
+    if (is<token>(opr.lhs)) {
+        // The RHS value was already used to ensure we fetch only rows in the specified
+        // token range. It is impossible for any fetched row not to match now.
+        // When token restrictions are present we forbid all other restrictions on partition key.
+        // This means that the partition range is defined solely by restrictions on token.
+        // When is_satisifed_by is used by filtering we can be sure that the token restrictions
+        // are fulfilled. In the future it will be possible to evaluate() a token,
+        // and we will be able to get rid of this risky if.
+        return true;
+    }
+
+    raw_value binop_eval_result = evaluate(opr, inputs);
+
+    if (binop_eval_result.is_null()) {
+        return false;
+    }
+    if (binop_eval_result.is_unset_value()) {
+        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to unset value: {}", opr));
+    }
+    if (binop_eval_result.is_empty_value()) {
+        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to EMPTY_VALUE: {}", opr));
+    }
+
+    return binop_eval_result.view().deserialize<bool>(*boolean_type);
 }
 
 } // anonymous namespace
@@ -1723,10 +1675,54 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
+cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
+    if (binop.order == comparison_order::clustering) {
+        throw exceptions::invalid_request_exception("Can't evaluate a binary operator with SCYLLA_CLUSTERING_BOUND");
+    }
+
+    bool_or_null binop_result(false);
+
+    switch (binop.op) {
+        case oper_t::EQ:
+            binop_result = equal(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::NEQ:
+            binop_result = not_equal(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::LT:
+        case oper_t::LTE:
+        case oper_t::GT:
+        case oper_t::GTE:
+            binop_result = limits(binop.lhs, binop.op, binop.rhs, inputs);
+            break;
+        case oper_t::CONTAINS:
+            binop_result = contains(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::CONTAINS_KEY:
+            binop_result = contains_key(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::LIKE:
+            binop_result = like(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::IN:
+            binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
+            break;
+        case oper_t::IS_NOT:
+            binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
+            break;
+    };
+
+    if (binop_result.is_null()) {
+        return raw_value::make_null();
+    }
+
+    return raw_value::make_value(boolean_type->decompose(binop_result.get_value()));
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
-        [](const binary_operator&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a binary_operator");
+        [&](const binary_operator& binop) -> cql3::raw_value {
+            return evaluate(binop, inputs);
         },
         [](const conjunction&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate a conjunction");
