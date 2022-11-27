@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/coroutine.hh>
@@ -17,6 +18,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
@@ -548,13 +550,26 @@ static future<> scan_table_ranges(
             co_return;
         }
         auto units = co_await get_units(page_sem, 1);
-        // We don't to limit page size in number of rows because there is a
-        // builtin limit of the page's size in bytes. Setting this limit to 1
-        // is useful for debugging the paging code with moderate-size data.
+        // We don't need to limit page size in number of rows because there is
+        // a builtin limit of the page's size in bytes. Setting this limit to
+        // 1 is useful for debugging the paging code with moderate-size data.
         uint32_t limit = std::numeric_limits<uint32_t>::max();
-        // FIXME: which timeout?
-        // FIXME: if read times out, need to retry it.
-        std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+        // Read a page, and if that times out, try again after a small sleep.
+        // If we didn't catch the timeout exception, it would cause the scan
+        // be aborted and only be restarted at the next scanning period.
+        std::unique_ptr<cql3::result_set> rs;
+        for (;;) {
+            try {
+                // FIXME: which timeout?
+                rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+                break;
+            } catch(exceptions::read_timeout_exception&) {
+                tlogger.warn("expiration scanner read timed out, will retry: {}",
+                    std::current_exception());
+            }
+            // If we didn't break out of this loop, add a minimal sleep
+            co_await seastar::sleep(1s);
+        }
         auto rows = rs->rows();
         auto meta = rs->get_metadata().get_names();
         std::optional<unsigned> expiration_column;
