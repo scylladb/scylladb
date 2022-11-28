@@ -28,6 +28,7 @@ class compaction_manager;
 
 namespace sstables {
 
+class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
 class directory_semaphore {
@@ -88,6 +89,7 @@ private:
     // Will be destroyed when this object is destroyed.
     std::optional<utils::phased_barrier::operation> _operation_barrier;
 
+    sstables_manager& _manager;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
 
@@ -133,7 +135,8 @@ private:
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
-    sstable_directory(std::filesystem::path sstable_dir,
+    sstable_directory(sstables_manager& manager,
+            std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
             directory_semaphore& load_semaphore,
             sstable_object_from_existing_fn sstable_from_existing);

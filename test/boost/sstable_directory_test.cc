@@ -109,6 +109,7 @@ public:
     sstables::shared_sstable operator()(fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) const {
         return _get_mgr()->make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
     }
+    sstables_manager& get_manager() { return *_get_mgr(); }
 };
 
 sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, int64_t gen) {
@@ -132,7 +133,7 @@ highest_generation_seen(sharded<sstables::sstable_directory>& dir) {
 static void with_sstable_directory(
     std::filesystem::path path,
     unsigned load_parallelism,
-    sstable_directory::sstable_object_from_existing_fn sstable_from_existing,
+    sstable_from_existing_file sstable_from_existing,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
     sharded<sstables::directory_semaphore> sstdir_sem;
@@ -153,7 +154,8 @@ static void with_sstable_directory(
         return sstable_from_existing(std::move(dir), gen, v, f);
     };
 
-    sstdir.start(std::move(path), default_priority_class(), std::ref(sstdir_sem), std::move(wrapped_sfe)).get();
+    sstdir.start(seastar::sharded_parameter([&sstable_from_existing] { return std::ref(sstable_from_existing.get_manager()); }),
+            std::move(path), default_priority_class(), std::ref(sstdir_sem), std::move(wrapped_sfe)).get();
 
     func(sstdir);
 }

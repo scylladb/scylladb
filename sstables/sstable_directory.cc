@@ -31,11 +31,13 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
     return true;
 }
 
-sstable_directory::sstable_directory(fs::path sstable_dir,
+sstable_directory::sstable_directory(sstables_manager& manager,
+        fs::path sstable_dir,
         ::io_priority_class io_prio,
         directory_semaphore& load_semaphore,
         sstable_object_from_existing_fn sstable_from_existing)
-    : _sstable_dir(std::move(sstable_dir))
+    : _manager(manager)
+    , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _load_semaphore(load_semaphore)
     , _sstable_object_from_existing_sstable(std::move(sstable_from_existing))
