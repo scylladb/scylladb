@@ -357,3 +357,33 @@ def do_test_filter_UDT_restriction(cql, test_keyspace, frozen):
             assert [(0,), (1,)] == list(cql.execute(stmt, [user_type("a", 4, "b", 6)]))
             assert [(0,), (1,), (2,)] == list(cql.execute(stmt, [user_type("a", 4, "b", 7)]))
             assert [] == list(cql.execute(stmt, [user_type("a", -1, "b", 7)]))
+
+# Reproducer for issue #12102, checking the meaning of fetch_size (page size
+# in paging) during a scan with filtering. We check both scanning a regular
+# table, and a secondary index.
+# The question to be tested is whether fetch_size counts the number of rows
+# before filtering, after filtering, or something else. As noted in #12102,
+# in Cassandra the behavior is the former - and this is what this test
+# expects. In Scylla it's currently the latter, causing this test to fail.
+@pytest.mark.parametrize("use_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#12102")),
+        pytest.param(False, marks=pytest.mark.xfail(reason="#12102"))])
+def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
+    with new_test_table(cql, test_keyspace, 'pk int primary key, x int, y int') as table:
+        if use_index:
+            cql.execute(f'CREATE INDEX ON {table}(x)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, x, y) VALUES (?, ?, ?)')
+        cql.execute(stmt, [0, 1, 0])
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [2, 1, 0])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [4, 1, 0])
+        cql.execute(stmt, [5, 1, 1])
+        cql.execute(stmt, [6, 1, 0])
+        cql.execute(stmt, [7, 1, 1])
+        # Fetch a filtered page with fetch_size=3 and expect to see 3 rows
+        # in the post-filtering results.
+        s = cql.prepare(f'SELECT pk FROM {table} WHERE x = 1 AND y = 0 ALLOW FILTERING')
+        s.fetch_size = 3
+        results = cql.execute(s)
+        assert len(results.current_rows) == 3
