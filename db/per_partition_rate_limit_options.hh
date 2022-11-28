@@ -41,6 +41,7 @@ public:
         case operation_type::read:
             return _max_reads_per_second;
         }
+        std::abort(); // compiler will error before we reach here
     }
 
     inline void set_max_writes_per_second(std::optional<uint32_t> v) {
