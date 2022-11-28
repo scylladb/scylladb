@@ -68,7 +68,12 @@ class ScyllaSetup:
 
     def cqlshrc(self):
         home = os.environ['HOME']
-        hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+        if self._rpcAddress:
+            hostname = self._rpcAddress
+        elif self._listenAddress:
+            hostname = self._listenAddress
+        else:
+            hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
         with open("%s/.cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
 
