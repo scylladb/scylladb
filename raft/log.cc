@@ -244,7 +244,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
     } else {
         auto entries_to_remove = _log.size() - (last_idx() - idx);
         size_t trailing_bytes = 0;
-        for (int i = 0; i < max_trailing_entries && entries_to_remove > 0; ++i) {
+        for (size_t i = 0; i < max_trailing_entries && entries_to_remove > 0; ++i) {
             trailing_bytes += memory_usage_of(*_log[entries_to_remove - 1], _max_command_size);
             if (trailing_bytes > max_trailing_bytes) {
                 break;
