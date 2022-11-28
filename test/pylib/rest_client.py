@@ -95,9 +95,11 @@ class RESTClient(metaclass=ABCMeta):
                           json = json)
 
     async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
-                       port: Optional[int] = None, params: Optional[dict[str, str]] = None) -> None:
-        await self._fetch("PUT", resource_uri, host = host, port = port, params = params,
-                          json = data)
+                       port: Optional[int] = None, params: Optional[dict[str, str]] = None,
+                       response_type: Optional[str] = None) -> Any:
+        ret = await self._fetch("PUT", resource_uri, response_type = response_type, host = host,
+                                port = port, params = params, json = data)
+        return ret
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
                      port: Optional[int] = None, params: Optional[dict[str, str]] = None,

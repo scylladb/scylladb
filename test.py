@@ -336,36 +336,51 @@ class PythonTestSuite(TestSuite):
         self.clusters = Pool(pool_size, self.create_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
-        def create_server(cluster_name: str, seeds: List[str]):
+        def create_server(create_cfg: ScyllaCluster.CreateServerParams):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
 
+            # There are multiple sources of config options, with increasing priority
+            # (if two sources provide the same config option, the higher priority one wins):
+            # 1. the defaults
+            # 2. suite-specific config options (in "extra_scylla_config_options")
+            # 3. config options from tests (when servers are added during a test)
             default_config_options = \
                     {"authenticator": "PasswordAuthenticator",
                      "authorizer": "CassandraAuthorizer"}
-            config_options = default_config_options | self.cfg.get("extra_scylla_config_options", {})
+            config_options = default_config_options | \
+                             self.cfg.get("extra_scylla_config_options", {}) | \
+                             create_cfg.config_from_test
 
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
-                host_registry=self.hosts,
-                cluster_name=cluster_name,
-                seeds=seeds,
+                cluster_name=create_cfg.cluster_name,
+                ip_addr=create_cfg.ip_addr,
+                seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options)
 
-            # Suite artifacts are removed when
-            # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, server.stop_artifact)
-            if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dir.
-                self.artifacts.add_suite_artifact(self, server.uninstall_artifact)
-            self.artifacts.add_exit_artifact(self, server.stop_artifact)
             return server
 
         async def create_cluster() -> ScyllaCluster:
-            cluster = ScyllaCluster(cluster_size, create_server)
+            cluster = ScyllaCluster(self.hosts, cluster_size, create_server)
+
+            async def stop() -> None:
+                await cluster.stop()
+
+            # Suite artifacts are removed when
+            # the entire suite ends successfully.
+            self.artifacts.add_suite_artifact(self, stop)
+            if not self.options.save_log_on_success:
+                # If a test fails, we might want to keep the data dirs.
+                async def uninstall() -> None:
+                    await cluster.uninstall()
+
+                self.artifacts.add_suite_artifact(self, uninstall)
+            self.artifacts.add_exit_artifact(self, stop)
+
             await cluster.install_and_start()
             return cluster
 
