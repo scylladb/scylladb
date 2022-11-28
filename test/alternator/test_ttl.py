@@ -348,7 +348,7 @@ def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
     # Note that unlike test_ttl_expiration, this test doesn't have a fixed
     # duration - it finishes as soon as the item we expect to be expired
     # is expired.
-    max_duration = 1200 if is_aws(dynamodb) else 120
+    max_duration = 1200 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -386,7 +386,7 @@ def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
 # Just like test_ttl_expiration() above, these tests are extremely slow
 # on AWS because DynamoDB delays expiration by around 10 minutes.
 def test_ttl_expiration_hash(dynamodb, waits_for_expiration):
-    max_duration = 1200 if is_aws(dynamodb) else 120
+    max_duration = 1200 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -418,7 +418,7 @@ def test_ttl_expiration_hash(dynamodb, waits_for_expiration):
         assert check_expired()
 
 def test_ttl_expiration_range(dynamodb, waits_for_expiration):
-    max_duration = 1200 if is_aws(dynamodb) else 120
+    max_duration = 1200 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -490,7 +490,7 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
     # items are expired with significant delay. Whereas a 10 minute delay
     # for regular tables was typical, in the table we have here we saw
     # a typical delay of 30 minutes before items expired.
-    max_duration = 3600 if is_aws(dynamodb) else 120
+    max_duration = 3600 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[
@@ -576,7 +576,7 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
 def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
-    max_duration = 3600 if is_aws(dynamodb) else 120
+    max_duration = 3600 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
         KeySchema=[
