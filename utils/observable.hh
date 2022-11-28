@@ -143,7 +143,7 @@ using observer = typename observable<Args...>::observer;
 
 template <typename... Args>
 inline observer<Args...> dummy_observer() {
-    return observer<Args...>(nullptr, noncopyable_function<void(Args...)>());
+    return observer<Args...>(nullptr, seastar::noncopyable_function<void(Args...)>());
 }
 
 }
