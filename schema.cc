@@ -1854,6 +1854,7 @@ std::vector<db::view::view_key_and_action> collection_column_computation::comput
                 bytes_opt elements[] = {bytes(key), value.value().linearize()};
                 return tuple_type_impl::build_value(elements);
         }
+        std::abort(); // compiler will error
     };
 
     std::vector<db::view::view_key_and_action> ret;
