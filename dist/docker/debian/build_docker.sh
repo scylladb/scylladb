@@ -76,9 +76,7 @@ run apt-get -y update
 run apt-get -y install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog locales sudo
-run locale-gen en_US.UTF-8
-run update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog sudo
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
@@ -95,9 +93,9 @@ bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scyl
 bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
-bconfig --env LANG=en_US.UTF-8
-bconfig --env LANGUAGE=en_US:en
-bconfig --env LC_ALL=en_US.UTF-8
+bconfig --env LANG=C.UTF-8
+bconfig --env LANGUAGE=
+bconfig --env LC_ALL=C.UTF-8
 bconfig --entrypoint  '["/docker-entrypoint.py"]'
 bconfig --cmd  ''
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
