@@ -31,6 +31,20 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
     return true;
 }
 
+sstable_directory::components_lister::components_lister(std::filesystem::path dir)
+        : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
+{
+}
+
+future<sstring> sstable_directory::components_lister::get() {
+    auto de = co_await _lister.get();
+    co_return sstring(de ? de->name : "");
+}
+
+future<> sstable_directory::components_lister::close() {
+    return _lister.close();
+}
+
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         fs::path sstable_dir,
@@ -166,12 +180,16 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
     scan_state state;
 
-    directory_lister sstable_dir_lister(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
+    components_lister sstable_dir_lister(_sstable_dir);
     std::exception_ptr ex;
     try {
-        while (auto de = co_await sstable_dir_lister.get()) {
-            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
-            handle_component(state, std::move(comps), _sstable_dir / de->name);
+        while (true) {
+            sstring name = co_await sstable_dir_lister.get();
+            if (name == "") {
+                break;
+            }
+            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), name);
+            handle_component(state, std::move(comps), _sstable_dir / name);
         }
     } catch (...) {
         ex = std::current_exception();

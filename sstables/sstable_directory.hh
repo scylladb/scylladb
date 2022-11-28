@@ -23,6 +23,7 @@
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/lister.hh"
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
@@ -61,6 +62,14 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
+    };
+
+    class components_lister {
+        directory_lister _lister;
+    public:
+        future<sstring> get();
+        components_lister(std::filesystem::path dir);
+        future<> close();
     };
 
 private:
