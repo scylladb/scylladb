@@ -106,9 +106,6 @@ public:
     explicit sstable_from_existing_file(sharded<sstables::test_env>& env) : _get_mgr([s = &env] { return &s->local().manager(); }) {}
     // This variant this transportable across shards
     explicit sstable_from_existing_file(cql_test_env& env) : _get_mgr([&env] { return &env.db().local().get_user_sstables_manager(); }) {}
-    sstables::shared_sstable operator()(fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) const {
-        return _get_mgr()->make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
-    }
     sstables_manager& get_manager() { return *_get_mgr(); }
 };
 
@@ -150,14 +147,10 @@ static void with_sstable_directory(
         }
     });
 
-    auto wrapped_sfe = [&sstable_from_existing] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-        return sstable_from_existing(std::move(dir), gen, v, f);
-    };
-
     sstdir.start(seastar::sharded_parameter([&sstable_from_existing] { return std::ref(sstable_from_existing.get_manager()); }),
             seastar::sharded_parameter([] { return test_table_schema(); }),
             std::move(path), default_priority_class(),
-            default_io_error_handler_gen(), std::move(wrapped_sfe)).get();
+            default_io_error_handler_gen()).get();
 
     func(sstdir);
 }

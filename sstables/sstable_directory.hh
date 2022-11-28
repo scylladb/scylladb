@@ -50,12 +50,6 @@ public:
 // or the main directory.
 class sstable_directory {
 public:
-    using sstable_object_from_existing_fn =
-        noncopyable_function<sstables::shared_sstable(std::filesystem::path,
-                                                      sstables::generation_type,
-                                                      sstables::sstable_version_types,
-                                                      sstables::sstable_format_types)>;
-
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
     using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
@@ -96,9 +90,6 @@ private:
     ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
 
-    // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
-    sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
-
     generation_type _max_generation_seen = generation_from_value(0);
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
 
@@ -138,8 +129,7 @@ public:
             schema_ptr schema,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
-            io_error_handler_gen error_handler_gen,
-            sstable_object_from_existing_fn sstable_from_existing);
+            io_error_handler_gen error_handler_gen);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
         return _unsorted_sstables;
