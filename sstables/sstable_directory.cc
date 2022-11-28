@@ -33,12 +33,10 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 
 sstable_directory::sstable_directory(fs::path sstable_dir,
         ::io_priority_class io_prio,
-        unsigned load_parallelism,
-        semaphore& load_semaphore,
+        directory_semaphore& load_semaphore,
         sstable_object_from_existing_fn sstable_from_existing)
     : _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
-    , _load_parallelism(load_parallelism)
     , _load_semaphore(load_semaphore)
     , _sstable_object_from_existing_sstable(std::move(sstable_from_existing))
     , _unshared_remote_sstables(smp::count)
@@ -439,8 +437,8 @@ template <typename Container, typename Func>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
     return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
-      return max_concurrent_for_each(c, _load_parallelism, [this, &func] (auto& el) mutable {
-        return with_semaphore(_load_semaphore, 1, [this, &func,  el = std::move(el)] () mutable {
+      return max_concurrent_for_each(c, _load_semaphore._concurrency, [this, &func] (auto& el) mutable {
+        return with_semaphore(_load_semaphore._sem, 1, [this, &func,  el = std::move(el)] () mutable {
             return func(el);
         });
       });

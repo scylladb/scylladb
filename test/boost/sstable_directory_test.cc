@@ -135,7 +135,7 @@ static void with_sstable_directory(
     sstable_directory::sstable_object_from_existing_fn sstable_from_existing,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
-    sharded<semaphore> sstdir_sem;
+    sharded<sstables::directory_semaphore> sstdir_sem;
     sstdir_sem.start(load_parallelism).get();
     auto stop_sstdir_sem = defer([&sstdir_sem] {
         sstdir_sem.stop().get();
@@ -153,7 +153,7 @@ static void with_sstable_directory(
         return sstable_from_existing(std::move(dir), gen, v, f);
     };
 
-    sstdir.start(std::move(path), default_priority_class(), load_parallelism, std::ref(sstdir_sem), std::move(wrapped_sfe)).get();
+    sstdir.start(std::move(path), default_priority_class(), std::ref(sstdir_sem), std::move(wrapped_sfe)).get();
 
     func(sstdir);
 }

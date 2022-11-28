@@ -30,6 +30,20 @@ namespace sstables {
 
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
+class directory_semaphore {
+    unsigned _concurrency;
+    semaphore _sem;
+public:
+    directory_semaphore(unsigned concurrency)
+            : _concurrency(concurrency)
+            , _sem(concurrency)
+    {
+    }
+
+    friend class sstable_directory;
+    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
+};
+
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),
 // or the main directory.
 class sstable_directory {
@@ -79,8 +93,7 @@ private:
 
     // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
     // how many of them we process at the same time.
-    const size_t _load_parallelism;
-    semaphore& _load_semaphore;
+    directory_semaphore& _load_semaphore;
 
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
@@ -122,8 +135,7 @@ private:
 public:
     sstable_directory(std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
-            unsigned load_parallelism,
-            semaphore& load_semaphore,
+            directory_semaphore& load_semaphore,
             sstable_object_from_existing_fn sstable_from_existing);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {

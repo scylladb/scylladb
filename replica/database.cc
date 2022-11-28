@@ -307,7 +307,7 @@ public:
 };
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-        compaction_manager& cm, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
+        compaction_manager& cm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
