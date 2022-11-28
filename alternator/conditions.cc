@@ -232,7 +232,14 @@ bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2,
     if (it2->name == "S") {
         return rjson::to_string_view(it1->value).starts_with(rjson::to_string_view(it2->value));
     } else /* it2->name == "B" */ {
-        return base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
+        try {
+            return base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
+        } catch(std::invalid_argument&) {
+            // determine if any of the malformed values is from query and raise an exception if so
+            unwrap_bytes(it1->value, v1_from_query);
+            unwrap_bytes(it2->value, v2_from_query);
+            return false;
+        }
     }
 }
 
@@ -241,7 +248,7 @@ static bool is_set_of(const rjson::value& type1, const rjson::value& type2) {
 }
 
 // Check if two JSON-encoded values match with the CONTAINS relation
-bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
+bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2, bool v1_from_query, bool v2_from_query) {
     if (!v1) {
         return false;
     }
@@ -250,7 +257,12 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
     if (kv1.name == "S" && kv2.name == "S") {
         return rjson::to_string_view(kv1.value).find(rjson::to_string_view(kv2.value)) != std::string_view::npos;
     } else if (kv1.name == "B" && kv2.name == "B") {
-        return rjson::base64_decode(kv1.value).find(rjson::base64_decode(kv2.value)) != bytes::npos;
+        auto d_kv1 = unwrap_bytes(kv1.value, v1_from_query);
+        auto d_kv2 = unwrap_bytes(kv2.value, v2_from_query);
+        if (!d_kv1 || !d_kv2) {
+            return false;
+        }
+        return d_kv1->find(*d_kv2) != bytes::npos;
     } else if (is_set_of(kv1.name, kv2.name)) {
         for (auto i = kv1.value.Begin(); i != kv1.value.End(); ++i) {
             if (*i == kv2.value) {
@@ -273,11 +285,11 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
 }
 
 // Check if two JSON-encoded values match with the NOT_CONTAINS relation
-static bool check_NOT_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
+static bool check_NOT_CONTAINS(const rjson::value* v1, const rjson::value& v2, bool v1_from_query, bool v2_from_query) {
     if (!v1) {
         return false;
     }
-    return !check_CONTAINS(v1, v2);
+    return !check_CONTAINS(v1, v2, v1_from_query, v2_from_query);
 }
 
 // Check if a JSON-encoded value equals any element of an array, which must have at least one element.
@@ -374,7 +386,12 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
                    std::string_view(kv2.value.GetString(), kv2.value.GetStringLength()));
     }
     if (kv1.name == "B") {
-        return cmp(rjson::base64_decode(kv1.value), rjson::base64_decode(kv2.value));
+        auto d_kv1 = unwrap_bytes(kv1.value, v1_from_query);
+        auto d_kv2 = unwrap_bytes(kv2.value, v2_from_query);
+        if(!d_kv1 || !d_kv2) {
+            return false;
+        }
+        return cmp(*d_kv1, *d_kv2);
     }
     // cannot reach here, as check_comparable_type() verifies the type is one
     // of the above options.
@@ -464,7 +481,13 @@ static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const r
                              bounds_from_query);
     }
     if (kv_v.name == "B") {
-        return check_BETWEEN(rjson::base64_decode(kv_v.value), rjson::base64_decode(kv_lb.value), rjson::base64_decode(kv_ub.value), bounds_from_query);
+        auto d_kv_v = unwrap_bytes(kv_v.value, v_from_query);
+        auto d_kv_lb = unwrap_bytes(kv_lb.value, lb_from_query);
+        auto d_kv_ub = unwrap_bytes(kv_ub.value, ub_from_query);
+        if(!d_kv_v || !d_kv_lb || !d_kv_ub) {
+            return false;
+        }
+        return check_BETWEEN(*d_kv_v, *d_kv_lb, *d_kv_ub, bounds_from_query);
     }
     if (v_from_query) {
         throw api_error::validation(
@@ -557,7 +580,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
                             format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
                                     "got {} instead", argtype));
                 }
-                return check_CONTAINS(got, arg);
+                return check_CONTAINS(got, arg, false, true);
             }
         case comparison_operator_type::NOT_CONTAINS:
             {
@@ -571,7 +594,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
                             format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
                                     "got {} instead", argtype));
                 }
-                return check_NOT_CONTAINS(got, arg);
+                return check_NOT_CONTAINS(got, arg, false, true);
             }
         }
         throw std::logic_error(format("Internal error: corrupted operator enum: {}", int(op)));
