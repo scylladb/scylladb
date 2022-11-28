@@ -20,6 +20,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
+#include "sstables/sstable_directory.hh"
 #include "db/cache_tracker.hh"
 #include "locator/host_id.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -84,6 +85,8 @@ public:
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+
+    sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }

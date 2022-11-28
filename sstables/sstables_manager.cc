@@ -105,4 +105,8 @@ future<> sstables_manager::close() {
     co_await _sstable_metadata_concurrency_sem.stop();
 }
 
+sstable_directory::components_lister sstables_manager::get_components_lister(std::filesystem::path dir) {
+    return sstable_directory::components_lister(std::move(dir));
+}
+
 }   // namespace sstables

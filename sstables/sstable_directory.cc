@@ -180,7 +180,7 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
     scan_state state;
 
-    components_lister sstable_dir_lister(_sstable_dir);
+    auto sstable_dir_lister = _manager.get_components_lister(_sstable_dir);
     std::exception_ptr ex;
     try {
         while (true) {
