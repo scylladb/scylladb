@@ -35,11 +35,13 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         fs::path sstable_dir,
         ::io_priority_class io_prio,
+        io_error_handler_gen error_handler_gen,
         sstable_object_from_existing_fn sstable_from_existing)
     : _manager(manager)
     , _schema(std::move(schema))
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
+    , _error_handler_gen(error_handler_gen)
     , _sstable_object_from_existing_sstable(std::move(sstable_from_existing))
     , _unshared_remote_sstables(smp::count)
 {}

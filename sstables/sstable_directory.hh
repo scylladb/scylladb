@@ -22,6 +22,7 @@
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
+#include "utils/disk-error-handler.hh"
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
@@ -93,6 +94,7 @@ private:
     schema_ptr _schema;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
+    io_error_handler_gen _error_handler_gen;
 
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
@@ -136,6 +138,7 @@ public:
             schema_ptr schema,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
+            io_error_handler_gen error_handler_gen,
             sstable_object_from_existing_fn sstable_from_existing);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
