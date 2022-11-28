@@ -124,35 +124,38 @@ db::commitlog::descriptor::descriptor(replay_position p, const std::string& fnam
         : descriptor(p.id, fname_prefix) {
 }
 
+const std::string db::commitlog::descriptor::SEPARATOR("-");
+const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPARATOR);
+const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
-db::commitlog::descriptor::descriptor(const sstring& filename, const std::string& fname_prefix)
-        : descriptor([&filename, &fname_prefix]() {
-            std::smatch m;
-            // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:Recycled-)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
-                std::string sfilename = filename;
-                auto cbegin = sfilename.cbegin();
-                // skip the leading path
-                // Note: we're using rfind rather than the regex above
-                // since it may run out of stack in debug builds.
-                // See https://github.com/scylladb/scylla/issues/4464
-                auto pos = std::string(filename).rfind('/');
-                if (pos != std::string::npos) {
-                    cbegin += pos + 1;
-                }
-                if (!std::regex_match(cbegin, sfilename.cend(), m, rx)) {
-                    throw std::domain_error("Cannot parse the version of the file: " + filename);
-                }
-                if (m[3].length() == 0) {
-                    // CMH. Can most likely ignore this
-                    throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
-                }
+static const std::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
+static const std::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
-                segment_id_type id = std::stoull(m[3].str().substr(1));
-                uint32_t ver = std::stoul(m[2].str());
+db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
+    : descriptor([&filename, &fname_prefix]() {
+        std::smatch m;
+        // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
+        auto cbegin = filename.cbegin();
+        auto pos = filename.rfind('/');
+        if (pos != std::string::npos) {
+            cbegin += pos + 1;
+        }
+        if (!std::regex_match(cbegin, filename.cend(), m, filename_match)) {
+            throw std::domain_error("Cannot parse the version of the file: " + filename);
+        }
+        if (m[1].str() != fname_prefix) {
+            throw std::domain_error("File does not match prefix pattern: " + filename + " / " + fname_prefix);
+        }
+        if (m[3].length() == 0) {
+            // CMH. Can most likely ignore this
+            throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
+        }
 
-                return descriptor(id, fname_prefix, ver, filename);
-            }()) {
+        segment_id_type id = std::stoull(m[3].str());
+        uint32_t ver = std::stoul(m[2].str());
+
+        return descriptor(id, fname_prefix, ver, filename);
+    }()) {
 }
 
 sstring db::commitlog::descriptor::filename() const {
@@ -216,11 +219,6 @@ struct db::commitlog::entry_writer {
     /** the resulting rp_handle for writing a given entry */
     virtual void result(size_t, rp_handle) = 0;
 };
-
-const std::string db::commitlog::descriptor::SEPARATOR("-");
-const std::string db::commitlog::descriptor::FILENAME_PREFIX(
-        "CommitLog" + SEPARATOR);
-const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
 class db::commitlog::segment_manager : public ::enable_shared_from_this<segment_manager> {
 public:
@@ -1400,6 +1398,9 @@ db::commitlog::segment_manager::segment_manager(config c)
 
     if (!cfg.metrics_category_name.empty()) {
         create_counters(cfg.metrics_category_name);
+    }
+    if (!std::regex_match(cfg.fname_prefix, allowed_prefix)) {
+        throw std::invalid_argument("Invalid filename prefix: " + cfg.fname_prefix);
     }
 }
 
