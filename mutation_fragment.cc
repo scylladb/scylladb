@@ -45,6 +45,7 @@ std::string_view to_string(partition_region r) {
         case partition_region::clustered: return "clustered";
         case partition_region::partition_end: return "partition_end";
     }
+    std::abort(); // compiler will error before we reach here
 }
 
 partition_region parse_partition_region(std::string_view s) {
