@@ -47,7 +47,7 @@ string_type to_sstring(sstables::generation_type generation) {
 namespace std {
 template <>
 struct hash<sstables::generation_type> {
-    constexpr size_t operator()(const sstables::generation_type& generation) const noexcept {
+    size_t operator()(const sstables::generation_type& generation) const noexcept {
         return hash<int64_t>{}(generation.value());
     }
 };
