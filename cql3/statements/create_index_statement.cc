@@ -232,10 +232,6 @@ void create_index_statement::validate_not_full_index(const index_target& target)
 
 void create_index_statement::validate_for_collection(const index_target& target, const column_definition& cd) const
 {
-    auto throw_exception = [&] {
-        const char* msg_format = "Cannot create secondary index on {} of non-frozen collection column {}";
-        throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
-    };
     switch (target.type) {
         case index_target::target_type::full:
             throw std::logic_error("invalid target type(full) in validate_for_collection");
