@@ -985,9 +985,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
             on_internal_error_noexcept(slogger, format("endpoint={} is not marked for removal but owns no tokens", endpoint));
         }
 
-        // Update pending ranges after update of normal tokens immediately to avoid
-        // a race where natural endpoint was updated to contain node A, but A was
-        // not yet removed from pending endpoints
         if (!is_normal_token_owner) {
             auto dc_rack = get_dc_rack_for(endpoint);
             slogger.debug("handle_state_normal: update_topology: endpoint={} dc={} rack={}", endpoint, dc_rack.dc, dc_rack.rack);
