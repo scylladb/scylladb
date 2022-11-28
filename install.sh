@@ -174,7 +174,6 @@ relocate_python3() {
     cat > "$install"<<EOF
 #!/usr/bin/env bash
 [[ -z "\$LD_PRELOAD" ]] || { echo "\$0: not compatible with LD_PRELOAD" >&2; exit 110; }
-export LC_ALL=en_US.UTF-8
 x="\$(readlink -f "\$0")"
 b="\$(basename "\$x")"
 d="\$(dirname "\$x")"
