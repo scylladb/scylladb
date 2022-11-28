@@ -147,7 +147,7 @@ concept invocable_on_expression_ref
         && std::invocable<Func, usertype_constructor&>
         ;
 
-/// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
+/// A CQL expression -- union of all possible expression types.
 class expression final {
     // 'impl' holds a variant of all expression types, but since 
     // variants of incomplete types are not allowed, we forward declare it
@@ -198,8 +198,7 @@ bool operator==(const expression& e1, const expression& e2);
 // An expression that doesn't contain subexpressions
 template <typename E>
 concept LeafExpression
-        = std::same_as<bool, E>
-        || std::same_as<unresolved_identifier, E> 
+        = std::same_as<unresolved_identifier, E>
         || std::same_as<null, E> 
         || std::same_as<bind_variable, E> 
         || std::same_as<untyped_constant, E> 
