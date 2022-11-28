@@ -344,7 +344,7 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     auto results = co_await when_all_succeed(futures.begin(), futures.end());
 
     forward_aggregates aggrs(req);
-    co_return co_await aggrs.with_thread_if_needed([&aggrs, results = std::move(results), result = std::move(result)] () mutable {
+    co_return co_await aggrs.with_thread_if_needed([&aggrs, req, results = std::move(results), result = std::move(result)] () mutable {
         for (auto&& r : results) {
             if (result) {
                 aggrs.merge(*result, std::move(r));
@@ -353,6 +353,14 @@ future<query::forward_result> forward_service::dispatch_to_shards(
                 result = r;
             }
         }
+
+        flogger.debug("on node execution result is {}", seastar::value_of([&req, &result] {
+            return query::forward_result::printer {
+                .functions = get_functions(req),
+                .res = *result
+            };})
+        );
+
         return *result;
     });
 }
@@ -452,11 +460,14 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         }
         query::forward_result res = { .query_results = rows[0] };
 
-        query::forward_result::printer res_printer{
-            .functions = get_functions(req),
-            .res = res
-        };
-        tracing::trace(tr_state, "On shard execution result is {}", res_printer);
+        auto printer = seastar::value_of([&req, &res] {
+            return query::forward_result::printer {
+                .functions = get_functions(req),
+                .res = res
+            };
+        });
+        tracing::trace(tr_state, "On shard execution result is {}", printer);
+        flogger.debug("on shard execution result is {}", printer);
 
         return res;
     });
@@ -509,6 +520,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     }
 
     tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
+    flogger.debug("dispatching forward_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
     query::forward_result result;
@@ -541,12 +553,14 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                             query::forward_result partial_result
                         ) mutable {
                             forward_aggregates aggrs(req);
-                            query::forward_result::printer partial_result_printer{
-                                .functions = get_functions(req),
-                                .res = partial_result
-                            };
-                            tracing::trace(tr_state_, "Received forward_result={} from {}", partial_result_printer, addr);
-                            flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
+                            auto partial_printer = seastar::value_of([&req, &partial_result] { 
+                                return query::forward_result::printer {
+                                    .functions = get_functions(req),
+                                    .res = partial_result
+                                };
+                            });
+                            tracing::trace(tr_state_, "Received forward_result={} from {}", partial_printer, addr);
+                            flogger.debug("received forward_result={} from {}", partial_printer, addr);
                             
                             return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
                                 aggrs.merge(result_, std::move(partial_result));
@@ -559,12 +573,14 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     const bool requires_thread = aggrs.requires_thread();
 
                     auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
-                        query::forward_result::printer result_printer{
-                            .functions = get_functions(req),
-                            .res = result
-                        };
-                        tracing::trace(tr_state, "Merged result is {}", result_printer);
-                        flogger.debug("merged result is {}", result_printer);
+                        auto printer = seastar::value_of([&req, &result] {
+                            return query::forward_result::printer {
+                                .functions = get_functions(req),
+                                .res = result
+                            };
+                        });
+                        tracing::trace(tr_state, "Merged result is {}", printer);
+                        flogger.debug("merged result is {}", printer);
 
                         aggrs.finalize(result);
                         return result;

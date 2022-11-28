@@ -414,7 +414,7 @@ struct forward_result {
     std::vector<bytes_opt> query_results;
 
     struct printer {
-        const std::vector<::shared_ptr<db::functions::aggregate_function>>& functions;
+        const std::vector<::shared_ptr<db::functions::aggregate_function>> functions;
         const query::forward_result& res;
     };
 };
