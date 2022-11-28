@@ -95,6 +95,14 @@ class raft_group0 {
     } _status_for_monitoring;
 
 public:
+    // Passed to `setup_group0` when replacing a node.
+    struct replace_info {
+        gms::inet_address ip_addr;
+        // Optional because it might be missing when Raft is disabled or in RECOVERY mode.
+        // `setup_group0` will verify that it's present when it's required.
+        std::optional<raft::server_id> raft_id;
+    };
+
     // Assumes that the provided services are fully started.
     raft_group0(seastar::abort_source& abort_source,
         service::raft_group_registry& raft_gr,
@@ -114,18 +122,21 @@ public:
     // Call before destroying the object.
     future<> abort();
 
-    // Call during the startup procedure.
+    // Call during the startup procedure, after gossiping has started.
+    //
+    // If we're performing the replace operation, pass the IP and Raft ID of the replaced node
+    // obtained using the shadow round through the `replace_info` parameter.
     //
     // If the local RAFT feature is enabled, does one of the following:
     // - join group 0 (if we're bootstrapping),
     // - start existing group 0 server (if we bootstrapped before),
-    // - (TODO: not implemented yet) prepare us for the upgrade procedure, which will create group 0 later.
+    // - prepare us for the upgrade procedure, which will create group 0 later (if we're upgrading).
     //
     // Cannot be called twice.
     //
     // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
-    // TODO: specify dependencies on other services: where during startup should we setup group 0?
-    future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes);
+    future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
+                          std::optional<replace_info>);
 
     // Call at the end of the startup procedure, after the node entered NORMAL state.
     // `setup_group0()` must have finished earlier.
@@ -157,7 +168,7 @@ public:
     // In both cases, `setup_group0()` must have finished earlier.
     //
     // The provided address may be our own - if we're replacing a node that had the same address as ours.
-    // We'll look for the other node's Raft ID in the group 0 configuration.
+    // We'll look for the other node's Raft ID in the Raft address map.
     future<> remove_from_group0(gms::inet_address host);
 
     // Assumes that this node's Raft server ID is already initialized and returns it.
