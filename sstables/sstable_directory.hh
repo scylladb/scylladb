@@ -93,10 +93,6 @@ private:
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
 
-    // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
-    // how many of them we process at the same time.
-    directory_semaphore& _load_semaphore;
-
     // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
     sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
 
@@ -138,7 +134,6 @@ public:
     sstable_directory(sstables_manager& manager,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
-            directory_semaphore& load_semaphore,
             sstable_object_from_existing_fn sstable_from_existing);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {

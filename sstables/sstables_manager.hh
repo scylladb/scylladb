@@ -105,6 +105,7 @@ public:
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
     future<> close();
+    directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
