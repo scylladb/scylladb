@@ -1050,3 +1050,45 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
 SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file_no_recycle) {
     co_await do_test_exception_in_allocate_ex(true);
 }
+
+using namespace std::string_literals;
+
+BOOST_AUTO_TEST_CASE(test_commitlog_segment_descriptor) {
+    for (auto& prefix : { "tuta"s, "ninja"s, "Commitlog"s, "Schemalog"s, "bamboo"s }) {
+        // create a descriptor without given filename
+        commitlog::descriptor d(db::replay_position(), prefix + commitlog::descriptor::SEPARATOR);
+
+        for (auto& add : { ""s, "Recycled-"s }) {
+            auto filename = "/some/path/we/dont/open/"s + add + std::string(d.filename());
+
+            // ensure we only allow same prefix
+            for (auto& wrong_prefix : { "fisk"s, "notter"s, "blazer"s }) {
+                try {
+                    commitlog::descriptor d2(filename, wrong_prefix + commitlog::descriptor::SEPARATOR);
+                } catch (std::domain_error&) {
+                    // ok
+                    continue;
+                }
+                BOOST_FAIL("Should not reach");
+            }
+
+            commitlog::descriptor d3(filename, prefix + commitlog::descriptor::SEPARATOR);
+
+            try {
+                // check we require id
+                commitlog::descriptor d3("/tmp/" + add + prefix + commitlog::descriptor::SEPARATOR + ".log", prefix);
+                BOOST_FAIL("Should not reach");
+            } catch (std::domain_error&) {
+                // ok
+            } 
+            try {
+                // check we require ver
+                commitlog::descriptor d3("/tmp/" + add + prefix + commitlog::descriptor::SEPARATOR + "12.log", prefix);
+                BOOST_FAIL("Should not reach");
+            } catch (std::domain_error&) {
+                // ok
+            } 
+        }
+    }
+}
+
