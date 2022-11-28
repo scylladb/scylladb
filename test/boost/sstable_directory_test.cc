@@ -495,10 +495,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         }
 
       with_sstable_directory(upload_path, 1,
-                [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                    auto& cf = e.local_db().find_column_family("ks", "cf");
-                    return cf.make_sstable(dir.native(), gen, v, f);
-                },
+                sstable_from_existing_file(e),
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
@@ -540,10 +537,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         }
 
       with_sstable_directory(upload_path, 1,
-                [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                    auto& cf = e.local_db().find_column_family("ks", "cf");
-                    return cf.make_sstable(dir.native(), gen, v, f);
-                },
+                sstable_from_existing_file(e),
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
@@ -585,10 +579,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         }
 
       with_sstable_directory(upload_path, 1,
-                [&e] (fs::path dir, generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                    auto& cf = e.local_db().find_column_family("ks", "cf");
-                    return cf.make_sstable(dir.native(), gen, v, f);
-                },
+                sstable_from_existing_file(e),
                 [&, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
