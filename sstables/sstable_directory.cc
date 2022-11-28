@@ -100,7 +100,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
         _max_version_seen = desc.version;
     }
 
-    auto sst = _sstable_object_from_existing_sstable(_sstable_dir, desc.generation, desc.version, desc.format);
+    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     return sst->load(_io_priority).then([this, sst, flags] {
         validate(sst, flags);
         if (flags.need_mutate_level) {
@@ -256,7 +256,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 future<>
 sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
     return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
-        auto sst = _sstable_object_from_existing_sstable(_sstable_dir, info.generation, info.version, info.format);
+        auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
         return sst->load(std::move(info)).then([sst, this] {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
@@ -403,7 +403,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
     return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
         return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
-            auto sst = _sstable_object_from_existing_sstable(_sstable_dir, info.generation, info.version, info.format);
+            auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
                 // Last bucket gets leftover SSTables
                 if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
