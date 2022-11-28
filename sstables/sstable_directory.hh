@@ -90,6 +90,7 @@ private:
     std::optional<utils::phased_barrier::operation> _operation_barrier;
 
     sstables_manager& _manager;
+    schema_ptr _schema;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
 
@@ -132,6 +133,7 @@ private:
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
     sstable_directory(sstables_manager& manager,
+            schema_ptr schema,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
             sstable_object_from_existing_fn sstable_from_existing);

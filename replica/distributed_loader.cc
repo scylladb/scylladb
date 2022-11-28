@@ -313,6 +313,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
+            sharded_parameter([&global_table] { return global_table->schema(); }),
             upload, service::get_local_streaming_priority(),
             [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
@@ -382,6 +383,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
+            sharded_parameter([&global_table] { return global_table->schema(); }),
             upload, service::get_local_streaming_priority(),
             [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
                 return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
@@ -552,6 +554,7 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     auto& db = _db;
     co_await directory.start(
         sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
+        sharded_parameter([&global_table] { return global_table->schema(); }),
         fs::path(sstdir), default_priority_class(),
         [&global_table] (fs::path dir, sstables::generation_type gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
             return global_table->make_sstable(dir.native(), gen, v, f);

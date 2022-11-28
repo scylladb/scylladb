@@ -155,6 +155,7 @@ static void with_sstable_directory(
     };
 
     sstdir.start(seastar::sharded_parameter([&sstable_from_existing] { return std::ref(sstable_from_existing.get_manager()); }),
+            seastar::sharded_parameter([] { return test_table_schema(); }),
             std::move(path), default_priority_class(), std::move(wrapped_sfe)).get();
 
     func(sstdir);
