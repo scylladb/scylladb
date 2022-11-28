@@ -37,6 +37,7 @@ namespace gms { class feature_service; }
 
 namespace sstables {
 
+class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
@@ -69,8 +70,9 @@ private:
     cache_tracker& _cache_tracker;
 
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
+    directory_semaphore& _dir_semaphore;
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem);
     virtual ~sstables_manager();
 
     // Constructs a shared sstable

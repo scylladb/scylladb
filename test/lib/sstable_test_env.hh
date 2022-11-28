@@ -17,6 +17,7 @@
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_directory.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
@@ -47,6 +48,7 @@ struct test_env_config {
 class test_env {
     struct impl {
         db::config db_config;
+        directory_semaphore dir_sem;
         cache_tracker cache_tracker;
         gms::feature_service feature_service;
         db::nop_large_data_handler nop_ld_handler;
