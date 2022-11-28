@@ -27,8 +27,7 @@ endpoint_snitch        GossipingPropertyFileSnitch
 
 **Important**
 
-If the node has two physical network interfaces in a multi-datacenter installation.
-Set ``listen_address`` to this node's private IP or hostname.
+If the node has two physical network interfaces in a multi-datacenter installation, set ``listen_address`` to this node's private IP or hostname.
 Set ``broadcast_address`` to the second IP or hostname (for communication between data centers).
 Set ``listen_on_broadcast_address`` to true.
 Open the storage_port or ssl_storage_port on the public IP firewall.
