@@ -76,7 +76,6 @@ struct column_mutation_attribute;
 struct function_call;
 struct cast;
 struct field_selection;
-struct null;
 struct bind_variable;
 struct untyped_constant;
 struct constant;
@@ -96,7 +95,6 @@ concept ExpressionElement
         || std::same_as<T, function_call>
         || std::same_as<T, cast>
         || std::same_as<T, field_selection>
-        || std::same_as<T, null>
         || std::same_as<T, bind_variable>
         || std::same_as<T, untyped_constant>
         || std::same_as<T, constant>
@@ -117,7 +115,6 @@ concept invocable_on_expression
         && std::invocable<Func, function_call>
         && std::invocable<Func, cast>
         && std::invocable<Func, field_selection>
-        && std::invocable<Func, null>
         && std::invocable<Func, bind_variable>
         && std::invocable<Func, untyped_constant>
         && std::invocable<Func, constant>
@@ -138,7 +135,6 @@ concept invocable_on_expression_ref
         && std::invocable<Func, function_call&>
         && std::invocable<Func, cast&>
         && std::invocable<Func, field_selection&>
-        && std::invocable<Func, null&>
         && std::invocable<Func, bind_variable&>
         && std::invocable<Func, untyped_constant&>
         && std::invocable<Func, constant&>
@@ -199,7 +195,6 @@ bool operator==(const expression& e1, const expression& e2);
 template <typename E>
 concept LeafExpression
         = std::same_as<unresolved_identifier, E>
-        || std::same_as<null, E> 
         || std::same_as<bind_variable, E> 
         || std::same_as<untyped_constant, E> 
         || std::same_as<constant, E>
@@ -345,12 +340,6 @@ struct field_selection {
     friend bool operator==(const field_selection&, const field_selection&) = default;
 };
 
-struct null {
-    data_type type; // may be null before prepare
-
-    friend bool operator==(const null&, const null&) = default;
-};
-
 struct bind_variable {
     int32_t bind_index;
 
@@ -364,12 +353,14 @@ struct bind_variable {
 // A constant which does not yet have a date type. It is partially typed
 // (we know if it's floating or int) but not sized.
 struct untyped_constant {
-    enum type_class { integer, floating_point, string, boolean, duration, uuid, hex };
+    enum type_class { integer, floating_point, string, boolean, duration, uuid, hex, null };
     type_class partial_type;
     sstring raw_text;
 
     friend bool operator==(const untyped_constant&, const untyped_constant&) = default;
 };
+
+untyped_constant make_untyped_null();
 
 // Represents a constant value with known value and type
 // For null and unset the type can sometimes be set to empty_type
@@ -435,7 +426,7 @@ struct usertype_constructor {
 struct expression::impl final {
     using variant_type = std::variant<
             conjunction, binary_operator, column_value, token, unresolved_identifier,
-            column_mutation_attribute, function_call, cast, field_selection, null,
+            column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
             usertype_constructor, subscript>;
     variant_type v;

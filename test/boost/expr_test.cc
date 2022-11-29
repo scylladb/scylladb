@@ -1529,7 +1529,7 @@ BOOST_AUTO_TEST_CASE(prepare_null) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression null_expr = null{};
+    expression null_expr = make_untyped_null();
 
     expression prepared = prepare_expression(null_expr, db, "test_ks", table_schema.get(), make_receiver(int32_type));
     expression expected = constant::make_null(int32_type);
@@ -1541,7 +1541,7 @@ BOOST_AUTO_TEST_CASE(prepare_null_no_type_fails) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression null_expr = null{};
+    expression null_expr = make_untyped_null();
     BOOST_REQUIRE_THROW(prepare_expression(null_expr, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
 }
@@ -1863,7 +1863,7 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
         .style = collection_constructor::style_type::list,
         .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
                      untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
-                     null{}},
+                     make_untyped_null()},
         .type = nullptr};
 
     data_type list_type = list_type_impl::get_instance(long_type, true);
@@ -1992,7 +1992,7 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_null) {
         .elements =
             {
                 untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
-                null{},
+                make_untyped_null(),
                 untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
             },
         .type = nullptr};
@@ -2250,7 +2250,8 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_key) {
                              untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {null{}, untyped_constant{.partial_type = untyped_constant::type_class::integer,
+                        .elements = {make_untyped_null(),
+                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
                                                               .raw_text = "-20"}},
                         .type = nullptr},
                     tuple_constructor{
@@ -2283,7 +2284,7 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_value) {
                                   .type = nullptr},
                 tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
                                                                 .raw_text = "2"},
-                                               null{}},
+                                               make_untyped_null()},
                                   .type = nullptr},
                 tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
                                                                 .raw_text = "1"},
@@ -2358,7 +2359,7 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_null) {
     constructor_elements.emplace(
         column_identifier("field1", true),
         untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
-    constructor_elements.emplace(column_identifier("field2", true), null{});
+    constructor_elements.emplace(column_identifier("field2", true), make_untyped_null());
     constructor_elements.emplace(
         column_identifier("field3", true),
         untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});

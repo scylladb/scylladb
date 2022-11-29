@@ -1513,7 +1513,7 @@ value returns [expression value]
     | l=collectionLiteral  { $value = std::move(l); }
     | u=usertypeLiteral    { $value = std::move(u); }
     | t=tupleLiteral       { $value = std::move(t); }
-    | K_NULL               { $value = null(); }
+    | K_NULL               { $value = make_untyped_null(); }
     | e=marker             { $value = std::move(e); }
     ;
 
@@ -1678,7 +1678,7 @@ relation returns [expression e]
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         { $e = binary_operator(token{std::move(l.elements)}, type, std::move(t)); }
     | name=cident K_IS K_NOT K_NULL {
-          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, null()); }
+          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
     | name=cident K_IN marker1=marker
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
     | name=cident K_IN in_values=singleColumnInValues

@@ -309,7 +309,7 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
 
     if (_op == expr::oper_t::LIKE) {
         auto literal_term = expr::as_if<expr::untyped_constant>(&*_value);
-        if (literal_term) {
+        if (literal_term && literal_term->partial_type != expr::untyped_constant::type_class::null) {
             // Pass matcher object
             const sstring& pattern = literal_term->raw_text;
             return column_condition::condition(receiver, std::move(collection_element_expression),

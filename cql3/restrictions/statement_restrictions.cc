@@ -153,10 +153,6 @@ static std::vector<expr::expression> extract_partition_range(
             on_internal_error(rlogger, "extract_partition_range(field_selection)");
         }
 
-        void operator()(const null&) {
-            on_internal_error(rlogger, "extract_partition_range(null)");
-        }
-
         void operator()(const bind_variable&) {
             on_internal_error(rlogger, "extract_partition_range(bind_variable)");
         }
@@ -276,10 +272,6 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const field_selection&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(field_selection)");
-        }
-
-        void operator()(const null&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(null)");
         }
 
         void operator()(const bind_variable&) {
@@ -1237,10 +1229,6 @@ struct multi_column_range_accumulator {
 
     void operator()(const field_selection&) {
         on_internal_error(rlogger, "field selection encountered outside binary operator");
-    }
-
-    void operator()(const null&) {
-        on_internal_error(rlogger, "null encountered outside binary operator");
     }
 
     void operator()(const bind_variable&) {
