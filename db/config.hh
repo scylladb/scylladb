@@ -99,6 +99,7 @@ struct tri_mode_restriction_t {
 };
 using tri_mode_restriction = enum_option<tri_mode_restriction_t>;
 
+constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
 class config : public utils::config_file {
 public:

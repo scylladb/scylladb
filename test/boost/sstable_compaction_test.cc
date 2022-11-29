@@ -3595,7 +3595,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
         };
 
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_expiring_cell = [&] (std::chrono::hours step) {
             static thread_local int32_t value = 1;
@@ -3716,7 +3716,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(window)).count();
         };
 
-        auto tokens = token_generation_for_shard(4, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(4, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_sstable = [&] (int sstable_idx) {
             static thread_local int32_t value = 1;
@@ -3838,7 +3838,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             using namespace std::chrono;
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_row = [&] (std::chrono::hours step) {
             static thread_local int32_t value = 1;
@@ -3899,7 +3899,7 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
         auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
 
         auto make_row = [&] (std::chrono::hours step) {
@@ -4013,7 +4013,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             return (now + duration_cast<seconds>(step)).count();
         };
 
-        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_row = [&](unsigned token_idx, auto step) {
             static thread_local int32_t value = 1;
@@ -4151,7 +4151,7 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
         std::map<sstring, sstring> opts;
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, std::move(opts));
 
-        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_row = [&](unsigned token_idx) {
             auto key_str = tokens[token_idx].first;
@@ -4291,7 +4291,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         auto tmp = tmpdir();
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto tracker = make_lw_shared<cache_tracker>();
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto next_timestamp = [] (auto step) {
             using namespace std::chrono;
@@ -4531,7 +4531,7 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
             using namespace std::chrono;
             return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto make_row = [&](std::chrono::hours step) {
             static thread_local int32_t value = 1;
@@ -4592,7 +4592,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         auto s = builder.build();
 
         auto tmp = tmpdir();
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
         auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
 
         table_for_tests cf(env.manager(), s, tmp.path().string());
@@ -4763,7 +4763,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             auto s = builder.build();
 
             auto tmp = tmpdir();
-            auto tokens = token_generation_for_shard(all_files, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+            auto tokens = token_generation_for_shard(all_files, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
             table_for_tests cf(env.manager(), s, tmp.path().string());
             auto close_cf = deferred_stop(cf);
@@ -4857,7 +4857,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
         auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
         table_for_tests cf(env.manager(), s);
         auto close_cf = deferred_stop(cf);
