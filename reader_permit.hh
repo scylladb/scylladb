@@ -171,7 +171,8 @@ class reader_permit::resource_units {
     friend class reader_permit;
     friend class reader_concurrency_semaphore;
 private:
-    resource_units(reader_permit permit, reader_resources res) noexcept;
+    class already_consumed_tag {};
+    resource_units(reader_permit permit, reader_resources res);
 public:
     resource_units(const resource_units&) = delete;
     resource_units(resource_units&&) noexcept;

@@ -26,9 +26,10 @@ std::ostream& operator<<(std::ostream& os , const reader_resources& r) {
     return os;
 }
 
-reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res) noexcept
+reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res)
     : _permit(std::move(permit)), _resources(res) {
     _permit.consume(res);
+    _resources = res;
 }
 
 reader_permit::resource_units::resource_units(resource_units&& o) noexcept
