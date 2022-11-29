@@ -169,6 +169,8 @@ public:
 
     void on_start_sstable_read() noexcept;
     void on_finish_sstable_read() noexcept;
+
+    uintptr_t id() { return reinterpret_cast<uintptr_t>(_impl.get()); }
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;
