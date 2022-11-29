@@ -727,6 +727,7 @@ public:
         case db::operation_type::read:
             return _rate_limiter_label_for_reads;
         }
+        std::abort(); // compiler will error if we get here
     }
 
     db::rate_limiter::label& get_rate_limiter_label_for_writes() {

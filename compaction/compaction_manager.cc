@@ -1045,7 +1045,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction::
             desc.sstables
             | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
     };
-    const auto threshold = std::max(schema->max_compaction_threshold(), 32);
+    const auto threshold = size_t(std::max(schema->max_compaction_threshold(), 32));
     auto count = num_runs_for_compaction();
     if (count <= threshold) {
         cmlog.trace("No need to wait for sstable count reduction in {}.{}: {} <= {}",

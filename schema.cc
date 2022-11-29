@@ -1774,8 +1774,6 @@ void collection_column_computation::operate_on_collection_entries(
 
     const column_definition* cdef = schema.get_column_definition(_collection_name);
 
-    auto get_cell = [](auto& kv) -> collection_kv::second_type& { return kv->second; };
-
     decltype(collection_mutation_view_description::cells) update_cells, existing_cells;
 
     const auto* update_cell = update.cells().find_cell(cdef->id);
@@ -1856,6 +1854,7 @@ std::vector<db::view::view_key_and_action> collection_column_computation::comput
                 bytes_opt elements[] = {bytes(key), value.value().linearize()};
                 return tuple_type_impl::build_value(elements);
         }
+        std::abort(); // compiler will error
     };
 
     std::vector<db::view::view_key_and_action> ret;

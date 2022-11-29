@@ -436,7 +436,7 @@ class segment_pool;
 struct reclaim_timer;
 
 class tracker::impl {
-    std::unique_ptr<segment_pool> _segment_pool;
+    std::unique_ptr<logalloc::segment_pool> _segment_pool;
     std::optional<background_reclaimer> _background_reclaimer;
     std::vector<region::impl*> _regions;
     seastar::metrics::metric_groups _metrics;
@@ -477,7 +477,7 @@ public:
     void enable_reclaim() noexcept {
         --_reclaiming_disabled_depth;
     }
-    segment_pool& segment_pool() {
+    logalloc::segment_pool& segment_pool() {
         return *_segment_pool;
     }
     void register_region(region::impl*);
@@ -963,7 +963,7 @@ public:
 // We prefer using high-address segments, and returning low-address segments to the seastar
 // allocator in order to segregate lsa and non-lsa memory, to reduce fragmentation.
 class segment_pool {
-    tracker::impl& _tracker;
+    logalloc::tracker::impl& _tracker;
     segment_store _store;
     std::vector<segment_descriptor> _segments;
     size_t _segments_in_use{};
@@ -1025,8 +1025,8 @@ private:
     }
     bool compact_segment(segment* seg);
 public:
-    explicit segment_pool(tracker::impl& tracker);
-    tracker::impl& tracker() { return _tracker; }
+    explicit segment_pool(logalloc::tracker::impl& tracker);
+    logalloc::tracker::impl& tracker() { return _tracker; }
     void prime(size_t available_memory, size_t min_free_memory);
     void use_standard_allocator_segment_pool_backend(size_t available_memory);
     segment* new_segment(region::impl* r);

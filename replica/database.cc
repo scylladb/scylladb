@@ -1961,7 +1961,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
 
     writers.reserve(muts.size());
 
-    for (auto i = 0; i < muts.size(); ++i) {
+    for (size_t i = 0; i < muts.size(); ++i) {
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
 
@@ -1995,7 +1995,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
     std::vector<rp_handle> handles = co_await cl->add_entries(std::move(writers), timeout);
 
     // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
-    for (auto i = 0; i < muts.size(); ++i) {
+    for (size_t i = 0; i < muts.size(); ++i) {
         auto&& cf = find_column_family(muts[i].column_family_id());
         auto s = local_schema_registry().get(muts[i].schema_version());
         co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);

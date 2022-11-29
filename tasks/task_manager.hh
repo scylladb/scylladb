@@ -44,7 +44,7 @@ private:
     task_map _all_tasks;
     modules _modules;
     config _cfg;
-    abort_source& _as;
+    seastar::abort_source& _as;
     serialized_action _update_task_ttl_action;
     utils::observer<uint32_t> _task_ttl_observer;
     uint32_t _task_ttl;
@@ -101,8 +101,8 @@ public:
             impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, task_id parent_id) noexcept;
 
             virtual future<task_manager::task::progress> get_progress() const;
-            virtual is_abortable is_abortable() const noexcept;
-            virtual is_internal is_internal() const noexcept;
+            virtual tasks::is_abortable is_abortable() const noexcept;
+            virtual tasks::is_internal is_internal() const noexcept;
             virtual future<> abort() noexcept;
         protected:
             virtual future<> run() = 0;
@@ -130,8 +130,8 @@ public:
         std::string get_module_name() const noexcept;
         module_ptr get_module() const noexcept;
         future<progress> get_progress() const;
-        is_abortable is_abortable() const noexcept;
-        is_internal is_internal() const noexcept;
+        tasks::is_abortable is_abortable() const noexcept;
+        tasks::is_internal is_internal() const noexcept;
         future<> abort() noexcept;
         bool abort_requested() const noexcept;
         future<> done() const noexcept;
@@ -153,7 +153,7 @@ public:
 
         uint64_t new_sequence_number() noexcept;
         task_manager& get_task_manager() noexcept;
-        virtual abort_source& abort_source() noexcept;
+        virtual seastar::abort_source& abort_source() noexcept;
         gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
         task_manager::task_map& get_tasks() noexcept;
@@ -198,7 +198,7 @@ public:
     template<typename T>
     static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_ptr)> func);
 protected:
-    abort_source& abort_source() noexcept;
+    seastar::abort_source& abort_source() noexcept;
     std::chrono::seconds get_task_ttl() const noexcept;
 private:
     future<> update_task_ttl() noexcept {

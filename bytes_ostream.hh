@@ -457,7 +457,9 @@ public:
             _begin.ptr->size = _size;
             _current = nullptr;
             _size = 0;
-            return managed_bytes(std::exchange(_begin.ptr, {}));
+            auto begin_ptr = _begin.ptr;
+            _begin.ptr = nullptr;
+            return managed_bytes(begin_ptr);
         } else {
             return managed_bytes();
         }

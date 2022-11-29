@@ -1413,9 +1413,6 @@ uint32_t mutation_partition::do_compact(const schema& s,
     auto should_purge_tombstone = [&] (const tombstone& t) {
         return t.deletion_time < gc_before && can_gc(t);
     };
-    auto should_purge_row_tombstone = [&] (const row_tombstone& t) {
-        return t.max_deletion_time() < gc_before && can_gc(t.tomb());
-    };
 
     bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, row_tombstone(_tombstone),
         query_time, can_gc, gc_before);

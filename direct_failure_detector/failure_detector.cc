@@ -48,7 +48,7 @@ struct listeners_liveness {
     std::vector<listener_info> listeners;
 
     // For each endpoint managed by this shard, the liveness state of this endpoint shared by all listeners in `listeners`.
-    std::unordered_map<pinger::endpoint_id, endpoint_liveness> endpoint_liveness;
+    std::unordered_map<pinger::endpoint_id, direct_failure_detector::endpoint_liveness> endpoint_liveness;
 };
 
 enum class endpoint_update {
