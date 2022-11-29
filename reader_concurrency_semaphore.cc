@@ -361,6 +361,10 @@ reader_concurrency_semaphore& reader_permit::semaphore() {
     return _impl->semaphore();
 }
 
+reader_permit::state reader_permit::get_state() const {
+    return _impl->get_state();
+}
+
 bool reader_permit::needs_readmission() const {
     return _impl->needs_readmission();
 }
