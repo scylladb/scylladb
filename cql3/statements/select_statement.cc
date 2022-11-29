@@ -1571,11 +1571,16 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         std::vector<data_type> selector_types;
         std::vector<const column_definition*> defs;
         selector_names.reserve(_select_clause.size());
+        selector_types.reserve(_select_clause.size());
         auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema);
         selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, *schema), db, schema, defs);
         auto selectors = factories.new_instances();
         for (size_t i = 0; i < selectors.size(); ++i) {
-            selector_names.push_back(selectables[i]->to_string());
+            if (_select_clause[i]->alias) {
+                selector_names.push_back(_select_clause[i]->alias->to_string());
+            } else {
+                selector_names.push_back(selectables[i]->to_string());
+            }
             selector_types.push_back(selectors[i]->get_type());
         }
 

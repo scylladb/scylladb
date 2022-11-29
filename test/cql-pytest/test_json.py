@@ -29,7 +29,7 @@ def type1(cql, test_keyspace):
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>, \"CaseSensitive\" int)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -407,3 +407,41 @@ def test_select_json_null_component(cql, table1, type1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t1) VALUES ({p}, ?)")
     cql.execute(stmt, [('hello', None)])
     assert list(cql.execute(f"SELECT JSON t1 from {table1} where p = {p}")) == [('{"t1": {"t": "hello", "b": null}}',)]
+
+# Reproducer for issue #8078: Test that the "AS" clause (alias) in
+# a SELECT JSON is honored, and the returned JSON string contains the
+# given alias instead of the original column name or function call.
+#
+# This issue is also reproduced (together with additional issues) by the
+# translated Cassandra unit tests:
+# cassandra_tests/validation/entities/json_test.py::testSelectJsonSyntax
+# cassandra_tests/validation/entities/json_test.py::testCaseSensitivity
+def test_select_json_with_alias(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, v, bigv, a, \"CaseSensitive\") VALUES ({p}, 17, 34, 'dog', 99)")
+    # We aim here to cover many interesting cases: alias for one column,
+    # aliases for several columns, some columns with alias and some without,
+    # aliasing a function call, case-sensitive aliases and case-sensitive
+    # column names.
+    input_and_output = {
+        'v':                       '{"v": 17}',
+        'v as hello':              '{"hello": 17}',
+        'v as Hello':              '{"hello": 17}',
+        'v as "Hello"':            '{"\\"Hello\\"": 17}',
+        'v as "Hello World!"':     '{"\\"Hello World!\\"": 17}',
+        'ttl(v)':                  '{"ttl(v)": null}',
+        'ttl(v) as hi':            '{"hi": null}',
+        '"CaseSensitive"':         '{"\\"CaseSensitive\\"": 99}',
+        '"CaseSensitive" as cs':   '{"cs": 99}',
+        'v, p':                    '{"v": 17, "p": ' + str(p) + '}',
+        'v, p as xyz':             '{"v": 17, "xyz": ' + str(p) + '}',
+        'v, bigv, a':              '{"v": 17, "bigv": 34, "a": "dog"}',
+        'v, bigv as xyz, a':       '{"v": 17, "xyz": 34, "a": "dog"}',
+        'v as qwe, bigv as xyz, a' :'{"qwe": 17, "xyz": 34, "a": "dog"}',
+        'v as q, bigv as x, a as z':'{"q": 17, "x": 34, "z": "dog"}',
+        # Although it's not useful, it's allowed to use the same alias
+        # for multiple columns...
+        'v as q, bigv as q, a as q':'{"q": 17, "q": 34, "q": "dog"}',
+    }
+    for input, output in input_and_output.items():
+        assert list(cql.execute(f"SELECT JSON {input} from {table1} where p = {p}")) == [(EquivalentJson(output),)]
