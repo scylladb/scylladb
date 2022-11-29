@@ -12,7 +12,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <experimental/source_location>
+#include <source_location>
 
 #include <seastar/net/inet_address.hh>
 

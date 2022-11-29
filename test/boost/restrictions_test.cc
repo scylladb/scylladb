@@ -7,7 +7,7 @@
  */
 
 #include <boost/range/adaptors.hpp>
-#include <experimental/source_location>
+#include <source_location>
 #include <fmt/format.h>
 #include <seastar/testing/thread_test_case.hh>
 
@@ -24,7 +24,7 @@
 
 namespace {
 
-using std::experimental::source_location;
+using std::source_location;
 using boost::adaptors::transformed;
 
 std::unique_ptr<cql3::query_options> to_options(
@@ -44,7 +44,7 @@ void require_rows(cql_test_env& e,
                   std::optional<std::vector<sstring_view>> names,
                   const std::vector<bytes_opt>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const std::experimental::source_location& loc = source_location::current()) {
+                  const std::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
     const auto rvals = values | transformed([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
     cql3::cql_config cfg(cql3::cql_config::default_tag{});

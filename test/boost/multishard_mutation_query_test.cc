@@ -23,7 +23,7 @@
 
 #include <seastar/testing/thread_test_case.hh>
 
-#include <experimental/source_location>
+#include <source_location>
 
 #include <boost/range/algorithm/sort.hpp>
 
@@ -39,7 +39,7 @@ static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db,
 }
 
 static void check_cache_population(distributed<replica::database>& db, size_t queriers,
-        std::experimental::source_location sl = std::experimental::source_location::current()) {
+        std::source_location sl = std::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
@@ -51,7 +51,7 @@ static void check_cache_population(distributed<replica::database>& db, size_t qu
 }
 
 static void require_eventually_empty_caches(distributed<replica::database>& db,
-        std::experimental::source_location sl = std::experimental::source_location::current()) {
+        std::source_location sl = std::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     auto aggregated_population_is_zero = [&] () mutable {
