@@ -909,6 +909,7 @@ public:
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
     future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges);
+    unsigned estimate_pending_compactions() const;
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {

@@ -1217,6 +1217,12 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     });
 }
 
+unsigned table::estimate_pending_compactions() const {
+    return boost::accumulate(compaction_groups() | boost::adaptors::transformed([this] (const compaction_group_ptr& cg) {
+        return _compaction_strategy.estimated_pending_compactions(cg->as_table_state());
+    }), unsigned(0));
+}
+
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
