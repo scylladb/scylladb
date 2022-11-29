@@ -526,4 +526,6 @@ public:
     uint64_t active_reads() const noexcept {
         return _stats.current_permits - _stats.inactive_reads - waiters();
     }
+
+    void foreach_permit(noncopyable_function<void(const reader_permit&)> func);
 };

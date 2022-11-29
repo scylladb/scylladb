@@ -1241,6 +1241,12 @@ std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) c
     return os.str();
 }
 
+void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) {
+    for (auto& p : _permit_list) {
+        func(reader_permit(p.shared_from_this()));
+    }
+}
+
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
