@@ -34,13 +34,10 @@ class standard_role_manager final : public role_manager {
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     seastar::abort_source _as;
+    std::string _superuser;
 
 public:
-    standard_role_manager(cql3::query_processor& qp, ::service::migration_manager& mm)
-            : _qp(qp)
-            , _migration_manager(mm)
-            , _stopped(make_ready_future<>()) {
-    }
+    standard_role_manager(cql3::query_processor&, ::service::migration_manager&);
 
     virtual std::string_view qualified_java_name() const noexcept override;
 

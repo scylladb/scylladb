@@ -29,6 +29,7 @@
 #include "utils/class_registrator.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "password_authenticator.hh"
 
 namespace auth {
 
@@ -128,6 +129,13 @@ static bool has_can_login(const cql3::untyped_result_set_row& row) {
     return row.has("can_login") && !(boolean_type->deserialize(row.get_blob("can_login")).is_null());
 }
 
+standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::migration_manager& mm)
+    : _qp(qp)
+    , _migration_manager(mm)
+    , _stopped(make_ready_future<>())
+    , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
+{}
+
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
     return "org.apache.cassandra.auth.CassandraRoleManager";
 }
@@ -169,7 +177,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
 }
 
 future<> standard_role_manager::create_default_role_if_missing() const {
-    return default_role_row_satisfies(_qp, &has_can_login).then([this](bool exists) {
+    return default_role_row_satisfies(_qp, &has_can_login, _superuser).then([this](bool exists) {
         if (!exists) {
             static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, true, true)",
                     meta::roles_table::qualified_name,
@@ -179,9 +187,9 @@ future<> standard_role_manager::create_default_role_if_missing() const {
                     query,
                     db::consistency_level::QUORUM,
                     internal_distributed_query_state(),
-                    {meta::DEFAULT_SUPERUSER_NAME},
-                    cql3::query_processor::cache_internal::no).then([](auto&&) {
-                log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
+                    {_superuser},
+                    cql3::query_processor::cache_internal::no).then([this](auto&&) {
+                log.info("Created default superuser role '{}'.", _superuser);
                 return make_ready_future<>();
             });
         }

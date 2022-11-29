@@ -43,13 +43,17 @@ constexpr std::string_view role_col_name{"role", 4};
 ///
 future<bool> default_role_row_satisfies(
         cql3::query_processor&,
-        std::function<bool(const cql3::untyped_result_set_row&)>);
+        std::function<bool(const cql3::untyped_result_set_row&)>,
+        std::optional<std::string> rolename = {}
+        );
 
 ///
 /// Check that any nondefault role satisfies a predicate. `false` if no nondefault roles exist.
 ///
 future<bool> any_nondefault_role_row_satisfies(
         cql3::query_processor&,
-        std::function<bool(const cql3::untyped_result_set_row&)>);
+        std::function<bool(const cql3::untyped_result_set_row&)>,
+        std::optional<std::string> rolename = {}
+        );
 
 }

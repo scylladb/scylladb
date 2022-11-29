@@ -118,6 +118,9 @@ template <>
 const config_type config_type_for<sstring> = config_type("string", value_to_json<sstring>);
 
 template <>
+const config_type config_type_for<std::string> = config_type("string", value_to_json<std::string>);
+
+template <>
 const config_type config_type_for<std::vector<sstring>> = config_type("string list", value_to_json<std::vector<sstring>>);
 
 template <>
@@ -990,6 +993,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
     , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
+    , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "", 
+        "Initial authentication super username. Ignored if authentication tables already contain a super user")
+    , auth_superuser_salted_password(this, "auth_superuser_salted_password", value_status::Used, "", 
+        "Initial authentication super user salted password. Create using mkpassword or similar. The hashing algorithm used must be available on the node host. "
+        "Ignored if authentication tables already contain a super user password.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)

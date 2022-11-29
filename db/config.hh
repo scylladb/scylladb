@@ -441,6 +441,10 @@ public:
 
     named_value<unsigned> minimum_keyspace_rf;
 
+    // authenticator options
+    named_value<std::string> auth_superuser_name;
+    named_value<std::string> auth_superuser_salted_password;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
