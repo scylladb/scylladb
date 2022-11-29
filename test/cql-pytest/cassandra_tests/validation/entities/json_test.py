@@ -951,7 +951,7 @@ def testJsonWithGroupBy(cql, test_keyspace):
                 ["{\"count\": 1}"])
 
 # Reproduces issues #8077, #8078
-@pytest.mark.xfail(reason="issues #8077, #8078")
+@pytest.mark.xfail(reason="issues #8077")
 def testSelectJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         # tests SELECT JSON statements
@@ -982,12 +982,14 @@ def testSelectJsonSyntax(cql, test_keyspace):
                 ["{\"foo\": null, \"k\": 0}"],
                 ["{\"foo\": null, \"k\": 1}"])
 
+        # Reproduces #8077:
         assert_rows(execute(cql, table, "SELECT JSON count(*) FROM %s"),
                 ["{\"count\": 2}"])
 
         assert_rows(execute(cql, table, "SELECT JSON count(*) as foo FROM %s"),
                 ["{\"foo\": 2}"])
 
+        # Reproduces #8077:
         assert_rows_ignoring_order(execute(cql, table, "SELECT JSON toJson(blobAsInt(intAsBlob(v))) FROM %s"),
                 ["{\"system.tojson(system.blobasint(system.intasblob(v)))\": \"0\"}"],
                 ["{\"system.tojson(system.blobasint(system.intasblob(v)))\": \"1\"}"])
@@ -1058,8 +1060,8 @@ def testInsertJsonSyntaxDefaultUnset(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s JSON '{\"k\": 2}' DEFAULT NULL")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k=2"), [2, None, None])
 
-# Reproduces issues #8078, #8086`
-@pytest.mark.xfail(reason="issues #8078, #8086")
+# Reproduces issues #8078, #8086
+@pytest.mark.xfail(reason="issues #8086")
 def testCaseSensitivity(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, \"Foo\" int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"\\\"Foo\\\"\": 0}")
