@@ -118,7 +118,9 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             auto& cm = db.get_compaction_manager();
             return parallel_for_each(table_names, [&db, &cm, &ks_name, type] (sstring& table_name) {
                 auto& t = db.find_column_family(ks_name, table_name);
-                return cm.stop_compaction(type, &t.as_table_state());
+                return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                    return cm.stop_compaction(type, &ts);
+                });
             });
         });
         co_return json_void();
