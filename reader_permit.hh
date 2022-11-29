@@ -186,6 +186,8 @@ public:
     reader_resources resources() const { return _resources; }
 };
 
+std::ostream& operator<<(std::ostream& os, reader_permit::state s);
+
 /// Mark a permit as used.
 ///
 /// Conceptually, a permit is considered used, when at least one reader
