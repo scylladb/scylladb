@@ -134,6 +134,8 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
+    state get_state() const;
+
     bool needs_readmission() const;
 
     // Call only when needs_readmission() = true.
