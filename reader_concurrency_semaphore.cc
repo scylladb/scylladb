@@ -26,8 +26,12 @@ std::ostream& operator<<(std::ostream& os , const reader_resources& r) {
     return os;
 }
 
-reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res)
+reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res, already_consumed_tag)
     : _permit(std::move(permit)), _resources(res) {
+}
+
+reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res)
+    : _permit(std::move(permit)) {
     _permit.consume(res);
     _resources = res;
 }
