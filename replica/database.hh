@@ -717,7 +717,7 @@ public:
     flat_mutation_reader_v2 make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
-    sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
+    sstables::shared_sstable make_streaming_sstable_for_write();
     sstables::shared_sstable make_streaming_staging_sstable();
 
     mutation_source as_mutation_source() const;

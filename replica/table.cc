@@ -278,18 +278,16 @@ table::make_reader_v2(schema_ptr s,
     return rd;
 }
 
-sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
-    sstring dir = _config.datadir;
-    if (subdir) {
-        dir += "/" + *subdir;
-    }
-    auto newtab = make_sstable(dir);
-    tlogger.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
+sstables::shared_sstable table::make_streaming_sstable_for_write() {
+    auto newtab = make_sstable(_config.datadir);
+    tlogger.debug("Created sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
 
 sstables::shared_sstable table::make_streaming_staging_sstable() {
-    return make_streaming_sstable_for_write(sstables::staging_dir);
+    auto newtab = make_sstable(_config.datadir + "/" + sstables::staging_dir);
+    tlogger.debug("Created staging sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
+    return newtab;
 }
 
 static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_v2 underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
