@@ -9,7 +9,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
-#include <experimental/source_location>
+#include <source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
@@ -2071,10 +2071,10 @@ class json_mutation_stream_parser {
             }
             return true;
         }
-        bool unexpected(std::experimental::source_location sl = std::experimental::source_location::current()) {
+        bool unexpected(std::source_location sl = std::source_location::current()) {
             return error("unexpected json event {} in state {}", sl.function_name(), stack_to_string());
         }
-        bool unexpected(std::string_view key, std::experimental::source_location sl = std::experimental::source_location::current()) {
+        bool unexpected(std::string_view key, std::source_location sl = std::source_location::current()) {
             return error("unexpected json event {}({}) in state {}", sl.function_name(), key, stack_to_string());
         }
     public:

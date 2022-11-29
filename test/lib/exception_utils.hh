@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <experimental/source_location>
+#include <source_location>
 #include <functional>
 #include <seastar/core/sstring.hh>
 
@@ -25,16 +25,16 @@ extern std::function<bool(const std::exception&)> make(
 /// Returns a predicate that will check if the exception message contains the given fragment.
 extern std::function<bool(const std::exception&)> message_contains(
         const sstring& fragment,
-        const std::experimental::source_location& loc = std::experimental::source_location::current());
+        const std::source_location& loc = std::source_location::current());
 
 /// Returns a predicate that will check if the exception message equals the given text.
 extern std::function<bool(const std::exception&)> message_equals(
         const sstring& text,
-        const std::experimental::source_location& loc = std::experimental::source_location::current());
+        const std::source_location& loc = std::source_location::current());
 
 /// Returns a predicate that will check if the exception message matches the given regular expression.
 extern std::function<bool(const std::exception&)> message_matches(
         const std::string& regex,
-        const std::experimental::source_location& loc = std::experimental::source_location::current());
+        const std::source_location& loc = std::source_location::current());
 
 } // namespace exception_predicate

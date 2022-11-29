@@ -10,7 +10,7 @@
 #include <vector>
 #include <unordered_set>
 #include <functional>
-#include <experimental/source_location>
+#include <source_location>
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
@@ -289,7 +289,7 @@ struct timeout_error : public error {
 };
 
 struct state_machine_error: public error {
-    state_machine_error(std::experimental::source_location l = std::experimental::source_location::current())
+    state_machine_error(std::source_location l = std::source_location::current())
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
 };
 

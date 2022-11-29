@@ -5,7 +5,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include <experimental/source_location>
+#include <source_location>
 
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
@@ -439,8 +439,8 @@ struct group0_members {
     const raft_address_map<>& _address_map;
 
 
-    std::vector<gms::inet_address> get_inet_addrs(std::experimental::source_location l =
-            std::experimental::source_location::current()) const {
+    std::vector<gms::inet_address> get_inet_addrs(std::source_location l =
+            std::source_location::current()) const {
         const raft::config_member_set& members = _group0_server.get_configuration().current;
         std::vector<gms::inet_address> ret;
         std::vector<raft::server_id> missing;

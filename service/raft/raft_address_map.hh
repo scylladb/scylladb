@@ -21,7 +21,7 @@
 #include <boost/intrusive/list.hpp>
 
 #include <chrono>
-#include <experimental/source_location>
+#include <source_location>
 
 namespace bi = boost::intrusive;
 
@@ -173,7 +173,7 @@ class raft_address_map : public peering_sharded_service<raft_address_map<Clock>>
     }
 
     template <std::invocable<raft_address_map&> F>
-    void replicate(F f, std::experimental::source_location l = std::experimental::source_location::current()) {
+    void replicate(F f, std::source_location l = std::source_location::current()) {
         if (!_replication_fiber) {
             return;
         }
