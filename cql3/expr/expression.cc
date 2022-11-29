@@ -607,9 +607,6 @@ bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
             [] (const field_selection&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
             },
-            [] (const null&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: NULL cannot serve as a restriction by itself");
-            },
             [] (const bind_variable&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a bind variable cannot serve as a restriction by itself");
             },
@@ -696,6 +693,14 @@ expression make_conjunction(expression a, expression b) {
     auto children = explode_conjunction(std::move(a));
     boost::copy(explode_conjunction(std::move(b)), back_inserter(children));
     return conjunction{std::move(children)};
+}
+
+untyped_constant
+make_untyped_null() {
+    return {
+        .partial_type = untyped_constant::type_class::null,
+        .raw_text = "null",
+    };
 }
 
 std::vector<expression>
@@ -888,9 +893,6 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const field_selection&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
                         },
-                        [] (const null&) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: nulls are not supported as the LHS of a binary expression");
-                        },
                         [] (const bind_variable&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: bind variables are not supported as the LHS of a binary expression");
                         },
@@ -928,9 +930,6 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const field_selection&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
-            },
-            [] (const null&) -> value_set {
-                on_internal_error(expr_logger, "possible_lhs_values: a NULL cannot serve as a restriction by itself");
             },
             [] (const bind_variable&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a bind variable cannot serve as a restriction by itself");
@@ -1025,9 +1024,6 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                         },
                         [&] (const field_selection&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: field selections are not supported as the LHS of a binary expression");
-                        },
-                        [&] (const null&) -> ret_t {
-                            on_internal_error(expr_logger, "is_supported_by: nulls are not supported as the LHS of a binary expression");
                         },
                         [&] (const bind_variable&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: bind variables are not supported as the LHS of a binary expression");
@@ -1188,10 +1184,6 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             },
             [&] (const field_selection& fs)  {
                 fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
-            },
-            [&] (const null&) {
-                // FIXME: adjust tests and change to NULL
-                fmt::print(os, "null");
             },
             [&] (const bind_variable&) {
                 // FIXME: store and present bind variable name
@@ -1599,7 +1591,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const function_call&) {}
         void operator()(const cast&) {}
         void operator()(const field_selection&) {}
-        void operator()(const null&) {}
         void operator()(const bind_variable&) {}
         void operator()(const untyped_constant&) {}
         void operator()(const tuple_constructor&) {}
@@ -1758,7 +1749,6 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
             on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
         },
 
-        [](const null&) { return cql3::raw_value::make_null(); },
         [](const constant& c) { return c.value; },
         [&](const bind_variable& bind_var) { return evaluate(bind_var, inputs); },
         [&](const tuple_constructor& tup) { return evaluate(tup, inputs); },
@@ -2316,7 +2306,6 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
             fill_prepare_context(s.sub, ctx);
         },
         [](untyped_constant&) {},
-        [](null&) {},
         [](constant&) {},
     }, e);
 }

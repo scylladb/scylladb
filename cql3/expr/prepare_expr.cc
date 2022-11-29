@@ -123,7 +123,7 @@ usertype_constructor_prepare_expression(const usertype_constructor& u, data_dict
         auto iraw = u.elements.find(field);
         expression raw;
         if (iraw == u.elements.end()) {
-            raw = expr::null();
+            raw = expr::make_untyped_null();
         } else {
             raw = iraw->second;
             ++found_values;
@@ -582,6 +582,7 @@ operator<<(std::ostream&out, untyped_constant::type_class t)
         case untyped_constant::type_class::boolean:  return out << "BOOLEAN";
         case untyped_constant::type_class::hex:      return out << "HEX";
         case untyped_constant::type_class::duration: return out << "DURATION";
+        case untyped_constant::type_class::null:     return out << "NULL";
     }
     abort();
 }
@@ -609,8 +610,9 @@ static
 assignment_testable::test_result
 untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver)
 {
+    bool uc_is_null = uc.partial_type == untyped_constant::type_class::null;
     auto receiver_type = receiver.type->as_cql3_type();
-    if (receiver_type.is_collection() || receiver_type.is_user_type()) {
+    if ((receiver_type.is_collection() || receiver_type.is_user_type()) && !uc_is_null) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
     if (!receiver_type.is_native()) {
@@ -675,6 +677,10 @@ untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::da
                 return assignment_testable::test_result::EXACT_MATCH;
             }
             break;
+        case untyped_constant::type_class::null:
+            return receiver.type->is_counter()
+                ? assignment_testable::test_result::NOT_ASSIGNABLE
+                : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
     return assignment_testable::test_result::NOT_ASSIGNABLE;
 }
@@ -688,9 +694,18 @@ untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary:
         return std::nullopt;
     }
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
+      if (uc.partial_type != untyped_constant::type_class::null) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
+      } else {
+        throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
+      }
     }
+
+    if (uc.partial_type == untyped_constant::type_class::null) {
+        return constant::make_null(receiver->type);
+    }
+
     raw_value raw_val = cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type));
     return constant(std::move(raw_val), receiver->type);
 }
@@ -713,29 +728,6 @@ bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::datab
         .bind_index = bv.bind_index,
         .receiver = receiver
     };
-}
-
-static
-assignment_testable::test_result
-null_test_assignment(data_dictionary::database db,
-        const sstring& keyspace,
-        const column_specification& receiver) {
-    return receiver.type->is_counter()
-        ? assignment_testable::test_result::NOT_ASSIGNABLE
-        : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-}
-
-static
-std::optional<expression>
-null_prepare_expression(data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
-    if (!receiver) {
-        // TODO: It is not possible to infer the type of NULL, but perhaps we can have a matcing null_type that can be cast to anything
-        return std::nullopt;
-    }
-    if (!is_assignable(null_test_assignment(db, keyspace, *receiver))) {
-        throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
-    }
-    return constant::make_null(receiver->type);
 }
 
 static
@@ -964,9 +956,6 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const field_selection&) -> std::optional<expression> {
             on_internal_error(expr_logger, "field_selections are not yet reachable via prepare_expression()");
         },
-        [&] (const null&) -> std::optional<expression> {
-            return null_prepare_expression(db, keyspace, receiver);
-        },
         [&] (const bind_variable& bv) -> std::optional<expression> {
             return bind_variable_prepare_expression(bv, db, keyspace, receiver);
         },
@@ -1027,9 +1016,6 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         },
         [&] (const field_selection&) -> test_result {
             on_internal_error(expr_logger, "field_selections are not yet reachable via test_assignment()");
-        },
-        [&] (const null&) -> test_result {
-            return null_test_assignment(db, keyspace, receiver);
         },
         [&] (const bind_variable& bv) -> test_result {
             return bind_variable_test_assignment(bv, db, keyspace, receiver);
