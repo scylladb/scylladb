@@ -42,6 +42,21 @@ using namespace seastar;
 /// code can be executed just before throwing (`prethrow_action` 
 /// constructor parameter).
 ///
+/// The semaphore has 3 layers of defense against consuming more memory
+/// than desired:
+/// 1) After memory consumption is larger than the configured memory limit,
+///    no more reads are admitted
+/// 2) After memory consumption is larger than `_serialize_limit_multiplier`
+///    times the configured memory limit, reads are serialized: only one of them
+///    is allowed to make progress, the rest is made to wait before they can
+///    consume more memory. Enforced via `request_memory()`.
+/// 4) After memory consumption is larger than `_kill_limit_multiplier`
+///    times the configured memory limit, reads are killed, by `consume()`
+///    throwing `std::bad_alloc`.
+///
+/// This makes `_kill_limit_multiplier` times the memory limit the effective
+/// upper bound of the memory consumed by reads.
+///
 /// The semaphore also acts as an execution stage for reads. This
 /// functionality is exposed via \ref with_permit() and \ref
 /// with_ready_permit().
