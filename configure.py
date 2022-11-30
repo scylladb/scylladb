@@ -44,16 +44,12 @@ distro_extra_cflags = ''
 distro_extra_ldflags = ''
 distro_extra_cmake_args = []
 employ_ld_trickery = True
-has_wasmtime = False
-use_wasmtime_as_library = False
 
 # distro-specific setup
 def distro_setup_nix():
-    global os_ids, employ_ld_trickery, has_wasmtime, use_wasmtime_as_library
+    global os_ids, employ_ld_trickery
     os_ids = ['linux']
     employ_ld_trickery = False
-    has_wasmtime = True
-    use_wasmtime_as_library = True
 
 if os.environ.get('NIX_CC'):
         distro_setup_nix()
