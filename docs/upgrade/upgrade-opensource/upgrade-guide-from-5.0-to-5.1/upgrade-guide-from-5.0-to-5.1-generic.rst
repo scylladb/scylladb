@@ -28,8 +28,8 @@
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 5.0 to 5.1
-.. _SCYLLA_METRICS: ../metric-update-5.0-to-5.1
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 5.0 to 5.1
+.. _SCYLLA_METRICS: /upgrade/upgrade-opensource/upgrade-guide-from-5.0-to-5.1/metric-update-5.0-to-5.1
 
 =============================================================================
 Upgrade Guide - |SCYLLA_NAME| |SRC_VERSION| to |NEW_VERSION|
@@ -223,7 +223,7 @@ Validate
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
-See |Scylla_METRICS|_ for more information..
+See |Scylla_METRICS|_ for more information.
 
 Update the Mode in perftune.yaml
 ------------------------------------
