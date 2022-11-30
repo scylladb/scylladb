@@ -411,9 +411,6 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        std::vector<size_t> unspooled_dirty_values;
-        unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
-
         auto rd = mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority());
         auto close_rd = deferred_close(rd);
 
@@ -425,13 +422,10 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
                 logalloc::shard_tracker().full_compaction();
                 mfopt = rd().get0();
             }
-            unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
+            BOOST_REQUIRE_LE(mgr.unspooled_dirty_memory(), mgr.real_dirty_memory());
         }
 
         BOOST_REQUIRE(!rd().get0());
-
-        std::reverse(unspooled_dirty_values.begin(), unspooled_dirty_values.end());
-        BOOST_REQUIRE(std::is_sorted(unspooled_dirty_values.begin(), unspooled_dirty_values.end()));
     });
 }
 
