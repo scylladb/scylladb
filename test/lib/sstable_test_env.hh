@@ -87,6 +87,8 @@ public:
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
+    db::config& db_config() { return test_db_config; }
+
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout);
     }
