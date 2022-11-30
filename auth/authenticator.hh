@@ -15,6 +15,8 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <optional>
+#include <functional>
 
 #include <seastar/core/enum.hh>
 #include <seastar/core/future.hh>
@@ -35,6 +37,16 @@ namespace db {
 namespace auth {
 
 class authenticated_user;
+
+// Query alt name info as a single (subject style) string
+using alt_name_func = std::function<future<std::string>()>;
+
+struct certificate_info {
+    std::string subject;
+    alt_name_func get_alt_names;
+};
+
+using session_dn_func = std::function<future<std::optional<certificate_info>>()>;
 
 ///
 /// Abstract client for authenticating role identity.
@@ -86,6 +98,13 @@ public:
     /// \returns an exceptional future with \ref exceptions::authentication_exception if given invalid credentials.
     ///
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const = 0;
+
+    ///
+    /// Authenticate (early) using transport info
+    ///
+    /// \returns nullopt if not supported/required. exceptional future if failed
+    ///
+    virtual future<std::optional<authenticated_user>> authenticate(session_dn_func) const;
 
     ///
     /// Create an authentication record for a new user. This is required before the user can log-in.
