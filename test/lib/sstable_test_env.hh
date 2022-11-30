@@ -38,6 +38,7 @@ public:
 };
 
 struct test_env_config {
+    db::large_data_handler* large_data_handler = nullptr;
 };
 
 class test_env {

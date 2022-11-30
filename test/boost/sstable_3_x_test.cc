@@ -5193,20 +5193,22 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     };
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
-    cache_tracker tracker;
+
+    sstables::test_env::do_with_async([&] (auto& env) {
+
     test_db_config.host_id = locator::host_id::create_random_id();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
-    auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = manager.make_sstable(
+    auto sst = env.manager().make_sstable(
             s, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
 
     // The test provides thresholds values for the large row handler. Whether the handler gets
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
+
+    }, { &handler }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
@@ -5250,20 +5252,22 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), f);
-    cache_tracker tracker;
+
+    sstables::test_env::do_with_async([&] (auto& env) {
+
     test_db_config.host_id = locator::host_id::create_random_id();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
-    auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = manager.make_sstable(
+    auto sst = env.manager().make_sstable(
             s, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
 
     // The test provides thresholds values for the large row handler. Whether the handler gets
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
+
+    }, { &handler }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
@@ -5311,15 +5315,17 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
-    cache_tracker tracker;
+
+    sstables::test_env::do_with_async([&] (auto& env) {
+
     test_db_config.host_id = locator::host_id::create_random_id();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
-    auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = manager.make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
+    auto sst = env.manager().make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
+
+    }, { &handler }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
@@ -5364,15 +5370,17 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
 
     BOOST_TEST_MESSAGE(format("elements={} threshold={} expected={}", elements, threshold, expected));
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, f);
-    cache_tracker tracker;
+
+    sstables::test_env::do_with_async([&] (auto& env) {
+
     test_db_config.host_id = locator::host_id::create_random_id();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
-    auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = manager.make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
+    auto sst = env.manager().make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
+
+    }, { &handler }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_too_many_collection_elements) {
