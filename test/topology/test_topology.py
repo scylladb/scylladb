@@ -13,6 +13,7 @@ import random
 import time
 
 from test.pylib.util import wait_for
+from test.pylib.rest_client import inject_error, HTTPError
 
 logger = logging.getLogger(__name__)
 
@@ -154,3 +155,14 @@ async def test_remove_node_with_concurrent_ddl(manager, random_tables):
         stopped = True
         await ddl_task
         logger.debug("ddl fiber done, finished")
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="group0 remove exception is not properly handled, issue #11723")
+async def test_remove_node_group0_failure(manager):
+    """Remove a node injecting an error to fail when removing from group0. Reproduces #11723"""
+    servers = await manager.running_servers()
+    await manager.server_stop_gracefully(servers[1].server_id)              # stop   1
+    async with inject_error(manager.api, servers[0].ip_addr, 'removenode_group0_after_finish',
+                            one_shot=True):
+        await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove 1 (on 0)

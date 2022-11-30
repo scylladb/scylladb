@@ -730,6 +730,9 @@ future<> raft_group0::leave_group0() {
 future<> raft_group0::remove_from_group0(gms::inet_address node) {
     assert(this_shard_id() == 0);
 
+    utils::get_local_injector().inject("removenode_group0_after_finish",
+        [] { throw std::runtime_error("error injection after finish, before remove from group 0"); });
+
     if (!_raft_gr.is_enabled()) {
         group0_log.info("remove_from_group0({}): local RAFT feature disabled, skipping.", node);
         co_return;
