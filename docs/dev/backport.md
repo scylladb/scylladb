@@ -64,6 +64,7 @@ Before the changes end up on `branch-5.0`, they are first added to the `next-5.0
 git fetch origin branch-5.0
 git checkout -t origin/branch-5.0
 git submodule sync
+git pull origin branch-5.0
 git submodule update --recursive
 ```
 2. Create a branch with the fix
