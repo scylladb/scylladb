@@ -225,6 +225,14 @@ Once you are sure the node upgrade was successful, move to the next node in the 
 
 See |Scylla_METRICS|_ for more information..
 
+Update the Mode in perftune.yaml
+------------------------------------
+Due to performance improvements in version 5.1, your cluster's existing nodes may use a different mode than 
+the nodes created after the upgrade. Using different modes across one cluster is not recommended, so you 
+should ensure that the same mode is used on all nodes. See 
+:doc:`Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</kb/perftune-modes-sync>` for instructions.
+
+
 Rollback Procedure
 ==================
 
