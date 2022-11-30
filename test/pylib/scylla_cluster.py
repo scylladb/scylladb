@@ -892,7 +892,7 @@ class ScyllaClusterManager:
         # initate remove
         try:
             await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead)
-        except RuntimeError as exc:
+        except HTTPError as exc:
             logging.error("_cluster_remove_node failed initiator %s server %s ignore_dead %s, check log at %s",
                           initiator, to_remove, ignore_dead, initiator.log_filename)
             return aiohttp.web.Response(status=500,
