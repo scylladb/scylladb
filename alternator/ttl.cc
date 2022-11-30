@@ -557,8 +557,9 @@ static future<> scan_table_ranges(
         // Read a page, and if that times out, try again after a small sleep.
         // If we didn't catch the timeout exception, it would cause the scan
         // be aborted and only be restarted at the next scanning period.
+        // If we retry too many times, give up and restart the scan later.
         std::unique_ptr<cql3::result_set> rs;
-        for (;;) {
+        for (int retries=0; ; retries++) {
             try {
                 // FIXME: which timeout?
                 rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
@@ -568,6 +569,13 @@ static future<> scan_table_ranges(
                     std::current_exception());
             }
             // If we didn't break out of this loop, add a minimal sleep
+            if (retries >= 10) {
+                // Don't get stuck forever asking the same page, maybe there's
+                // a bug or a real problem in several replicas. Give up on
+                // this scan an retry the scan from a random position later,
+                // in the next scan period.
+                throw runtime_exception("scanner thread failed after too many timeouts for the same page");
+            }
             co_await sleep_abortable(std::chrono::seconds(1), abort_source);
         }
         auto rows = rs->rows();
