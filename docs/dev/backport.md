@@ -71,7 +71,8 @@ git submodule update --recursive
 git checkout -b my_fix_branch_5.0
 ```
 
-3. Copy the changes to the branch, use the merge commit from `master`
+3. Copy the changes to the branch, use the merge commit from `master`.  
+This command will copy all commits to the branch at once, which might result in a lot conflicts to resolve. It's also possible to cherry-pick the commits individually in order to tackle the conflicts one at a time. Please use the `-x` option on cherry-pick so that's it's possible to tell where the commit came from.
 ```bash
 git cherry-pick -m1 -x 2d2034ea28b8615a130146ad9780010d29d2fcc9
 ```
