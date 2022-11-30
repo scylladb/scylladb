@@ -5197,8 +5197,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     sstables::test_env::do_with_async([&] (auto& env) {
         test_db_config.host_id = locator::host_id::create_random_id();
         tmpdir dir;
-        auto sst = env.manager().make_sstable(
-                s, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
         // trigger depends on the size of rows after they are written in the MC format and that size
@@ -5254,8 +5253,7 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
     sstables::test_env::do_with_async([&] (auto& env) {
         test_db_config.host_id = locator::host_id::create_random_id();
         tmpdir dir;
-        auto sst = env.manager().make_sstable(
-                s, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
         // trigger depends on the size of rows after they are written in the MC format and that size
@@ -5315,7 +5313,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     sstables::test_env::do_with_async([&] (auto& env) {
         test_db_config.host_id = locator::host_id::create_random_id();
         tmpdir dir;
-        auto sst = env.manager().make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
@@ -5368,7 +5366,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
     sstables::test_env::do_with_async([&] (auto& env) {
         test_db_config.host_id = locator::host_id::create_random_id();
         tmpdir dir;
-        auto sst = env.manager().make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
