@@ -13,6 +13,9 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/defer.hh>
 
+#include "db/config.hh"
+#include "db/large_data_handler.hh"
+#include "gms/feature_service.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
@@ -43,7 +46,10 @@ struct test_env_config {
 
 class test_env {
     struct impl {
+        db::config db_config;
         cache_tracker cache_tracker;
+        gms::feature_service feature_service;
+        db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
 
@@ -87,7 +93,7 @@ public:
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
-    db::config& db_config() { return test_db_config; }
+    db::config& db_config() { return _impl->db_config; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout);
