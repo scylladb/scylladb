@@ -1543,6 +1543,15 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
     });
 }
 
+future<std::optional<utils::UUID>> system_keyspace::get_peer_raft_id_if_known(gms::inet_address ip_addr) {
+    sstring req = format("SELECT raft_server_id FROM system.{} WHERE peer = ?", PEERS);
+    shared_ptr<cql3::untyped_result_set> res = co_await execute_cql(req, ip_addr.addr());
+    if (res->empty() || !res->one().has("raft_server_id")) {
+        co_return std::nullopt;
+    }
+    co_return res->one().get_as<utils::UUID>("raft_server_id");
+}
+
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
     auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
     assert(res);

@@ -8,8 +8,8 @@
 #pragma once
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
-#include "service/raft/messaging.hh"
 #include "service/raft/group0_fwd.hh"
+#include "gms/feature.hh"
 
 namespace cql3 { class query_processor; }
 
@@ -250,6 +250,10 @@ private:
     // Persist the initial Raft <-> IP address map as seen by
     // the gossiper.
     future<> persist_initial_raft_address_map();
+
+    // Load the initial Raft <-> IP address map as seen by
+    // the gossiper.
+    void load_initial_raft_address_map();
 };
 
 } // end of namespace service

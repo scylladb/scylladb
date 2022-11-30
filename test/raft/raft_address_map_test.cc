@@ -52,51 +52,31 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     using seastar::manual_clock;
 
     {
-        // Set regular entry + set_expiring_flag works as expected
-        sharded<raft_address_map<manual_clock>> m_svc;
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.set(id1, addr1, false);
+        m.add_or_update_entry(id1, addr1);
+        m.set_nonexpiring(id1);
+        // Check that regular entries don't expire
+        manual_clock::advance(expiration_time);
         {
             const auto found = m.find(id1);
             BOOST_CHECK(!!found && *found == addr1);
         }
-        {
-            const auto found = m.set_expiring_flag(id1);
-            BOOST_CHECK(!!found && *found == addr1);
-        }
+        m.set_expiring(id1);
         manual_clock::advance(expiration_time);
         BOOST_CHECK(!m.find(id1));
     }
     {
-        // Set expiring entry + set_expiring_flag works as expected
-        sharded<raft_address_map<manual_clock>> m_svc;
+        // m.add_or_update_entry() adds an expiring entry
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.set(id1, addr1, true);
-        {
-            const auto found = m.find(id1);
-            BOOST_CHECK(!!found && *found == addr1);
-        }
-        {
-            const auto found = m.set_expiring_flag(id1);
-            BOOST_CHECK(!!found && *found == addr1);
-        }
-        manual_clock::advance(expiration_time);
-        BOOST_CHECK(!m.find(id1));
-    }
-    {
-        // Set expiring + wait for expiration works as expected
-        sharded<raft_address_map<manual_clock>> m_svc;
-        m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
-        auto& m = m_svc.local();
-
-        m.set(id1, addr1, true);
+        m.add_or_update_entry(id1, addr1);
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
         // The entry stay in the cache for 1 hour
@@ -104,27 +84,16 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         BOOST_CHECK(!m.find(id1));
     }
     {
-        // Check that regular entries don't expire
-        sharded<raft_address_map<manual_clock>> m_svc;
-        m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
-        auto& m = m_svc.local();
-
-        m.set(id1, addr1, false);
-        manual_clock::advance(expiration_time);
-        BOOST_CHECK(!!m.find(id1) && *m.find(id1) == addr1);
-    }
-    {
         // Set two expirable entries with different timestamps, check for
         // automatic rearming of expiration timer after the first one expires.
-        sharded<raft_address_map<manual_clock>> m_svc;
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.set(id1, addr1, true);
+        m.add_or_update_entry(id1, addr1);
         manual_clock::advance(30min);
-        m.set(id2, addr2, true);
+        m.add_or_update_entry(id2, addr2);
         // Here the expiration timer will rearm itself automatically since id2
         // hasn't expired yet and need to be collected some time later
         manual_clock::advance(30min + 1s);
@@ -135,39 +104,31 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         BOOST_CHECK(!m.find(id2));
     }
     {
-        // Throw on re-mapping address for the same id
-        scoped_no_abort_on_internal_error abort_guard;
-        sharded<raft_address_map<manual_clock>> m_svc;
+        // Do not throw on re-mapping address for the same id
+        // - happens when IP address changes after a node restart
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.set(id1, addr1, false);
-        BOOST_CHECK_THROW(m.set(id1, addr2, false), std::runtime_error);
+        m.add_or_update_entry(id1, addr1);
+        m.set_nonexpiring(id1);
+        BOOST_CHECK_NO_THROW(m.add_or_update_entry(id1, addr2));
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr2);
     }
     {
-        // Check that transition from regular to expiring entry is not possible
-        sharded<raft_address_map<manual_clock>> m_svc;
+        // Check that add_or_update_entry() doesn't transition the entry type
+        // to expiring.
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.set(id1, addr1, false);
-        m.set(id1, addr1, true);
+        m.add_or_update_entry(id1, addr1);
+        m.set_nonexpiring(id1);
+        m.add_or_update_entry(id1, addr2);
         manual_clock::advance(expiration_time);
-        BOOST_CHECK(m.find(id1));
-    }
-    {
-        // Check that transition from expiring to regular entry works
-        sharded<raft_address_map<manual_clock>> m_svc;
-        m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
-        auto& m = m_svc.local();
-
-        m.set(id1, addr1, true);
-        m.set(id1, addr1, false);
-        manual_clock::advance(expiration_time);
-        BOOST_CHECK(!!m.find(id1) && *m.find(id1) == addr1);
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr2);
     }
 }
 
@@ -188,24 +149,27 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
     using seastar::manual_clock;
 
     {
-        sharded<raft_address_map<manual_clock>> m_svc;
+        sharded<raft_address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        // Replicate non-expiring entry, ensure it doesn't expire on the other shard
-        m.set(id1, addr1, false);
+        // Add entry on both shards, replicate non-expiration
+        // flag, ensure it doesn't expire on the other shard
+        m.add_or_update_entry(id1, addr1);
+        m.set_nonexpiring(id1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
         }).get();
 
         // Set it to expiring, ensure it expires on both shards
-        m.set_expiring_flag(id1);
+        m.set_expiring(id1);
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(!m.find(id1));
@@ -213,22 +177,22 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         ping_shards().get(); // so this shard notices the clock advance
         BOOST_CHECK(!m.find(id1));
 
-        // Expiring entries are not replicated
-        m.set(id1, addr1, true);
+        // Expiring entries are replicated
+        m.add_or_update_entry(id1, addr1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
-            BOOST_CHECK(!m.find(id1));
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+            BOOST_CHECK(m.find(id1));
         }).get();
 
-        // Can't add non-expiring entries on shard other than 0
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
+        // Can't call add_or_update_entry on shard other than 0
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
-            BOOST_CHECK_THROW(m.set(id2, addr2, false), std::runtime_error);
+            BOOST_CHECK_THROW(m.add_or_update_entry(id1, addr2), std::runtime_error);
         }).get();
 
         // Can add expiring entries on shard other than 0 - and they indeed expire
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
-            m.set(id2, addr2, true);
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+            m.opt_add_entry(id2, addr2);
             BOOST_CHECK(m.find(id2) && *m.find(id2) == addr2);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(!m.find(id2));
@@ -237,20 +201,20 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
 
         // Add entry on two shards, make it non-expiring on shard 0,
         // the non-expiration must be replicated
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
-            m.set(id2, addr2, true);
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+            m.opt_add_entry(id2, addr2);
         }).get();
-        m.set(id2, addr2, false);
+        m.set_nonexpiring(id2);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             manual_clock::advance(expiration_time);
             BOOST_CHECK(m.find(id2) && *m.find(id2) == addr2);
         }).get();
 
         // Cannot set it to expiring on shard 1
-        m_svc.invoke_on(1, [] (raft_address_map<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
-            BOOST_CHECK_THROW(m.set_expiring_flag(id2), std::runtime_error);
+            BOOST_CHECK_THROW(m.set_expiring(id2), std::runtime_error);
         }).get();
     }
 }

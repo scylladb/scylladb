@@ -917,7 +917,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            static sharded<service::raft_address_map<>> raft_address_map;
+            static sharded<service::raft_address_map> raft_address_map;
             supervisor::notify("starting Raft address map");
             raft_address_map.start().get();
             auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {

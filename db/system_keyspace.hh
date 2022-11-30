@@ -347,6 +347,10 @@ public:
      */
     future<std::unordered_map<gms::inet_address, locator::host_id>> load_host_ids();
 
+    // Load the list of raft server ids and their ips known to
+    // gossip.
+    future<std::optional<utils::UUID>> get_peer_raft_id_if_known(gms::inet_address ip_addr);
+
     future<std::vector<gms::inet_address>> load_peers();
 
     /*
