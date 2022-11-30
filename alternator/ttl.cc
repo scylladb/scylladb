@@ -568,7 +568,7 @@ static future<> scan_table_ranges(
                     std::current_exception());
             }
             // If we didn't break out of this loop, add a minimal sleep
-            co_await seastar::sleep(1s);
+            co_await sleep_abortable(std::chrono::seconds(1), abort_source);
         }
         auto rows = rs->rows();
         auto meta = rs->get_metadata().get_names();
