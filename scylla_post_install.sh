@@ -37,6 +37,21 @@ EOS
     fi
 fi
 
+# Old systemd does not have "+" modifier on ExecStart, have to use PermissionsStartOnly
+if [ $SYSTEMD_VER -lt 231 ]; then
+    EXEC_START_PRE=$(sed -n -r 's/^ExecStartPre=\+(.*)$/\1/p' /usr/lib/systemd/system/scylla-server.service)
+    EXEC_STOP_POST=$(sed -n -r 's/^ExecStopPost=\+(.*)$/\1/p' /usr/lib/systemd/system/scylla-server.service)
+    mkdir -p /etc/systemd/system/scylla-server.service.d/
+    cat << EOS > /etc/systemd/system/scylla-server.service.d/exec_start.conf
+[Service]
+PermissionsStartOnly=true
+ExecStartPre=
+ExecStartPre=$EXEC_START_PRE
+ExecStopPost=
+ExecStopPost=$EXEC_STOP_POST
+EOS
+fi
+
 # For systems with not a lot of memory, override default reservations for the slices
 # seastar has a minimum reservation of 1.5GB that kicks in, and 21GB * 0.07 = 1.5GB.
 # So for anything smaller than that we will not use percentages in the helper slice

@@ -140,6 +140,7 @@ rm -rf $RPM_BUILD_ROOT
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
+%ghost /etc/systemd/system/scylla-server.service.d/exec_start.conf
 /etc/systemd/system/scylla-server.service.d/dependencies.conf
 %ghost %config /etc/systemd/system/var-lib-systemd-coredump.mount
 %ghost /etc/systemd/system/scylla-cpupower.service
