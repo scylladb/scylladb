@@ -214,9 +214,10 @@ SEASTAR_TEST_CASE(compact) {
     auto s = builder.build();
     table_for_tests cf(env.manager(), s);
     auto close_cf = deferred_stop(cf);
+    tmpdir dir;
+    sstring tmpdir_path = dir.path().string();
 
-    test_setup::do_with_tmp_directory([s, generation, cf] (test_env& env, sstring tmpdir_path) {
-        return open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, generation] (auto sstables) mutable {
+        open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, generation] (auto sstables) mutable {
             auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s, tmpdir_path] {
                 return env.make_sstable(s, tmpdir_path,
                         (*gen)++, sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
@@ -287,8 +288,7 @@ SEASTAR_TEST_CASE(compact) {
                     });
                 });
             });
-        });
-    }).get();
+        }).get();
   });
 
     // verify that the compacted sstable look like
