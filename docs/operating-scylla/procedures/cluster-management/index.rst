@@ -66,7 +66,7 @@ Cluster Management Procedures
 
   * :doc:`Replace a Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node/>`
 
-  * :doc:`Replace More then One Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`
+  * :doc:`Replace More than One Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`
 
   * :doc:`Replace a Seed Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-seed-node/>`
 
