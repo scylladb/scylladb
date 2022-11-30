@@ -37,19 +37,23 @@ public:
     }
 };
 
+struct test_env_config {
+};
+
 class test_env {
     struct impl {
         cache_tracker cache_tracker;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
 
-        impl();
+        impl(test_env_config cfg);
         impl(impl&&) = delete;
         impl(const impl&) = delete;
     };
     std::unique_ptr<impl> _impl;
 public:
-    explicit test_env() : _impl(std::make_unique<impl>()) { }
+
+    explicit test_env(test_env_config cfg = {}) : _impl(std::make_unique<impl>(std::move(cfg))) { }
 
     future<> stop() {
         return _impl->mgr.close().finally([this] {
@@ -98,8 +102,8 @@ public:
     }
 
     template <typename Func>
-    static inline auto do_with(Func&& func) {
-        return seastar::do_with(test_env(), [func = std::move(func)] (test_env& env) mutable {
+    static inline auto do_with(Func&& func, test_env_config cfg = {}) {
+        return seastar::do_with(test_env(std::move(cfg)), [func = std::move(func)] (test_env& env) mutable {
             return futurize_invoke(func, env).finally([&env] {
                 return env.stop();
             });
@@ -115,9 +119,9 @@ public:
         });
     }
 
-    static inline future<> do_with_async(noncopyable_function<void (test_env&)> func) {
-        return seastar::async([func = std::move(func)] {
-            test_env env;
+    static inline future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {}) {
+        return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
+            test_env env(std::move(cfg));
             auto close_env = defer([&] { env.stop().get(); });
             func(env);
         });

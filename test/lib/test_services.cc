@@ -152,7 +152,7 @@ future<> table_for_tests::stop() {
 
 namespace sstables {
 
-test_env::impl::impl()
+test_env::impl::impl(test_env_config cfg)
     : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker, memory::stats().total_memory())
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
 { }
