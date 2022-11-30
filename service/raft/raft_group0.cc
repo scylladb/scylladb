@@ -1027,9 +1027,11 @@ with_timeout(abort_source& as, db::timeout_clock::duration d, F&& fun) {
 struct sleep_with_exponential_backoff {
     std::chrono::seconds _retry_period{1};
     static constexpr std::chrono::seconds _max_retry_period{16};
-    future<> operator()(abort_source& as) {
+    future<> operator()(abort_source& as,
+                        std::source_location loc = std::source_location::current()) {
+        upgrade_log.info("{}: sleeping for {} seconds before retrying...", loc.function_name(), _retry_period);
         co_await sleep_abortable(_retry_period, as);
-        _retry_period = std::max(_retry_period * 2, _max_retry_period);
+        _retry_period = std::min(_retry_period * 2, _max_retry_period);
     }
 };
 
@@ -1060,13 +1062,13 @@ static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks,
                 co_return;
             }
 
-            upgrade_log.info("group 0 configuration is joint: {}. Sleeping for a while before retrying...", current_config);
+            upgrade_log.info("group 0 configuration is joint: {}.", current_config);
             continue;
         }
 
         upgrade_log.info(
             "group 0 configuration does not contain all peers yet."
-            " Missing peers: {}. Current group 0 config: {}. Sleeping for a while before retrying...",
+            " Missing peers: {}. Current group 0 config: {}.",
             missing_peers, current_config);
     }
 }
@@ -1134,8 +1136,6 @@ static future<> check_remote_group0_upgrade_state_dry_run(
         if (!retry) {
             co_return;
         }
-
-        upgrade_log.warn("check_remote_group0_upgrade_state_dry_run: retrying in a while...");
     }
 }
 
@@ -1227,8 +1227,6 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
         if (!*retry) {
             co_return true;
         }
-
-        upgrade_log.warn("wait_for_peers_to_enter_synchronize_state: retrying in a while...");
     }
 }
 
@@ -1287,9 +1285,7 @@ collect_schema_versions_from_group0_members(
             co_return std::nullopt;
         }
 
-        upgrade_log.info(
-                "synchronize_schema: could not finish early."
-                " Sleeping for a while before retrying remote schema version collection...");
+        upgrade_log.info("synchronize_schema: could not finish early.");
     }
 }
 
@@ -1388,8 +1384,6 @@ static future<bool> synchronize_schema(
             upgrade_log.info("synchronize_schema: finishing early.");
             co_return false;
         }
-
-        upgrade_log.info("synchronize_schema: sleeping for a while before collecting schema versions again...");
     }
 }
 
