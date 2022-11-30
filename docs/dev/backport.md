@@ -37,9 +37,13 @@ keep the label
 5.6. Ask someone else (from QA, or the patch author, or anyone relevant)
 for assistance in selecting among the options
 
-## How to backport a patch
+## Contributor instructions
+When backporting the maintainer will try to cherry-pick the changes onto the branch with older version of Scylla,
+but sometimes additional changes are needed to make the change work with old code.
 
-Here are the instructions on how to backport some changes to an older version of Scylla.  
+In such case the maintainer can ask the contributor to prepare a change to work with this particular version.
+Here are the instructions for a contributor on how to properly prepare these changes.
+
 It's the easiest to show it by an example, so let's look at PR [#12031](https://github.com/scylladb/scylladb/pull/12031), which fixed issue [#12014](https://github.com/scylladb/scylladb/issues/12014).
 
 ### Wait for the original change to get merged
