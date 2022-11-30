@@ -50,13 +50,13 @@ It's the easiest to show it by an example, so let's look at PR [#12031](https://
 First the original PR should get merged.
 In the example the author wanted to merge the branch `cvybhu:filter_multi_bug` into `scylladb:master`.
 Each PR is submitted on its own branch, which the PR author wants to merge into the `master` branch.
-Before the changes end up on `master`, they are first added to the `next` branch to run some additional tests. Later the `next` branch becomes `master` and the PR is officialy merged.
+Before the changes end up on `master`, they are first added to the `next` branch to run some additional tests. Later the `next` branch is merged into `master` and the PR is officialy merged.
 
 ### A backport PR
 Released versions of `Scylla` live on their own branches - `branch-5.0`, `branch-4.6` etc.
 To backport the change we will have to put it on its own branch and merge it into the branch with the desired version.
 In the example, the PR with the backport [#12086](https://github.com/scylladb/scylladb/pull/12086) wants to merge `cvybhu:filter_multi_bug_5.0` into `scylladb:branch-5.0`.
-Before the changes end up on `branch-5.0`, they are first added to the `next-5.0` branch to run some additional tests. Later the `next-5.0` branch becomes `branch-5.0` and the PR is officially backported.
+Before the changes end up on `branch-5.0`, they are first added to the `next-5.0` branch to run some additional tests. Later the `next-5.0` branch is merged into `branch-5.0` and the PR is officially backported.
 
 ### Preparing the backport PR
 1. Go to the branch with the target backport version
