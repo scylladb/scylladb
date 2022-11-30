@@ -32,10 +32,10 @@ private:
     feature_config();
 
     friend class feature_service;
-    friend feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled);
+    friend feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled);
 };
 
-feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled = {});
+feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
 
 using namespace std::literals;
 
