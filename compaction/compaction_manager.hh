@@ -86,7 +86,7 @@ private:
         compaction_backlog_tracker backlog_tracker;
 
         explicit compaction_state(table_state& t);
-        compaction_state(compaction_state&&) = default;
+        compaction_state(compaction_state&&) = delete;
         ~compaction_state();
 
         bool compaction_disabled() const noexcept {

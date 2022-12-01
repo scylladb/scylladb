@@ -1582,7 +1582,7 @@ compaction_manager::compaction_state::compaction_state(table_state& t)
 }
 
 void compaction_manager::add(compaction::table_state& t) {
-    auto [_, inserted] = _compaction_state.insert({&t, compaction_state(t)});
+    auto [_, inserted] = _compaction_state.try_emplace(&t, t);
     if (!inserted) {
         auto s = t.schema();
         on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(&t)));
