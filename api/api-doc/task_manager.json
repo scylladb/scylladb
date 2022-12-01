@@ -168,6 +168,26 @@
                   "failed"
                 ],
                 "description":"The state of a task"
+             },
+             "type":{
+                "type":"string",
+                "description":"The description of the task"
+             },
+             "keyspace":{
+                "type":"string",
+                "description":"The keyspace the task is working on (if applicable)"
+             },
+             "table":{
+                "type":"string",
+                "description":"The table the task is working on (if applicable)"
+             },
+             "entity":{
+                "type":"string",
+                "description":"Task-specific entity description"
+             },
+             "sequence_number":{
+                "type":"long",
+                "description":"The running sequence number of the task"
              }
            }
        },

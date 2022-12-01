@@ -38,10 +38,23 @@ struct full_task_status {
 };
 
 struct task_stats {
-    task_stats(tasks::task_manager::task_ptr task) : task_id(task->id().to_sstring()), state(task->get_status().state) {}
+    task_stats(tasks::task_manager::task_ptr task)
+        : task_id(task->id().to_sstring())
+        , state(task->get_status().state)
+        , type(task->type())
+        , keyspace(task->get_status().keyspace)
+        , table(task->get_status().table)
+        , entity(task->get_status().entity)
+        , sequence_number(task->get_status().sequence_number)
+    { }
 
     sstring task_id;
     tasks::task_manager::task_state state;
+    std::string type;
+    std::string keyspace;
+    std::string table;
+    std::string entity;
+    uint64_t sequence_number;
 };
 
 tm::task_status make_status(full_task_status status) {
