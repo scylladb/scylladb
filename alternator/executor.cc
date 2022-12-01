@@ -3107,20 +3107,10 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     });
 }
 
-// is_big() checks approximately if the given JSON value is "bigger" than
-// the given big_size number of bytes. The goal is to *quickly* detect
-// oversized JSON that, for example, is too large to be serialized to a
-// contiguous string - we don't need an accurate size for that. Moreover,
-// as soon as we detect that the JSON is indeed "big", we can return true
-// and don't need to continue calculating its exact size.
-// For simplicity, we use a recursive implementation. This is fine because
-// Alternator limits the depth of JSONs it reads from inputs, and doesn't
-// add more than a couple of levels in its own output construction.
-
 static void check_big_object(const rjson::value& val, int& size_left);
 static void check_big_array(const rjson::value& val, int& size_left);
 
-static bool is_big(const rjson::value& val, int big_size = 100'000) {
+bool is_big(const rjson::value& val, int big_size) {
     if (val.IsString()) {
         return ssize_t(val.GetStringLength()) > big_size;
     } else if (val.IsObject()) {
@@ -3691,8 +3681,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
             // update our "filtered_row_matched_total" for all the rows matched, despited the filter
             cql_stats.filtered_rows_matched_total += size;
         }
-        // TODO: better threshold
-        if (size > 10) {
+        if (is_big(items)) {
             return make_ready_future<executor::request_return_type>(make_streamed(std::move(items)));
         }
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(items)));
