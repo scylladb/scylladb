@@ -72,6 +72,82 @@ protected:
     // TODO: implement progress for data-sync repairs
 };
 
+class shard_repair_task_impl : public repair_task_impl {
+private:
+    std::exception_ptr _ex;
+public:
+    repair_service& rs;
+    seastar::sharded<replica::database>& db;
+    seastar::sharded<netw::messaging_service>& messaging;
+    sharded<db::system_distributed_keyspace>& sys_dist_ks;
+    sharded<db::view::view_update_generator>& view_update_generator;
+    service::migration_manager& mm;
+    gms::gossiper& gossiper;
+    const dht::sharder& sharder;
+    locator::effective_replication_map_ptr erm;
+    dht::token_range_vector ranges;
+    std::vector<sstring> cfs;
+    std::vector<table_id> table_ids;
+    repair_uniq_id id;
+    std::vector<sstring> data_centers;
+    std::vector<sstring> hosts;
+    std::unordered_set<gms::inet_address> ignore_nodes;
+    streaming::stream_reason reason;
+    std::unordered_map<dht::token_range, repair_neighbors> neighbors;
+    size_t total_rf;
+    uint64_t nr_ranges_finished = 0;
+    uint64_t nr_ranges_total;
+    size_t nr_failed_ranges = 0;
+    bool aborted = false;
+    int ranges_index = 0;
+    repair_stats _stats;
+    std::unordered_set<sstring> dropped_tables;
+    optimized_optional<abort_source::subscription> _abort_subscription;
+    bool _hints_batchlog_flushed = false;
+public:
+    shard_repair_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            const sstring& keyspace,
+            std::string type,
+            std::exception_ptr ex,
+            repair_service& repair,
+            locator::effective_replication_map_ptr erm_,
+            const dht::token_range_vector& ranges_,
+            std::vector<table_id> table_ids_,
+            repair_uniq_id parent_id_,
+            const std::vector<sstring>& data_centers_,
+            const std::vector<sstring>& hosts_,
+            const std::unordered_set<gms::inet_address>& ignore_nodes_,
+            streaming::stream_reason reason_,
+            abort_source* as,
+            bool hints_batchlog_flushed);
+    void check_failed_ranges();
+    void abort_repair_info() noexcept;
+    void check_in_abort();
+    void check_in_shutdown();
+    repair_neighbors get_repair_neighbors(const dht::token_range& range);
+    void update_statistics(const repair_stats& stats) {
+        _stats.add(stats);
+    }
+    const std::vector<sstring>& table_names() {
+        return cfs;
+    }
+    const std::string& get_keyspace() const noexcept {
+        return _status.keyspace;
+    }
+
+    bool hints_batchlog_flushed() const {
+        return _hints_batchlog_flushed;
+    }
+
+    future<> repair_range(const dht::token_range& range, table_id);
+
+    size_t ranges_size();
+protected:
+    future<> do_repair_ranges();
+    future<> run() override;
+};
+
 // The repair_module tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
 // table, but a failed repair will remain in the table forever so it can
@@ -85,7 +161,7 @@ private:
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
     // Map repair id into repair_info.
-    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
+    std::unordered_map<int, tasks::task_id> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
     std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
@@ -112,9 +188,9 @@ public:
 
     repair_status get(int id) const;
     void check_in_shutdown();
-    void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
-    void remove_repair_info(int id);
-    lw_shared_ptr<repair_info> get_repair_info(int id);
+    void add_shard_task_id(int id, tasks::task_id ri);
+    void remove_shard_task_id(int id);
+    tasks::task_manager::task_ptr get_shard_task_ptr(int id);
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();

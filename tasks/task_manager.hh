@@ -20,6 +20,8 @@
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
+class repair_module;
+
 namespace tasks {
 
 using is_abortable = bool_class <struct abortable_tag>;
@@ -139,6 +141,7 @@ public:
         void unregister_task() noexcept;
 
         friend class test_task;
+        friend class ::repair_module;
     };
 
     class module : public enable_shared_from_this<module> {
