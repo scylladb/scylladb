@@ -2808,6 +2808,10 @@ thread_local cached_file::metrics index_page_cache_metrics;
 thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
 
+size_t space_used_by_index_cache() {
+    return partition_index_cache::shard_stats().used_bytes + index_page_cache_metrics.cached_bytes;
+}
+
 future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;

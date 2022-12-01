@@ -424,6 +424,7 @@ public:
     named_value<uint32_t> nodeops_heartbeat_interval_seconds;
 
     named_value<bool> cache_index_pages;
+    named_value<double> index_cache_fraction;
 
     named_value<bool> consistent_cluster_management;
 

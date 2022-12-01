@@ -56,7 +56,7 @@ public:
         uint64_t bytes_in_std = 0; // memory used by active temporary_buffer:s
     };
 private:
-    class cached_page : public evictable {
+    class cached_page final : public index_evictable {
     public:
         cached_file* parent;
         page_idx_type idx;

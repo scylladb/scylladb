@@ -32,7 +32,7 @@ public:
     using key_type = uint64_t;
 private:
     // Allocated inside LSA
-    class entry : public evictable, public lsa::weakly_referencable<entry> {
+    class entry final : public index_evictable, public lsa::weakly_referencable<entry> {
     public:
         partition_index_cache* _parent;
         key_type _key;
