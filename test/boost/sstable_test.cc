@@ -480,27 +480,6 @@ test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
     });
 }
 
-// We need to be careful not to allow failures in this test to contaminate subsequent runs.
-// We will therefore run it in an empty directory, and first link a known SSTable from another
-// directory to it.
-SEASTAR_TEST_CASE(set_generation) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
-        return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
-            return sstp->create_links(generation_dir).then([sstp] {});
-        }).then([&env, generation_dir] {
-            return env.reusable_sst(uncompressed_schema(), generation_dir, 1).then([] (auto sstp) {
-                return sstp->set_generation(generation_from_value(2)).then([sstp] {});
-            });
-        }).then([generation_dir] {
-            return test_sstable_exists(generation_dir, 1, false);
-        }).then([uncompressed_dir, generation_dir] {
-            return compare_files(sstdesc{uncompressed_dir, 1 },
-                                 sstdesc{generation_dir, 2 },
-                                 component_type::Data);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
         return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {

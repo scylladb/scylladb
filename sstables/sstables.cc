@@ -2216,26 +2216,6 @@ future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generati
     return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
-future<> sstable::set_generation(generation_type new_generation) {
-    sstlog.debug("Setting generation for {} to generation={}", get_filename(), new_generation);
-    return create_links(_dir, new_generation).then([this] {
-        return remove_file(filename(component_type::TOC)).then([this] {
-            return sstable_write_io_check(sync_directory, _dir);
-        }).then([this] {
-            return parallel_for_each(all_components(), [this] (auto p) {
-                if (p.first == component_type::TOC) {
-                    return make_ready_future<>();
-                }
-                return remove_file(sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second));
-            });
-        });
-    }).then([this, new_generation] {
-        return sync_directory(_dir).then([this, new_generation] {
-            _generation = new_generation;
-        });
-    });
-}
-
 future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",

@@ -192,8 +192,6 @@ public:
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
     future<> destroy();
-
-    future<> set_generation(generation_type generation);
     future<> move_to_new_dir(sstring new_dir, generation_type generation, bool do_sync_dirs = true);
 
     // Move the sstable to the quarantine_dir
