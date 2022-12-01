@@ -260,21 +260,25 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
         # TODO ensure that srv1 failed upgrade - look at logs?
         # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
 
-    logging.info(f"Setting recovery state on {hosts}")
-    for host in hosts:
-        await cql.run_async("update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'", host=host)
+        logging.info(f"Setting recovery state on {hosts}")
+        for host in hosts:
+            await cql.run_async(
+                    "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
+                    host=host)
 
-    logging.info(f"Restarting {others}")
-    await asyncio.gather(*(restart(manager, srv) for srv in others))
-    cql = await reconnect_driver(manager)
+        logging.info(f"Restarting {others}")
+        await asyncio.gather(*(restart(manager, srv) for srv in others))
+        cql = await reconnect_driver(manager)
 
-    logging.info(f"{others} restarted, waiting until driver reconnects to them")
-    hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
+        logging.info(f"{others} restarted, waiting until driver reconnects to them")
+        hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
 
-    logging.info(f"Checking if {hosts} are in recovery state")
-    for host in hosts:
-        rs = await cql.run_async("select value from system.scylla_local where key = 'group0_upgrade_state'", host=host)
-        assert rs[0].value == 'recovery'
+        logging.info(f"Checking if {hosts} are in recovery state")
+        for host in hosts:
+            rs = await cql.run_async(
+                    "select value from system.scylla_local where key = 'group0_upgrade_state'",
+                    host=host)
+            assert rs[0].value == 'recovery'
 
     logging.info("Creating a table while in recovery state")
     table = await random_tables.add_table(ncolumns=5)
