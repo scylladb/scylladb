@@ -2100,13 +2100,9 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-1-big-UNKNOWN.txt").get0());
 
         sstp = env.reusable_sst(uncompressed_schema(), tmp.path().string(), 1).get0();
-        sstp->set_generation(generation_from_value(2)).get();
-        BOOST_REQUIRE(!file_exists(tmp.path().string() +  "/la-1-big-UNKNOWN.txt").get0());
-        BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
-
         sstables::sstable_directory::delete_atomically({sstp}).get();
         // assure unknown component is deleted
-        BOOST_REQUIRE(!file_exists(tmp.path().string() + "/la-2-big-UNKNOWN.txt").get0());
+        BOOST_REQUIRE(!file_exists(tmp.path().string() + "/la-1-big-UNKNOWN.txt").get0());
     });
 }
 
