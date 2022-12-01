@@ -451,13 +451,12 @@ class ScyllaCluster:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
-        # Every ScyllaServer is in one of self.running, self.stopped, self.decommissioned.
+        # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
         self.running: Dict[ServerNum, ScyllaServer] = {}        # started servers
         self.stopped: Dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
         self.servers = ChainMap(self.running, self.stopped)
-        self.decommissioned: Dict[ServerNum, ScyllaServer] = {} # decommissioned servers
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
@@ -651,12 +650,6 @@ class ScyllaCluster:
             await server.stop()
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} stopped")
-
-    def server_mark_decommissioned(self, server_id: ServerNum) -> None:
-        """Mark a stopped server as decommissioned"""
-        assert server_id in self.stopped, "Server must be stopped when marking as decommissioned"""
-        logging.debug("Cluster %s marking %s as decommissioned", self, self.stopped[server_id])
-        self.decommissioned[server_id] = self.stopped.pop(server_id)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
@@ -946,7 +939,6 @@ class ScyllaClusterManager:
             return aiohttp.web.Response(status=500,
                                         text=f"Error decommissioning {server}: {exc}")
         await self.cluster.server_stop(server_id, gracefully=True)
-        self.cluster.server_mark_decommissioned(server_id)
         return aiohttp.web.Response(text="OK")
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
