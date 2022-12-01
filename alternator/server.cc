@@ -28,6 +28,8 @@
 static logging::logger slogger("alternator-server");
 
 using namespace httpd;
+using request = http::request;
+using reply = http::reply;
 
 namespace alternator {
 

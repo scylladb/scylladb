@@ -27,7 +27,7 @@ using chunked_content = rjson::chunked_content;
 class server {
     static constexpr size_t content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
-            tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<request>)>;
+            tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
 
     http_server _http_server;
@@ -76,8 +76,8 @@ public:
 private:
     void set_routes(seastar::httpd::routes& r);
     // If verification succeeds, returns the authenticated user's username
-    future<std::string> verify_signature(const seastar::httpd::request&, const chunked_content&);
-    future<executor::request_return_type> handle_api_request(std::unique_ptr<request> req);
+    future<std::string> verify_signature(const seastar::http::request&, const chunked_content&);
+    future<executor::request_return_type> handle_api_request(std::unique_ptr<http::request> req);
 };
 
 }
