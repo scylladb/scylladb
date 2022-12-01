@@ -1012,7 +1012,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         // ugh. figure out if we are and end-of-shard
         auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
 
-        return _sdks.cdc_current_generation_timestamp({ normal_token_owners }).then([this, iter, high_ts, start_time, ret = std::move(ret), nrecords](db_clock::time_point ts) mutable {
+        return _sdks.cdc_current_generation_timestamp({ normal_token_owners }).then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
             auto& shard = iter.shard;            
 
             if (shard.time < ts && ts < high_ts) {
@@ -1029,8 +1029,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 rjson::add(ret, "NextShardIterator", iter);
             }
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
-            // TODO: determine a better threshold...
-            if (nrecords > 10) {
+            if (is_big(ret)) {
                 return make_ready_future<executor::request_return_type>(make_streamed(std::move(ret)));
             }
             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));

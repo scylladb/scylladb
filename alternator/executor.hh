@@ -239,4 +239,15 @@ public:
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
 };
 
+// is_big() checks approximately if the given JSON value is "bigger" than
+// the given big_size number of bytes. The goal is to *quickly* detect
+// oversized JSON that, for example, is too large to be serialized to a
+// contiguous string - we don't need an accurate size for that. Moreover,
+// as soon as we detect that the JSON is indeed "big", we can return true
+// and don't need to continue calculating its exact size.
+// For simplicity, we use a recursive implementation. This is fine because
+// Alternator limits the depth of JSONs it reads from inputs, and doesn't
+// add more than a couple of levels in its own output construction.
+bool is_big(const rjson::value& val, int big_size = 100'000);
+
 }
