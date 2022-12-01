@@ -33,10 +33,6 @@ range<dht::token> create_token_range_from_keys(const dht::sharder& sinfo, const 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-db::nop_large_data_handler nop_lp_handler;
-db::config test_db_config;
-gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
-
 table_for_tests::data::data()
     : semaphore(reader_concurrency_semaphore::no_limits{}, "table_for_tests")
 { }
@@ -152,8 +148,9 @@ future<> table_for_tests::stop() {
 
 namespace sstables {
 
-test_env::impl::impl()
-    : mgr(nop_lp_handler, test_db_config, test_feature_service, cache_tracker, memory::stats().total_memory())
+test_env::impl::impl(test_env_config cfg)
+    : feature_service(gms::feature_config_from_db_config(db_config))
+    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, db_config, feature_service, cache_tracker, memory::stats().total_memory())
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
 { }
 

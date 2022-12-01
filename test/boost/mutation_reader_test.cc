@@ -997,28 +997,6 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
     });
 }
 
-sstables::shared_sstable create_sstable(sstables::test_env& env, simple_schema& sschema, const sstring& path) {
-    std::vector<mutation> mutations;
-    mutations.reserve(1 << 14);
-
-    for (std::size_t p = 0; p < (1 << 10); ++p) {
-        mutation m(sschema.schema(), sschema.make_pkey(p));
-        sschema.add_static_row(m, format("{:d}_static_val", p));
-
-        for (std::size_t c = 0; c < (1 << 4); ++c) {
-            sschema.add_row(m, sschema.make_ckey(c), format("val_{:d}", c));
-        }
-
-        mutations.emplace_back(std::move(m));
-        thread::yield();
-    }
-
-    return make_sstable_containing([&] {
-            return env.make_sstable(sschema.schema(), path, 0);
-        }
-        , mutations);
-}
-
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();

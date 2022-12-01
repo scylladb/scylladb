@@ -34,9 +34,6 @@
 #include "compaction/table_state.hh"
 #include "sstables/sstables_manager.hh"
 
-extern db::config test_db_config;
-extern gms::feature_service test_feature_service;
-
 struct table_for_tests {
     class table_state;
     struct data {

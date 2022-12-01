@@ -29,7 +29,7 @@ feature_config::feature_config() {
 feature_service::feature_service(feature_config cfg) : _config(cfg)
 {}
 
-feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
+feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
 
     fcfg._disabled_features = std::move(disabled);
