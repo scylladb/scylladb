@@ -102,7 +102,7 @@ def test_too_large_request(dynamodb, test_table):
 #    Content-Length header or chunked encoding (reproduces issue #8196).
 # 2. The client should be able to recognize this error as a 413 error, not
 #     some I/O error like broken pipe (reproduces issue #8195).
-@pytest.mark.xfail(reason="issue #8196")
+@pytest.mark.xfail(reason="issue #8196, #12166")
 def test_too_large_request_chunked(dynamodb, test_table):
     if Version(urllib3.__version__) < Version('1.26'):
         pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
@@ -118,6 +118,7 @@ def test_too_large_request_chunked(dynamodb, test_table):
     # request succeeded, and the status_code was 200 instead of 413.
     assert response.status_code == 413
 
+@pytest.mark.xfail(reason="issue #12166. Note that only fails very rairly, will usually xpass")
 def test_too_large_request_content_length(dynamodb, test_table):
     if Version(urllib3.__version__) < Version('1.26'):
         pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
