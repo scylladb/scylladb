@@ -14,6 +14,9 @@
 #include "tasks/task_manager.hh"
 #include "seastarx.hh"
 
+using request = http::request;
+using reply = http::reply;
+
 namespace service {
 
 class load_meter;

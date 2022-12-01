@@ -34,16 +34,16 @@ static constexpr const char* DUMMY_META_SERVER_IP = "DUMMY_META_SERVER_IP";
 static constexpr const char* USE_GCE_META_SERVER = "USE_GCE_META_SERVER";
 
 class gce_meta_get_handler : public seastar::httpd::handler_base {
-    virtual future<std::unique_ptr<seastar::httpd::reply>> handle(const sstring& path, std::unique_ptr<seastar::httpd::request> req, std::unique_ptr<seastar::httpd::reply> rep) override {
+    virtual future<std::unique_ptr<seastar::http::reply>> handle(const sstring& path, std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) override {
         using namespace seastar::httpd;
 
         if (path == locator::gce_snitch::ZONE_NAME_QUERY_REQ) {
             rep->write_body(sstring("txt"), sstring("projects/431729375847/zones/us-central1-a"));
         } else {
-            rep->set_status(reply::status_type::bad_request);
+            rep->set_status(http::reply::status_type::bad_request);
         }
 
-        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+        return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
     }
 };
 

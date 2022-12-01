@@ -23,7 +23,7 @@ namespace alternator {
 // api_error into a JSON object, and that is returned to the user.
 class api_error final : public std::exception {
 public:
-    using status_type = httpd::reply::status_type;
+    using status_type = http::reply::status_type;
     status_type _http_code;
     std::string _type;
     std::string _msg;
@@ -77,7 +77,7 @@ public:
         return api_error("TableNotFoundException", std::move(msg));
     }
     static api_error internal(std::string msg) {
-        return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
+        return api_error("InternalServerError", std::move(msg), http::reply::status_type::internal_server_error);
     }
 
     // Provide the "std::exception" interface, to make it easier to print this
