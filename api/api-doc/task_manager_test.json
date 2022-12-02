@@ -87,14 +87,6 @@
                         "paramType":"query"
                     },
                     {
-                        "name":"type",
-                        "description":"The type of the task",
-                        "required":false,
-                        "allowMultiple":false,
-                        "type":"string",
-                        "paramType":"query"
-                    },
-                    {
                         "name":"entity",
                         "description":"Task-specific entity description",
                         "required":false,

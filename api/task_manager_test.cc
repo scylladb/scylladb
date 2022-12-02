@@ -47,8 +47,6 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
         std::string keyspace = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("table");
         std::string table = it != req->query_parameters.end() ? it->second : "";
-        it = req->query_parameters.find("type");
-        std::string type = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("entity");
         std::string entity = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("parent_id");
