@@ -8,6 +8,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_address_map.hh"
+#include "db/system_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
@@ -65,7 +66,6 @@ public:
         return _alive_set.contains(srv);
     }
 };
-
 // }}} direct_fd_proxy
 
 // {{{ gossiper_state_change_subscriber_proxy
@@ -134,6 +134,16 @@ public:
 };
 
 // }}} gossiper_state_change_subscriber_proxy
+
+future<raft::server_id> load_or_create_my_raft_id(db::system_keyspace& sys_ks) {
+    assert(this_shard_id() == 0);
+    auto id = raft::server_id{co_await sys_ks.get_raft_server_id()};
+    if (id == raft::server_id{}) {
+        id = raft::server_id::create_random_id();
+        co_await sys_ks.set_raft_server_id(id.id);
+    }
+    co_return id;
+}
 
 raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map& address_map,
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
@@ -253,6 +263,23 @@ void raft_group_registry::init_rpc_verbs() {
             return rpc.execute_modify_config(from, std::move(add), std::move(del));
         });
     });
+
+    ser::raft_rpc_verbs::register_direct_fd_ping(&_ms,
+            [this] (const rpc::client_info&, raft::server_id dst) -> future<direct_fd_ping_reply> {
+        // XXX: update address map here as well?
+
+        const raft::server_id& my_id = get_my_raft_id();
+        if (my_id != dst) {
+            co_return direct_fd_ping_reply {
+                .result = wrong_destination {
+                    .reached_id = my_id,
+                },
+            };
+        }
+        co_return direct_fd_ping_reply {
+            .result = std::monostate{},
+        };
+    });
 }
 
 future<> raft_group_registry::uninit_rpc_verbs() {
@@ -267,7 +294,8 @@ future<> raft_group_registry::uninit_rpc_verbs() {
         ser::raft_rpc_verbs::unregister_raft_read_quorum_reply(&_ms),
         ser::raft_rpc_verbs::unregister_raft_execute_read_barrier_on_leader(&_ms),
         ser::raft_rpc_verbs::unregister_raft_add_entry(&_ms),
-        ser::raft_rpc_verbs::unregister_raft_modify_config(&_ms)
+        ser::raft_rpc_verbs::unregister_raft_modify_config(&_ms),
+        ser::raft_rpc_verbs::unregister_direct_fd_ping(&_ms)
     ).discard_result();
 }
 
@@ -291,11 +319,14 @@ future<> raft_group_registry::stop_servers() noexcept {
     co_await g.close();
 }
 
-seastar::future<> raft_group_registry::start() {
-    if (!_is_enabled) {
-        co_return;
-    }
+seastar::future<> raft_group_registry::start(raft::server_id my_id) {
+    assert(_is_enabled);
+    assert(!_my_id);
+
+    _my_id = my_id;
+
     _gossiper.register_(_gossiper_proxy);
+
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
@@ -303,6 +334,13 @@ seastar::future<> raft_group_registry::start() {
 
     _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
         direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+}
+
+const raft::server_id& raft_group_registry::get_my_raft_id() {
+    if (!_my_id) {
+        on_internal_error(rslog, "get_my_raft_id(): Raft ID not initialized");
+    }
+    return *_my_id;
 }
 
 seastar::future<> raft_group_registry::stop() {
@@ -404,13 +442,22 @@ shared_ptr<raft::failure_detector> raft_group_registry::failure_detector() {
 raft_group_registry::~raft_group_registry() = default;
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
-    auto addr = _address_map.find(raft::server_id{id});
+    auto dst_id = raft::server_id{std::move(id)};
+    auto addr = _address_map.find(dst_id);
     if (!addr) {
         co_return false;
     }
 
     try {
-        co_await _echo_pinger.ping(*addr, as);
+        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, netw::msg_addr(*addr), as, dst_id);
+        if (auto* wrong_dst = std::get_if<wrong_destination>(&reply.result)) {
+            // This may happen e.g. when node B is replacing node A with the same IP.
+            // When we ping node A, the pings will reach node B instead.
+            // B will detect they were destined for node A and return wrong_destination.
+            rslog.trace("ping(id = {}, ip_addr = {}): wrong destination (reached {})",
+                        dst_id, *addr, wrong_dst->reached_id);
+            co_return false;
+        }
     } catch (seastar::rpc::closed_error&) {
         co_return false;
     }

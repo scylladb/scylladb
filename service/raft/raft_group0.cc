@@ -172,25 +172,8 @@ static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messagin
     co_return state;
 }
 
-future<raft::server_id> raft_group0::load_my_id() {
-    assert(this_shard_id() == 0);
-
-    auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (!id) {
-        on_internal_error(group0_log, "load_my_id(): server ID for group 0 missing");
-    }
-
-    co_return id;
-}
-
-seastar::future<raft::server_id> raft_group0::load_or_create_my_id() {
-    assert(this_shard_id() == 0);
-    auto id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (id == raft::server_id{}) {
-        id = raft::server_id::create_random_id();
-        co_await db::system_keyspace::set_raft_server_id(id.id);
-    }
-    co_return id;
+const raft::server_id& raft_group0::load_my_id() {
+    return _raft_gr.get_my_raft_id();
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id) {
@@ -371,7 +354,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     assert(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
-    auto my_id = co_await load_my_id();
+    auto my_id = load_my_id();
     _raft_gr.address_map().add_or_update_entry(my_id, _gossiper.get_broadcast_address());
     // At this time the group registry is already up and running,
     // so the address map is getting all the notifications from
@@ -394,7 +377,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
     }
 
     raft::server* server = nullptr;
-    auto my_id = co_await load_or_create_my_id();
+    auto my_id = load_my_id();
     group0_log.info("server {} found no local group 0. Discovering...", my_id);
     while (true) {
         auto g0_info = co_await discover_group0(my_id, seeds);
@@ -656,7 +639,7 @@ void raft_group0::load_initial_raft_address_map() {
 future<> raft_group0::finish_setup_after_join() {
     if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
-        auto my_id = co_await load_my_id();
+        auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
             // Just bootstrapped and joined as non-voter. Become a voter.
@@ -763,12 +746,7 @@ future<> raft_group0::leave_group0() {
             "leave_group0: we're fully upgraded to use Raft but didn't join group 0. Please report a bug.");
     }
 
-    auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (!my_id) {
-        on_internal_error(group0_log,
-            "leave_group0: we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
-            " Please report a bug.");
-    }
+    auto my_id = load_my_id();
 
     // Note: if this gets stuck due to a failure, the DB admin can abort.
     // FIXME: this gets stuck without failures if we're the leader (#10833)
@@ -823,12 +801,7 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
             " Please report a bug.", node));
     }
 
-    auto my_id = raft::server_id{co_await db::system_keyspace::get_raft_server_id()};
-    if (!my_id) {
-        on_internal_error(group0_log, format(
-            "remove_from_group0({}): we're fully upgraded to use Raft and group 0 ID is present but Raft server ID is not."
-            " Please report a bug.", node));
-    }
+    auto my_id = load_my_id();
 
     // Find their group 0 server's Raft ID.
     // Note: even if the removed node had the same inet_address as us, `find_replace_id` should correctly find them

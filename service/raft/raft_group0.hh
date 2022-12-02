@@ -160,10 +160,12 @@ public:
     // We'll look for the other node's Raft ID in the group 0 configuration.
     future<> remove_from_group0(gms::inet_address host);
 
-    // Loads server id for group 0 from disk if present,
-    // otherwise randomly generates a new one and persists it.
-    // Execute on shard 0 only.
-    future<raft::server_id> load_or_create_my_id();
+    // Assumes that this node's Raft server ID is already initialized and returns it.
+    // It's a fatal error if the id is missing.
+    //
+    // The returned ID is not empty.
+    const raft::server_id& load_my_id();
+
 private:
     void init_rpc_verbs();
     future<> uninit_rpc_verbs();
@@ -174,14 +176,6 @@ private:
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id);
-
-    // Assumes server id for group 0 is already persisted and loads it from disk.
-    // It's a fatal error if the id is missing.
-    //
-    // Execute on shard 0 only.
-    //
-    // The returned ID is not empty.
-    future<raft::server_id> load_my_id();
 
     // Run the discovery algorithm.
     //

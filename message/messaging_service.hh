@@ -179,7 +179,8 @@ enum class messaging_verb : int32_t {
     REPAIR_FLUSH_HINTS_BATCHLOG = 60,
     FORWARD_REQUEST = 61,
     GET_GROUP0_UPGRADE_STATE = 62,
-    LAST = 63,
+    DIRECT_FD_PING = 63,
+    LAST = 64,
 };
 
 } // namespace netw

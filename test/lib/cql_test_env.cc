@@ -633,7 +633,7 @@ public:
 
 
             static sharded<service::direct_fd_pinger> fd_pinger;
-            fd_pinger.start(sharded_parameter([] (gms::gossiper& g) { return std::ref(g.get_echo_pinger()); }, std::ref(gossiper)), std::ref(raft_address_map)).get();
+            fd_pinger.start(std::ref(ms), std::ref(raft_address_map)).get();
             auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
 
             service::direct_fd_clock fd_clock;
@@ -648,7 +648,6 @@ public:
             raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
                 std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
-            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
@@ -785,6 +784,13 @@ public:
                     t.enable_auto_compaction();
                 }
             }).get();
+
+            if (raft_gr.local().is_enabled()) {
+                auto my_raft_id = service::load_or_create_my_raft_id(sys_ks.local()).get();
+                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
+                    return raft_gr.start(my_raft_id);
+                }).get();
+            }
 
             group0_client.init().get();
             auto stop_system_keyspace = defer([&sys_ks] {
