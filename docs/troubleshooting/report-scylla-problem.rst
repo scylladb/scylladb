@@ -184,6 +184,7 @@ The script contents is  as follows:
    sudo perf record --call-graph dwarf -C 0 -F 99 -p $(ps -C scylla -o pid --no-headers) -g --output ./report/perf.data sleep 10
 
    export report_uuid=$(uuidgen)
+   echo $report_uuid
    tar c report | xz > report.tar.xz
    curl --request PUT --upload-file report.tar.xz "scylladb-users-upload.s3.amazonaws.com/$report_uuid/report.tar.xz"
    echo $report_uuid
@@ -238,6 +239,7 @@ Once you have collected and compressed your reports, send them to ScyllaDB for a
 .. code-block:: shell
 
    export report_uuid=$(uuidgen) 
+   echo $report_uuid
 
 2. Upload **all required** report files:
 
