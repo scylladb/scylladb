@@ -50,6 +50,7 @@ class large_data_handler;
 
 namespace sstables {
 
+class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
 namespace mc {
@@ -350,10 +351,6 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    sstring filename(const sstring& dir, component_type f) const {
-        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
-    }
-
     sstring filename(component_type f) const {
         return filename(get_dir(), f);
     }
@@ -390,14 +387,6 @@ public:
     static bool is_pending_delete_dir(const fs::path& dirpath)
     {
         return dirpath.filename().string() == pending_delete_dir_basename().c_str();
-    }
-
-    const sstring& get_dir() const {
-        return _dir;
-    }
-
-    const sstring get_temp_dir() const {
-        return temp_sst_dir(_dir, _generation);
     }
 
     bool requires_view_building() const;
@@ -485,6 +474,19 @@ public:
         return _last_partition_last_position;
     }
 private:
+    sstring filename(const sstring& dir, component_type f) const {
+        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
+    }
+
+    friend class sstable_directory;
+    const sstring& get_dir() const {
+        return _dir;
+    }
+
+    const sstring get_temp_dir() const {
+        return temp_sst_dir(_dir, _generation);
+    }
+
     size_t sstable_buffer_size;
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
