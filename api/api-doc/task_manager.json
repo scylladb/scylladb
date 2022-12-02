@@ -264,6 +264,13 @@
             "progress_completed":{
                "type":"double",
                "description":"The number of units completed so far"
+            },
+            "children_ids":{
+               "type":"array",
+                "items":{
+                    "type":"string"
+                },
+               "description":"Task IDs of children of this task"
             }
           }
        }

@@ -35,6 +35,7 @@ struct full_task_status {
     std::string module;
     tasks::task_id parent_id;
     tasks::is_abortable abortable;
+    std::vector<std::string> children_ids;
 };
 
 struct task_stats {
@@ -81,6 +82,7 @@ tm::task_status make_status(full_task_status status) {
     res.progress_units = status.task_status.progress_units;
     res.progress_total = status.progress.total;
     res.progress_completed = status.progress.completed;
+    res.children_ids = std::move(status.children_ids);
     return res;
 }
 
@@ -97,6 +99,11 @@ future<json::json_return_type> retrieve_status(tasks::task_manager::foreign_task
     s.module = task->get_module_name();
     s.progress.completed = progress.completed;
     s.progress.total = progress.total;
+    std::vector<std::string> ct{task->get_children().size()};
+    boost::transform(task->get_children(), ct.begin(), [] (const auto& child) {
+        return child->id().to_sstring();
+    });
+    s.children_ids = std::move(ct);
     co_return make_status(s);
 }
 
