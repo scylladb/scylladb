@@ -1494,8 +1494,11 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     std::exception_ptr ex;
 
     auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+    auto table_names = std::make_unique<std::unordered_set<sstring>>();
+
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
+    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir, &table_names] (sstables::shared_sstable sstable) {
+        table_names->insert(sstable->component_basename(sstables::component_type::Data));
         return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
             return io_check([sstable, &dir = jsondir] {
                 return sstable->create_links(dir);
@@ -1503,16 +1506,6 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
         });
     });
     co_await io_check(sync_directory, jsondir);
-
-    auto table_names = std::make_unique<std::unordered_set<sstring>>();
-    table_names->reserve(tables.size());
-    for (auto& sst : tables) {
-        auto f = sst->get_filename();
-        auto rf = f.substr(sst->get_dir().size() + 1);
-        table_names->insert(std::move(rf));
-        co_await coroutine::maybe_yield();
-    }
-
     co_return make_foreign(std::move(table_names));
 }
 
