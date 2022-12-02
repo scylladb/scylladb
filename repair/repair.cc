@@ -553,7 +553,6 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
 shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
         const sstring& keyspace,
-        std::string type,
         std::exception_ptr ex,
         repair_service& repair,
         locator::effective_replication_map_ptr erm_,
@@ -566,7 +565,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
         streaming::stream_reason reason_,
         abort_source* as,
         bool hints_batchlog_flushed)
-    : repair_task_impl(module, id, 0, keyspace, "", std::move(type), "", parent_id_.uuid(), reason_)
+    : repair_task_impl(module, id, 0, keyspace, "", "", parent_id_.uuid(), reason_)
     , _ex(std::move(ex))
     , rs(repair)
     , db(repair.get_db())
@@ -1121,7 +1120,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         co_return id.id;
     }
 
-    auto task_impl_ptr = std::make_unique<user_requested_repair_task_impl>(_repair_module, id, std::move(keyspace), format("{}", streaming::stream_reason::repair), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes));
+    auto task_impl_ptr = std::make_unique<user_requested_repair_task_impl>(_repair_module, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes));
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
     co_return id.id;
 }
@@ -1232,8 +1231,8 @@ future<> user_requested_repair_task_impl::run() {
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 std::exception_ptr ex;
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}",
-                        streaming::stream_reason::repair), ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
+                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
+                        ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, nullptr, hints_batchlog_flushed);
                 auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
                 co_await task->done();
@@ -1307,7 +1306,7 @@ future<> repair_service::sync_data_using_repair(
     }
 
     assert(this_shard_id() == 0);
-    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_info);
+    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info);
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
     co_await task->done();
 }
@@ -1348,7 +1347,7 @@ future<> data_sync_repair_task_impl::run() {
                     ex = std::current_exception();
                 }
                 auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
-                        format("{}", streaming::stream_reason::repair), ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
+                        ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, asp, hints_batchlog_flushed);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);

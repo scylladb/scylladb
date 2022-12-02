@@ -30,6 +30,7 @@ inline bool filter_tasks(tasks::task_manager::task_ptr task, std::unordered_map<
 
 struct full_task_status {
     tasks::task_manager::task::status task_status;
+    std::string type;
     tasks::task_manager::task::progress progress;
     std::string module;
     tasks::task_id parent_id;
@@ -52,7 +53,7 @@ tm::task_status make_status(full_task_status status) {
 
     tm::task_status res{};
     res.id = status.task_status.id.to_sstring();
-    res.type = status.task_status.type;
+    res.type = status.type;
     res.state = status.task_status.state;
     res.is_abortable = bool(status.abortable);
     res.start_time = st;
@@ -77,6 +78,7 @@ future<json::json_return_type> retrieve_status(tasks::task_manager::foreign_task
     auto progress = co_await task->get_progress();
     full_task_status s;
     s.task_status = task->get_status();
+    s.type = task->type();
     s.parent_id = task->get_parent_id();
     s.abortable = task->is_abortable();
     s.module = task->get_module_name();
