@@ -105,6 +105,10 @@ task_id task_manager::task::id() {
     return _impl->_status.id;
 }
 
+std::string task_manager::task::type() const {
+    return _impl->type();
+}
+
 task_manager::task::status& task_manager::task::get_status() noexcept {
     return _impl->_status;
 }

@@ -39,6 +39,10 @@ public:
         : task_manager::task::impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(type), std::move(entity), parent_id)
     {}
 
+    virtual std::string type() const override {
+        return "test";
+    }
+
     future<> run() override {
         return _finish_run.get_future();
     }

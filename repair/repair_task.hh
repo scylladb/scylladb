@@ -20,6 +20,10 @@ public:
         , _reason(reason) {
         _status.progress_units = "ranges";
     }
+
+    virtual std::string type() const override {
+        return format("{}", _reason);
+    }
 protected:
     repair_uniq_id get_repair_uniq_id() const noexcept {
         return repair_uniq_id{

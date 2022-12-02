@@ -103,6 +103,7 @@ public:
             impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, task_id parent_id) noexcept;
             virtual ~impl() = default;
 
+            virtual std::string type() const = 0;
             virtual future<task_manager::task::progress> get_progress() const;
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
@@ -123,6 +124,7 @@ public:
         task(task_impl_ptr&& impl) noexcept;
 
         task_id id();
+        std::string type() const;
         status& get_status() noexcept;
         uint64_t get_sequence_number() const noexcept;
         task_id get_parent_id() const noexcept;
