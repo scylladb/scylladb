@@ -1607,13 +1607,13 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
     check_reversed(
             { {excl{9, 39}, incl{10}} },
             {10},
-            { {excl{9, 39}, incl{10, null{}}} });
+            { {excl{9, 39}, excl{10}} });
 
     // (13)
     check_reversed(
             { {incl{9, 10}, incl{10, 30}} },
             {10},
-            { {incl{9, 10}, incl{10, null{}}} });
+            { {incl{9, 10}, excl{10}} });
 
     // (14)
     check_reversed(
