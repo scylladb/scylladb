@@ -110,8 +110,7 @@ public:
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     }
 
-    template <typename Func>
-    static inline auto do_with(Func&& func, test_env_config cfg = {}) {
+    static inline auto do_with(noncopyable_function<future<> (test_env&)> func, test_env_config cfg = {}) {
         return seastar::do_with(test_env(std::move(cfg)), [func = std::move(func)] (test_env& env) mutable {
             return futurize_invoke(func, env).finally([&env] {
                 return env.stop();
