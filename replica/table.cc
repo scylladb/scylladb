@@ -2365,15 +2365,14 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
-    auto dirs_to_sync = std::set<sstring>({dir()});
+    sstables::sstable::delayed_commit_changes delay_commit;
     for (auto sst : sstables) {
-        dirs_to_sync.emplace(sst->get_dir());
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
             // completed first.
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
-            co_await sst->move_to_new_dir(dir(), sst->generation(), false);
+            co_await sst->move_to_new_dir(dir(), sst->generation(), &delay_commit);
             // If view building finished faster, SSTable with repair origin still exists.
             // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
@@ -2386,9 +2385,9 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             throw;
         }
     }
-    co_await coroutine::parallel_for_each(dirs_to_sync, [] (sstring dir) {
-        return sync_directory(dir);
-    });
+
+    co_await delay_commit.commit();
+
     // Off-strategy timer will be rearmed, so if there's more incoming data through repair / streaming,
     // the timer can be updated once again. In practice, it allows off-strategy compaction to kick off
     // at the end of the node operation on behalf of this table, which brings more efficiency in terms

@@ -189,10 +189,17 @@ public:
     future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
+    class delayed_commit_changes {
+        std::unordered_set<sstring> _dirs;
+        friend class sstable;
+    public:
+        future<> commit();
+    };
+
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
     future<> destroy();
-    future<> move_to_new_dir(sstring new_dir, generation_type generation, bool do_sync_dirs = true);
+    future<> move_to_new_dir(sstring new_dir, generation_type generation, delayed_commit_changes* delay = nullptr);
 
     // Move the sstable to the quarantine_dir
     //
@@ -202,7 +209,7 @@ public:
     //
     // Note: moving a sstable in any other dir to quarantine
     // will move it into a quarantine_dir subdirectory of its current directory.
-    future<> move_to_quarantine(bool do_sync_dirs = true);
+    future<> move_to_quarantine(delayed_commit_changes* delay = nullptr);
 
     generation_type generation() const {
         return _generation;

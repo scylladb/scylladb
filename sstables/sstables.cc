@@ -2216,10 +2216,10 @@ future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generati
     return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
+future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), _generation, new_dir, new_generation, do_sync_dirs);
+            get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
@@ -2228,12 +2228,15 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     });
     auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
     co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
-    if (do_sync_dirs) {
+    if (delay_commit == nullptr) {
         co_await when_all(sstable_write_io_check(sync_directory, old_dir), sstable_write_io_check(sync_directory, new_dir)).discard_result();
+    } else {
+        delay_commit->_dirs.insert(old_dir);
+        delay_commit->_dirs.insert(new_dir);
     }
 }
 
-future<> sstable::move_to_quarantine(bool do_sync_dirs) {
+future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
     auto path = fs::path(_dir);
     sstring basename = path.filename().native();
     if (basename == quarantine_dir) {
@@ -2246,7 +2249,13 @@ future<> sstable::move_to_quarantine(bool do_sync_dirs) {
     auto new_dir = (path / sstables::quarantine_dir).native();
     sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
     co_await touch_directory(new_dir);
-    co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+    co_await move_to_new_dir(std::move(new_dir), generation(), delay_commit);
+}
+
+future<> sstable::delayed_commit_changes::commit() {
+    return parallel_for_each(_dirs, [] (sstring dir) {
+        return sync_directory(dir);
+    });
 }
 
 flat_mutation_reader_v2
