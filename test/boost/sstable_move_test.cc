@@ -43,7 +43,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
         auto cur_dir = sst->get_dir();
         auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
-        sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get();
+        sst->move_to_new_dir(new_dir, generation_from_value(gen)).get();
         // the source directory must be empty now
         remove_file(cur_dir).get();
     }
@@ -98,7 +98,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_replay) {
         auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
         done = partial_create_links(sst, fs::path(new_dir), gen, count++);
-        sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get();
+        sst->move_to_new_dir(new_dir, generation_from_value(gen)).get();
         remove_file(cur_dir).get();
     } while (!done);
 }
@@ -115,5 +115,5 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
     auto cur_dir = src_sst->get_dir();
     auto new_dir = dst_sst->get_dir();
     dst_sst->close_files().get();
-    BOOST_REQUIRE_THROW(src_sst->move_to_new_dir(new_dir, generation_from_value(gen), true).get(), malformed_sstable_exception);
+    BOOST_REQUIRE_THROW(src_sst->move_to_new_dir(new_dir, generation_from_value(gen)).get(), malformed_sstable_exception);
 }
