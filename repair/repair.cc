@@ -475,7 +475,7 @@ float repair_module::report_progress(streaming::stream_reason reason) {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
             auto& impl = dynamic_cast<shard_repair_task_impl&>(*it->second->_impl);
-            if (impl.reason == reason) {
+            if (impl.reason() == reason) {
                 nr_ranges_total += impl.ranges_size();
                 nr_ranges_finished += impl.nr_ranges_finished;
             }
@@ -566,7 +566,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
         streaming::stream_reason reason_,
         abort_source* as,
         bool hints_batchlog_flushed)
-    : repair_task_impl(module, id, 0, keyspace, "", std::move(type), "", parent_id_.uuid())
+    : repair_task_impl(module, id, 0, keyspace, "", std::move(type), "", parent_id_.uuid(), reason_)
     , _ex(std::move(ex))
     , rs(repair)
     , db(repair.get_db())
@@ -584,7 +584,6 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
     , data_centers(data_centers_)
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
-    , reason(reason_)
     , total_rf(erm->get_replication_factor())
     , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
@@ -596,7 +595,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
 
 void shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        id.uuid(), id.shard(), reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
+        id.uuid(), id.shard(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid(), id.shard(), nr_failed_ranges, ranges_size());
         throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid(), id.shard(), nr_failed_ranges, ranges_size()));
@@ -946,21 +945,21 @@ future<> shard_repair_task_impl::do_repair_ranges() {
         auto table_name = table_names()[idx];
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
-                id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, reason);
+                id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, _reason);
         co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) {
             return with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_id] {
                 return repair_range(range, table_id).then([this] {
-                    if (reason == streaming::stream_reason::bootstrap) {
+                    if (_reason == streaming::stream_reason::bootstrap) {
                         rs.get_metrics().bootstrap_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::replace) {
+                    } else if (_reason == streaming::stream_reason::replace) {
                         rs.get_metrics().replace_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::rebuild) {
+                    } else if (_reason == streaming::stream_reason::rebuild) {
                         rs.get_metrics().rebuild_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::decommission) {
+                    } else if (_reason == streaming::stream_reason::decommission) {
                         rs.get_metrics().decommission_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::removenode) {
+                    } else if (_reason == streaming::stream_reason::removenode) {
                         rs.get_metrics().removenode_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::repair) {
+                    } else if (_reason == streaming::stream_reason::repair) {
                         rs.get_metrics().repair_finished_ranges_sum++;
                         nr_ranges_finished++;
                     }
@@ -976,7 +975,7 @@ future<> shard_repair_task_impl::do_repair_ranges() {
             });
         });
 
-        if (reason != streaming::stream_reason::repair) {
+        if (_reason != streaming::stream_reason::repair) {
             try {
                 auto& table = db.local().find_column_family(table_id);
                 rlogger.debug("repair[{}]: Trigger off-strategy compaction for keyspace={}, table={}",

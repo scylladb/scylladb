@@ -2720,7 +2720,7 @@ private:
     // Update system.repair_history table
     future<> update_system_repair_table() {
         // Update repair_history table only if it is a reguar repair.
-        if (_shard_task.reason != streaming::stream_reason::repair) {
+        if (_shard_task.reason() != streaming::stream_reason::repair) {
             co_return;
         }
         // Update repair_history table only if all replicas have been repaired
@@ -2795,7 +2795,7 @@ public:
                     _seed,
                     repair_master::yes,
                     repair_meta_id,
-                    _shard_task.reason,
+                    _shard_task.reason(),
                     std::move(master_node_shard_config),
                     _all_live_peer_nodes,
                     _all_live_peer_nodes.size(),
@@ -2816,7 +2816,7 @@ public:
                 parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
-                    return master.repair_row_level_start(node, _shard_task.get_keyspace(), _cf_name, _range, schema_version, _shard_task.reason).then([&] () {
+                    return master.repair_row_level_start(node, _shard_task.get_keyspace(), _cf_name, _range, schema_version, _shard_task.reason()).then([&] () {
                         ns.state = repair_state::row_level_start_finished;
                         nodes_to_stop.push_back(node);
                         ns.state = repair_state::get_estimated_partitions_started;
