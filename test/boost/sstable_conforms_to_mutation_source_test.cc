@@ -237,7 +237,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
     auto rev_full_slice = native_reverse_slice_to_legacy_reverse_slice(*query_schema, query_schema->full_slice());
     rev_full_slice.options.set(query::partition_slice::option::reversed);
 
-    sstables::test_env::do_with([&, version = writable_sstable_versions[1]] (sstables::test_env& env) {
+    sstables::test_env::do_with_async([&, version = writable_sstable_versions[1]] (sstables::test_env& env) {
 
         std::vector<tmpdir> dirs;
         sstable_writer_config cfg = env.manager().configure_writer();
