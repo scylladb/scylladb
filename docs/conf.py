@@ -103,9 +103,9 @@ html_theme_options = {
     "github_repository": "scylladb/scylladb",
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
-    'banner_button_text': 'Learn More',
-    'banner_button_url': 'https://lp.scylladb.com/university-live-2022-12-registration',
-    'banner_title_text': 'Join us for ScyllaDB University LIVE, a half-day of FREE instructor-led training with exclusive new ScyllaDB database content. December 1. Register for Free',
+    'banner_button_text': 'Say Hello',
+    'banner_button_url': 'https://forum.scylladb.com/t/say-hello-how-are-you-using-scylladb/35/4',
+    'banner_title_text': 'Check out our new community forum!',
     'hide_banner': 'false',
     "collapse_navigation": 'true',
 }
