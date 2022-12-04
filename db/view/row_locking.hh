@@ -30,6 +30,7 @@
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
 #include "utils/estimated_histogram.hh"
+#include "utils/latency.hh"
 
 class row_locker {
 public:
@@ -43,6 +44,15 @@ public:
         single_lock_stats shared_row;
         single_lock_stats exclusive_partition;
         single_lock_stats shared_partition;
+    };
+    struct latency_stats_tracker {
+        single_lock_stats& lock_stats;
+        utils::latency_counter waiting_latency;
+
+        latency_stats_tracker(single_lock_stats& stats);
+        ~latency_stats_tracker();
+
+        void lock_acquired();
     };
     // row_locker's locking functions lock_pk(), lock_ck() return a
     // "lock_holder" object. When the caller destroys the object it received,
