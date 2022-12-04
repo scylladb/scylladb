@@ -79,30 +79,29 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
 future<row_locker::lock_holder>
 row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     try {
-    // FIXME: indentation
-    mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
-    auto i = _two_level_locks.try_emplace(pk, this).first;
-    auto j = i->second._row_locks.find(cpk);
-    if (j == i->second._row_locks.end()) {
-        // Not yet locked, need to create the lock. This makes a copy of cpk.
+        mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
+        auto i = _two_level_locks.try_emplace(pk, this).first;
+        auto j = i->second._row_locks.find(cpk);
+        if (j == i->second._row_locks.end()) {
+            // Not yet locked, need to create the lock. This makes a copy of cpk.
             j = i->second._row_locks.emplace(cpk, lock_type()).first;
-    }
-    single_lock_stats &single_lock_stats = exclusive ? stats.exclusive_row : stats.shared_row;
-    single_lock_stats.operations_currently_waiting_for_lock++;
-    utils::latency_counter waiting_latency;
-    waiting_latency.start();
-    future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
-    future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
-    return when_all_succeed(std::move(lock_partition), std::move(lock_row))
-    .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
-        lock1.release();
-        lock2.release();
-        waiting_latency.stop();
-        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
-        single_lock_stats.lock_acquisitions++;
-        single_lock_stats.operations_currently_waiting_for_lock--;
-        return lock_holder(this, pk, cpk, exclusive ? lock_state::exclusive : lock_state::shared);
-    });
+        }
+        single_lock_stats &single_lock_stats = exclusive ? stats.exclusive_row : stats.shared_row;
+        single_lock_stats.operations_currently_waiting_for_lock++;
+        utils::latency_counter waiting_latency;
+        waiting_latency.start();
+        future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
+        future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
+        return when_all_succeed(std::move(lock_partition), std::move(lock_row))
+        .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
+            lock1.release();
+            lock2.release();
+            waiting_latency.stop();
+            single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
+            single_lock_stats.lock_acquisitions++;
+            single_lock_stats.operations_currently_waiting_for_lock--;
+            return lock_holder(this, pk, cpk, exclusive ? lock_state::exclusive : lock_state::shared);
+        });
     } catch (...) {
         return make_exception_future<row_locker::lock_holder>(std::current_exception());
     }
