@@ -2216,10 +2216,10 @@ future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generati
     return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, bool do_sync_dirs) {
+future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), _generation, new_dir, new_generation, do_sync_dirs);
+            get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
     _dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
@@ -2228,12 +2228,15 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     });
     auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
     co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
-    if (do_sync_dirs) {
+    if (delay_commit == nullptr) {
         co_await when_all(sstable_write_io_check(sync_directory, old_dir), sstable_write_io_check(sync_directory, new_dir)).discard_result();
+    } else {
+        delay_commit->_dirs.insert(old_dir);
+        delay_commit->_dirs.insert(new_dir);
     }
 }
 
-future<> sstable::move_to_quarantine(bool do_sync_dirs) {
+future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
     auto path = fs::path(_dir);
     sstring basename = path.filename().native();
     if (basename == quarantine_dir) {
@@ -2246,7 +2249,13 @@ future<> sstable::move_to_quarantine(bool do_sync_dirs) {
     auto new_dir = (path / sstables::quarantine_dir).native();
     sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
     co_await touch_directory(new_dir);
-    co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+    co_await move_to_new_dir(std::move(new_dir), generation(), delay_commit);
+}
+
+future<> sstable::delayed_commit_changes::commit() {
+    return parallel_for_each(_dirs, [] (sstring dir) {
+        return sync_directory(dir);
+    });
 }
 
 flat_mutation_reader_v2
@@ -2782,20 +2791,6 @@ static inline sstring parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
-// Must be called on a directory.
-future<>
-fsync_directory(const io_error_handler& error_handler, sstring dirname) {
-    return ::sstable_io_check(error_handler, [&] {
-        return open_checked_directory(error_handler, dirname).then([] (file f) {
-            return do_with(std::move(f), [] (file& f) {
-                return f.flush().then([&f] {
-                    return f.close();
-                });
-            });
-        });
-    });
-}
-
 future<> remove_by_toc_name(sstring sstable_toc_name) {
     sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
     sstring new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
@@ -2804,7 +2799,7 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
     if (co_await sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name)) {
         // If new_toc_name exists it will be atomically replaced.  See rename(2)
         co_await sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name);
-        co_await fsync_directory(sstable_write_error_handler, parent_path(new_toc_name));
+        co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
     } else {
         if (!co_await sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name)) {
             sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
@@ -2846,7 +2841,7 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
             sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
         }
     });
-    co_await fsync_directory(sstable_write_error_handler, parent_path(new_toc_name));
+    co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
     co_await sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
 }
 

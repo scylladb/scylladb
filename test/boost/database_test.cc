@@ -1114,9 +1114,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
                 auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
                 testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
                 auto sst = sstables[idx];
-                auto quarantine_dir = sst->get_dir() + "/" + sstables::quarantine_dir;
-                co_await touch_directory(quarantine_dir);
-                co_await sst->move_to_new_dir(quarantine_dir, sst->generation());
+                co_await sst->move_to_quarantine();
                 co_return true;
             });
         }
@@ -1167,10 +1165,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
                 }
                 auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
                 auto sst = sstables[idx];
-                auto quarantine_dir = sst->get_dir() + "/" + sstables::quarantine_dir;
-                co_await touch_directory(quarantine_dir);
-                testlog.debug("Moving sstable #{} out of {}: {} to quarantine", idx, sstables.size(), sst->get_filename());
-                co_await sst->move_to_new_dir(quarantine_dir, sst->generation());
+                co_await sst->move_to_quarantine();
             });
         }
         BOOST_REQUIRE(found);

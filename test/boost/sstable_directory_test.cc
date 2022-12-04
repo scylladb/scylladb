@@ -282,7 +282,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     auto dir = tmpdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
-    auto tempstr = sst->filename(dir.path().native(), component_type::TemporaryStatistics);
+    auto tempstr = sst->filename(component_type::TemporaryStatistics);
     auto f = open_file_dma(tempstr, open_flags::rw | open_flags::create | open_flags::truncate).get0();
     f.close().get();
     auto tempstat = fs::canonical(fs::path(tempstr));

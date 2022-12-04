@@ -275,7 +275,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_await dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) -> future<> {
         auto gen = table.calculate_generation_for_new_table();
         dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
-        co_await sst->move_to_new_dir(datadir.native(), gen, true);
+        co_await sst->move_to_new_dir(datadir.native(), gen);
             // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
             sst->set_sstable_level(0);
             new_sstables.push_back(std::move(sst));

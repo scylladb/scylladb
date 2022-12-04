@@ -1494,8 +1494,11 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     std::exception_ptr ex;
 
     auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+    auto table_names = std::make_unique<std::unordered_set<sstring>>();
+
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
+    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir, &table_names] (sstables::shared_sstable sstable) {
+        table_names->insert(sstable->component_basename(sstables::component_type::Data));
         return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
             return io_check([sstable, &dir = jsondir] {
                 return sstable->create_links(dir);
@@ -1503,16 +1506,6 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
         });
     });
     co_await io_check(sync_directory, jsondir);
-
-    auto table_names = std::make_unique<std::unordered_set<sstring>>();
-    table_names->reserve(tables.size());
-    for (auto& sst : tables) {
-        auto f = sst->get_filename();
-        auto rf = f.substr(sst->get_dir().size() + 1);
-        table_names->insert(std::move(rf));
-        co_await coroutine::maybe_yield();
-    }
-
     co_return make_foreign(std::move(table_names));
 }
 
@@ -2372,15 +2365,14 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
-    auto dirs_to_sync = std::set<sstring>({dir()});
+    sstables::sstable::delayed_commit_changes delay_commit;
     for (auto sst : sstables) {
-        dirs_to_sync.emplace(sst->get_dir());
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
             // completed first.
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
-            co_await sst->move_to_new_dir(dir(), sst->generation(), false);
+            co_await sst->move_to_new_dir(dir(), sst->generation(), &delay_commit);
             // If view building finished faster, SSTable with repair origin still exists.
             // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
@@ -2393,9 +2385,9 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             throw;
         }
     }
-    co_await coroutine::parallel_for_each(dirs_to_sync, [] (sstring dir) {
-        return sync_directory(dir);
-    });
+
+    co_await delay_commit.commit();
+
     // Off-strategy timer will be rearmed, so if there's more incoming data through repair / streaming,
     // the timer can be updated once again. In practice, it allows off-strategy compaction to kick off
     // at the end of the node operation on behalf of this table, which brings more efficiency in terms
