@@ -10,8 +10,6 @@
 #include "log.hh"
 #include "utils/latency.hh"
 
-#include <seastar/core/when_all.hh>
-
 static logging::logger mylog("row_locking");
 
 row_locker::row_locker(schema_ptr s)
@@ -102,9 +100,10 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     single_lock_stats.operations_currently_waiting_for_lock++;
     utils::latency_counter waiting_latency;
     waiting_latency.start();
-    future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
-    return when_all_succeed(std::move(lock_partition), std::move(lock_row))
-    .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
+    return lock_partition.then([this, pk = &i->first, cpk = &j->first, &row_lock = j->second, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), timeout] (auto lock1) mutable {
+        auto lock_row = exclusive ? row_lock.hold_write_lock(timeout) : row_lock.hold_read_lock(timeout);
+        return lock_row.then([this, pk, cpk, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), lock1 = std::move(lock1)] (auto lock2) mutable {
+        // FIXME: indentation
         lock1.release();
         lock2.release();
         waiting_latency.stop();
@@ -112,6 +111,7 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
         return lock_holder(this, pk, cpk, exclusive);
+        });
     });
 }
 
