@@ -206,9 +206,8 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
                 }
             }
             if (row_locks.empty()) {
-            // FIXME: indentation
-            mylog.debug("Erasing lock object for partition {}", *pk);
-            _two_level_locks.erase(pli);
+                mylog.debug("Erasing lock object for partition {}", *pk);
+                _two_level_locks.erase(pli);
             }
         }
      }
