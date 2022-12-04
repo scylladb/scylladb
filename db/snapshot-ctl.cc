@@ -111,23 +111,23 @@ future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
 snapshot_ctl::get_snapshot_details() {
     using snapshot_map = std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>;
 
-    co_return co_await run_snapshot_list_operation([this] () -> future<snapshot_map> {
+    co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
         snapshot_map result;
         for (auto& r : co_await _db.local().get_snapshot_details()) {
             result[r.snapshot_name].emplace_back(std::move(r.details));
         }
         co_return result;
-    });
+    }));
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
-    co_return co_await run_snapshot_list_operation([this] () -> future<int64_t> {
+    co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<int64_t> {
         int64_t total = 0;
         for (auto& r : co_await _db.local().get_snapshot_details()) {
             total += r.details.live;
         }
         co_return total;
-    });
+    }));
 }
 
 }
