@@ -31,25 +31,28 @@ void row_locker::upgrade(schema_ptr new_schema) {
 row_locker::lock_holder::lock_holder()
     : _locker(nullptr)
     , _partition(nullptr)
-    , _partition_exclusive(true)
+    , _partition_state(lock_state::unlocked)
     , _row(nullptr)
-    , _row_exclusive(true) {
+    , _row_state(lock_state::unlocked)
+{
 }
 
-row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_key* pk, bool exclusive)
+row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_key* pk, lock_state lock_state)
     : _locker(locker)
     , _partition(pk)
-    , _partition_exclusive(exclusive)
+    , _partition_state(lock_state)
     , _row(nullptr)
-    , _row_exclusive(true) {
+    , _row_state(lock_state::unlocked)
+{
 }
 
-row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_key* pk, const clustering_key_prefix* cpk, bool exclusive)
+row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_key* pk, const clustering_key_prefix* cpk, lock_state lock_state)
     : _locker(locker)
     , _partition(pk)
-    , _partition_exclusive(false)
+    , _partition_state(lock_state == lock_state::unlocked ? lock_state::unlocked : lock_state::shared)
     , _row(cpk)
-    , _row_exclusive(exclusive) {
+    , _row_state(lock_state)
+{
 }
 
 future<row_locker::lock_holder>
@@ -69,7 +72,7 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
         single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
-        return lock_holder(this, pk, exclusive);
+        return lock_holder(this, pk, exclusive ? lock_state::exclusive : lock_state::shared);
     });
 }
 
@@ -111,16 +114,16 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
         single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
-        return lock_holder(this, pk, cpk, exclusive);
+        return lock_holder(this, pk, cpk, exclusive ? lock_state::exclusive : lock_state::shared);
     });
 }
 
 row_locker::lock_holder::lock_holder(row_locker::lock_holder&& old) noexcept
         : _locker(old._locker)
         , _partition(old._partition)
-        , _partition_exclusive(old._partition_exclusive)
+        , _partition_state(std::exchange(old._partition_state, lock_state::unlocked))
         , _row(old._row)
-        , _row_exclusive(old._row_exclusive)
+        , _row_state(std::exchange(old._row_state, lock_state::unlocked))
 {
     // We also need to zero old's _partition and _row, so when destructed
     // the destructor will do nothing and further moves will not create
@@ -134,9 +137,9 @@ row_locker::lock_holder& row_locker::lock_holder::operator=(row_locker::lock_hol
         this->~lock_holder();
         _locker = old._locker;
         _partition = old._partition;
-        _partition_exclusive = old._partition_exclusive;
+        _partition_state = std::exchange(old._partition_state, lock_state::unlocked);
         _row = old._row;
-        _row_exclusive = old._row_exclusive;
+        _row_state = std::exchange(old._row_state, lock_state::unlocked);
         // As above, need to also zero other's data
         old._partition = nullptr;
         old._row = nullptr;
@@ -145,11 +148,11 @@ row_locker::lock_holder& row_locker::lock_holder::operator=(row_locker::lock_hol
 }
 
 void
-row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
-                    const clustering_key_prefix* cpk, bool row_exclusive) {
+row_locker::unlock(const dht::decorated_key* pk, lock_state partition_state,
+                    const clustering_key_prefix* cpk, lock_state row_state) {
     // Look for the partition and/or row locks given keys, release the locks,
     // and if nobody is using one of lock objects any more, delete it:
-    if (pk) {
+    if (pk && partition_state != lock_state::unlocked) {
         auto pli = _two_level_locks.find(*pk);
         if (pli == _two_level_locks.end()) {
             // This shouldn't happen... We can't unlock this lock if we can't find it...
@@ -157,13 +160,14 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             return;
         }
         assert(&pli->first == pk);
-        if (cpk) {
+        if (cpk && row_state != lock_state::unlocked) {
             auto rli = pli->second._row_locks.find(*cpk);
             if (rli == pli->second._row_locks.end()) {
                 mylog.error("column_family::local_base_lock_holder::~local_base_lock_holder() can't find lock for row", *cpk);
                 return;
             }
             assert(&rli->first == cpk);
+            auto row_exclusive = (row_state == lock_state::exclusive);
             mylog.debug("releasing {} lock for row {} in partition {}", (row_exclusive ? "exclusive" : "shared"), *cpk, *pk);
             auto& lock = rli->second;
             if (row_exclusive) {
@@ -176,6 +180,7 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
                 pli->second._row_locks.erase(rli);
             }
         }
+        auto partition_exclusive = (partition_state == lock_state::exclusive);
         mylog.debug("releasing {} lock for entire partition {}", (partition_exclusive ? "exclusive" : "shared"), *pk);
         auto& lock = pli->second._partition_lock;
         if (partition_exclusive) {
@@ -215,6 +220,6 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
 
 row_locker::lock_holder::~lock_holder() {
     if (_locker) {
-        _locker->unlock(_partition,  _partition_exclusive, _row, _row_exclusive);
+        _locker->unlock(_partition, _partition_state, _row, _row_state);
     }
 }

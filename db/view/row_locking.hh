@@ -44,6 +44,11 @@ public:
         single_lock_stats exclusive_partition;
         single_lock_stats shared_partition;
     };
+    enum class lock_state {
+        unlocked,
+        shared,
+        exclusive
+    };
     // row_locker's locking functions lock_pk(), lock_ck() return a
     // "lock_holder" object. When the caller destroys the object it received,
     // the lock is released. The same type "lock_holder" is used regardless
@@ -55,13 +60,13 @@ public:
         // only drop them from the hash table when all the lock holders for
         // this partition or row are released).
         const dht::decorated_key* _partition;
-        bool _partition_exclusive;
+        lock_state _partition_state;
         const clustering_key_prefix* _row;
-        bool _row_exclusive;
+        lock_state _row_state;
     public:
         lock_holder();
-        lock_holder(row_locker* locker, const dht::decorated_key* pk, bool exclusive);
-        lock_holder(row_locker* locker, const dht::decorated_key* pk, const clustering_key_prefix* cpk, bool exclusive);
+        lock_holder(row_locker* locker, const dht::decorated_key* pk, lock_state lock_state);
+        lock_holder(row_locker* locker, const dht::decorated_key* pk, const clustering_key_prefix* cpk, lock_state lock_state);
         ~lock_holder();
         // Allow move (noexcept) but disallow copy
         lock_holder(lock_holder&&) noexcept;
@@ -98,7 +103,7 @@ private:
         }
     };
     std::unordered_map<dht::decorated_key, two_level_lock, decorated_key_hash, decorated_key_equals_comparator> _two_level_locks;
-    void unlock(const dht::decorated_key* pk, bool partition_exclusive, const clustering_key_prefix* cpk, bool row_exclusive);
+    void unlock(const dht::decorated_key* pk, lock_state partition_state, const clustering_key_prefix* cpk, lock_state row_state);
 public:
     // row_locker needs to know the column_family's schema because key
     // comparisons needs the schema.
