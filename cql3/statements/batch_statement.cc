@@ -162,36 +162,32 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     mutation_set_type result;
-    {
-        result.reserve(_statements.size());
-        for (size_t i = 0; i != _statements.size(); ++i) {
-            auto&& statement = _statements[i].statement;
-            statement->inc_cql_stats(query_state.get_client_state().is_internal());
-            auto&& statement_options = options.for_statement(i);
-            auto timestamp = _attrs->get_timestamp(now, statement_options);
-            auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state);
-            {
-                for (auto&& m : more) {
-                    // We want unordered_set::try_emplace(), but we don't have it
-                    auto pos = result.find(m);
-                    if (pos == result.end()) {
-                        result.emplace(std::move(m));
-                    } else {
-                        const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
-                    }
-                }
+    result.reserve(_statements.size());
+    for (size_t i = 0; i != _statements.size(); ++i) {
+        auto&& statement = _statements[i].statement;
+        statement->inc_cql_stats(query_state.get_client_state().is_internal());
+        auto&& statement_options = options.for_statement(i);
+        auto timestamp = _attrs->get_timestamp(now, statement_options);
+        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state);
+
+        for (auto&& m : more) {
+            // We want unordered_set::try_emplace(), but we don't have it
+            auto pos = result.find(m);
+            if (pos == result.end()) {
+                result.emplace(std::move(m));
+            } else {
+                const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
             }
-        }
-        {
-            // can't use range adaptors, because we want to move
-            auto vresult = std::vector<mutation>();
-            vresult.reserve(result.size());
-            for (auto&& m : result) {
-                vresult.push_back(std::move(m));
-            }
-            co_return vresult;
         }
     }
+
+    // can't use range adaptors, because we want to move
+    auto vresult = std::vector<mutation>();
+    vresult.reserve(result.size());
+    for (auto&& m : result) {
+        vresult.push_back(std::move(m));
+    }
+    co_return vresult;
 }
 
 void batch_statement::verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations) {
