@@ -804,7 +804,14 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
             ::make_shared<metadata>(*_selection->get_result_metadata()))
         ));
     }
+    return process_results_complex(std::move(results), std::move(cmd), options, now);
+}
 
+future<shared_ptr<cql_transport::messages::result_message>>
+select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
+                                  lw_shared_ptr<query::read_command> cmd,
+                                  const query_options& options,
+                                  gc_clock::time_point now) const {
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
     return do_with(std::move(builder), [this, cmd, results = std::move(results), options] (cql3::selection::result_set_builder& builder) mutable {

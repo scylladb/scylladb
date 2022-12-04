@@ -79,6 +79,9 @@ protected:
     bool _range_scan = false;
     bool _range_scan_no_bypass_cache = false;
     std::unique_ptr<cql3::attributes> _attrs;
+private:
+    future<shared_ptr<cql_transport::messages::result_message>> process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
+        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
         service::query_state& state, const query_options& options) const;
