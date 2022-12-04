@@ -184,8 +184,32 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             lock.read_unlock();
         }
         if (!lock.locked()) {
+            auto& row_locks = pli->second._row_locks;
+            // We can erase the partition entry only if all its rows are unlocked.
+            // If _row_locks isn't empty it may contain rows in one of two states:
+            // - A locked row.  This is an indication that lock_ck `lock_partition`
+            //   failed on timeout while holding the row lock (https://github.com/scylladb/scylladb/issues/12168)
+            //   In this case we must not erase the partition element that contains
+            //   the row_locks map.
+            // - An unlocked row.  This could also occur in if and of lock_ck locks fail.
+            //   In this case, since it doesn't get to create the lock_holder, and it
+            //   relies only on the semantics of the destroyed rwlock::holder's, it
+            //   may leave behind an unlocked row which is not cleaned up by this function.
+            //   I this case, it can be cleaned up now.  Better late than never :)
+            if (!row_locks.empty()) {
+                for (auto it = row_locks.begin(); it != row_locks.end(); ) {
+                    if (it->second.locked()) {
+                        ++it;
+                    } else {
+                        it = row_locks.erase(it);
+                    }
+                }
+            }
+            if (row_locks.empty()) {
+            // FIXME: indentation
             mylog.debug("Erasing lock object for partition {}", *pk);
             _two_level_locks.erase(pli);
+            }
         }
      }
 }
