@@ -58,28 +58,31 @@ public:
     // "lock_holder" object. When the caller destroys the object it received,
     // the lock is released. The same type "lock_holder" is used regardless
     // of whether a row or partition was locked, for read or write.
+    using lock_type = basic_rwlock<db::timeout_clock>;
     class lock_holder {
         row_locker* _locker;
         // The lock holder pointers to the partition and clustering keys,
         // which are stored inside the _two_level_locks hash table (we may
         // only drop them from the hash table when all the lock holders for
         // this partition or row are released).
-        const dht::decorated_key* _partition;
-        bool _partition_exclusive;
-        const clustering_key_prefix* _row;
-        bool _row_exclusive;
+        const dht::decorated_key* _partition = nullptr;
+        lock_type::holder _partition_lock_holder;
+        bool _partition_exclusive = false;
+        const clustering_key_prefix* _row = nullptr;
+        lock_type::holder _row_lock_holder;
+        bool _row_exclusive = false;
     public:
-        lock_holder();
-        lock_holder(row_locker* locker, const dht::decorated_key* pk, bool exclusive);
-        lock_holder(row_locker* locker, const dht::decorated_key* pk, const clustering_key_prefix* cpk, bool exclusive);
+        lock_holder(row_locker* locker = nullptr) noexcept : _locker(locker) {}
         ~lock_holder();
         // Allow move (noexcept) but disallow copy
         lock_holder(lock_holder&&) noexcept;
-        lock_holder& operator=(lock_holder&&) noexcept;
+        lock_holder& operator=(lock_holder&&) = default;
+
+        future<> lock_partition(const dht::decorated_key* pk, lock_type& partition_lock, bool exclusive, db::timeout_clock::time_point timeout);
+        future<> lock_row(const clustering_key_prefix* cpk, lock_type& row_lock, bool exclusive, db::timeout_clock::time_point timeout);
     };
 private:
     schema_ptr _schema;
-    using lock_type = basic_rwlock<db::timeout_clock>;
     struct two_level_lock {
         lock_type _partition_lock;
         struct clustering_key_prefix_less {
@@ -108,7 +111,7 @@ private:
         }
     };
     std::unordered_map<dht::decorated_key, two_level_lock, decorated_key_hash, decorated_key_equals_comparator> _two_level_locks;
-    void unlock(const dht::decorated_key* pk, bool partition_exclusive, const clustering_key_prefix* cpk, bool row_exclusive);
+    void cleanup(const dht::decorated_key* pk, const clustering_key_prefix* cpk);
 public:
     // row_locker needs to know the column_family's schema because key
     // comparisons needs the schema.
