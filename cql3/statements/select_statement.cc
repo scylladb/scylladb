@@ -814,33 +814,31 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
                                   gc_clock::time_point now) const {
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    {
-        co_return co_await builder.with_thread_if_needed([&] {
-            if (_restrictions_need_filtering) {
-                results->ensure_counts();
-                _stats.filtered_rows_read_total += *results->row_count();
-                query::result_view::consume(*results, cmd->slice,
-                        cql3::selection::result_set_builder::visitor(builder, *_schema,
-                                *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
-            } else {
-                query::result_view::consume(*results, cmd->slice,
-                        cql3::selection::result_set_builder::visitor(builder, *_schema,
-                                *_selection));
-            }
-            auto rs = builder.build();
+    co_return co_await builder.with_thread_if_needed([&] {
+        if (_restrictions_need_filtering) {
+            results->ensure_counts();
+            _stats.filtered_rows_read_total += *results->row_count();
+            query::result_view::consume(*results, cmd->slice,
+                    cql3::selection::result_set_builder::visitor(builder, *_schema,
+                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
+        } else {
+            query::result_view::consume(*results, cmd->slice,
+                    cql3::selection::result_set_builder::visitor(builder, *_schema,
+                            *_selection));
+        }
+        auto rs = builder.build();
 
-            if (needs_post_query_ordering()) {
-                rs->sort(_ordering_comparator);
-                if (_is_reversed) {
-                    rs->reverse();
-                }
-                rs->trim(cmd->get_row_limit());
+        if (needs_post_query_ordering()) {
+            rs->sort(_ordering_comparator);
+            if (_is_reversed) {
+                rs->reverse();
             }
-            update_stats_rows_read(rs->size());
-            _stats.filtered_rows_matched_total += _restrictions_need_filtering ? rs->size() : 0;
-            return shared_ptr<cql_transport::messages::result_message>(::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs))));
-        });
-    }
+            rs->trim(cmd->get_row_limit());
+        }
+        update_stats_rows_read(rs->size());
+        _stats.filtered_rows_matched_total += _restrictions_need_filtering ? rs->size() : 0;
+        return shared_ptr<cql_transport::messages::result_message>(::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs))));
+    });
 }
 
 const ::shared_ptr<const restrictions::statement_restrictions> select_statement::get_restrictions() const {
