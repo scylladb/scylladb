@@ -814,8 +814,8 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
                                   gc_clock::time_point now) const {
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    return do_with(std::move(builder), [this, cmd, results = std::move(results), options] (cql3::selection::result_set_builder& builder) mutable {
-        return builder.with_thread_if_needed([this, &builder, cmd, results = std::move(results), options] {
+    {
+        co_return co_await builder.with_thread_if_needed([&] {
             if (_restrictions_need_filtering) {
                 results->ensure_counts();
                 _stats.filtered_rows_read_total += *results->row_count();
@@ -840,7 +840,7 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
             _stats.filtered_rows_matched_total += _restrictions_need_filtering ? rs->size() : 0;
             return shared_ptr<cql_transport::messages::result_message>(::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs))));
         });
-    });
+    }
 }
 
 const ::shared_ptr<const restrictions::statement_restrictions> select_statement::get_restrictions() const {
