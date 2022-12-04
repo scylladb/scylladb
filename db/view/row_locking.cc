@@ -63,16 +63,18 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
     single_lock_stats.operations_currently_waiting_for_lock++;
     utils::latency_counter waiting_latency;
     waiting_latency.start();
-    auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
     // Note: we rely on the fact that &i->first, the pointer to a key, never
     // becomes invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-    return f.then([this, pk = &i->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] () mutable {
+    auto holder = make_lw_shared<lock_holder>(this, &i->first, lock_state::unlocked);
+    auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
+    return f.then([this, pk = &i->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), holder = std::move(holder)] () mutable {
         waiting_latency.stop();
         single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
-        return lock_holder(this, pk, exclusive ? lock_state::exclusive : lock_state::shared);
+        holder->_partition_state = exclusive ? lock_state::exclusive : lock_state::shared;
+        return std::move(*holder);
     });
 }
 
@@ -90,17 +92,23 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
         single_lock_stats.operations_currently_waiting_for_lock++;
         utils::latency_counter waiting_latency;
         waiting_latency.start();
+        // Note: we rely on the fact that &i->first and &j->first, the pointers
+        // to a key and row, never become invalid (as long as the item is actually
+        // in the hash table), even in the case of rehashing.
+        auto holder = make_lw_shared<lock_holder>(this, &i->first, &j->first, lock_state::unlocked);
         future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
         future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
         return when_all_succeed(std::move(lock_partition), std::move(lock_row))
-        .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
+        .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), holder = std::move(holder)] (auto lock1, auto lock2) mutable {
             lock1.release();
             lock2.release();
             waiting_latency.stop();
             single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
             single_lock_stats.lock_acquisitions++;
             single_lock_stats.operations_currently_waiting_for_lock--;
-            return lock_holder(this, pk, cpk, exclusive ? lock_state::exclusive : lock_state::shared);
+            holder->_partition_state = lock_state::shared;
+            holder->_row_state = exclusive ? lock_state::exclusive : lock_state::shared;
+            return std::move(*holder);
         });
     } catch (...) {
         return make_exception_future<row_locker::lock_holder>(std::current_exception());

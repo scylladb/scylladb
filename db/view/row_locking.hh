@@ -71,6 +71,8 @@ public:
         // Allow move (noexcept) but disallow copy
         lock_holder(lock_holder&&) noexcept;
         lock_holder& operator=(lock_holder&&) noexcept;
+
+        friend class row_locker;
     };
 private:
     schema_ptr _schema;
