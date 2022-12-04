@@ -183,6 +183,15 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             lock.read_unlock();
         }
         if (!lock.locked()) {
+            auto& row_locks = pli->second._row_locks;
+            // We don't expect any locked rows since the lock_holder is supposed
+            // to clean up any locked row by calling this function in its dtor
+            // and lock_ck row lock is serialized after the partition lock.
+            for (auto it = row_locks.begin(); it != row_locks.end(); ++it) {
+                if (it->second.locked()) {
+                    on_internal_error(mylog, format("Encounered a locked row {} when unlocking partition {}", it->first, *pk));
+                }
+            }
             mylog.debug("Erasing lock object for partition {}", *pk);
             _two_level_locks.erase(pli);
         }
