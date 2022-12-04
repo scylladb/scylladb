@@ -55,6 +55,26 @@ row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_ke
 {
 }
 
+future<> row_locker::lock_holder::lock_partition(lock_type& partition_lock, bool exclusive) noexcept {
+    return exclusive ?
+            partition_lock.write_lock().then([this] {
+                _partition_state = lock_state::exclusive;
+            }) :
+            partition_lock.read_lock().then([this] {
+                _partition_state = lock_state::shared;
+            });
+}
+
+future<> row_locker::lock_holder::lock_row(lock_type& row_lock, bool exclusive) noexcept {
+    return exclusive ?
+            row_lock.write_lock().then([this] {
+                _row_state = lock_state::exclusive;
+            }) :
+            row_lock.read_lock().then([this] {
+                _row_state = lock_state::shared;
+            });
+}
+
 future<row_locker::lock_holder>
 row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     mylog.debug("taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
@@ -67,13 +87,12 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
     // becomes invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
     auto holder = make_lw_shared<lock_holder>(this, &i->first, lock_state::unlocked);
-    auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
+    auto f = holder->lock_partition(i->second._partition_lock, exclusive);
     return f.then([this, pk = &i->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), holder = std::move(holder)] () mutable {
         waiting_latency.stop();
         single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
-        holder->_partition_state = exclusive ? lock_state::exclusive : lock_state::shared;
         return std::move(*holder);
     });
 }
@@ -96,18 +115,14 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
         // to a key and row, never become invalid (as long as the item is actually
         // in the hash table), even in the case of rehashing.
         auto holder = make_lw_shared<lock_holder>(this, &i->first, &j->first, lock_state::unlocked);
-        future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
-        future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
-        return when_all_succeed(std::move(lock_partition), std::move(lock_row))
-        .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), holder = std::move(holder)] (auto lock1, auto lock2) mutable {
-            lock1.release();
-            lock2.release();
+        auto lock_partition = holder->lock_partition(i->second._partition_lock, false);
+        auto lock_row = holder->lock_row(j->second, exclusive);
+        return when_all_succeed(std::move(lock_partition), std::move(lock_row)).discard_result()
+        .then([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), holder = std::move(holder)] () mutable {
             waiting_latency.stop();
             single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
             single_lock_stats.lock_acquisitions++;
             single_lock_stats.operations_currently_waiting_for_lock--;
-            holder->_partition_state = lock_state::shared;
-            holder->_row_state = exclusive ? lock_state::exclusive : lock_state::shared;
             return std::move(*holder);
         });
     } catch (...) {
@@ -188,21 +203,20 @@ row_locker::unlock(const dht::decorated_key* pk, lock_state partition_state,
         if (!lock.locked()) {
             auto& row_locks = pli->second._row_locks;
             // We can erase the partition entry only if all its rows are unlocked.
-            // If _row_locks isn't empty it may contain rows in one of two states:
-            // - A locked row.  This is an indication that lock_ck `lock_partition`
+            // If _row_locks isn't empty it may contain locked as follows:
+            // - This is an indication that lock_ck `lock_partition`
             //   failed on timeout while holding the row lock (https://github.com/scylladb/scylladb/issues/12168)
             //   In this case we must not erase the partition element that contains
             //   the row_locks map.
-            // - An unlocked row.  This could also occur in if and of lock_ck locks fail.
-            //   In this case, since it doesn't get to create the lock_holder, and it
-            //   relies only on the semantics of the destroyed rwlock::holder's, it
-            //   may leave behind an unlocked row which is not cleaned up by this function.
-            //   I this case, it can be cleaned up now.  Better late than never :)
+            // - Unlocked rows should never be left in the _row_locks map.
+            //   since all lock operations are supposed to be tracked by lock_holder,
+            //   so any failure should result in calling unlock.
             if (!row_locks.empty()) {
                 for (auto it = row_locks.begin(); it != row_locks.end(); ) {
                     if (it->second.locked()) {
                         ++it;
                     } else {
+                        mylog.debug("Unexpected stale unlocked row {}", it->first);
                         it = row_locks.erase(it);
                     }
                 }

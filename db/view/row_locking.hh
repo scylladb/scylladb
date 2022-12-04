@@ -33,6 +33,7 @@
 
 class row_locker {
 public:
+    using lock_type = basic_rwlock<db::timeout_clock>;
     struct single_lock_stats {
         uint64_t lock_acquisitions = 0;
         uint64_t operations_currently_waiting_for_lock = 0;
@@ -72,11 +73,11 @@ public:
         lock_holder(lock_holder&&) noexcept;
         lock_holder& operator=(lock_holder&&) noexcept;
 
-        friend class row_locker;
+        future<> lock_partition(lock_type& partition_lock, bool exclusive) noexcept;
+        future<> lock_row(lock_type& row_lock, bool exclusive) noexcept;
     };
 private:
     schema_ptr _schema;
-    using lock_type = basic_rwlock<db::timeout_clock>;
     struct two_level_lock {
         lock_type _partition_lock;
         struct clustering_key_prefix_less {
