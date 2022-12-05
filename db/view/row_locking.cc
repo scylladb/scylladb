@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/coroutine.hh>
+
 #include "row_locking.hh"
 #include "log.hh"
 
@@ -70,11 +72,10 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
     // the pointers to a key and respectively, its lock, never
     // become invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-    auto f = holder.lock_partition(&i->first, i->second._partition_lock, exclusive, timeout);
-    return f.then([this, tracker = std::move(tracker), holder = std::move(holder)] () mutable {
+    co_await holder.lock_partition(&i->first, i->second._partition_lock, exclusive, timeout);
+        // FIXME: indentation
         tracker.lock_acquired();
-        return std::move(holder);
-    });
+        co_return holder;
 }
 
 future<row_locker::lock_holder>
@@ -87,38 +88,21 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     // the pointers to a key and respectively, its lock, never
     // become invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-    auto lock_partition = holder.lock_partition(&i->first, i->second._partition_lock, false, timeout);
+    co_await holder.lock_partition(&i->first, i->second._partition_lock, false, timeout);
     auto j = i->second._row_locks.find(cpk);
     if (j == i->second._row_locks.end()) {
         // Not yet locked, need to create the lock. This makes a copy of cpk.
-        try {
+            // FIXME: indentation
             j = i->second._row_locks.emplace(cpk, lock_type()).first;
-        } catch(...) {
-            // If this emplace() failed, e.g., out of memory, we fail. We
-            // could do nothing - the partition lock we already started
-            // taking will be unlocked automatically after being locked.
-            // But it's better form to wait for the work we started, and it
-            // will also allow us to remove the hash-table row we added.
-            return lock_partition.then([ex = std::current_exception()] () {
-                // The lock is automatically released when "lock" goes out of scope.
-                // TODO: unlock (lock = {}) now, search for the partition in the
-                // hash table (we know it's still there, because we held the lock until
-                // now) and remove the unused lock from the hash table if still unused.
-                return make_exception_future<row_locker::lock_holder>(std::current_exception());
-            });
-        }
     }
     // Note: we rely on the fact that &j->first and &j->second,
     // the pointers to a clustering key and respectively, its lock, never
     // become invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-    return lock_partition.then([this, cpk = &j->first, &row_lock = j->second, exclusive, tracker = std::move(tracker), timeout, holder = std::move(holder)] () mutable {
-        auto lock_row = holder.lock_row(cpk, row_lock, exclusive, timeout);
-        return lock_row.then([this, tracker = std::move(tracker), holder = std::move(holder)] () mutable {
+        // FIXME: indentation
+        co_await holder.lock_row(&j->first, j->second, exclusive, timeout);
             tracker.lock_acquired();
-            return std::move(holder);
-        });
-    });
+            co_return holder;
 }
 
 // We need to zero old's _partition and _row, so when destructed
