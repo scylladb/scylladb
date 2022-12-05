@@ -867,7 +867,7 @@ future<> sstable::read_toc() noexcept {
 
 }
 
-void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
+void sstable::generate_toc() {
     // Creating table of components.
     _recognized_components.insert(component_type::TOC);
     _recognized_components.insert(component_type::Statistics);
@@ -875,10 +875,10 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     _recognized_components.insert(component_type::Index);
     _recognized_components.insert(component_type::Summary);
     _recognized_components.insert(component_type::Data);
-    if (filter_fp_chance != 1.0) {
+    if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (c == nullptr) {
+    if (_schema->get_compressor_params().get_compressor() == nullptr) {
         _recognized_components.insert(component_type::CRC);
     } else {
         _recognized_components.insert(component_type::CompressionInfo);
@@ -926,8 +926,13 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
     });
 }
 
-void sstable::write_toc(const io_priority_class& pc) {
+void sstable::open_sstable(const io_priority_class& pc) {
+    generate_toc();
     _storage.touch_temp_dir(*this).get0();
+    write_toc(pc);
+}
+
+void sstable::write_toc(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);

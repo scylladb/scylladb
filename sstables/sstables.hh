@@ -604,8 +604,9 @@ private:
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
-    void generate_toc(compressor_ptr c, double filter_fp_chance);
+    void generate_toc();
     void write_toc(const io_priority_class& pc);
+    void open_sstable(const io_priority_class& pc);
 
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);

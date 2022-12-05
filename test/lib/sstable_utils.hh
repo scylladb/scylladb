@@ -158,7 +158,7 @@ public:
         _sst->_recognized_components.erase(component_type::Index);
         _sst->_recognized_components.erase(component_type::Data);
         return seastar::async([sst = _sst] {
-            sst->write_toc(default_priority_class());
+            sst->open_sstable(default_priority_class());
             sst->write_statistics(default_priority_class());
             sst->write_compression(default_priority_class());
             sst->write_filter(default_priority_class());
