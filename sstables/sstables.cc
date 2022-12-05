@@ -2160,7 +2160,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_t
 /// \param dir - the destination directory.
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dir
-future<> sstable::create_links_common(const sstring& dir, generation_type generation, bool mark_for_removal) const {
+future<> sstable::create_links_common(const sstring& dir, generation_type generation, mark_for_removal mark_for_removal) const {
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dir, generation, mark_for_removal);
     return do_with(dir, all_components(), [this, generation, mark_for_removal] (const sstring& dir, auto& comps) {
         return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps, mark_for_removal] {
@@ -2200,11 +2200,11 @@ future<> sstable::create_links_common(const sstring& dir, generation_type genera
 }
 
 future<> sstable::create_links(const sstring& dir, generation_type generation) const {
-    return create_links_common(dir, generation, false /* mark_for_removal */);
+    return create_links_common(dir, generation, mark_for_removal::no);
 }
 
 future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generation_type generation) const {
-    return create_links_common(dir, generation, true /* mark_for_removal */);
+    return create_links_common(dir, generation, mark_for_removal::yes);
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
