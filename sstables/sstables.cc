@@ -964,19 +964,19 @@ void sstable::write_toc(const io_priority_class& pc) {
     sstable_write_io_check(sync_directory, _storage.dir).get();
 }
 
-future<> sstable::seal_sstable() {
+future<> sstable::filesystem_storage::seal(const sstable& sst) {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-    co_await _storage.remove_temp_dir();
-    auto dir_f = co_await open_checked_directory(_write_error_handler, _storage.dir);
+    co_await remove_temp_dir();
+    auto dir_f = co_await open_checked_directory(sst._write_error_handler, dir);
     // Guarantee that every component of this sstable reached the disk.
-    co_await sstable_write_io_check([&] { return dir_f.flush(); });
+    co_await sst.sstable_write_io_check([&] { return dir_f.flush(); });
     // Rename TOC because it's no longer temporary.
-    co_await sstable_write_io_check(rename_file, filename(component_type::TemporaryTOC), filename(component_type::TOC));
-    co_await sstable_write_io_check([&] { return dir_f.flush(); });
-    co_await sstable_write_io_check([&] { return dir_f.close(); });
+    co_await sst.sstable_write_io_check(rename_file, sst.filename(component_type::TemporaryTOC), sst.filename(component_type::TOC));
+    co_await sst.sstable_write_io_check([&] { return dir_f.flush(); });
+    co_await sst.sstable_write_io_check([&] { return dir_f.close(); });
     // If this point was reached, sstable should be safe in disk.
-    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
+    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", sst._generation, sst._schema->ks_name(), sst._schema->cf_name());
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1748,7 +1748,7 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
 
 future<> sstable::seal_sstable(bool backup)
 {
-    return seal_sstable().then([this, backup] {
+    return _storage.seal(*this).then([this, backup] {
         if (_marked_for_deletion == mark_for_deletion::implicit) {
             _marked_for_deletion = mark_for_deletion::none;
         }

@@ -483,10 +483,11 @@ public:
 
     private:
         future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+        future<> remove_temp_dir();
 
     public:
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
-        future<> remove_temp_dir();
+        future<> seal(const sstable& sst);
     };
 
 private:
@@ -603,7 +604,6 @@ private:
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
-    future<> seal_sstable();
 
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
