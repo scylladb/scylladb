@@ -163,7 +163,7 @@ public:
             sst->write_compression(default_priority_class());
             sst->write_filter(default_priority_class());
             sst->write_summary(default_priority_class());
-            sst->seal_sstable().get();
+            sst->seal_sstable(false).get();
         });
     }
 
@@ -202,7 +202,7 @@ public:
         _sst->_recognized_components.erase(component_type::Scylla);
         remove_file(_sst->filename(component_type::TOC)).get();
         _sst->write_toc(default_priority_class());
-        _sst->seal_sstable().get();
+        _sst->seal_sstable(false).get();
     }
 
     future<> remove_component(component_type c) {

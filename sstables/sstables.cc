@@ -975,9 +975,6 @@ future<> sstable::seal_sstable() {
     co_await sstable_write_io_check(rename_file, filename(component_type::TemporaryTOC), filename(component_type::TOC));
     co_await sstable_write_io_check([&] { return dir_f.flush(); });
     co_await sstable_write_io_check([&] { return dir_f.close(); });
-    if (_marked_for_deletion == mark_for_deletion::implicit) {
-        _marked_for_deletion = mark_for_deletion::none;
-    }
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
 }
@@ -1752,6 +1749,9 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
 future<> sstable::seal_sstable(bool backup)
 {
     return seal_sstable().then([this, backup] {
+        if (_marked_for_deletion == mark_for_deletion::implicit) {
+            _marked_for_deletion = mark_for_deletion::none;
+        }
         if (backup) {
             auto dir = get_dir() + "/backups/";
             auto fut = sstable_touch_directory_io_check(dir);
