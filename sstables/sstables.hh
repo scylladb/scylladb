@@ -397,11 +397,7 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(const sstring& dir, generation_type generation) const;
-
-    future<> create_links(const sstring& dir) const {
-        return create_links(dir, _generation);
-    }
+    future<> create_links(const sstring& dir) const;
 
     future<> snapshot(const sstring& dir) const;
 

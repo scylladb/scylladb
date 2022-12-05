@@ -2190,8 +2190,8 @@ future<> sstable::create_links_common(sstring dst_dir, generation_type generatio
     sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dst_dir, generation);
 }
 
-future<> sstable::create_links(const sstring& dir, generation_type generation) const {
-    return create_links_common(dir, generation, mark_for_removal::no);
+future<> sstable::create_links(const sstring& dir) const {
+    return create_links_common(dir, _generation, mark_for_removal::no);
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
