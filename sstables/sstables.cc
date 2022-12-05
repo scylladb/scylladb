@@ -2194,10 +2194,6 @@ future<> sstable::create_links(const sstring& dir, generation_type generation) c
     return create_links_common(dir, generation, mark_for_removal::no);
 }
 
-future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generation_type generation) const {
-    return create_links_common(dir, generation, mark_for_removal::yes);
-}
-
 future<> sstable::snapshot(const sstring& dir) const {
     return create_links(dir);
 }
@@ -2206,7 +2202,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
-    co_await create_links_and_mark_for_removal(new_dir, new_generation);
+    co_await create_links_common(new_dir, new_generation, mark_for_removal::yes);
     _storage.dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
     co_await coroutine::parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
