@@ -484,11 +484,12 @@ public:
         future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
         future<> remove_temp_dir();
         future<> create_links(const sstable& sst, const sstring& dir) const;
+        future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
 
     public:
-        future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, const sstring& dir) const;
+        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
     };
 
 private:

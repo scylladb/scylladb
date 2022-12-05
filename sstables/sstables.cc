@@ -2200,24 +2200,30 @@ future<> sstable::snapshot(const sstring& dir) const {
     return _storage.snapshot(*this, dir);
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
-    sstring old_dir = get_dir();
+future<> sstable::filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    co_await touch_directory(new_dir);
+    sstring old_dir = dir;
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
-    co_await _storage.create_links_common(*this, new_dir, new_generation, mark_for_removal::yes);
-    _storage.dir = new_dir;
-    generation_type old_generation = std::exchange(_generation, new_generation);
-    co_await coroutine::parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
-        return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
+            sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
+    co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
+    dir = new_dir;
+    generation_type old_generation = sst._generation;
+    co_await coroutine::parallel_for_each(sst.all_components(), [&sst, old_generation, old_dir] (auto p) {
+        return sst.sstable_write_io_check(remove_file, sstable::filename(old_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, old_generation, sst._format, p.second));
     });
-    auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
-    co_await sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, temp_toc));
+    auto temp_toc = sstable_version_constants::get_component_map(sst._version).at(component_type::TemporaryTOC);
+    co_await sst.sstable_write_io_check(remove_file, sstable::filename(old_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, old_generation, sst._format, temp_toc));
     if (delay_commit == nullptr) {
-        co_await when_all(sstable_write_io_check(sync_directory, old_dir), sstable_write_io_check(sync_directory, new_dir)).discard_result();
+        co_await when_all(sst.sstable_write_io_check(sync_directory, old_dir), sst.sstable_write_io_check(sync_directory, new_dir)).discard_result();
     } else {
         delay_commit->_dirs.insert(old_dir);
         delay_commit->_dirs.insert(new_dir);
     }
+}
+
+future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    co_await _storage.move(*this, std::move(new_dir), new_generation, delay_commit);
+    _generation = std::move(new_generation);
 }
 
 future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
@@ -2232,8 +2238,7 @@ future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
     // will move it into a "quarantine" subdirectory of its current directory.
     auto new_dir = (path / sstables::quarantine_dir).native();
     sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
-    co_await touch_directory(new_dir);
-    co_await move_to_new_dir(std::move(new_dir), generation(), delay_commit);
+    co_await _storage.move(*this, std::move(new_dir), generation(), delay_commit);
 }
 
 future<> sstable::delayed_commit_changes::commit() {
