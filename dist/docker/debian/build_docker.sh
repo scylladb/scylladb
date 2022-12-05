@@ -77,6 +77,7 @@ run apt-get -y install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
 run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog sudo
+run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
