@@ -288,6 +288,21 @@ static void tcp_syncookies_sanity() {
     }
 }
 
+static void tcp_timestamps_sanity() {
+    try {
+        auto f = file_desc::open("/proc/sys/net/ipv4/tcp_timestamps", O_RDONLY | O_CLOEXEC);
+        char buf[128] = {};
+        f.read(buf, 128);
+        if (sstring(buf) == "0\n") {
+            startlog.warn("sysctl entry net.ipv4.tcp_timestamps is set to 0.\n"
+                          "To performance suffer less in a presence of packet loss, set following parameter on sysctl is strongly recommended:\n"
+                          "net.ipv4.tcp_timestamps=1");
+        }
+    } catch (const std::system_error& e) {
+        startlog.warn("Unable to check if net.ipv4.tcp_timestamps is set {}", e);
+    }
+}
+
 static void
 verify_seastar_io_scheduler(const boost::program_options::variables_map& opts, bool developer_mode) {
     auto note_bad_conf = [developer_mode] (sstring cause) {
@@ -551,6 +566,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         }
 
         tcp_syncookies_sanity();
+        tcp_timestamps_sanity();
 
         return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
