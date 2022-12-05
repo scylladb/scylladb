@@ -490,6 +490,8 @@ public:
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, const sstring& dir) const;
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
+
+        future<> touch_temp_dir(const sstable& sst);
     };
 
 private:
@@ -601,8 +603,6 @@ private:
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
-
-    future<> touch_temp_dir();
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);

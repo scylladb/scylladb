@@ -927,7 +927,7 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
-    touch_temp_dir().get0();
+    _storage.touch_temp_dir(*this).get0();
     auto file_path = filename(component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
@@ -1954,15 +1954,15 @@ void sstable::validate_originating_host_id() const {
     }
 }
 
-future<> sstable::touch_temp_dir() {
-    if (_storage.temp_dir) {
+future<> sstable::filesystem_storage::touch_temp_dir(const sstable& sst) {
+    if (temp_dir) {
         return make_ready_future<>();
     }
-    auto temp_dir = get_temp_dir();
-    sstlog.debug("Touching temp_dir={}", temp_dir);
-    auto fut = sstable_touch_directory_io_check(temp_dir);
-    return fut.then([this, temp_dir = std::move(temp_dir)] () mutable {
-        _storage.temp_dir = std::move(temp_dir);
+    auto tmp = dir + "/" + sstable::sst_dir_basename(sst._generation);
+    sstlog.debug("Touching temp_dir={}", tmp);
+    auto fut = sst.sstable_touch_directory_io_check(tmp);
+    return fut.then([this, tmp = std::move(tmp)] () mutable {
+        temp_dir = std::move(tmp);
     });
 }
 
