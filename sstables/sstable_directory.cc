@@ -31,16 +31,30 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
     return true;
 }
 
-sstable_directory::sstable_directory(fs::path sstable_dir,
+sstable_directory::components_lister::components_lister(std::filesystem::path dir)
+        : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
+{
+}
+
+future<sstring> sstable_directory::components_lister::get() {
+    auto de = co_await _lister.get();
+    co_return sstring(de ? de->name : "");
+}
+
+future<> sstable_directory::components_lister::close() {
+    return _lister.close();
+}
+
+sstable_directory::sstable_directory(sstables_manager& manager,
+        schema_ptr schema,
+        fs::path sstable_dir,
         ::io_priority_class io_prio,
-        unsigned load_parallelism,
-        semaphore& load_semaphore,
-        sstable_object_from_existing_fn sstable_from_existing)
-    : _sstable_dir(std::move(sstable_dir))
+        io_error_handler_gen error_handler_gen)
+    : _manager(manager)
+    , _schema(std::move(schema))
+    , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
-    , _load_parallelism(load_parallelism)
-    , _load_semaphore(load_semaphore)
-    , _sstable_object_from_existing_sstable(std::move(sstable_from_existing))
+    , _error_handler_gen(error_handler_gen)
     , _unshared_remote_sstables(smp::count)
 {}
 
@@ -98,7 +112,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
         _max_version_seen = desc.version;
     }
 
-    auto sst = _sstable_object_from_existing_sstable(_sstable_dir, desc.generation, desc.version, desc.format);
+    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     return sst->load(_io_priority).then([this, sst, flags] {
         validate(sst, flags);
         if (flags.need_mutate_level) {
@@ -166,12 +180,16 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
     scan_state state;
 
-    directory_lister sstable_dir_lister(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
+    auto sstable_dir_lister = _manager.get_components_lister(_sstable_dir);
     std::exception_ptr ex;
     try {
-        while (auto de = co_await sstable_dir_lister.get()) {
-            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de->name);
-            handle_component(state, std::move(comps), _sstable_dir / de->name);
+        while (true) {
+            sstring name = co_await sstable_dir_lister.get();
+            if (name == "") {
+                break;
+            }
+            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), name);
+            handle_component(state, std::move(comps), _sstable_dir / name);
         }
     } catch (...) {
         ex = std::current_exception();
@@ -254,7 +272,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 future<>
 sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
     return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
-        auto sst = _sstable_object_from_existing_sstable(_sstable_dir, info.generation, info.version, info.format);
+        auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
         return sst->load(std::move(info)).then([sst, this] {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
@@ -401,7 +419,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
     return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
         return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
-            auto sst = _sstable_object_from_existing_sstable(_sstable_dir, info.generation, info.version, info.format);
+            auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
                 // Last bucket gets leftover SSTables
                 if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
@@ -439,8 +457,8 @@ template <typename Container, typename Func>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
     return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
-      return max_concurrent_for_each(c, _load_parallelism, [this, &func] (auto& el) mutable {
-        return with_semaphore(_load_semaphore, 1, [this, &func,  el = std::move(el)] () mutable {
+      return max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [this, &func] (auto& el) mutable {
+        return with_semaphore(_manager.dir_semaphore()._sem, 1, [this, &func,  el = std::move(el)] () mutable {
             return func(el);
         });
       });

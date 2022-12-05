@@ -25,6 +25,7 @@
 #include "schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
 #include "types/user.hh"
 #include "types/set.hh"
@@ -3234,7 +3235,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
             dbcfg.host_id = locator::host_id::create_random_id();
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory());
+            sstables::directory_semaphore dir_sem(1);
+            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem);
             auto close_sst_man = deferred_close(sst_man);
 
             std::vector<sstables::shared_sstable> sstables;

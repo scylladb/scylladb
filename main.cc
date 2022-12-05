@@ -513,7 +513,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<netw::messaging_service> messaging;
     sharded<cql3::query_processor> qp;
     sharded<db::batchlog_manager> bm;
-    sharded<semaphore> sst_dir_semaphore;
+    sharded<sstables::directory_semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;

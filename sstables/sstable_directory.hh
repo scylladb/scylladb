@@ -22,24 +22,35 @@
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
+#include "utils/disk-error-handler.hh"
+#include "utils/lister.hh"
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
 
 namespace sstables {
 
+class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
+
+class directory_semaphore {
+    unsigned _concurrency;
+    semaphore _sem;
+public:
+    directory_semaphore(unsigned concurrency)
+            : _concurrency(concurrency)
+            , _sem(concurrency)
+    {
+    }
+
+    friend class sstable_directory;
+    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
+};
 
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),
 // or the main directory.
 class sstable_directory {
 public:
-    using sstable_object_from_existing_fn =
-        noncopyable_function<sstables::shared_sstable(std::filesystem::path,
-                                                      sstables::generation_type,
-                                                      sstables::sstable_version_types,
-                                                      sstables::sstable_format_types)>;
-
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
     using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
@@ -51,6 +62,14 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
+    };
+
+    class components_lister {
+        directory_lister _lister;
+    public:
+        future<sstring> get();
+        components_lister(std::filesystem::path dir);
+        future<> close();
     };
 
 private:
@@ -74,16 +93,11 @@ private:
     // Will be destroyed when this object is destroyed.
     std::optional<utils::phased_barrier::operation> _operation_barrier;
 
+    sstables_manager& _manager;
+    schema_ptr _schema;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
-
-    // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
-    // how many of them we process at the same time.
-    const size_t _load_parallelism;
-    semaphore& _load_semaphore;
-
-    // How to create an SSTable object from an existing SSTable file (respecting generation, etc)
-    sstable_object_from_existing_fn _sstable_object_from_existing_sstable;
+    io_error_handler_gen _error_handler_gen;
 
     generation_type _max_generation_seen = generation_from_value(0);
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
@@ -120,11 +134,11 @@ private:
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
-    sstable_directory(std::filesystem::path sstable_dir,
+    sstable_directory(sstables_manager& manager,
+            schema_ptr schema,
+            std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
-            unsigned load_parallelism,
-            semaphore& load_semaphore,
-            sstable_object_from_existing_fn sstable_from_existing);
+            io_error_handler_gen error_handler_gen);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
         return _unsorted_sstables;

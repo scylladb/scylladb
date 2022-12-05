@@ -652,7 +652,7 @@ public:
             stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
-            sharded<semaphore> sst_dir_semaphore;
+            sharded<sstables::directory_semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
                 sst_dir_semaphore.stop().get();

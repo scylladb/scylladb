@@ -1497,9 +1497,9 @@ future<table::snapshot_file_set> table::take_snapshot(database& db, sstring json
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
 
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
-    co_await max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir, &table_names] (sstables::shared_sstable sstable) {
+    co_await max_concurrent_for_each(tables, db.get_sharded_sst_dir_semaphore().local()._concurrency, [&db, &jsondir, &table_names] (sstables::shared_sstable sstable) {
         table_names->insert(sstable->component_basename(sstables::component_type::Data));
-        return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
+        return with_semaphore(db.get_sharded_sst_dir_semaphore().local()._sem, 1, [&jsondir, sstable] {
             return io_check([sstable, &dir = jsondir] {
                 return sstable->create_links(dir);
             });

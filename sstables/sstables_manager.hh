@@ -20,6 +20,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
+#include "sstables/sstable_directory.hh"
 #include "db/cache_tracker.hh"
 #include "locator/host_id.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -37,6 +38,7 @@ namespace gms { class feature_service; }
 
 namespace sstables {
 
+class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
@@ -69,8 +71,9 @@ private:
     cache_tracker& _cache_tracker;
 
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
+    directory_semaphore& _dir_semaphore;
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem);
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
@@ -82,6 +85,8 @@ public:
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+
+    sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
@@ -103,6 +108,7 @@ public:
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
     future<> close();
+    directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
