@@ -330,7 +330,7 @@ private:
     // table still exists and compaction is not disabled for the table.
     inline bool can_proceed(compaction::table_state* t) const;
 
-    void postponed_compactions_reevaluation();
+    future<> postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.

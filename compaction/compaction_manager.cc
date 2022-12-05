@@ -727,7 +727,7 @@ void compaction_manager::enable() {
     assert(_state == state::none || _state == state::disabled);
     _state = state::enabled;
     _compaction_submission_timer.arm(periodic_compaction_submission_interval());
-    postponed_compactions_reevaluation();
+    _waiting_reevalution = postponed_compactions_reevaluation();
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
@@ -738,8 +738,8 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
     };
 }
 
-void compaction_manager::postponed_compactions_reevaluation() {
-    _waiting_reevalution = repeat([this] {
+future<> compaction_manager::postponed_compactions_reevaluation() {
+     return repeat([this] {
         return _postponed_reevaluation.wait().then([this] {
             if (_state != state::enabled) {
                 _postponed.clear();
