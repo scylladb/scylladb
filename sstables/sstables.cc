@@ -2528,8 +2528,12 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
     co_return valid;
 }
 
-static future<uint32_t> read_digest(sstring filename, file_input_stream_options options) {
-    auto digest_file = co_await open_file_dma(filename, open_flags::ro);
+future<uint32_t> sstable::read_digest(io_priority_class pc) {
+    file_input_stream_options options;
+    options.buffer_size = 4096;
+    options.io_priority_class = pc;
+
+    auto digest_file = co_await open_file_dma(filename(component_type::Digest), open_flags::ro);
     auto digest_stream = make_file_input_stream(std::move(digest_file), options);
 
     std::exception_ptr ex;
@@ -2547,8 +2551,12 @@ static future<uint32_t> read_digest(sstring filename, file_input_stream_options 
     co_return boost::lexical_cast<uint32_t>(digest_str);
 }
 
-static future<checksum> read_checksum(sstring filename, file_input_stream_options options) {
-    auto crc_file = co_await open_file_dma(filename, open_flags::ro);
+future<checksum> sstable::read_checksum(io_priority_class pc) {
+    file_input_stream_options options;
+    options.buffer_size = 4096;
+    options.io_priority_class = pc;
+
+    auto crc_file = co_await open_file_dma(filename(component_type::CRC), open_flags::ro);
     auto crc_stream = make_file_input_stream(std::move(crc_file), options);
 
     checksum checksum;
@@ -2578,11 +2586,7 @@ static future<checksum> read_checksum(sstring filename, file_input_stream_option
 }
 
 future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc) {
-    file_input_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
-
-    const auto digest = co_await read_digest(sst->filename(component_type::Digest), options);
+    const auto digest = co_await sst->read_digest(pc);
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), pc, permit, nullptr, nullptr, sstable::raw_stream::yes);
 
@@ -2597,7 +2601,7 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const 
                 valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
             }
         } else {
-            auto checksum = co_await read_checksum(sst->filename(component_type::CRC), options);
+            auto checksum = co_await sst->read_checksum(pc);
             if (sst->get_version() >= sstable_version_types::mc) {
                 valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, checksum, digest);
             } else {

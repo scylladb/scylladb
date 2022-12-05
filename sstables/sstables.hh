@@ -912,6 +912,9 @@ public:
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
+
+    future<uint32_t> read_digest(io_priority_class pc);
+    future<checksum> read_checksum(io_priority_class pc);
 };
 
 // Validate checksums
