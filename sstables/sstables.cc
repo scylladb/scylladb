@@ -2207,6 +2207,10 @@ future<> sstable::create_links_and_mark_for_removal(const sstring& dir, generati
     return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
+future<> sstable::snapshot(const sstring& dir) const {
+    return create_links(dir);
+}
+
 future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",

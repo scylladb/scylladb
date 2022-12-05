@@ -403,6 +403,8 @@ public:
         return create_links(dir, _generation);
     }
 
+    future<> snapshot(const sstring& dir) const;
+
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
     future<> unlink() noexcept;
