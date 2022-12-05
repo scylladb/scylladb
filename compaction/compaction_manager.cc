@@ -739,11 +739,12 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 }
 
 future<> compaction_manager::postponed_compactions_reevaluation() {
-     return repeat([this] {
-        return _postponed_reevaluation.wait().then([this] {
+     while (true) {
+        co_await _postponed_reevaluation.when();
+        {
             if (_state != state::enabled) {
                 _postponed.clear();
-                return stop_iteration::yes;
+                co_return;
             }
             auto postponed = std::move(_postponed);
             try {
@@ -755,9 +756,8 @@ future<> compaction_manager::postponed_compactions_reevaluation() {
             } catch (...) {
                 _postponed = std::move(postponed);
             }
-            return stop_iteration::no;
-        });
-    });
+        }
+    }
 }
 
 void compaction_manager::reevaluate_postponed_compactions() noexcept {
