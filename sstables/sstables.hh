@@ -397,8 +397,6 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(const sstring& dir) const;
-
     future<> snapshot(const sstring& dir) const;
 
     // Delete the sstable by unlinking all sstable files
@@ -475,6 +473,7 @@ public:
     using mark_for_removal = bool_class<class mark_for_removal_tag>;
 
     class filesystem_storage {
+        friend class test;
     public:
         sstring dir;
         std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
@@ -484,10 +483,12 @@ public:
     private:
         future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
         future<> remove_temp_dir();
+        future<> create_links(const sstable& sst, const sstring& dir) const;
 
     public:
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
         future<> seal(const sstable& sst);
+        future<> snapshot(const sstable& sst, const sstring& dir) const;
     };
 
 private:

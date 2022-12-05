@@ -2095,7 +2095,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         auto tmp = tmpdir();
         copy_directory("test/resource/sstables/unknown_component", std::string(tmp.path().string()) + "/unknown_component");
         auto sstp = env.reusable_sst(uncompressed_schema(), tmp.path().string() + "/unknown_component", 1).get0();
-        sstp->create_links(tmp.path().string()).get();
+        test::create_links(*sstp, tmp.path().string()).get();
         // check that create_links() moved unknown component to new dir
         BOOST_REQUIRE(file_exists(tmp.path().string() + "/la-1-big-UNKNOWN.txt").get0());
 

@@ -1753,11 +1753,7 @@ future<> sstable::seal_sstable(bool backup)
             _marked_for_deletion = mark_for_deletion::none;
         }
         if (backup) {
-            auto dir = get_dir() + "/backups/";
-            auto fut = sstable_touch_directory_io_check(dir);
-            return fut.then([this, dir = std::move(dir)] () mutable {
-                return create_links(std::move(dir));
-            });
+            return _storage.snapshot(*this, get_dir() + "/backups/");
         }
         return make_ready_future<>();
     });
@@ -2191,12 +2187,17 @@ future<> sstable::filesystem_storage::create_links_common(const sstable& sst, ss
     sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
 }
 
-future<> sstable::create_links(const sstring& dir) const {
-    return _storage.create_links_common(*this, dir, _generation, mark_for_removal::no);
+future<> sstable::filesystem_storage::create_links(const sstable& sst, const sstring& dir) const {
+    return create_links_common(sst, dir, sst._generation, mark_for_removal::no);
+}
+
+future<> sstable::filesystem_storage::snapshot(const sstable& sst, const sstring& dir) const {
+    co_await sst.sstable_touch_directory_io_check(dir);
+    co_await create_links(sst, dir);
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
-    return create_links(dir);
+    return _storage.snapshot(*this, dir);
 }
 
 future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {

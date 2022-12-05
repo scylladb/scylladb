@@ -483,7 +483,7 @@ test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
         return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
-            return sstp->create_links(generation_dir).then([sstp] {});
+            return test::create_links(*sstp, generation_dir).then([sstp] {});
         }).then([generation_dir] {
             return test_sstable_exists(generation_dir, 1, true);
         }).then([&env, generation_dir] {

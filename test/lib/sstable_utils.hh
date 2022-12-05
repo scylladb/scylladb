@@ -216,6 +216,10 @@ public:
     void set_shards(std::vector<unsigned> shards) {
         _sst->_shards = std::move(shards);
     }
+
+    static future<> create_links(const sstable& sst, const sstring& dir) {
+        return sst._storage.create_links(sst, dir);
+    }
 };
 
 inline auto replacer_fn_no_op() {
