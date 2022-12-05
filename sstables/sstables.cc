@@ -961,11 +961,7 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    file dir_f = open_checked_directory(_write_error_handler, _dir).get0();
-    sstable_write_io_check([&] {
-        dir_f.flush().get();
-        dir_f.close().get();
-    });
+    sstable_write_io_check(sync_directory, _dir).get();
 }
 
 future<> sstable::seal_sstable() {
