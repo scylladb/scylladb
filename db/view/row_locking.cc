@@ -103,14 +103,13 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     return lock_partition.then([this, pk = &i->first, cpk = &j->first, &row_lock = j->second, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), timeout] (auto lock1) mutable {
         auto lock_row = exclusive ? row_lock.hold_write_lock(timeout) : row_lock.hold_read_lock(timeout);
         return lock_row.then([this, pk, cpk, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency), lock1 = std::move(lock1)] (auto lock2) mutable {
-        // FIXME: indentation
-        lock1.release();
-        lock2.release();
-        waiting_latency.stop();
-        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
-        single_lock_stats.lock_acquisitions++;
-        single_lock_stats.operations_currently_waiting_for_lock--;
-        return lock_holder(this, pk, cpk, exclusive);
+            lock1.release();
+            lock2.release();
+            waiting_latency.stop();
+            single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
+            single_lock_stats.lock_acquisitions++;
+            single_lock_stats.operations_currently_waiting_for_lock--;
+            return lock_holder(this, pk, cpk, exclusive);
         });
     });
 }
