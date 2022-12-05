@@ -1160,7 +1160,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
                 }
                 // collect all expected sstable data files
                 for (auto sst : sstables) {
-                    expected.insert(fs::path(sst->get_filename()).filename().native());
+                    expected.insert(sst->component_basename(sstables::component_type::Data));
                 }
                 if (std::exchange(found, true)) {
                     co_return;
