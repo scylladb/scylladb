@@ -486,6 +486,7 @@ public:
 
     public:
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+        future<> remove_temp_dir();
     };
 
 private:
@@ -599,7 +600,6 @@ private:
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     future<> touch_temp_dir();
-    future<> remove_temp_dir();
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);

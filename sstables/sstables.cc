@@ -967,7 +967,7 @@ void sstable::write_toc(const io_priority_class& pc) {
 future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-    co_await remove_temp_dir();
+    co_await _storage.remove_temp_dir();
     auto dir_f = co_await open_checked_directory(_write_error_handler, _storage.dir);
     // Guarantee that every component of this sstable reached the disk.
     co_await sstable_write_io_check([&] { return dir_f.flush(); });
@@ -1970,14 +1970,14 @@ future<> sstable::touch_temp_dir() {
     });
 }
 
-future<> sstable::remove_temp_dir() {
-    if (!_storage.temp_dir) {
+future<> sstable::filesystem_storage::remove_temp_dir() {
+    if (!temp_dir) {
         return make_ready_future<>();
     }
-    sstlog.debug("Removing temp_dir={}", _storage.temp_dir);
-    return remove_file(*_storage.temp_dir).then_wrapped([this] (future<> f) {
+    sstlog.debug("Removing temp_dir={}", temp_dir);
+    return remove_file(*temp_dir).then_wrapped([this] (future<> f) {
         if (!f.failed()) {
-            _storage.temp_dir.reset();
+            temp_dir.reset();
             return make_ready_future<>();
         }
         auto ep = f.get_exception();
