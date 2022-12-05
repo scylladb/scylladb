@@ -741,21 +741,19 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 future<> compaction_manager::postponed_compactions_reevaluation() {
      while (true) {
         co_await _postponed_reevaluation.when();
-        {
-            if (_state != state::enabled) {
-                _postponed.clear();
-                co_return;
+        if (_state != state::enabled) {
+            _postponed.clear();
+            co_return;
+        }
+        auto postponed = std::move(_postponed);
+        try {
+            for (auto& t : postponed) {
+                auto s = t->schema();
+                cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
+                submit(*t);
             }
-            auto postponed = std::move(_postponed);
-            try {
-                for (auto& t : postponed) {
-                    auto s = t->schema();
-                    cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
-                    submit(*t);
-                }
-            } catch (...) {
-                _postponed = std::move(postponed);
-            }
+        } catch (...) {
+            _postponed = std::move(postponed);
         }
     }
 }
