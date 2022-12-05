@@ -201,7 +201,7 @@ public:
     void rewrite_toc_without_scylla_component() {
         _sst->_recognized_components.erase(component_type::Scylla);
         remove_file(_sst->filename(component_type::TOC)).get();
-        _sst->write_toc(default_priority_class());
+        _sst->_storage.open(*_sst, default_priority_class());
         _sst->seal_sstable(false).get();
     }
 

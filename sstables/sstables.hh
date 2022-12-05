@@ -485,13 +485,14 @@ public:
         future<> remove_temp_dir();
         future<> create_links(const sstable& sst, const sstring& dir) const;
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+        future<> touch_temp_dir(const sstable& sst);
 
     public:
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, const sstring& dir) const;
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
-
-        future<> touch_temp_dir(const sstable& sst);
+        // runs in async context
+        void open(sstable& sst, const io_priority_class& pc);
     };
 
 private:
@@ -605,7 +606,6 @@ private:
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     void generate_toc();
-    void write_toc(const io_priority_class& pc);
     void open_sstable(const io_priority_class& pc);
 
     future<> read_compression(const io_priority_class& pc);
