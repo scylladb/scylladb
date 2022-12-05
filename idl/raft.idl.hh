@@ -80,6 +80,10 @@ struct not_a_leader {
     raft::server_id leader;
 };
 
+struct not_a_member {
+    sstring message();
+};
+
 struct transient_error {
     sstring message();
     raft::server_id leader;

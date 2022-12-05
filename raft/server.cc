@@ -521,8 +521,8 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
         // configuration.
-        co_return add_entry_reply{transient_error{format("Add entry from {} was discarded since "
-                                                         "it is not part of the configuration", from), {}}};
+        co_return add_entry_reply{not_a_member{format("Add entry from {} was discarded since "
+                                                         "it is not part of the configuration", from)}};
     }
     logger.trace("[{}] adding a forwarded entry from {}", id(), from);
     try {
@@ -613,6 +613,9 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
             on_internal_error(logger, "add_entry: `execute_add_entry` or `send_add_entry`"
                                       " returned `commit_status_unknown`");
         }
+        if (std::holds_alternative<not_a_member>(reply)) {
+            co_await coroutine::return_exception(std::get<not_a_member>(reply));
+        }
         const auto& e = std::get<transient_error>(reply);
         logger.trace("[{}] got {}", _id, e);
         leader = e.leader;
@@ -626,8 +629,8 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
         // configuration.
-        co_return add_entry_reply{transient_error{format("Modify config from {} was discarded since "
-                                                         "it is not part of the configuration", from), {}}};
+        co_return add_entry_reply{not_a_member{format("Modify config from {} was discarded since "
+                                                         "it is not part of the configuration", from)}};
     }
     try {
         // Wait for a new slot to become available
@@ -721,6 +724,9 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
             logger.trace("[{}] got {}", _id, *e);
             leader = e->leader;
             co_return stop_iteration::no;
+        }
+        if (std::holds_alternative<not_a_member>(reply)) {
+            co_await coroutine::return_exception(std::get<not_a_member>(reply));
         }
         throw std::get<raft::commit_status_unknown>(reply);
     });

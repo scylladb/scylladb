@@ -208,7 +208,7 @@ raft::command make_command(const cmd_id_t& cmd_id, const Input& input) {
 
 // TODO: handle other errors?
 template <PureStateMachine M>
-using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::stopped_error>;
+using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::stopped_error, raft::not_a_member>;
 
 // Wait for a future `f` to finish, but keep the result inside a `future`.
 // Works for `future<void>` as well as for `future<T>`.
@@ -313,6 +313,8 @@ future<call_result_t<M>> call(
         try {
             std::rethrow_exception(eptr);
         } catch (raft::not_a_leader e) {
+            return make_ready_future<call_result_t<M>>(e);
+        } catch (raft::not_a_member e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::dropped_entry e) {
             return make_ready_future<call_result_t<M>>(e);
@@ -1225,7 +1227,7 @@ private:
 };
 
 using reconfigure_result_t = std::variant<std::monostate,
-    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error>;
+    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error, raft::not_a_member>;
 
 future<reconfigure_result_t> reconfigure(
         const std::vector<std::pair<raft::server_id, bool>>& ids,
@@ -1280,6 +1282,8 @@ future<reconfigure_result_t> modify_config(
         });
         co_return std::monostate{};
     } catch (raft::not_a_leader e) {
+        co_return e;
+    } catch (raft::not_a_member e) {
         co_return e;
     } catch (raft::dropped_entry e) {
         co_return e;

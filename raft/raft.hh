@@ -260,6 +260,12 @@ struct not_a_leader : public error {
     explicit not_a_leader(server_id l) : error(format("Not a leader, leader: {}", l)), leader(l) {}
 };
 
+struct not_a_member : public error {
+    explicit not_a_member(sstring err) : error(std::move(err)) {}
+    sstring message() const { return what(); }
+};
+
+
 struct dropped_entry : public error {
     dropped_entry() : error("Entry was dropped because of a leader change") {}
 };
@@ -476,7 +482,7 @@ struct transient_error: public error {
 // transient_error (the entry is not added to Raft log), or, for
 // modify_config, commit_status_unknown (commit status is
 // unknown).
-using add_entry_reply = std::variant<entry_id, transient_error, commit_status_unknown>;
+using add_entry_reply = std::variant<entry_id, transient_error, commit_status_unknown, not_a_member>;
 
 // std::monostate {} if the leader cannot execute the barrier because
 // it did not commit any entries yet
