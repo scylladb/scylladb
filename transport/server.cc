@@ -670,17 +670,33 @@ future<> cql_server::connection::process_request() {
                 _pending_requests_gate.leave();
             });
             auto istream = buf.get_istream();
-            (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
-                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
-                try {
-                    write_response(response_f.get0(), std::move(mem_permit), _compression);
-                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
-                } catch (...) {
-                    clogger.error("request processing failed: {}", std::current_exception());
-                }
-            });
 
-            return make_ready_future<>();
+
+            // Parallelize only the performance sensitive requests:
+            // QUERY, PREPARE, EXECUTE, BATCH
+            bool should_paralelize = (op == uint8_t(cql_binary_opcode::QUERY) ||
+                    op == uint8_t(cql_binary_opcode::PREPARE) ||
+                    op == uint8_t (cql_binary_opcode::EXECUTE) ||
+                    op == uint8_t(cql_binary_opcode::BATCH));
+
+            future<foreign_ptr<std::unique_ptr<cql_server::response>>> request_process_future = should_paralelize ?
+                    _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit) :
+                    process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit);
+
+            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
+                    try {
+                        write_response(response_f.get0(), std::move(mem_permit), _compression);
+                        _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
+                    } catch (...) {
+                        clogger.error("request processing failed: {}", std::current_exception());
+                    }
+                });
+
+            if (should_paralelize) {
+                return make_ready_future<>();
+            } else {
+                return request_response_future;
+            }
           });
         });
     });
