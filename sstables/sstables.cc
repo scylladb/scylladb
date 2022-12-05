@@ -2157,41 +2157,42 @@ future<> sstable::filesystem_storage::check_create_links_replay(const sstable& s
 /// are used.  These versions handle EEXIST errors that may happen
 /// when the respective operations are replayed.
 ///
+/// \param sst - the sstable to work on
 /// \param dst_dir - the destination directory.
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dst_dir
-future<> sstable::create_links_common(sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
-    sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dst_dir, generation, mark_for_removal);
-    auto comps = all_components();
-    co_await _storage.check_create_links_replay(*this, dst_dir, generation, comps);
+future<> sstable::filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
+    sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", sst.get_filename(), dst_dir, generation, mark_for_removal);
+    auto comps = sst.all_components();
+    co_await check_create_links_replay(sst, dst_dir, generation, comps);
     // TemporaryTOC is always first, TOC is always last
-    auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-    co_await sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), std::move(dst));
-    co_await sstable_write_io_check(sync_directory, dst_dir);
-    co_await parallel_for_each(comps, [this, &dst_dir, generation] (auto p) {
-        auto src = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
-        auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
-        return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
+    auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, generation, sst._format, component_type::TemporaryTOC);
+    co_await sst.sstable_write_io_check(idempotent_link_file, sst.filename(component_type::TOC), std::move(dst));
+    co_await sst.sstable_write_io_check(sync_directory, dst_dir);
+    co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation] (auto p) {
+        auto src = sstable::filename(dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, p.second);
+        auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, generation, sst._format, p.second);
+        return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
     });
-    co_await sstable_write_io_check(sync_directory, dst_dir);
-    auto dst_temp_toc = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+    co_await sst.sstable_write_io_check(sync_directory, dst_dir);
+    auto dst_temp_toc = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, generation, sst._format, component_type::TemporaryTOC);
     if (mark_for_removal) {
         // Now that the source sstable is linked to new_dir, mark the source links for
         // deletion by leaving a TemporaryTOC file in the source directory.
-        auto src_temp_toc = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, component_type::TemporaryTOC);
-        co_await sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
-        co_await sstable_write_io_check(sync_directory, _storage.dir);
+        auto src_temp_toc = sstable::filename(dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, component_type::TemporaryTOC);
+        co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
+        co_await sst.sstable_write_io_check(sync_directory, dir);
     } else {
         // Now that the source sstable is linked to dir, remove
         // the TemporaryTOC file at the destination.
-        co_await sstable_write_io_check(remove_file, std::move(dst_temp_toc));
+        co_await sst.sstable_write_io_check(remove_file, std::move(dst_temp_toc));
     }
-    co_await sstable_write_io_check(sync_directory, dst_dir);
-    sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dst_dir, generation);
+    co_await sst.sstable_write_io_check(sync_directory, dst_dir);
+    sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
 }
 
 future<> sstable::create_links(const sstring& dir) const {
-    return create_links_common(dir, _generation, mark_for_removal::no);
+    return _storage.create_links_common(*this, dir, _generation, mark_for_removal::no);
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
@@ -2202,7 +2203,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
-    co_await create_links_common(new_dir, new_generation, mark_for_removal::yes);
+    co_await _storage.create_links_common(*this, new_dir, new_generation, mark_for_removal::yes);
     _storage.dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
     co_await coroutine::parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {

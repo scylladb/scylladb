@@ -472,6 +472,8 @@ public:
         return _last_partition_last_position;
     }
 
+    using mark_for_removal = bool_class<class mark_for_removal_tag>;
+
     class filesystem_storage {
     public:
         sstring dir;
@@ -479,7 +481,11 @@ public:
 
         explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
 
+    private:
         future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+
+    public:
+        future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
     };
 
 private:
@@ -705,9 +711,6 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
-
-    using mark_for_removal = bool_class<class mark_for_removal_tag>;
-    future<> create_links_common(sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
 public:
     future<> read_toc() noexcept;
 
