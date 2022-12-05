@@ -710,7 +710,7 @@ private:
 
     future<> check_create_links_replay(const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
     using mark_for_removal = bool_class<class mark_for_removal_tag>;
-    future<> create_links_common(const sstring& dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+    future<> create_links_common(sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
     future<> create_links_and_mark_for_removal(const sstring& dst_dir, generation_type dst_gen) const;
 public:
     future<> read_toc() noexcept;
