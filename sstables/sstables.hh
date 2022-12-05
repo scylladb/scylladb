@@ -473,6 +473,15 @@ public:
     const position_in_partition& last_partition_last_position() const noexcept {
         return _last_partition_last_position;
     }
+
+    class filesystem_storage {
+    public:
+        sstring dir;
+        std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
+
+        explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
+    };
+
 private:
     sstring filename(const sstring& dir, component_type f) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
@@ -480,11 +489,11 @@ private:
 
     friend class sstable_directory;
     const sstring& get_dir() const {
-        return _dir;
+        return _storage.dir;
     }
 
     const sstring get_temp_dir() const {
-        return temp_sst_dir(_dir, _generation);
+        return temp_sst_dir(_storage.dir, _generation);
     }
 
     size_t sstable_buffer_size;
@@ -523,9 +532,9 @@ private:
     lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
 
     schema_ptr _schema;
-    sstring _dir;
-    std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     generation_type _generation{0};
+
+    filesystem_storage _storage;
 
     version_types _version;
     format_types _format;

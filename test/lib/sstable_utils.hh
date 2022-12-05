@@ -139,7 +139,7 @@ public:
     }
 
     void change_dir(sstring dir) {
-        _sst->_dir = dir;
+        _sst->_storage.dir = dir;
     }
 
     void set_data_file_size(uint64_t size) {

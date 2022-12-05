@@ -144,7 +144,7 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   try {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
-    auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
+    auto name = !readonly && _storage.temp_dir ? temp_filename(type) : filename(type);
 
     auto f = open_sstable_component_file_non_checked(name, flags, options,
                     _manager.config().enable_sstable_data_integrity_check());
@@ -961,14 +961,14 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    sstable_write_io_check(sync_directory, _dir).get();
+    sstable_write_io_check(sync_directory, _storage.dir).get();
 }
 
 future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
     co_await remove_temp_dir();
-    auto dir_f = co_await open_checked_directory(_write_error_handler, _dir);
+    auto dir_f = co_await open_checked_directory(_write_error_handler, _storage.dir);
     // Guarantee that every component of this sstable reached the disk.
     co_await sstable_write_io_check([&] { return dir_f.flush(); });
     // Rename TOC because it's no longer temporary.
@@ -1959,25 +1959,25 @@ void sstable::validate_originating_host_id() const {
 }
 
 future<> sstable::touch_temp_dir() {
-    if (_temp_dir) {
+    if (_storage.temp_dir) {
         return make_ready_future<>();
     }
     auto temp_dir = get_temp_dir();
     sstlog.debug("Touching temp_dir={}", temp_dir);
     auto fut = sstable_touch_directory_io_check(temp_dir);
     return fut.then([this, temp_dir = std::move(temp_dir)] () mutable {
-        _temp_dir = std::move(temp_dir);
+        _storage.temp_dir = std::move(temp_dir);
     });
 }
 
 future<> sstable::remove_temp_dir() {
-    if (!_temp_dir) {
+    if (!_storage.temp_dir) {
         return make_ready_future<>();
     }
-    sstlog.debug("Removing temp_dir={}", _temp_dir);
-    return remove_file(*_temp_dir).then_wrapped([this] (future<> f) {
+    sstlog.debug("Removing temp_dir={}", _storage.temp_dir);
+    return remove_file(*_storage.temp_dir).then_wrapped([this] (future<> f) {
         if (!f.failed()) {
-            _temp_dir.reset();
+            _storage.temp_dir.reset();
             return make_ready_future<>();
         }
         auto ep = f.get_exception();
@@ -1997,15 +1997,15 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_dir, staging_dir);
+    return boost::algorithm::ends_with(_storage.dir, staging_dir);
 }
 
 bool sstable::is_quarantined() const noexcept {
-    return boost::algorithm::ends_with(_dir, quarantine_dir);
+    return boost::algorithm::ends_with(_storage.dir, quarantine_dir);
 }
 
 bool sstable::is_uploaded() const noexcept {
-    return boost::algorithm::ends_with(_dir, upload_dir);
+    return boost::algorithm::ends_with(_storage.dir, upload_dir);
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
@@ -2096,7 +2096,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_t
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
     return parallel_for_each(comps, [this, &dst_dir, dst_gen] (const auto& p) mutable {
         auto comp = p.second;
-        auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, comp);
+        auto src = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, comp);
         auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, dst_gen, _format, comp);
         return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
             return file_exists(dst).then([&, this] (bool exists) mutable {
@@ -2113,7 +2113,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_t
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg, _dir));
+                        return make_exception_future<>(malformed_sstable_exception(msg, _storage.dir));
                     }
                     return make_ready_future<>();
                 });
@@ -2170,7 +2170,7 @@ future<> sstable::create_links_common(const sstring& dir, generation_type genera
                 return sstable_write_io_check(sync_directory, dir);
             }).then([this, &dir, generation, &comps] {
                 return parallel_for_each(comps, [this, &dir, generation] (auto p) {
-                    auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
+                    auto src = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
                     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
                     return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
                 });
@@ -2182,9 +2182,9 @@ future<> sstable::create_links_common(const sstring& dir, generation_type genera
             if (mark_for_removal) {
                 // Now that the source sstable is linked to new_dir, mark the source links for
                 // deletion by leaving a TemporaryTOC file in the source directory.
-                auto src_temp_toc = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, component_type::TemporaryTOC);
+                auto src_temp_toc = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, component_type::TemporaryTOC);
                 return sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc)).then([this] {
-                    return sstable_write_io_check(sync_directory, _dir);
+                    return sstable_write_io_check(sync_directory, _storage.dir);
                 });
             } else {
                 // Now that the source sstable is linked to dir, remove
@@ -2212,7 +2212,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), _generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_and_mark_for_removal(new_dir, new_generation);
-    _dir = new_dir;
+    _storage.dir = new_dir;
     generation_type old_generation = std::exchange(_generation, new_generation);
     co_await coroutine::parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
         return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
@@ -2228,7 +2228,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generatio
 }
 
 future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
-    auto path = fs::path(_dir);
+    auto path = fs::path(_storage.dir);
     sstring basename = path.filename().native();
     if (basename == quarantine_dir) {
         co_return;
@@ -2755,17 +2755,17 @@ future<> sstable::close_files() {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
         }
 
-        if (_temp_dir) {
+        if (_storage.temp_dir) {
             try {
-                unlinked_temp_dir = recursive_remove_directory(fs::path(*_temp_dir)).then_wrapped([this] (future<> f) {
+                unlinked_temp_dir = recursive_remove_directory(fs::path(*_storage.temp_dir)).then_wrapped([this] (future<> f) {
                     if (f.failed()) {
-                        sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_temp_dir, f.get_exception());
+                        sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, f.get_exception());
                     } else {
-                        _temp_dir.reset();
+                        _storage.temp_dir.reset();
                     }
                 });
             } catch (...) {
-                sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_temp_dir, std::current_exception());
+                sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, std::current_exception());
             }
         }
     }
@@ -3185,8 +3185,8 @@ sstable::sstable(schema_ptr schema,
         size_t buffer_size)
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
-    , _dir(std::move(dir))
     , _generation(generation)
+    , _storage(std::move(dir))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
