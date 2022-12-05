@@ -73,9 +73,8 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
     // become invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
     co_await holder.lock_partition(&i->first, i->second._partition_lock, exclusive, timeout);
-        // FIXME: indentation
-        tracker.lock_acquired();
-        co_return holder;
+    tracker.lock_acquired();
+    co_return holder;
 }
 
 future<row_locker::lock_holder>
@@ -99,10 +98,9 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     // the pointers to a clustering key and respectively, its lock, never
     // become invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-        // FIXME: indentation
-        co_await holder.lock_row(&j->first, j->second, exclusive, timeout);
-            tracker.lock_acquired();
-            co_return holder;
+    co_await holder.lock_row(&j->first, j->second, exclusive, timeout);
+    tracker.lock_acquired();
+    co_return holder;
 }
 
 // We need to zero old's _partition and _row, so when destructed
