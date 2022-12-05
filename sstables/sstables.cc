@@ -2092,12 +2092,12 @@ future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
 // from staging to the base dir, for example, right after create_links completes,
 // and right before deleting the source links.
 // We end up in two valid sstables in this case, so make create_links idempotent.
-future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_type dst_gen,
+future<> sstable::filesystem_storage::check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen,
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
-    return parallel_for_each(comps, [this, &dst_dir, dst_gen] (const auto& p) mutable {
+    return parallel_for_each(comps, [this, &sst, &dst_dir, dst_gen] (const auto& p) mutable {
         auto comp = p.second;
-        auto src = sstable::filename(_storage.dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, comp);
-        auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, dst_gen, _format, comp);
+        auto src = sstable::filename(dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, comp);
+        auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, dst_gen, sst._format, comp);
         return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
             return file_exists(dst).then([&, this] (bool exists) mutable {
                 if (!exists) {
@@ -2113,7 +2113,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_t
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg, _storage.dir));
+                        return make_exception_future<>(malformed_sstable_exception(msg, dir));
                     }
                     return make_ready_future<>();
                 });
@@ -2163,7 +2163,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, generation_t
 future<> sstable::create_links_common(sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
     sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dst_dir, generation, mark_for_removal);
     auto comps = all_components();
-    co_await check_create_links_replay(dst_dir, generation, comps);
+    co_await _storage.check_create_links_replay(*this, dst_dir, generation, comps);
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
     co_await sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), std::move(dst));
