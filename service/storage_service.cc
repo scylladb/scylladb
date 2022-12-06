@@ -414,10 +414,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
-    if (_group0->is_raft_enabled()) {
-        auto my_id = _group0->load_my_id();
-        app_states.emplace(gms::application_state::RAFT_SERVER_ID, versioned_value::raft_server_id(my_id.id));
-    }
     app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
@@ -1327,13 +1323,6 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "schema_version", utils::UUID(value.value));
     } else if (state == application_state::HOST_ID) {
         co_await update_table(endpoint, "host_id", utils::UUID(value.value));
-    } else if (state == application_state::RAFT_SERVER_ID && _feature_service.supports_raft_cluster_mgmt) {
-        auto server_id = utils::UUID(value.value);
-        if (server_id == utils::UUID{}) {
-            slogger.error("empty raft server id in application state for host {} ", endpoint);
-        } else {
-            co_await update_table(endpoint, "raft_server_id", server_id);
-        }
     } else if (state == application_state::SUPPORTED_FEATURES) {
         co_await update_table(endpoint, "supported_features", value.value);
     }

@@ -591,51 +591,6 @@ future<> raft_group0::setup_group0(
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
 }
 
-future<> raft_group0::persist_initial_raft_address_map() {
-    static constexpr auto max_concurrency = 10;
-    std::vector<gms::inet_address> endpoints;
-    const auto& states = _gossiper.get_endpoint_states();
-    endpoints.reserve(states.size());
-    std::transform(states.begin(), states.end(), std::back_inserter(endpoints), [](const auto& it) { return it.first; });
-    //
-    // Gossiper only persists node state when it switches to
-    // NORMAL. When persisting a node state, Raft ID is only
-    // persisted if the cluster supports raft.  Some nodes switch
-    // to NORMAL before the whole cluster enables raft. For these
-    // nodes we may never persist their Raft ID unless, here, as
-    // soon as we discover that the entire cluster supports Raft,
-    // we go over these nodes and explicitly persist their RAFT
-    // IDs.
-
-    co_await max_concurrent_for_each(endpoints, max_concurrency, [this] (const gms::inet_address& ip_addr) -> future<> {
-        auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(ip_addr);
-        if (state == nullptr) {
-            co_return;
-        }
-        if (!state->is_normal()) {
-            // Handle only NORMAL states, others should not be
-            // persisted to avoid garbage in the peers table if
-            // bootstrap fails.
-            co_return;
-        }
-        auto* value = state->get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
-        if (value == nullptr) {
-            co_return;
-        }
-        auto server_id = utils::UUID(value->value);
-        if (server_id == utils::UUID{}) {
-            upgrade_log.error("empty raft server id for host {} ", ip_addr);
-            co_return;
-        }
-        try {
-            co_await _sys_ks.update_peer_info(ip_addr, "raft_server_id", server_id);
-        } catch (...) {
-            upgrade_log.error("failed to persist raft_server_id for {}: {}",
-                    ip_addr, std::current_exception());
-        }
-    });
-}
-
 void raft_group0::load_initial_raft_address_map() {
     for (auto& [ip_addr, state] : _gossiper.get_endpoint_states()) {
         auto* value = state.get_application_state_ptr(gms::application_state::HOST_ID);
@@ -1476,7 +1431,6 @@ future<> raft_group0::upgrade_to_group0() {
             break;
         case group0_upgrade_state::use_pre_raft_procedures:
             upgrade_log.info("starting in `use_pre_raft_procedures` state.");
-            co_await persist_initial_raft_address_map();
             break;
     }
 

@@ -2003,10 +2003,6 @@ future<> gossiper::add_saved_endpoint(inet_address ep) {
     if (host_id) {
         ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
     }
-    auto raft_id = co_await _sys_ks.local().get_peer_raft_id_if_known(ep);
-    if (raft_id) {
-        ep_state.add_application_state(gms::application_state::RAFT_SERVER_ID, versioned_value::raft_server_id(raft_id.value()));
-    }
     ep_state.mark_dead();
     _endpoint_state_map[ep] = ep_state;
     co_await replicate(ep, ep_state);

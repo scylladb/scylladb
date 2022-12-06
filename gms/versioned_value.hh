@@ -151,10 +151,6 @@ public:
         return versioned_value(host_id.to_sstring());
     }
 
-    static versioned_value raft_server_id(const utils::UUID& id) {
-        return versioned_value(id.to_sstring());
-    }
-
     static versioned_value tokens(const std::unordered_set<dht::token>& tokens) {
         return versioned_value(make_full_token_string(tokens));
     }

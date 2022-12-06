@@ -250,10 +250,6 @@ private:
     // Remove the node from raft config, retries raft::commit_status_unknown.
     future<> remove_from_raft_config(raft::server_id id);
 
-    // Persist the initial Raft <-> IP address map as seen by
-    // the gossiper.
-    future<> persist_initial_raft_address_map();
-
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.
     void load_initial_raft_address_map();
