@@ -307,12 +307,13 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         require_exist(file_name, true);
     };
 
-    auto temp_sst_dir = sst::temp_sst_dir(sst_dir, generation_from_value(2));
-    touch_dir(temp_sst_dir);
+    auto temp_sst_dir_2 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(2));
+    touch_dir(temp_sst_dir_2);
 
-    temp_sst_dir = sst::temp_sst_dir(sst_dir, generation_from_value(3));
-    touch_dir(temp_sst_dir);
-    auto temp_file_name = sst::filename(temp_sst_dir, ks, cf, sst::version_types::mc, generation_from_value(3), sst::format_types::big, component_type::TemporaryTOC);
+    auto temp_sst_dir_3 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(3));
+    touch_dir(temp_sst_dir_3);
+
+    auto temp_file_name = sst::filename(temp_sst_dir_3, ks, cf, sst::version_types::mc, generation_from_value(3), sst::format_types::big, component_type::TemporaryTOC);
     touch_file(temp_file_name);
 
     temp_file_name = sst::filename(sst_dir, ks, cf, sst::version_types::mc, generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC);
@@ -320,9 +321,9 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     temp_file_name = sst::filename(sst_dir, ks, cf, sst::version_types::mc, generation_from_value(4), sst::format_types::big, component_type::Data);
     touch_file(temp_file_name);
 
-    do_with_cql_env_thread([&sst_dir, &ks, &cf, &require_exist] (cql_test_env& e) {
-        require_exist(sst::temp_sst_dir(sst_dir, generation_from_value(2)), false);
-        require_exist(sst::temp_sst_dir(sst_dir, generation_from_value(3)), false);
+    do_with_cql_env_thread([&sst_dir, &ks, &cf, &require_exist, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
+        require_exist(temp_sst_dir_2, false);
+        require_exist(temp_sst_dir_3, false);
 
         require_exist(sst::filename(sst_dir, ks, cf, sst::version_types::mc, generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC), false);
         require_exist(sst::filename(sst_dir, ks, cf, sst::version_types::mc, generation_from_value(4), sst::format_types::big, component_type::Data), false);

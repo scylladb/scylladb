@@ -367,10 +367,6 @@ public:
         return fmt::format("{}.sstable", gen);
     }
 
-    static sstring temp_sst_dir(const sstring& dir, generation_type gen) {
-        return dir + "/" + sst_dir_basename(gen);
-    }
-
     static bool is_temp_dir(const fs::path& dirpath)
     {
         return dirpath.extension().string() == ".sstable";
@@ -505,10 +501,6 @@ private:
     friend class sstable_directory;
     const sstring& get_dir() const {
         return _storage.dir;
-    }
-
-    sstring temp_filename(component_type f) const {
-        return filename(temp_sst_dir(_storage.dir, _generation), f);
     }
 
     size_t sstable_buffer_size;
