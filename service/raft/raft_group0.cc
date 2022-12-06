@@ -647,13 +647,13 @@ future<> raft_group0::persist_initial_raft_address_map() {
 
 void raft_group0::load_initial_raft_address_map() {
     for (auto& [ip_addr, state] : _gossiper.get_endpoint_states()) {
-        auto* value = state.get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
+        auto* value = state.get_application_state_ptr(gms::application_state::HOST_ID);
         if (value == nullptr) {
             continue;
         }
         auto server_id = utils::UUID(value->value);
         if (server_id == utils::UUID{}) {
-            upgrade_log.error("empty raft server id for host {} ", ip_addr);
+            upgrade_log.error("empty Host ID for host {} ", ip_addr);
             continue;
         }
         // The failure detector needs the IPs on all shards. We
