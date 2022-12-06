@@ -1765,7 +1765,7 @@ future<> sstable::seal_sstable(bool backup)
             _marked_for_deletion = mark_for_deletion::none;
         }
         if (backup) {
-            return _storage.snapshot(*this, get_dir() + "/backups/");
+            return _storage.snapshot(*this, "backups", filesystem_storage::absolute_path::no);
         }
         return make_ready_future<>();
     });
@@ -2203,13 +2203,16 @@ future<> sstable::filesystem_storage::create_links(const sstable& sst, const sst
     return create_links_common(sst, dir, sst._generation, mark_for_removal::no);
 }
 
-future<> sstable::filesystem_storage::snapshot(const sstable& sst, const sstring& dir) const {
+future<> sstable::filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
+    if (!abs) {
+        dir = this->dir + "/" + dir + "/";
+    }
     co_await sst.sstable_touch_directory_io_check(dir);
     co_await create_links(sst, dir);
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
-    return _storage.snapshot(*this, dir);
+    return _storage.snapshot(*this, dir, filesystem_storage::absolute_path::yes);
 }
 
 future<> sstable::filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {

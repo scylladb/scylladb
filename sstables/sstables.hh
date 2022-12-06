@@ -480,8 +480,9 @@ public:
         future<> touch_temp_dir(const sstable& sst);
 
     public:
+        using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
         future<> seal(const sstable& sst);
-        future<> snapshot(const sstable& sst, const sstring& dir) const;
+        future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);
