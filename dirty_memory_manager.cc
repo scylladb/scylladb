@@ -11,8 +11,6 @@
 // Code previously under logalloc namespace
 namespace dirty_memory_manager_logalloc {
 
-using namespace logalloc;
-
 inline void
 region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
 #ifdef SEASTAR_DEBUG
@@ -54,7 +52,7 @@ dirty_memory_manager_logalloc::size_tracked_region* region_group::get_largest_re
 }
 
 void
-region_group::add(region* child_r) {
+region_group::add(logalloc::region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
     assert(!child->_heap_handle);
     child->_heap_handle = std::make_optional(_regions.push(child));
@@ -63,7 +61,7 @@ region_group::add(region* child_r) {
 }
 
 void
-region_group::del(region* child_r) {
+region_group::del(logalloc::region* child_r) {
     auto child = static_cast<size_tracked_region*>(child_r);
     if (child->_heap_handle) {
         _regions.erase(*std::exchange(child->_heap_handle, std::nullopt));
@@ -73,7 +71,7 @@ region_group::del(region* child_r) {
 }
 
 void
-region_group::moved(region* old_address, region* new_address) {
+region_group::moved(logalloc::region* old_address, logalloc::region* new_address) {
     auto old_child = static_cast<size_tracked_region*>(old_address);
     if (old_child->_heap_handle) {
         _regions.erase(*std::exchange(old_child->_heap_handle, std::nullopt));
@@ -116,7 +114,7 @@ future<> region_group::release_queued_allocations() {
             co_await std::invoke([&] {
                 // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
                 // FIXME: handle allocation failures (not very likely) like allocating_section does
-                tracker_reclaimer_lock rl(logalloc::shard_tracker());
+                logalloc::tracker_reclaimer_lock rl(logalloc::shard_tracker());
                 return _relief.wait();
             });
         }
