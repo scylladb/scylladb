@@ -17,6 +17,8 @@
 #include "replica/database_fwd.hh"
 #include "utils/logalloc.hh"
 
+class test_region_group;
+
 // Code previously under logalloc namespace
 namespace dirty_memory_manager_logalloc {
 
@@ -331,7 +333,7 @@ private:
     virtual void add(logalloc::region* child) override; // from region_listener
     virtual void del(logalloc::region* child) override; // from region_listener
 
-    friend class test_region_group;
+    friend class ::test_region_group;
 };
 
 }
