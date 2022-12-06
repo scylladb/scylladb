@@ -6,7 +6,7 @@ Scylla Types
 Introduction
 -------------
 This tool allows you to examine raw values obtained from SStables, logs, coredumps, etc., by performing operations on them,
-such as ``print``, ``compare``, or ``validate``. See :ref:`Supported Operations <scylla-types-operations>` for details.
+such as ``deserialize``, ``compare``, or ``validate``. See :ref:`Supported Operations <scylla-types-operations>` for details.
 
 Run ``scylla types --help`` for additional information about the tool and the operations.
 
@@ -41,7 +41,7 @@ If you provide more than one value, all of the values must share the same type. 
 
 .. code-block:: console
 
-   scylla types print -t Int32Type b34b62d4 00783562
+   scylla types deserialize -t Int32Type b34b62d4 00783562
 
 .. _scylla-types-compound:
 
@@ -57,17 +57,26 @@ of the types on the command line must be the same as the order in the compound).
 
 .. code-block:: console
 
-   scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+   scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 
 
 .. _scylla-types-operations:
 
 Supported Operations
 ^^^^^^^^^^^^^^^^^^^^^^^
-* ``print`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
-* ``compare`` - Compares two values and print the result. Required arguments: 2 serialized values.
+* ``serialize`` - Serialize the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form. To avoid problems around special symbols, separate values with ``--`` from the rest of the arguments.
+* ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
+* ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
+* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
+* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
 
+
+You can learn more about each operation by invoking its help:
+
+    .. code-block:: console
+
+        scylla types $OPERATION --help
 
 .. _scylla-types-options:
 
@@ -86,11 +95,50 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 
 Examples
 ^^^^^^^^
+* Serializing a value of type Int32Type:
+
+    .. code-block:: console
+
+        scylla types serialize -t Int32Type -- -1286905132
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        b34b62d4
+
+* Serializing a clustering-key (``--prefix-compound``):
+
+    .. code-block:: console
+
+        scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b 16
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0010d00819896f6b11ea00000000001c571b000400000010
+
+* Serializing a partition-key (``--full-compound``):
+
+    .. code-block:: console
+
+        scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0010d00819896f6b11ea00000000001c571b
+
 * Deserializing and printing a value of type Int32Type:
 
     .. code-block:: console
 
-       scylla types print -t Int32Type b34b62d4
+       scylla types deserialize -t Int32Type b34b62d4
 
     Output:
 
@@ -129,7 +177,7 @@ Examples
 
     .. code-block:: console
 
-       scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+       scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 
     Output:
 
@@ -138,3 +186,28 @@ Examples
 
        (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 
+* Calculating the token of a partition key:
+
+    .. code-block:: console
+
+        scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
+
+* Calculating the owner shard of a partition key:
+
+    .. code-block:: console
+
+        scylla types shardof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType --shards=7 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): token: -5043005771368701888, shard: 1

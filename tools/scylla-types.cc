@@ -28,6 +28,43 @@ using type_variant = std::variant<
         compound_type<allow_prefixes::yes>,
         compound_type<allow_prefixes::no>>;
 
+struct serializing_visitor {
+    const std::vector<sstring>& values;
+
+    managed_bytes operator()(const data_type& type) {
+        if (values.size() != 1) {
+            throw std::runtime_error(fmt::format("serialize_handler(): expected 1 value for non-compound type, got {}", values.size()));
+        }
+        return managed_bytes(type->from_string(values.front()));
+    }
+    template <allow_prefixes AllowPrefixes>
+    managed_bytes operator()(const compound_type<AllowPrefixes>& type) {
+        if constexpr (AllowPrefixes == allow_prefixes::yes) {
+            if (values.size() > type.types().size()) {
+                throw std::runtime_error(fmt::format("serialize_handler(): expected at most {} (number of subtypes) values for prefix compound type, got {}", type.types().size(), values.size()));
+            }
+        } else {
+            if (values.size() != type.types().size()) {
+                throw std::runtime_error(fmt::format("serialize_handler(): expected {} (number of subtypes) values for non-prefix compound type, got {}", type.types().size(), values.size()));
+            }
+        }
+        std::vector<bytes> serialized_values;
+        serialized_values.reserve(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            serialized_values.push_back(type.types().at(i)->from_string(values.at(i)));
+        }
+        return type.serialize_value(serialized_values);
+    }
+
+    managed_bytes operator()(const type_variant& type) {
+        return std::visit(*this, type);
+    }
+};
+
+void serialize_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
+    fmt::print("{}\n", to_hex(serializing_visitor{values}(type)));
+}
+
 sstring to_printable_string(const data_type& type, bytes_view value) {
     return type->to_string(value);
 }
@@ -62,7 +99,7 @@ sstring to_printable_string(const type_variant& type, bytes_view value) {
     return std::visit(printing_visitor{value}, type);
 }
 
-void print_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void deserialize_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     for (const auto& value : values) {
         fmt::print("{}\n", to_printable_string(type, value));
     }
@@ -194,16 +231,27 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
     }
 }
 
-using action_handler_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
-
 class action_handler {
+public:
+    using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
+    using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
+
+    enum class value_type {
+        bytes = 0,
+        string,
+    };
+
+private:
     std::string _name;
     std::string _summary;
     std::string _description;
-    action_handler_func _func;
+    std::variant<bytes_func, string_func> _func;
 
 public:
-    action_handler(std::string name, std::string summary, action_handler_func func, std::string description)
+    action_handler(std::string name, std::string summary, bytes_func func, std::string description)
+        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
+    }
+    action_handler(std::string name, std::string summary, string_func func, std::string description)
         : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
     }
 
@@ -211,24 +259,56 @@ public:
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
 
+    value_type get_value_type() const { return value_type(_func.index()); }
+
     void operator()(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) const {
-        _func(std::move(type), std::move(values), vm);
+        std::get<bytes_func>(_func)(std::move(type), std::move(values), vm);
+    }
+    void operator()(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) const {
+        std::get<string_func>(_func)(std::move(type), std::move(values), vm);
     }
 };
 
 const std::vector<action_handler> action_handlers = {
-    {"print", "print the value(s) in a human readable form", print_handler,
+    {"serialize", "serialize the value and print it in hex encoded form", serialize_handler,
 R"(
-Deserialize and print the value(s) in a human-readable form.
+Serialize the value and print it in a hex encoded form.
+
+Arguments:
+* 1 value for regular types
+* N values for non-prefix compound types (one value for each component)
+* <N values for prefix compound types (one value for each present component)
+
+To avoid boost::program_options trying to interpret values with special
+characters like '-' as options, separate values from the rest of the arguments
+with '--'.
+
+Only atomic, regular types are supported for now, collections, UDT and tuples are
+not supported, not even in frozen form.
+
+Examples:
+
+$ scylla types serialize -t Int32Type -- -1286905132
+b34b62d4
+
+$ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b 16
+0010d00819896f6b11ea00000000001c571b000400000010
+
+$ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
+0010d00819896f6b11ea00000000001c571b
+)"},
+    {"deserialize", "deserialize the value(s) and print them in a human readable form", deserialize_handler,
+R"(
+Deserialize the value(s) and print them in a human-readable form.
 
 Arguments: 1 or more serialized values.
 
 Examples:
 
-$ scylla types print -t Int32Type b34b62d4
+$ scylla types deserialize -t Int32Type b34b62d4
 -1286905132
 
-$ scylla types print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+$ scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )"},
     {"compare", "compare two values", compare_handler,
@@ -369,10 +449,20 @@ $ scylla types {{action}} --help
         if (!app.configuration().contains("value")) {
             throw std::invalid_argument("error: no values specified");
         }
-        auto values = boost::copy_range<std::vector<bytes>>(
-                app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-        handler(std::move(type), std::move(values), app.configuration());
+        switch (handler.get_value_type()) {
+            case action_handler::value_type::bytes:
+                {
+                    auto values = boost::copy_range<std::vector<bytes>>(
+                            app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
+
+                    handler(std::move(type), std::move(values), app.configuration());
+                }
+                break;
+            case action_handler::value_type::string:
+                handler(std::move(type), app.configuration()["value"].as<std::vector<sstring>>(), app.configuration());
+                break;
+        }
 
         co_return;
     });
