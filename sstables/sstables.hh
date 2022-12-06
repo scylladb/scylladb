@@ -398,6 +398,7 @@ public:
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
     future<> unlink() noexcept;
+    future<> wipe_storage(const sstring& name) noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;

@@ -3009,6 +3009,19 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
+future<> sstable::wipe_storage(const sstring& name) noexcept {
+    try {
+        co_await remove_by_toc_name(name);
+    } catch (...) {
+        // Log and ignore the failure since there is nothing much we can do about it at this point.
+        // a. Compaction will retry deleting the sstable in the next pass, and
+        // b. in the future sstables_manager is planned to handle sstables deletion.
+        // c. Eventually we may want to record these failures in a system table
+        //    and notify the administrator about that for manual handling (rather than aborting).
+        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+    }
+}
+
 future<>
 sstable::unlink() noexcept {
     // We must be able to generate toc_filename()
@@ -3019,20 +3032,7 @@ sstable::unlink() noexcept {
         return toc_filename();
     }();
 
-    // remove_by_toc_name doesn't throw
-    auto fut = remove_by_toc_name(name);
-    // remove_fut never fails
-    auto remove_fut = fut.then_wrapped([&name] (future<> f) {
-        if (f.failed()) {
-            // Log and ignore the failure since there is nothing much we can do about it at this point.
-            // a. Compaction will retry deleting the sstable in the next pass, and
-            // b. in the future sstables_manager is planned to handle sstables deletion.
-            // c. Eventually we may want to record these failures in a system table
-            //    and notify the administrator about that for manual handling (rather than aborting).
-            sstlog.warn("Failed to delete {}: {}. Ignoring.", name, f.get_exception());
-        }
-        return make_ready_future<>();
-    });
+    auto remove_fut = wipe_storage(name);
 
     try {
         co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
