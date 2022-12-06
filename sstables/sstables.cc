@@ -2995,7 +2995,15 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
-future<> sstable::wipe_storage(const sstring& name) noexcept {
+future<> sstable::filesystem_storage::wipe(const sstable& sst) noexcept {
+    // We must be able to generate toc_filename()
+    // in order to delete the sstable.
+    // Running out of memory here will terminate.
+    auto name = [&sst] () noexcept {
+        memory::scoped_critical_alloc_section _;
+        return sst.toc_filename();
+    }();
+
     try {
         co_await remove_by_toc_name(name);
     } catch (...) {
@@ -3007,34 +3015,27 @@ future<> sstable::wipe_storage(const sstring& name) noexcept {
         sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
     }
 
-    if (_storage.temp_dir) {
+    if (temp_dir) {
         try {
-            co_await recursive_remove_directory(fs::path(*_storage.temp_dir));
-            _storage.temp_dir.reset();
+            co_await recursive_remove_directory(fs::path(*temp_dir));
+            temp_dir.reset();
         } catch (...) {
-            sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, std::current_exception());
+            sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *temp_dir, std::current_exception());
         }
     }
 }
 
 future<>
 sstable::unlink() noexcept {
-    // We must be able to generate toc_filename()
-    // in order to delete the sstable.
-    // Running out of memory here will terminate.
-    auto name = [this] () noexcept {
-        memory::scoped_critical_alloc_section _;
-        return toc_filename();
-    }();
-
-    auto remove_fut = wipe_storage(name);
+    auto remove_fut = _storage.wipe(*this);
 
     try {
         co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
     } catch (...) {
+        memory::scoped_critical_alloc_section _;
         // Just log and ignore failures to delete large data entries.
         // They are not critical to the operation of the database.
-        sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, std::current_exception());
+        sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", toc_filename(), std::current_exception());
     }
 
     co_await std::move(remove_fut);

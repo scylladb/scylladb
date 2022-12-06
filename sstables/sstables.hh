@@ -398,7 +398,6 @@ public:
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
     future<> unlink() noexcept;
-    future<> wipe_storage(const sstring& name) noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;
@@ -490,6 +489,7 @@ public:
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);
+        future<> wipe(const sstable& sst) noexcept;
     };
 
 private:
