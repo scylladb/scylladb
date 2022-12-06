@@ -1,8 +1,8 @@
-* cluster_name - ``cat /etc/scylla/scylla.yaml | grep cluster_name``
-* seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
-* endpoint_snitch - ``cat /etc/scylla/scylla.yaml | grep endpoint_snitch``
+* cluster_name - ``grep cluster_name /etc/scylla/scylla.yaml``
+* seeds - ``grep seeds: /etc/scylla/scylla.yaml``
+* endpoint_snitch - ``grep endpoint_snitch /etc/scylla/scylla.yaml``
 * Scylla version - ``scylla --version``
-* Authentication status - ``cat /etc/scylla/scylla.yaml | grep authenticator``
+* Authentication status - ``grep authenticator /etc/scylla/scylla.yaml``
 
 .. Note:: 
 
