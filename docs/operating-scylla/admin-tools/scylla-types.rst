@@ -65,7 +65,7 @@ of the types on the command line must be the same as the order in the compound).
 Supported Operations
 ^^^^^^^^^^^^^^^^^^^^^^^
 * ``print`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
-* ``compare`` - Compares two values and print the result. Required arguments: 2 serialized values.
+* ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
 
 
