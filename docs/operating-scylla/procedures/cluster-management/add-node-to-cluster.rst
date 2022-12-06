@@ -9,27 +9,26 @@ be time-consuming, depending on the data size and network bandwidth. If using a 
 Prerequisites
 -------------
 
-Before adding the new node, check the node's status in the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command.
-You cannot add new nodes to the cluster if any nodes are down.
+#. Before adding the new node, check the node's status in the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. You cannot add new nodes to the cluster if any nodes are down.
 
-For example:
+    For example:
 
-.. code-block:: shell
+    .. code-block:: shell
 
-   Datacenter: DC1
-   Status=Up/Down
-   State=Normal/Leaving/Joining/Moving
-   --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
-   UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
-   DN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
+       Datacenter: DC1
+       Status=Up/Down
+       State=Normal/Leaving/Joining/Moving
+       --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
+       UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
+       DN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
 
-In the example above,  the node with the IP address 192.168.1.202 has a status of Down (DN). To proceed, you need to start the node that is down or :doc:`remove it from the cluster </operating-scylla/procedures/cluster-management/remove-node/>`.
+    In the example above,  the node with the IP address 192.168.1.202 has a status of Down (DN). To proceed, you need to start the node that is down or :doc:`remove it from the cluster </operating-scylla/procedures/cluster-management/remove-node/>`.
 
-Login to one of the nodes in the cluster to collect the following information:
+#. Login to one of the nodes in the cluster to collect the following information:
 
-.. include:: /operating-scylla/procedures/cluster-management/_common/prereq.rst
+    .. include:: /operating-scylla/procedures/cluster-management/_common/prereq.rst
 
-.. _add-node-to-cluster-procedure:
+    .. _add-node-to-cluster-procedure:
 
 
 Procedure
