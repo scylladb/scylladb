@@ -445,6 +445,8 @@ public:
     named_value<std::string> auth_superuser_name;
     named_value<std::string> auth_superuser_salted_password;
 
+    named_value<std::vector<std::unordered_map<sstring, sstring>>> auth_certificate_role_queries;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
