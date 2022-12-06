@@ -490,6 +490,7 @@ public:
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);
         future<> wipe(const sstable& sst) noexcept;
+        future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity);
     };
 
 private:

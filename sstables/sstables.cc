@@ -140,22 +140,27 @@ future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring t
     });
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
-  try {
+future<file> sstable::filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
-    auto name = !readonly && _storage.temp_dir ? temp_filename(type) : filename(type);
+    auto name = !readonly && temp_dir ? sst.temp_filename(type) : sst.filename(type);
 
-    auto f = open_sstable_component_file_non_checked(name, flags, options,
-                    _manager.config().enable_sstable_data_integrity_check());
+    auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
 
     if (!readonly) {
-        f = with_file_close_on_failure(std::move(f), [this, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_sstable_component_file(name, filename(type)).then([fd = std::move(fd)] () mutable {
+        f = with_file_close_on_failure(std::move(f), [&sst, type, name = std::move(name)] (file fd) mutable {
+            return sst.rename_new_sstable_component_file(name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });
     }
+
+    return f;
+}
+
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
+  try {
+    auto f = _storage.open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
