@@ -110,10 +110,6 @@ Procedure
 
        Tip 3: Run cleanup one node at a time, reducing overall cluster impact.
 
-    .. note::
-
-       If you are using Scylla Enterprise 2018.1.5 or earlier or Scylla Open source 2.3 or earlier, **do not** run the ``nodetool cleanup`` command before upgrading to the latest release of your branch. See this `issue <https://github.com/scylladb/scylla/issues/3872>`_ for more information.
-
 #. Wait until the new node becomes UN (Up Normal) in the output of :doc:`nodetool status </operating-scylla/nodetool-commands/status>` on one of the old nodes. 
 
     .. note:: 
