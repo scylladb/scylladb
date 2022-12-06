@@ -3197,17 +3197,8 @@ future<utils::UUID> system_keyspace::get_raft_group0_id() {
     co_return opt.value_or<utils::UUID>({});
 }
 
-future<utils::UUID> system_keyspace::get_raft_server_id() {
-    auto opt = co_await get_scylla_local_param_as<utils::UUID>("raft_server_id");
-    co_return opt.value_or<utils::UUID>({});
-}
-
 future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
     return set_scylla_local_param_as<utils::UUID>("raft_group0_id", uuid);
-}
-
-future<> system_keyspace::set_raft_server_id(utils::UUID uuid) {
-    return set_scylla_local_param_as<utils::UUID>("raft_server_id", uuid);
 }
 
 static constexpr auto GROUP0_HISTORY_KEY = "history";

@@ -786,7 +786,7 @@ public:
             }).get();
 
             if (raft_gr.local().is_enabled()) {
-                auto my_raft_id = service::load_or_create_my_raft_id(sys_ks.local()).get();
+                auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
                 raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
                     return raft_gr.start(my_raft_id);
                 }).get();
