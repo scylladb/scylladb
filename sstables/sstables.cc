@@ -133,7 +133,7 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
     return open_file_dma(name, flags, options);
 }
 
-future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
+future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) const {
     return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
         sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
         return make_exception_future<>(ep);
