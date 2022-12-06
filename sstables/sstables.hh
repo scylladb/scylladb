@@ -351,10 +351,6 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    sstring filename(component_type f) const {
-        return filename(get_dir(), f);
-    }
-
     sstring get_filename() const {
         return filename(component_type::Data);
     }
@@ -497,6 +493,10 @@ public:
     };
 
 private:
+    sstring filename(component_type f) const {
+        return filename(get_dir(), f);
+    }
+
     sstring filename(const sstring& dir, component_type f) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
