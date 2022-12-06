@@ -363,6 +363,10 @@ public:
         return filename(component_type::TOC);
     }
 
+    sstring index_filename() const {
+        return filename(component_type::Index);
+    }
+
     static sstring sst_dir_basename(generation_type gen) {
         return fmt::format("{}.sstable", gen);
     }
