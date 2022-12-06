@@ -2,7 +2,7 @@
 * seeds - ``grep seeds: /etc/scylla/scylla.yaml``
 * endpoint_snitch - ``grep endpoint_snitch /etc/scylla/scylla.yaml``
 * Scylla version - ``scylla --version``
-* Authentication status - ``grep authenticator /etc/scylla/scylla.yaml``
+* Authenticator - ``grep authenticator /etc/scylla/scylla.yaml``
 
 .. Note:: 
 
