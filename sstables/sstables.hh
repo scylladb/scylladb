@@ -355,10 +355,6 @@ public:
         return filename(get_dir(), f);
     }
 
-    sstring temp_filename(component_type f) const {
-        return filename(get_temp_dir(), f);
-    }
-
     sstring get_filename() const {
         return filename(component_type::Data);
     }
@@ -505,8 +501,8 @@ private:
         return _storage.dir;
     }
 
-    const sstring get_temp_dir() const {
-        return temp_sst_dir(_storage.dir, _generation);
+    sstring temp_filename(component_type f) const {
+        return filename(temp_sst_dir(_storage.dir, _generation), f);
     }
 
     size_t sstable_buffer_size;
