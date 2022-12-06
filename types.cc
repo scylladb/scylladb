@@ -2265,9 +2265,11 @@ struct compare_visitor {
     std::strong_ordering operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
         auto sf = cql_serialization_format::internal();
-        return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
-                llpdi::end(v2, sf),
-                [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
+        return with_empty_checks([&] {
+            return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
+                    llpdi::end(v2, sf),
+                    [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
+        });
     }
     std::strong_ordering operator()(const map_type_impl& m) {
         return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2);

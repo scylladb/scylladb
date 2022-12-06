@@ -683,6 +683,13 @@ BOOST_AUTO_TEST_CASE(test_parse_valid_frozen_set) {
     BOOST_REQUIRE(type->as_cql3_type().to_string() == "frozen<set<int>>");
 }
 
+BOOST_AUTO_TEST_CASE(test_empty_frozen_set_compare) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.FrozenType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))");
+    auto type = parser.parse();
+    std::unordered_set<int> set = {1, 2, 3};
+    type->compare(bytes_view(), bytes_view(*data_value(set).serialize()));
+}
+
 BOOST_AUTO_TEST_CASE(test_parse_valid_set_frozen_set) {
     sstring frozen = "org.apache.cassandra.db.marshal.FrozenType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))";
     auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.SetType(" + frozen + ")");
