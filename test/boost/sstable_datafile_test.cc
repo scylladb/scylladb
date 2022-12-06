@@ -3143,7 +3143,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
                 BOOST_REQUIRE(valid);
 
-                auto sst_file = open_file_dma(sst->get_filename(), open_flags::wo).get();
+                auto sst_file = open_file_dma(test::filename(*sst, sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
                 testlog.info("Validating corrupted {}", sst->get_filename());
@@ -3188,7 +3188,7 @@ SEASTAR_TEST_CASE(partial_sstable_deletion_test) {
         auto sst = make_sstable_containing(sst_gen, {std::move(mut1)});
 
         // Rename TOC into TMP toc, to stress deletion path for partial files
-        rename_file(sst->toc_filename(), sst->filename(sstables::component_type::TemporaryTOC)).get();
+        rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
         sst->unlink().get();
     });

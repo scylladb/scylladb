@@ -24,7 +24,7 @@ static auto copy_sst_to_tmpdir(fs::path tmp_path, test_env& env, sstables::schem
     auto dst_path = tmp_path / src_path.filename() / format("gen-{}", gen);
     recursive_touch_directory(dst_path.native()).get();
     for (auto p : sst->all_components()) {
-        auto src_path = fs::path(sst->filename(p.first));
+        auto src_path = test::filename(*sst, p.first);
         copy_file(src_path, dst_path / src_path.filename());
     }
     return std::make_pair(env.reusable_sst(schema_ptr, dst_path.native(), gen).get0(), dst_path.native());
@@ -64,14 +64,14 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
 static bool partial_create_links(sstable_ptr sst, fs::path dst_path, int64_t gen, int count) {
     auto schema = sst->get_schema();
     auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, component_type::TemporaryTOC);
-    link_file(sst->filename(component_type::TOC), tmp_toc).get();
+    link_file(test::filename(*sst, component_type::TOC).native(), tmp_toc).get();
     for (auto& [c, s] : sst->all_components()) {
         if (count-- <= 0) {
             return false;
         }
-        auto src = sst->filename(c);
+        auto src = test::filename(*sst, c);
         auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, c);
-        link_file(src, dst).get();
+        link_file(src.native(), dst).get();
     }
     if (count-- <= 0) {
         return false;

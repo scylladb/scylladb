@@ -183,7 +183,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
 
     // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
     // We should fail validation and leave the directory untouched
-    remove_file(sst->filename(sstables::component_type::Statistics)).get();
+    remove_file(test::filename(*sst, sstables::component_type::Statistics).native()).get();
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
-    rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
+    rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -236,7 +236,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
     return sstables::test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
         auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
-        link_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
+        link_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
         with_sstable_directory(dir.path(), 1,
                 sstable_from_existing_file(env),
@@ -253,7 +253,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
     auto dir = tmpdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
-    remove_file(sst->filename(sstables::component_type::TOC)).get();
+    remove_file(test::filename(*sst, sstables::component_type::TOC).native()).get();
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -279,10 +279,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     auto dir = tmpdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
-    auto tempstr = sst->filename(component_type::TemporaryStatistics);
-    auto f = open_file_dma(tempstr, open_flags::rw | open_flags::create | open_flags::truncate).get0();
+    auto tempstr = test::filename(*sst, component_type::TemporaryStatistics);
+    auto f = open_file_dma(tempstr.native(), open_flags::rw | open_flags::create | open_flags::truncate).get0();
     f.close().get();
-    auto tempstat = fs::canonical(fs::path(tempstr));
+    auto tempstat = fs::canonical(tempstr);
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -295,7 +295,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     }).get();
    });
 
-    remove_file(sst->filename(sstables::component_type::Statistics)).get();
+    remove_file(test::filename(*sst, sstables::component_type::Statistics).native()).get();
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -312,7 +312,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     auto dir = tmpdir();
     make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 3333));
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
-    rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
+    rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
    with_sstable_directory(dir.path(), 1,
             sstable_from_existing_file(env),
@@ -415,7 +415,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             // Collect all sstable file names
             sstdir.invoke_on_all([&] (sstable_directory& d) {
                 return d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
-                    sstables[this_shard_id()].push_back(sst->get_filename());
+                    sstables[this_shard_id()].push_back(test::filename(*sst, sstables::component_type::Data).native());
                     return make_ready_future<>();
                 });
             }).get();

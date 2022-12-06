@@ -220,6 +220,10 @@ public:
     static future<> create_links(const sstable& sst, const sstring& dir) {
         return sst._storage.create_links(sst, dir);
     }
+
+    static fs::path filename(const sstable& sst, component_type c) {
+        return fs::path(sst.filename(c));
+    }
 };
 
 inline auto replacer_fn_no_op() {
