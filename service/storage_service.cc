@@ -92,7 +92,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<streaming::stream_manager>& stream_manager,
     endpoint_lifecycle_notifier& elc_notif,
     sharded<db::batchlog_manager>& bm,
-    sharded<locator::snitch_ptr>& snitch)
+    sharded<locator::snitch_ptr>& snitch,
+    rpc_fence& rpc_fence)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -102,6 +103,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)
+        , _rpc_fence(rpc_fence)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
@@ -2455,6 +2457,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
                 // Step 6: Finish
                 req.cmd = node_ops_cmd::removenode_done;
+                req.fencing_token = ss._rpc_fence.get_token();
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
                         slogger.debug("removenode[{}]: Got done response from node={}", uuid, node);
@@ -2575,6 +2578,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_update_heartbeat(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_done) {
             slogger.info("removenode[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+            if (req.fencing_token) {
+                _rpc_fence.increment(*req.fencing_token).get();
+            }
             node_ops_done(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::removenode_sync_data) {
             auto it = _node_ops.find(ops_uuid);

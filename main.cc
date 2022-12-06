@@ -501,6 +501,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     distributed<replica::database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
+    sharded<service::rpc_fence> rpc_fence;
     auto& proxy = service::get_storage_proxy();
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
@@ -551,7 +552,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_fence] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -943,13 +944,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
+            {
+                const auto version = db::system_keyspace::get_topology_version().get();
+                rpc_fence.start(service::fencing_token{version}).get();
+            }
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks),
                 std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
-                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch)).get();
+                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
+                std::ref(rpc_fence)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1073,7 +1080,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             };
             proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(messaging)).get();
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(messaging),
+                    std::ref(rpc_fence)).get();
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {

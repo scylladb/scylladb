@@ -30,6 +30,8 @@
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
+#include "service/rpc_fence.hh"
+
 
 namespace tasks {
 class repair_module;
@@ -299,6 +301,7 @@ struct node_ops_cmd_request {
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
+    std::optional<service::fencing_token> fencing_token;
     node_ops_cmd_request(node_ops_cmd command,
             utils::UUID uuid,
             std::list<gms::inet_address> ignore = {},

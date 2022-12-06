@@ -157,12 +157,14 @@ class storage_proxy::remote {
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
+    rpc_fence& _rpc_fence;
 
 public:
-    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, rpc_fence& rpc_fence)
         : _sp(sp), _ms(ms), _gossiper(g)
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
+        , _rpc_fence(rpc_fence)
     {}
 
     void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
@@ -170,7 +172,7 @@ public:
 
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
-        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate(), {}); });
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
@@ -204,7 +206,7 @@ public:
         return ser::storage_proxy_rpc_verbs::send_mutation(
                 &_ms, std::move(addr), timeout,
                 std::move(m), std::move(forward), std::move(reply_to), shard,
-                response_id, std::move(trace_info), rate_limit_info);
+                response_id, std::move(trace_info), rate_limit_info, _rpc_fence.get_token());
     }
 
     future<> send_hint_mutation(
@@ -498,10 +500,15 @@ private:
             smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t,
             frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id,
-            rpc::optional<std::optional<tracing::trace_info>> trace_info, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<std::optional<tracing::trace_info>> trace_info,
+            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<fencing_token> fencing_token) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+        if (fencing_token) {
+            _rpc_fence.check(*fencing_token);
+        }
 
         auto schema_version = in.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
@@ -2695,7 +2702,8 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms,
+        rpc_fence& rpc_fence)
     : _db(db)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
@@ -2710,7 +2718,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
-    , _remote(std::make_unique<struct remote>(*this, ms, gossiper))
+    , _remote(std::make_unique<struct remote>(*this, ms, gossiper, rpc_fence))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)

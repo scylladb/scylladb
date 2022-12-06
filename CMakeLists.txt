@@ -585,6 +585,7 @@ set(scylla_sources
     service/raft/raft_rpc.cc
     service/raft/raft_sys_table_storage.cc
     service/raft/group0_state_machine.cc
+    service/rpc_fence.cc
     service/storage_proxy.cc
     service/storage_service.cc
     sstables/compress.cc

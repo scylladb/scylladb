@@ -31,6 +31,7 @@
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
 #include "service/migration_listener.hh"
+#include "service/rpc_fence.hh"
 #include "protocol_server.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
@@ -145,6 +146,7 @@ private:
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
+    service::rpc_fence& _rpc_fence;
 
     // Engaged on shard 0 after `join_cluster`.
     service::raft_group0* _group0;
@@ -179,7 +181,8 @@ public:
         sharded<streaming::stream_manager>& stream_manager,
         endpoint_lifecycle_notifier& elc_notif,
         sharded<db::batchlog_manager>& bm,
-        sharded<locator::snitch_ptr>& snitch);
+        sharded<locator::snitch_ptr>& snitch,
+        service::rpc_fence& rpc_fence);
 
     // Needed by distributed<>
     future<> stop();

@@ -3209,6 +3209,15 @@ future<> system_keyspace::set_raft_server_id(utils::UUID uuid) {
     return set_scylla_local_param_as<utils::UUID>("raft_server_id", uuid);
 }
 
+future<int64_t> system_keyspace::get_topology_version() {
+    auto opt = co_await get_scylla_local_param_as<int64_t>("topology_version");
+    co_return opt.value_or<int64_t>(0);
+}
+
+future<> system_keyspace::set_topology_version(int64_t version) {
+    return set_scylla_local_param_as<int64_t>("topology_version", version);
+}
+
 static constexpr auto GROUP0_HISTORY_KEY = "history";
 
 future<utils::UUID> system_keyspace::get_last_group0_state_id() {

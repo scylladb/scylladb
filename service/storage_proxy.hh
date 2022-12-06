@@ -29,6 +29,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
+#include "rpc_fence.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
 #include "exceptions/exceptions.hh"
@@ -438,7 +439,8 @@ private:
 
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms,
+            rpc_fence& rpc_fence);
     ~storage_proxy();
 
     remote& remote();

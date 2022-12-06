@@ -466,6 +466,10 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
 
+    static future<int64_t> get_topology_version();
+
+    static future<> set_topology_version(int64_t uuid);
+
     future<service::group0_upgrade_state> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(service::group0_upgrade_state);
 
