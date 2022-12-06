@@ -12,7 +12,7 @@ test/cql/cdc_* @kbr- @elcallio @piodul @jul-stas
 test/boost/cdc_* @kbr- @elcallio @piodul @jul-stas
 
 # COMMITLOG / BATCHLOG
-db/commitlog/* @elcallio
+db/commitlog/* @elcallio @eliransin
 db/batch* @elcallio
 
 # COORDINATOR
@@ -25,7 +25,7 @@ compaction/* @raphaelsc @nyh
 transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @psarna @cvybhu
+cql3/* @tgrabiec @cvybhu @nyh
 
 # COUNTERS
 counters* @jul-stas
@@ -33,7 +33,7 @@ tests/counter_test* @jul-stas
 
 # DOCS
 docs/* @annastuchlik @tzach
-docs/alternator @annastuchlik @tzach @nyh @psarna
+docs/alternator @annastuchlik @tzach @nyh @havaker @nuivall
 
 # GOSSIP
 gms/* @tgrabiec @asias
@@ -45,9 +45,9 @@ dist/docker/*
 utils/logalloc* @tgrabiec
 
 # MATERIALIZED VIEWS
-db/view/* @nyh @psarna
-cql3/statements/*view* @nyh @psarna
-test/boost/view_* @nyh @psarna
+db/view/* @nyh @cvybhu @piodul
+cql3/statements/*view* @nyh @cvybhu @piodul
+test/boost/view_* @nyh @cvybhu @piodul
 
 # PACKAGING
 dist/* @syuu1228
@@ -62,9 +62,9 @@ service/migration* @tgrabiec @nyh
 schema* @tgrabiec @nyh
 
 # SECONDARY INDEXES
-db/index/* @nyh @psarna
-cql3/statements/*index* @nyh @psarna
-test/boost/*index* @nyh @psarna
+index/* @nyh @cvybhu @piodul
+cql3/statements/*index* @nyh @cvybhu @piodul
+test/boost/*index* @nyh @cvybhu @piodul
 
 # SSTABLES
 sstables/* @tgrabiec @raphaelsc @nyh
@@ -74,11 +74,11 @@ streaming/* @tgrabiec @asias
 service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
-alternator/* @nyh @psarna
-test/alternator/* @nyh @psarna
+alternator/* @nyh @havaker @nuivall
+test/alternator/* @nyh @havaker @nuivall
 
 # HINTED HANDOFF
-db/hints/* @piodul @vladzcloudius
+db/hints/* @piodul @vladzcloudius @eliransin
 
 # REDIS
 redis/* @nyh @syuu1228
