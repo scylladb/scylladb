@@ -33,6 +33,7 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
+#include <seastar/net/tls.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
@@ -894,13 +895,31 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     std::unique_ptr<cql_server::response> res;
     if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
         _authenticating = true;
-        res = make_autheticate(stream, a.qualified_java_name(), trace_state);
+        auto opt_user = co_await a.authenticate([this]() -> future<std::optional<auth::certificate_info>> {
+            auto dn_info = co_await tls::get_dn_information(this->_fd);
+            if (dn_info) {
+                co_return auth::certificate_info{ dn_info->subject, [this]() -> future<std::string> {
+                    auto altnames = co_await tls::get_alt_name_information(this->_fd);
+                    auto res = fmt::format("{}", fmt::join(altnames, ","));
+                    co_return res;
+                } };
+            }
+            co_return std::nullopt;
+        });
+        if (opt_user) {
+            client_state.set_login(std::move(*opt_user));
+            co_await client_state.check_user_can_login();
+            co_await client_state.maybe_update_per_service_level_params();
+            res = make_ready(stream, trace_state);
+        } else {
+            res = make_autheticate(stream, a.qualified_java_name(), trace_state);
+        }
     } else {
         _ready = true;
         res = make_ready(stream, trace_state);
     }
 
-    return make_ready_future<decltype(res)>(std::move(res));
+    co_return res;
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
