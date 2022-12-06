@@ -2757,20 +2757,6 @@ future<> sstable::close_files() {
         } catch (...) {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
         }
-
-        if (_storage.temp_dir) {
-            try {
-                unlinked_temp_dir = recursive_remove_directory(fs::path(*_storage.temp_dir)).then_wrapped([this] (future<> f) {
-                    if (f.failed()) {
-                        sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, f.get_exception());
-                    } else {
-                        _storage.temp_dir.reset();
-                    }
-                });
-            } catch (...) {
-                sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, std::current_exception());
-            }
-        }
     }
 
     _on_closed(*this);
@@ -3019,6 +3005,15 @@ future<> sstable::wipe_storage(const sstring& name) noexcept {
         // c. Eventually we may want to record these failures in a system table
         //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+    }
+
+    if (_storage.temp_dir) {
+        try {
+            co_await recursive_remove_directory(fs::path(*_storage.temp_dir));
+            _storage.temp_dir.reset();
+        } catch (...) {
+            sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_storage.temp_dir, std::current_exception());
+        }
     }
 }
 
