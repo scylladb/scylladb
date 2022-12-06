@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto make_memtable = [] (dirty_memory_manager& mgr, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
+        auto make_memtable = [] (replica::dirty_memory_manager& mgr, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
             auto mt = make_lw_shared<replica::memtable>(muts.front().schema(), mgr, tbl_stats);
             for (auto& m : muts) {
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
                 replica::table_stats tbl_stats;
-                dirty_memory_manager mgr;
+                replica::dirty_memory_manager mgr;
                 const auto muts = gen(4);
                 const auto now = gc_clock::now();
                 auto compacted_muts = muts;
@@ -256,7 +256,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        dirty_memory_manager mgr;
+        replica::dirty_memory_manager mgr;
         replica::table_stats tbl_stats;
 
         auto mt = make_lw_shared<replica::memtable>(s, mgr, tbl_stats);
@@ -392,7 +392,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         replica::table_stats tbl_stats;
-        dirty_memory_manager mgr;
+        replica::dirty_memory_manager mgr;
 
         auto mt = make_lw_shared<replica::memtable>(s, mgr, tbl_stats);
 
@@ -970,7 +970,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 
         replica::table& t = db.find_column_family("ks", "cf");
         replica::memtable& m = t.active_memtable();
-        dirty_memory_manager& dmm = m.get_dirty_memory_manager();
+        replica::dirty_memory_manager& dmm = m.get_dirty_memory_manager();
 
         // Insert something so that we have data in memtable to flush
         // it has to be somewhat large, as automatic flushing picks the

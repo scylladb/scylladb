@@ -10,16 +10,16 @@
 
 #include "replica/memtable.hh"
 #include "row_cache.hh"
-#include "dirty_memory_manager.hh"
+#include "replica/dirty_memory_manager.hh"
 
 // makes sure that cache update handles real dirty memory correctly.
 class real_dirty_memory_accounter {
-    dirty_memory_manager& _mgr;
+    replica::dirty_memory_manager& _mgr;
     cache_tracker& _tracker;
     uint64_t _bytes;
     uint64_t _uncommitted = 0;
 public:
-    real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size);
+    real_dirty_memory_accounter(replica::dirty_memory_manager& mgr, cache_tracker& tracker, size_t size);
     real_dirty_memory_accounter(replica::memtable& m, cache_tracker& tracker);
     ~real_dirty_memory_accounter();
     real_dirty_memory_accounter(real_dirty_memory_accounter&& c);
@@ -30,7 +30,7 @@ public:
 };
 
 inline
-real_dirty_memory_accounter::real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size)
+real_dirty_memory_accounter::real_dirty_memory_accounter(replica::dirty_memory_manager& mgr, cache_tracker& tracker, size_t size)
     : _mgr(mgr)
     , _tracker(tracker)
     , _bytes(size) {

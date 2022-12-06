@@ -19,6 +19,8 @@
 
 class test_region_group;
 
+namespace replica {
+
 // Code previously under logalloc namespace
 namespace dirty_memory_manager_logalloc {
 
@@ -594,3 +596,4 @@ region_group::blocked_requests_counter() const noexcept {
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;
 
+}

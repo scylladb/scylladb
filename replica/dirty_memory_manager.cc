@@ -8,6 +8,8 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "seastarx.hh"
 
+namespace replica {
+
 // Code previously under logalloc namespace
 namespace dirty_memory_manager_logalloc {
 
@@ -190,6 +192,8 @@ region_group::shutdown() noexcept {
 
 void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
+}
+
 }
 
 }

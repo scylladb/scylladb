@@ -77,11 +77,11 @@ using namespace db;
 
 logging::logger dblog("database");
 
+namespace replica {
+
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
 thread_local dirty_memory_manager default_dirty_memory_manager;
-
-namespace replica {
 
 inline
 flush_controller
@@ -449,6 +449,8 @@ void backlog_controller::update_controller(float shares) {
 }
 
 
+namespace replica {
+
 dirty_memory_manager::dirty_memory_manager(replica::database& db, size_t threshold, double soft_limit, scheduling_group deferred_work_sg)
     : _db(&db)
     , _region_group("memtable (unspooled)", dirty_memory_manager_logalloc::reclaim_config{
@@ -474,8 +476,6 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
                        sm::description("Holds the size of used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 }
-
-namespace replica {
 
 static const metrics::label class_label("class");
 
@@ -1728,8 +1728,6 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     });
 }
 
-} // namespace replica
-
 future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
     _should_flush.signal();
@@ -1737,8 +1735,6 @@ future<> dirty_memory_manager::shutdown() {
         return _region_group.shutdown();
     });
 }
-
-namespace replica {
 
 future<> memtable_list::flush() {
     if (!may_flush()) {
@@ -1771,8 +1767,6 @@ std::vector<replica::shared_memtable> memtable_list::clear_and_add() {
     new_memtables.emplace_back(new_memtable());
     return std::exchange(_memtables, std::move(new_memtables));
 }
-
-} // namespace replica
 
 future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
     return _manager->get_flush_permit(std::move(_background_permit));
@@ -1844,8 +1838,6 @@ future<> dirty_memory_manager::flush_when_needed() {
 void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
-
-namespace replica {
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& cf = find_column_family(m.column_family_id());

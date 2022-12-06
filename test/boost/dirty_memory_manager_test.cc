@@ -29,7 +29,7 @@
 #include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
-#include "dirty_memory_manager.hh"
+#include "replica/dirty_memory_manager.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/chunked_vector.hh"
@@ -45,7 +45,8 @@ static auto x = [] {
 }();
 
 using namespace logalloc;
-using namespace dirty_memory_manager_logalloc;
+using namespace replica::dirty_memory_manager_logalloc;
+using namespace replica;
 
 SEASTAR_TEST_CASE(test_region_groups) {
     return seastar::async([] {
@@ -175,8 +176,8 @@ struct raii_region_group: public region_group {
     }
 };
 
-struct test_region: public dirty_memory_manager_logalloc::size_tracked_region  {
-    test_region() : dirty_memory_manager_logalloc::size_tracked_region() {}
+struct test_region: public replica::dirty_memory_manager_logalloc::size_tracked_region  {
+    test_region() : replica::dirty_memory_manager_logalloc::size_tracked_region() {}
     ~test_region() {
         clear();
     }
