@@ -6,9 +6,9 @@
 
 .. Note:: 
 
-   If ``authenticator`` is set to ``PasswordAuthenticator`` - increase the ``system_auth`` table replication factor.
+   If ``authenticator`` is set to ``PasswordAuthenticator`` - increase the replication factor of the ``system_auth`` keyspace.
 
-   For example
+   For example:
 
    ``ALTER KEYSPACE system_auth WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'dc1' : <new_replication_factor>};``
 
