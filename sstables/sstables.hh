@@ -489,11 +489,13 @@ public:
         void open(sstable& sst, const io_priority_class& pc);
         future<> wipe(const sstable& sst) noexcept;
         future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity);
+
+        sstring prefix() const { return dir; }
     };
 
 private:
     sstring filename(component_type f) const {
-        return filename(get_dir(), f);
+        return filename(_storage.prefix(), f);
     }
 
     sstring filename(const sstring& dir, component_type f) const {
@@ -501,9 +503,6 @@ private:
     }
 
     friend class sstable_directory;
-    const sstring& get_dir() const {
-        return _storage.dir;
-    }
 
     size_t sstable_buffer_size;
 
