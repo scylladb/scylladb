@@ -28,6 +28,7 @@
 #include "clustering_key_filter.hh"
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
+#include "utils/labels.hh"
 
 namespace cache {
 
@@ -145,29 +146,29 @@ void
 cache_tracker::setup_metrics() {
     namespace sm = seastar::metrics;
     _metrics.add_group("cache", {
-        sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); }),
-        sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); }),
-        sm::make_counter("partition_hits", sm::description("number of partitions needed by reads and found in cache"), _stats.partition_hits),
-        sm::make_counter("partition_misses", sm::description("number of partitions needed by reads and missing in cache"), _stats.partition_misses),
-        sm::make_counter("partition_insertions", sm::description("total number of partitions added to cache"), _stats.partition_insertions),
-        sm::make_counter("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits),
+        sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); })(basic_level),
+        sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); })(basic_level),
+        sm::make_counter("partition_hits", sm::description("number of partitions needed by reads and found in cache"), _stats.partition_hits)(basic_level),
+        sm::make_counter("partition_misses", sm::description("number of partitions needed by reads and missing in cache"), _stats.partition_misses)(basic_level),
+        sm::make_counter("partition_insertions", sm::description("total number of partitions added to cache"), _stats.partition_insertions)(basic_level),
+        sm::make_counter("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits)(basic_level),
         sm::make_counter("dummy_row_hits", sm::description("total number of dummy rows touched by reads in cache"), _stats.dummy_row_hits),
-        sm::make_counter("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
-        sm::make_counter("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
-        sm::make_counter("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions),
-        sm::make_counter("row_removals", sm::description("total number of invalidated rows"), _stats.row_removals),
+        sm::make_counter("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses)(basic_level),
+        sm::make_counter("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions)(basic_level),
+        sm::make_counter("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions)(basic_level),
+        sm::make_counter("row_removals", sm::description("total number of invalidated rows"), _stats.row_removals)(basic_level),
         sm::make_counter("rows_dropped_by_tombstones", _app_stats.rows_dropped_by_tombstones, sm::description("Number of rows dropped in cache by a tombstone write")),
         sm::make_counter("rows_compacted_with_tombstones", _app_stats.rows_compacted_with_tombstones, sm::description("Number of rows scanned during write of a tombstone for the purpose of compaction in cache")),
         sm::make_counter("static_row_insertions", sm::description("total number of static rows added to cache"), _stats.static_row_insertions),
         sm::make_counter("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
-        sm::make_counter("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
-        sm::make_counter("partition_evictions", sm::description("total number of evicted partitions"), _stats.partition_evictions),
-        sm::make_counter("partition_removals", sm::description("total number of invalidated partitions"), _stats.partition_removals),
+        sm::make_counter("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges)(basic_level),
+        sm::make_counter("partition_evictions", sm::description("total number of evicted partitions"), _stats.partition_evictions)(basic_level),
+        sm::make_counter("partition_removals", sm::description("total number of invalidated partitions"), _stats.partition_removals)(basic_level),
         sm::make_counter("mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
         sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions),
         sm::make_gauge("rows", sm::description("total number of cached rows"), _stats.rows),
-        sm::make_counter("reads", sm::description("number of started reads"), _stats.reads),
-        sm::make_counter("reads_with_misses", sm::description("number of reads which had to read from sstables"), _stats.reads_with_misses),
+        sm::make_counter("reads", sm::description("number of started reads"), _stats.reads)(basic_level),
+        sm::make_counter("reads_with_misses", sm::description("number of reads which had to read from sstables"), _stats.reads_with_misses)(basic_level),
         sm::make_gauge("active_reads", sm::description("number of currently active reads"), [this] { return _stats.active_reads(); }),
         sm::make_counter("sstable_reader_recreations", sm::description("number of times sstable reader was recreated due to memtable flush"), _stats.underlying_recreations),
         sm::make_counter("sstable_partition_skips", sm::description("number of times sstable reader was fast forwarded across partitions"), _stats.underlying_partition_skips),
@@ -178,11 +179,11 @@ cache_tracker::setup_metrics() {
         sm::make_counter("rows_dropped_from_memtable", _stats.rows_dropped_from_memtable,
             sm::description("total number of rows in memtables which were dropped during cache update on memtable flush")),
         sm::make_counter("rows_merged_from_memtable", _stats.rows_merged_from_memtable,
-            sm::description("total number of rows in memtables which were merged with existing rows during cache update on memtable flush")),
+            sm::description("total number of rows in memtables which were merged with existing rows during cache update on memtable flush"))(basic_level),
         sm::make_counter("range_tombstone_reads", _stats.range_tombstone_reads,
-            sm::description("total amount of range tombstones processed during read")),
+            sm::description("total amount of range tombstones processed during read"))(basic_level),
         sm::make_counter("row_tombstone_reads", _stats.row_tombstone_reads,
-            sm::description("total amount of row tombstones processed during read")),
+            sm::description("total amount of row tombstones processed during read"))(basic_level),
         sm::make_counter("rows_compacted", _stats.rows_compacted,
             sm::description("total amount of attempts to compact expired rows during read")),
         sm::make_counter("rows_compacted_away", _stats.rows_compacted_away,
