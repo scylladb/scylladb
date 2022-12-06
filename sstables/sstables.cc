@@ -2005,15 +2005,15 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_storage.dir, staging_dir);
+    return boost::algorithm::ends_with(_storage.prefix(), staging_dir);
 }
 
 bool sstable::is_quarantined() const noexcept {
-    return boost::algorithm::ends_with(_storage.dir, quarantine_dir);
+    return boost::algorithm::ends_with(_storage.prefix(), quarantine_dir);
 }
 
 bool sstable::is_uploaded() const noexcept {
-    return boost::algorithm::ends_with(_storage.dir, upload_dir);
+    return boost::algorithm::ends_with(_storage.prefix(), upload_dir);
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,

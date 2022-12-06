@@ -466,11 +466,8 @@ public:
 
     class filesystem_storage {
         friend class test;
-    public:
         sstring dir;
         std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
-
-        explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
 
     private:
         future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
@@ -480,6 +477,8 @@ public:
         future<> touch_temp_dir(const sstable& sst);
 
     public:
+        explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
+
         using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
