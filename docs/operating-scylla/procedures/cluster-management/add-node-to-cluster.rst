@@ -2,7 +2,7 @@
 Adding a New Node Into an Existing Scylla Cluster (Out Scale)
 ==============================================================
 
-When you add a new node, another node in the cluster streams data to the new node. This operation is called bootstrapping and may
+When you add a new node, other nodes in the cluster stream data to the new node. This operation is called bootstrapping and may
 be time-consuming, depending on the data size and network bandwidth. If using a :ref:`multi-availability-zone <faq-best-scenario-node-multi-availability-zone>`, make sure they are balanced.
 
 
@@ -70,11 +70,11 @@ Procedure
 
     .. include:: /rst_include/scylla-commands-start-index.rst
 
-#. Verify that the node was added to the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. Another node in the cluster will be streaming data to the new node, so the new node will be in Up Joining (UJ) status. Wait until the node's status changes to Up Normal (UN) - the time depends on the data size and network bandwidth.
+#. Verify that the node was added to the cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status>` command. Other nodes in the cluster will be streaming data to the new node, so the new node will be in Up Joining (UJ) status. Wait until the node's status changes to Up Normal (UN) - the time depends on the data size and network bandwidth.
 
     **For example:**
 
-    The node in the cluster is streaming data to the new node:
+    Nodes in the cluster are streaming data to the new node:
 
     .. code-block:: shell
 
@@ -86,7 +86,7 @@ Procedure
        UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
        UJ  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
 
-   The node in the cluster has finished streaming data to the new node:
+   Nodes in the cluster finished streaming data to the new node:
 
    .. code-block:: shell
 
