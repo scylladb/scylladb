@@ -149,6 +149,14 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
     auto f = open_sstable_component_file_non_checked(name, flags, options,
                     _manager.config().enable_sstable_data_integrity_check());
 
+    if (!readonly) {
+        f = with_file_close_on_failure(std::move(f), [this, type, name = std::move(name)] (file fd) mutable {
+            return rename_new_sstable_component_file(name, filename(type)).then([fd = std::move(fd)] () mutable {
+                return make_ready_future<file>(std::move(fd));
+            });
+        });
+    }
+
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
             f = with_file_close_on_failure(std::move(f), [ext, this, type, flags] (file f) {
@@ -163,17 +171,10 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
         return make_checked_file(error_handler, std::move(f));
     });
 
-    if (!readonly) {
-        f = with_file_close_on_failure(std::move(f).handle_exception([name] (auto ep) {
-            sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-            return make_exception_future<file>(ep);
-        }), [this, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_sstable_component_file(name, filename(type)).then([fd = std::move(fd)] () mutable {
-                return make_ready_future<file>(std::move(fd));
-            });
-        });
-    }
-    return f;
+    return f.handle_exception([name] (auto ep) {
+        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
+        return make_exception_future<file>(ep);
+    });
   } catch (...) {
       return current_exception_as_future<file>();
   }
