@@ -97,7 +97,18 @@ Procedure
         UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
         UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
 
-#. When the new node status is Up Normal (UN), run the :doc:`nodetool cleanup </operating-scylla/nodetool-commands/cleanup>` command on all nodes in the cluster except for the new node that has just been added. Cleanup removes keys that were streamed to the newly added node and are no longer owned by the node. Run this command one node at a time. It is possible to postpone this step to low demand hours.
+#. When the new node status is Up Normal (UN), run the :doc:`nodetool cleanup </operating-scylla/nodetool-commands/cleanup>` command on all nodes in the cluster except for the new node that has just been added. Cleanup removes keys that were streamed to the newly added node and are no longer owned by the node.
+
+    .. note::
+
+       To prevent data resurrection, it's essential to complete cleanup after adding nodes and before any node is decommissioned or removed.
+       However, cleanup may consume significant resources. Use the following guideline to reduce cleanup impact:
+
+       Tip 1: When adding multiple nodes, run the cleanup operations after all nodes are added on all nodes but the last one to be added.
+
+       Tip 2: Postpone cleanup to low demand hours while ensuring it completes successfully before any node is decommissioned or removed.
+
+       Tip 3: Run cleanup one node at a time, reducing overall cluster impact.
 
     .. note::
 
