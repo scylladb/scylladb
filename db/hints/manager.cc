@@ -34,6 +34,7 @@
 #include "mutation_partition_view.hh"
 #include "utils/runtime.hh"
 #include "utils/error_injection.hh"
+#include "utils/labels.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -66,7 +67,7 @@ void manager::register_metrics(const sstring& group_name) {
                         sm::description("Size of hinted mutations that are scheduled to be written.")),
 
         sm::make_counter("written", _stats.written,
-                        sm::description("Number of successfully written hints.")),
+                        sm::description("Number of successfully written hints."))(basic_level),
 
         sm::make_counter("errors", _stats.errors,
                         sm::description("Number of errors during hints writes.")),
@@ -75,7 +76,7 @@ void manager::register_metrics(const sstring& group_name) {
                         sm::description("Number of dropped hints.")),
 
         sm::make_counter("sent", _stats.sent,
-                        sm::description("Number of sent hints.")),
+                        sm::description("Number of sent hints."))(basic_level),
 
         sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
