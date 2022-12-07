@@ -1681,20 +1681,19 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             cf.refresh_compound_sstable_set();
         }
     };
-        // FIXME: indentation.
-        auto p = make_lw_shared<pruner>(*this, *_compaction_group);
-        co_await _cache.invalidate(row_cache::external_updater([p, truncated_at] {
-            p->prune(truncated_at);
-            tlogger.debug("cleaning out row cache");
-        }));
-        rebuild_statistics();
-        co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
-            if (r.enable_backlog_tracker) {
-                remove_sstable_from_backlog_tracker(p->cg.get_backlog_tracker(), r.sst);
-            }
-            return sstables::sstable_directory::delete_atomically({r.sst});
-        });
-        co_return p->rp;
+    auto p = make_lw_shared<pruner>(*this, *_compaction_group);
+    co_await _cache.invalidate(row_cache::external_updater([p, truncated_at] {
+        p->prune(truncated_at);
+        tlogger.debug("cleaning out row cache");
+    }));
+    rebuild_statistics();
+    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
+        if (r.enable_backlog_tracker) {
+            remove_sstable_from_backlog_tracker(p->cg.get_backlog_tracker(), r.sst);
+        }
+        return sstables::sstable_directory::delete_atomically({r.sst});
+    });
+    co_return p->rp;
 }
 
 void table::set_schema(schema_ptr s) {
