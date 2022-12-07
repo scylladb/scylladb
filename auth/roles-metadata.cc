@@ -51,31 +51,18 @@ future<bool> default_role_row_satisfies(
             meta::roles_table::qualified_name,
             meta::roles_table::role_col_name);
 
-    return do_with(std::move(p), [&qp](const auto& p) {
-        return qp.execute_internal(
-                query,
-                db::consistency_level::ONE,
-                internal_distributed_query_state(),
-                {meta::DEFAULT_SUPERUSER_NAME},
-                cql3::query_processor::cache_internal::yes).then([&qp, &p](::shared_ptr<cql3::untyped_result_set> results) {
-            if (results->empty()) {
-                return qp.execute_internal(
-                        query,
-                        db::consistency_level::QUORUM,
-                        internal_distributed_query_state(),
-                        {meta::DEFAULT_SUPERUSER_NAME},
-                        cql3::query_processor::cache_internal::yes).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
-                    if (results->empty()) {
-                        return make_ready_future<bool>(false);
-                    }
+    for (auto cl : { db::consistency_level::ONE, db::consistency_level::QUORUM }) {
+        auto results = co_await qp.execute_internal(query, cl
+            , internal_distributed_query_state()
+            , {meta::DEFAULT_SUPERUSER_NAME}
+            , cql3::query_processor::cache_internal::yes
+            );
+        if (!results->empty()) {
+            co_return p(results->one());
+        }
+    }
 
-                    return make_ready_future<bool>(p(results->one()));
-                });
-            }
-
-            return make_ready_future<bool>(p(results->one()));
-        });
-    });
+    co_return false;
 }
 
 future<bool> any_nondefault_role_row_satisfies(
@@ -83,23 +70,18 @@ future<bool> any_nondefault_role_row_satisfies(
         std::function<bool(const cql3::untyped_result_set_row&)> p) {
     static const sstring query = format("SELECT * FROM {}", meta::roles_table::qualified_name);
 
-    return do_with(std::move(p), [&qp](const auto& p) {
-        return qp.execute_internal(
-                query,
-                db::consistency_level::QUORUM,
-                internal_distributed_query_state(),
-                cql3::query_processor::cache_internal::no).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
-            if (results->empty()) {
-                return false;
-            }
+    auto results = co_await qp.execute_internal(query, db::consistency_level::QUORUM
+        , internal_distributed_query_state(), cql3::query_processor::cache_internal::no
+        );
+    if (results->empty()) {
+        co_return false;
+    }
+    static const sstring col_name = sstring(meta::roles_table::role_col_name);
 
-            static const sstring col_name = sstring(meta::roles_table::role_col_name);
-
-            return boost::algorithm::any_of(*results, [&p](const cql3::untyped_result_set_row& row) {
-                const bool is_nondefault = row.get_as<sstring>(col_name) != meta::DEFAULT_SUPERUSER_NAME;
-                return is_nondefault && p(row);
-            });
-        });
+    co_return boost::algorithm::any_of(*results, [&](const cql3::untyped_result_set_row& row) {
+        auto superuser = meta::DEFAULT_SUPERUSER_NAME;
+        const bool is_nondefault = row.get_as<sstring>(col_name) != superuser;
+        return is_nondefault && p(row);
     });
 }
 
