@@ -46,6 +46,7 @@
 
 #include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
+#include "utils/labels.hh"
 
 logging::logger rlogger("repair");
 
@@ -70,17 +71,17 @@ node_ops_metrics::node_ops_metrics(shared_ptr<repair_module> module)
     auto ops_label_type = sm::label("ops");
     _metrics.add_group("node_ops", {
         sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap"), basic_level}),
         sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace"), basic_level}),
         sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild"), basic_level}),
         sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission"), basic_level}),
         sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode"), basic_level}),
         sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair"), basic_level}),
     });
 }
 
