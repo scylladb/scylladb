@@ -65,6 +65,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "utils/stall_free.hh"
 #include "utils/error_injection.hh"
+#include "locator/util.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -774,38 +775,6 @@ storage_service::get_range_to_address_map(const sstring& keyspace) const {
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
     return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
-}
-
-future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map_in_local_dc(
-        locator::effective_replication_map_ptr erm) const {
-    auto tmptr = erm->get_token_metadata_ptr();
-    auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*tmptr));
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
-    filtered_map.reserve(orig_map.size());
-    auto local_dc_filter = tmptr->get_topology().get_local_dc_filter();
-    for (auto entry : orig_map) {
-        auto& addresses = filtered_map[entry.first];
-        addresses.reserve(entry.second.size());
-        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), std::cref(local_dc_filter));
-        co_await coroutine::maybe_yield();
-    }
-
-    co_return filtered_map;
-}
-
-// Caller is responsible to hold token_metadata valid until the returned future is resolved
-future<std::vector<token>>
-storage_service::get_tokens_in_local_dc(const locator::token_metadata& tm) const {
-    std::vector<token> filtered_tokens;
-    auto local_dc_filter = tm.get_topology().get_local_dc_filter();
-    for (auto token : tm.sorted_tokens()) {
-        auto endpoint = tm.get_endpoint(token);
-        if (local_dc_filter(*endpoint))
-            filtered_tokens.push_back(token);
-        co_await coroutine::maybe_yield();
-    }
-    co_return filtered_tokens;
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
@@ -3240,56 +3209,7 @@ future<> storage_service::move(token new_token) {
 
 future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
-    std::vector<token_range_endpoints> ranges;
-    //Token.TokenFactory tf = getPartitioner().getTokenFactory();
-
-    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
-            include_only_local_dc
-                    ? get_range_to_address_map_in_local_dc(erm)
-                    : get_range_to_address_map(erm)
-    );
-    auto tmptr = erm->get_token_metadata_ptr();
-    for (auto entry : range_to_address_map) {
-        const auto& topology = tmptr->get_topology();
-        auto range = entry.first;
-        auto addresses = entry.second;
-        token_range_endpoints tr;
-        if (range.start()) {
-            tr._start_token = range.start()->value().to_sstring();
-        }
-        if (range.end()) {
-            tr._end_token = range.end()->value().to_sstring();
-        }
-        for (auto endpoint : addresses) {
-            endpoint_details details;
-            details._host = endpoint;
-            details._datacenter = topology.get_datacenter(endpoint);
-            details._rack = topology.get_rack(endpoint);
-            tr._rpc_endpoints.push_back(get_rpc_address(endpoint));
-            tr._endpoints.push_back(boost::lexical_cast<std::string>(details._host));
-            tr._endpoint_details.push_back(details);
-        }
-        ranges.push_back(tr);
-        co_await coroutine::maybe_yield();
-    }
-    // Convert to wrapping ranges
-    auto left_inf = boost::find_if(ranges, [] (const token_range_endpoints& tr) {
-        return tr._start_token.empty();
-    });
-    auto right_inf = boost::find_if(ranges, [] (const token_range_endpoints& tr) {
-        return tr._end_token.empty();
-    });
-    using set = std::unordered_set<sstring>;
-    if (left_inf != right_inf
-            && left_inf != ranges.end()
-            && right_inf != ranges.end()
-            && (boost::copy_range<set>(left_inf->_endpoints)
-                 == boost::copy_range<set>(right_inf->_endpoints))) {
-        left_inf->_start_token = std::move(right_inf->_start_token);
-        ranges.erase(right_inf);
-    }
-    co_return ranges;
+    return locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>

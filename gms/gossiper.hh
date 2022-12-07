@@ -405,6 +405,13 @@ public:
      * determine which endpoint started up earlier
      */
     int compare_endpoint_startup(inet_address addr1, inet_address addr2);
+
+    /**
+     * Return the rpc address associated with an endpoint as a string.
+     * @param endpoint The endpoint to get rpc address for
+     * @return the rpc address
+     */
+    sstring get_rpc_address(const inet_address& endpoint) const;
 private:
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 

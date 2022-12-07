@@ -1443,6 +1443,16 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
 }
 
+sstring gossiper::get_rpc_address(const inet_address& endpoint) const {
+    if (endpoint != get_broadcast_address()) {
+        auto* v = get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
+        if (v) {
+            return v->value;
+        }
+    }
+    return boost::lexical_cast<std::string>(endpoint);
+}
+
 void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map) {
     for (const auto& x : map) {
         const gms::inet_address& endpoint = x.first;
