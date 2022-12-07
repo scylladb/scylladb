@@ -41,6 +41,7 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "tracing/trace_state.hh"
 #include "stats.hh"
+#include "utils/labels.hh"
 
 namespace std {
 
@@ -68,7 +69,7 @@ void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_
         metrics.add_group(cdc_group_name, {
                 sm::make_total_operations(seastar::format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
                         sm::description(seastar::format("number of {} CDC operations that processed a {}", suffix, part_name)),
-                        {})
+                        {cdc_label}).set_skip_when_empty()
             });
     };
 
@@ -91,23 +92,23 @@ cdc::stats::stats() {
         _metrics.add_group(cdc_group_name, {
                 sm::make_total_operations("operations_" + kind, counters.unsplit_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(false)}),
+                        {split_label(false), basic_level, cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_" + kind, counters.split_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(true)}),
+                        {split_label(true), basic_level, cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
                         sm::description(format("number of {} preimage queries performed", kind)),
-                        {}),
+                        {cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_with_preimage_" + kind, counters.with_preimage_count,
                         sm::description(format("number of {} operations that included preimage", kind)),
-                        {}),
+                        {cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_with_postimage_" + kind, counters.with_postimage_count,
                         sm::description(format("number of {} operations that included postimage", kind)),
-                        {})
+                        {cdc_label}).set_skip_when_empty()
             });
 
         counters.touches.register_metrics(_metrics, kind);
@@ -183,7 +184,7 @@ public:
         // any writer should see cdc -> off together with any actual schema changes to
         // base table, so should never try to write to non-existent log column etc.
         // note that if user has set ttl=0 in cdc options, he is still responsible
-        // for emptying the log. 
+        // for emptying the log.
         if (is_cdc) {
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(old_schema.cf_name());
@@ -207,7 +208,7 @@ public:
 
             auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
-            auto log_mut = log_schema 
+            auto log_mut = log_schema
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
                 : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
                 ;
@@ -360,7 +361,7 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
             }
         } else if (key == "postimage") {
             if (is_true || is_false) {
-                _postimage = is_true;    
+                _postimage = is_true;
             } else {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"postimage\": " + p.second);
             }
@@ -1051,7 +1052,7 @@ struct process_row_visitor {
     // We need to keep a reference to it since we might insert new row_states during the visitation.
     row_states_map& _clustering_row_states;
 
-    const bool _generate_delta_values = true; 
+    const bool _generate_delta_values = true;
 
     process_row_visitor(
             const clustering_key& log_ck, stats::part_type_set& touched_parts, log_mutation_builder& builder,
@@ -1408,7 +1409,7 @@ private:
      *
      * An assignment also happens when an INSERT statement is used as follows:
      * INSERT INTO t (a, b) VALUES (0, {0:0}) USING TTL 5;
-     * 
+     *
      * This will be split into three separate changes (three invocations of `transform`):
      * 1. One with TTL = 5 for the row marker (introduces by the INSERT), indicating that a row was inserted.
      * 2. One without a TTL for the tombstone, indicating that the collection was cleared.
@@ -1488,7 +1489,7 @@ public:
     }
 
     void produce_preimage(const clustering_key* ck, const one_kind_column_set& columns_to_include) override {
-        // iff we want full preimage, just ignore the affected columns and include everything. 
+        // iff we want full preimage, just ignore the affected columns and include everything.
         generate_image(operation::pre_image, ck, _schema->cdc_options().full_preimage() ? nullptr : &columns_to_include);
     };
 
@@ -1517,11 +1518,11 @@ public:
             }
         } else {
             row_state = &_static_row_state;
-            // if the static row state is empty and we did not touch 
-            // during processing, it either did not exist, or we did pk delete. 
+            // if the static row state is empty and we did not touch
+            // during processing, it either did not exist, or we did pk delete.
             // In those cases, no postimage for you.
-            // If we touched it, we should indicate it with an empty 
-            // postimage. 
+            // If we touched it, we should indicate it with an empty
+            // postimage.
             if (row_state->empty() && !_touched_parts.contains(stats::part_type::STATIC_ROW)) {
                 return;
             }
@@ -1541,7 +1542,7 @@ public:
             if (auto current = get_col_from_row_state(row_state, cdef)) {
                 _builder->set_value(image_ck, cdef, *current);
             } else if (op == operation::pre_image) {
-                // Cell is NULL. 
+                // Cell is NULL.
                 // If we generate the preimage,
                 // we should also fill in the deleted column.
                 // Otherwise the user will not be able
@@ -1672,7 +1673,7 @@ public:
                 });
             }
         }
-        
+
         auto selection = cql3::selection::selection::for_columns(_schema, std::move(columns));
 
         auto opts = selection->get_query_options();
@@ -1692,7 +1693,7 @@ public:
             return make_lw_shared<cql3::untyped_result_set>(*s, std::move(qr.query_result), *selection, partition_slice);
         });
       } catch (exceptions::unavailable_exception& e) {
-        // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
+        // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable".
         // So, we'll translate it to a `read_failure_exception` with custom message.
         cdc_log.debug("Preimage: translating a (read) `unavailable_exception` to `request_execution_exception` - {}", e);
         throw exceptions::read_failure_exception("CDC preimage query could not achieve the CL.",
