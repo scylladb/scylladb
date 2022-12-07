@@ -16,7 +16,7 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
-#include "sstables/sstables.hh"
+#include "sstables/version.hh"
 #include "sstables/sstable_directory.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"

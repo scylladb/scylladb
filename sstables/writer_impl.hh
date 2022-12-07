@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "sstables.hh"
 #include "sstable_writer.hh"
 #include "sstables_manager.hh"
 #include "schema_fwd.hh"

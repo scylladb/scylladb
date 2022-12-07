@@ -12,6 +12,7 @@
 #include <boost/algorithm/string.hpp>
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "compaction/compaction_manager.hh"
 #include "log.hh"
 #include "sstable_directory.hh"

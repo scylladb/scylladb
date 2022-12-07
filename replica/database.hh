@@ -64,6 +64,7 @@
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_manager.hh"
+#include "utils/disk-error-handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
