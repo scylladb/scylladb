@@ -49,6 +49,7 @@
 #include "dht/sharder.hh"
 #include "db/config.hh"
 #include "db/tags/utils.hh"
+#include "utils/labels.hh"
 
 #include "ttl.hh"
 
@@ -838,7 +839,7 @@ expiration_service::stats::stats() {
         seastar::metrics::make_total_operations("scan_table", scan_table,
             seastar::metrics::description("number of table scans (counting each scan of each table that enabled expiration)")),
         seastar::metrics::make_total_operations("items_deleted", items_deleted,
-            seastar::metrics::description("number of items deleted after expiration")),
+            seastar::metrics::description("number of items deleted after expiration"))(basic_level),
         seastar::metrics::make_total_operations("secondary_ranges_scanned", secondary_ranges_scanned,
             seastar::metrics::description("number of token ranges scanned by this node while their primary owner was down")),
     });
