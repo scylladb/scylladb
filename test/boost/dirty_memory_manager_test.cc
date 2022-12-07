@@ -29,7 +29,7 @@
 #include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
-#include "dirty_memory_manager.hh"
+#include "replica/dirty_memory_manager.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/chunked_vector.hh"
@@ -45,7 +45,8 @@ static auto x = [] {
 }();
 
 using namespace logalloc;
-using namespace dirty_memory_manager_logalloc;
+using namespace replica::dirty_memory_manager_logalloc;
+using namespace replica;
 
 SEASTAR_TEST_CASE(test_region_groups) {
     return seastar::async([] {
@@ -166,17 +167,17 @@ inline void quiesce(FutureType&& fut) {
 
 // Simple RAII structure that wraps around a region_group
 // Not using defer because we usually employ many region groups
-struct test_region_group: public region_group {
-    test_region_group(reclaim_config cfg)
+struct raii_region_group: public region_group {
+    raii_region_group(reclaim_config cfg)
         : region_group("test_region_group", std::move(cfg)) {}
 
-    ~test_region_group() {
+    ~raii_region_group() {
         shutdown().get();
     }
 };
 
-struct test_region: public dirty_memory_manager_logalloc::size_tracked_region  {
-    test_region() : dirty_memory_manager_logalloc::size_tracked_region() {}
+struct test_region: public replica::dirty_memory_manager_logalloc::size_tracked_region  {
+    test_region() : replica::dirty_memory_manager_logalloc::size_tracked_region() {}
     ~test_region() {
         clear();
     }
@@ -209,7 +210,7 @@ private:
 SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     return seastar::async([] {
         // singleton hierarchy, only one segment allowed
-        test_region_group simple({ .unspooled_hard_limit = logalloc::segment_size });
+        raii_region_group simple({ .unspooled_hard_limit = logalloc::segment_size });
         auto simple_region = std::make_unique<test_region>();
         simple_region->listen(&simple);
 
@@ -265,7 +266,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
-        test_region_group rg({.unspooled_hard_limit = logalloc::segment_size});
+        raii_region_group rg({.unspooled_hard_limit = logalloc::segment_size});
 
         auto region = std::make_unique<test_region>();
         region->listen(&rg);
@@ -534,8 +535,6 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
     });
 }
 
-namespace dirty_memory_manager_logalloc {
-
 class test_region_group : public region_group {
     sstring _name;
 
@@ -607,15 +606,13 @@ public:
     }
 };
 
-} // namespace dirty_memory_manager_logalloc
-
 SEASTAR_THREAD_TEST_CASE(test_size_tracked_region_move) {
     struct managed_object {
         int x;
         static size_t storage_size() noexcept { return sizeof(x); }
     };
 
-    dirty_memory_manager_logalloc::test_region_group rg0("test_size_tracked_region_move.rg0");
+    test_region_group rg0("test_size_tracked_region_move.rg0");
     size_tracked_region r0;
     r0.listen(&rg0);
     void* p = r0.allocator().alloc<managed_object>(managed_object::storage_size());
@@ -631,14 +628,14 @@ SEASTAR_THREAD_TEST_CASE(test_size_tracked_region_move_assign) {
         static size_t storage_size() noexcept { return sizeof(x); }
     };
 
-    dirty_memory_manager_logalloc::test_region_group rg0("test_size_tracked_region_move.rg0");
+    test_region_group rg0("test_size_tracked_region_move.rg0");
     size_tracked_region r0;
     r0.listen(&rg0);
 
     void* p = r0.allocator().alloc<managed_object>(managed_object::storage_size());
     BOOST_REQUIRE_NE(p, nullptr);
 
-    dirty_memory_manager_logalloc::test_region_group rg1("test_size_tracked_region_move.rg1");
+    test_region_group rg1("test_size_tracked_region_move.rg1");
     size_tracked_region r1;
     r1.listen(&rg1);
 

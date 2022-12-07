@@ -17,10 +17,12 @@
 #include "replica/database_fwd.hh"
 #include "utils/logalloc.hh"
 
+class test_region_group;
+
+namespace replica {
+
 // Code previously under logalloc namespace
 namespace dirty_memory_manager_logalloc {
-
-using namespace logalloc;
 
 class size_tracked_region;
 
@@ -97,7 +99,7 @@ struct reclaim_config {
 // A container for memtables. Called "region_group" for historical
 // reasons. Receives updates about memtable size change via the
 // LSA region_listener interface.
-class region_group : public region_listener {
+class region_group : public logalloc::region_listener {
     using region_heap = dirty_memory_manager_logalloc::region_heap;
 public:
     struct allocating_function {
@@ -236,7 +238,7 @@ private:
     void notify_unspooled_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 private: // from region_listener
-    virtual void moved(region* old_address, region* new_address) override;
+    virtual void moved(logalloc::region* old_address, logalloc::region* new_address) override;
 public:
     // When creating a region_group, one can specify an optional throttle_threshold parameter. This
     // parameter won't affect normal allocations, but an API is provided, through the region_group's
@@ -275,16 +277,16 @@ public:
     // 2) some callers would like to pass delta = 0. For instance, when we are making a region
     //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
     //    the full update cycle even then.
-    virtual void increase_usage(region* r, ssize_t delta) override { // From region_listener
+    virtual void increase_usage(logalloc::region* r, ssize_t delta) override { // From region_listener
         _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
         update_unspooled(delta);
     }
 
-    virtual void decrease_evictable_usage(region* r) override { // From region_listener
+    virtual void decrease_evictable_usage(logalloc::region* r) override { // From region_listener
         _regions.decrease(*static_cast<size_tracked_region*>(r)->_heap_handle);
     }
 
-    virtual void decrease_usage(region* r, ssize_t delta) override { // From region_listener
+    virtual void decrease_usage(logalloc::region* r, ssize_t delta) override { // From region_listener
         decrease_evictable_usage(r);
         update_unspooled(delta);
     }
@@ -330,10 +332,10 @@ private:
 
     uint64_t top_region_evictable_space() const noexcept;
 
-    virtual void add(region* child) override; // from region_listener
-    virtual void del(region* child) override; // from region_listener
+    virtual void add(logalloc::region* child) override; // from region_listener
+    virtual void del(logalloc::region* child) override; // from region_listener
 
-    friend class test_region_group;
+    friend class ::test_region_group;
 };
 
 }
@@ -594,3 +596,4 @@ region_group::blocked_requests_counter() const noexcept {
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;
 
+}

@@ -257,7 +257,7 @@ class mvcc_container {
     std::optional<logalloc::region> _region_holder;
     std::optional<mutation_cleaner> _cleaner_holder;
     partition_snapshot::phase_type _phase = partition_snapshot::min_phase;
-    dirty_memory_manager _mgr;
+    replica::dirty_memory_manager _mgr;
     std::optional<real_dirty_memory_accounter> _acc;
     logalloc::region* _region;
     mutation_cleaner* _cleaner;

@@ -160,7 +160,7 @@ private:
     std::vector<shared_memtable> _memtables;
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
-    dirty_memory_manager* _dirty_memory_manager;
+    replica::dirty_memory_manager* _dirty_memory_manager;
     std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
@@ -359,7 +359,7 @@ public:
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
-        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         replica::cf_stats* cf_stats = nullptr;
@@ -1114,7 +1114,7 @@ public:
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
-        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         replica::cf_stats* cf_stats = nullptr;

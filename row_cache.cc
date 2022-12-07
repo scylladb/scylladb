@@ -17,7 +17,7 @@
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "read_context.hh"
-#include "dirty_memory_manager.hh"
+#include "replica/dirty_memory_manager.hh"
 #include "real_dirty_memory_accounter.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/forwardable_v2.hh"

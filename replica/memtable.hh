@@ -97,9 +97,9 @@ public:
 
 }
 
-class dirty_memory_manager;
-
 namespace replica {
+
+class dirty_memory_manager;
 
 struct table_stats;
 
