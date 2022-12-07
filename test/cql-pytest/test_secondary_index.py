@@ -1502,3 +1502,32 @@ def test_disallow_local_indexes_on_static_columns(scylla_only, cql, test_keyspac
     with new_test_table(cql, test_keyspace, schema) as table:
         with pytest.raises(InvalidRequest, match="Local indexes containing static columns are not supported"):
             cql.execute(f'CREATE INDEX ON {table}((pk), s)')
+
+# Check that a "SELECT p FROM table WHERE v = 1 AND token(p) > ..."
+# works where p is a base table's partition key and  v is an indexed
+# regular column. For this to work, it requires that a secondary index
+# should hold the list of matching p's in token order, and for the
+# query planner to understand this (so ALLOW FILTERING isn't necessary).
+# Reproduces issue #7043. See also C++ tests
+# test_select_with_token_range_*() in test/boost/secondary_index_test.cc
+def test_index_filter_by_token(cql, test_keyspace):
+    schema = 'p int, v int, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,v) VALUES (?,?)")
+        for i in range(10):
+            # All of these have v = 1:
+            cql.execute(insert, [i, 1])
+        # Scan the base table in token order
+        base_results = list(cql.execute(f"SELECT token(p), p FROM {table}"))
+        # Scanning the secondary index yields the same order
+        # (see also test_partition_order_with_si() above)
+        si_results = list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 1"))
+        assert si_results == base_results
+        # Find one of the tokens token and add a "token(p) >" restriction
+        # Check that the token(p) > .. restriction works (yielding just
+        # a subset of base_results) and also the v = ... works together
+        # (v=1 yields the data, v=0 yields nothing).
+        token3 = base_results[3].system_token_p
+        assert base_results[4:] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 1 AND token(p) > {token3}"))
+        assert [] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 0 AND token(p) > {token3}"))
