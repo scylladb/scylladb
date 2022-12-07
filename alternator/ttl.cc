@@ -48,6 +48,7 @@
 #include "dht/sharder.hh"
 #include "db/config.hh"
 #include "db/tags/utils.hh"
+#include "utils/labels.hh"
 
 #include "ttl.hh"
 
@@ -850,13 +851,13 @@ future<> expiration_service::stop() {
 expiration_service::stats::stats() {
     _metrics.add_group("expiration", {
         seastar::metrics::make_total_operations("scan_passes", scan_passes,
-            seastar::metrics::description("number of passes over the database")),
+            seastar::metrics::description("number of passes over the database"))(alternator_label).set_skip_when_empty(),
         seastar::metrics::make_total_operations("scan_table", scan_table,
-            seastar::metrics::description("number of table scans (counting each scan of each table that enabled expiration)")),
+            seastar::metrics::description("number of table scans (counting each scan of each table that enabled expiration)"))(alternator_label).set_skip_when_empty(),
         seastar::metrics::make_total_operations("items_deleted", items_deleted,
-            seastar::metrics::description("number of items deleted after expiration")),
+            seastar::metrics::description("number of items deleted after expiration"))(basic_level)(alternator_label).set_skip_when_empty(),
         seastar::metrics::make_total_operations("secondary_ranges_scanned", secondary_ranges_scanned,
-            seastar::metrics::description("number of token ranges scanned by this node while their primary owner was down")),
+            seastar::metrics::description("number of token ranges scanned by this node while their primary owner was down"))(alternator_label).set_skip_when_empty(),
     });
 }
 
