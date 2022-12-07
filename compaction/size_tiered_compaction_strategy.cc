@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 
 #include <boost/range/adaptor/transformed.hpp>

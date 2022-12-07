@@ -17,7 +17,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"
-#include "sstables/sstables.hh"
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
 #include "sstables/sstable_directory.hh"

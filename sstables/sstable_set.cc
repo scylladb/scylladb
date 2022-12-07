@@ -13,6 +13,8 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
 
+#include "sstables.hh"
+
 #include "compatible_ring_position.hh"
 #include "compaction/compaction_strategy_impl.hh"
 #include "compaction/leveled_compaction_strategy.hh"

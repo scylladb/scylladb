@@ -10,15 +10,15 @@
 #pragma once
 
 #include "schema_fwd.hh"
-#include "sstables/sstable_set.hh"
-#include "sstables/sstables_manager.hh"
 #include "compaction_descriptor.hh"
 
 class reader_permit;
 class compaction_backlog_tracker;
 
 namespace sstables {
+class sstable_set;
 class compaction_strategy;
+class sstables_manager;
 struct sstable_writer_config;
 }
 

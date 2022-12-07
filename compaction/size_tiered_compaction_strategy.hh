@@ -10,7 +10,7 @@
 
 #include "compaction_strategy_impl.hh"
 #include "compaction.hh"
-#include "sstables/sstables.hh"
+#include "sstables/shared_sstable.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 class size_tiered_backlog_tracker;
