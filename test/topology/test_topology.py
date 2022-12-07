@@ -60,6 +60,7 @@ async def test_remove_node_add_column(manager, random_tables):
     await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove   [1]
     await table.add_column()
     await random_tables.verify_schema()
+    # TODO: check that group 0 no longer contains the removed node (#12153)
 
 
 @pytest.mark.asyncio
@@ -92,24 +93,23 @@ async def test_decommission_node_add_column(manager, random_tables):
     await manager.decommission_node(decommission_target.server_id)
     await table.add_column()
     await random_tables.verify_schema()
+    # TODO: check that group 0 no longer contains the decommissioned node (#12153)
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Replace operation sleeps for 60 seconds")
 async def test_replace_different_ip(manager: ManagerClient, random_tables) -> None:
     servers = await manager.running_servers()
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node
+    # TODO: check that group 0 no longer contains the replaced node (#12153)
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="As above + the new node cannot join group 0")
-async def replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
+async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
     servers = await manager.running_servers()
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node
+    # TODO: check that group 0 no longer contains the replaced node (#12153)
 
 
 @pytest.mark.asyncio
@@ -162,6 +162,7 @@ async def test_remove_node_with_concurrent_ddl(manager, random_tables):
             await manager.wait_for_host_down(initiator_ip, target_ip)
             logger.info(f'do_remove_node [{i}], invoking remove_node')
             await manager.remove_node(initiator_ip, target_ip, target_host_id)
+            # TODO: check that group 0 no longer contains the removed node (#12153)
             logger.info(f'do_remove_node [{i}], remove_node done')
             new_server_ip = await manager.server_add()
             logger.info(f'do_remove_node [{i}], server_add [{new_server_ip}] done')

@@ -488,7 +488,9 @@ static future<bool> synchronize_schema(
         const noncopyable_function<future<bool>()>& can_finish_early,
         abort_source&);
 
-future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes) {
+future<> raft_group0::setup_group0(
+        db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
+        std::optional<replace_info> replace_info) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
@@ -524,6 +526,13 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
         co_return;
     }
 
+    if (replace_info && !replace_info->raft_id) {
+        auto msg = format("Cannot perform replace operation: Raft ID of the replaced server (IP: {}) is missing.",
+                          replace_info->ip_addr);
+        group0_log.error("{}", msg);
+        throw std::runtime_error{std::move(msg)};
+    }
+
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
         if (addr != _gossiper.get_broadcast_address()) {
@@ -534,6 +543,25 @@ future<> raft_group0::setup_group0(db::system_keyspace& sys_ks, const std::unord
     group0_log.info("setup_group0: joining group 0...");
     co_await join_group0(std::move(seeds), false /* non-voter */);
     group0_log.info("setup_group0: successfully joined group 0.");
+
+    if (replace_info) {
+        // Insert the replaced node's (Raft ID, IP address) pair into `raft_address_map`.
+        // In general, the mapping won't be obtained through the regular gossiping route:
+        // if we (the replacing node) use the replaced node's IP address, the replaced node's
+        // application states are gone by this point (our application states overrode them
+        // - the application states map is using the IP address as the key).
+        // Even when we use a different IP, there's no guarantee the IPs were exchanged by now.
+        // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
+        // another node and fetch application states from it) and pass it to `setup_group0`.
+
+        // Checked earlier.
+        assert(replace_info->raft_id);
+        group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
+                        *replace_info->raft_id, replace_info->ip_addr);
+
+        // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
+        _raft_gr.address_map().opt_add_entry(*replace_info->raft_id, replace_info->ip_addr);
+    }
 
     // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
     // and is currently in the middle of `upgrade_to_group0()`. For that procedure to finish
@@ -808,23 +836,15 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
     // (if they are still a member of group 0); hence we provide `my_id` to skip us in the search.
     auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
     if (!their_id) {
-        // The address map is updated with the ID of every member of the configuration.
-        // We could not find them in the address map. This could mean two things:
-        // 1. they are not a member.
-        // 2. They are a member, but we don't know about it yet; e.g. we just upgraded
-        //    and joined group 0 but the leader is still pushing entires to us (including config entries)
-        //    and we don't yet have the entry which contains `their_id`.
+        // This may mean that the node is a member of group 0 but due to a bug we're missing
+        // an entry from the address map so we're not able to identify the member that must be removed.
+        // In this case group 0 will have a 'garbage' member corresponding to a node that has left,
+        // and that member may be a voter, which is bad because group 0's availability is reduced.
         //
-        // To handle the second case we perform a read barrier now and check the address again.
-        // Ignore the returned guard, we don't need it.
-        group0_log.info("remove_from_group0({}): did not find them in group 0 configuration, synchronizing Raft before retrying...", node);
-        co_await _raft_gr.group0().read_barrier(&_abort_source);
-
-        their_id = _raft_gr.address_map().find_replace_id(node, my_id);
-        if (!their_id) {
-            group0_log.info("remove_from_group0({}): did not find them in group 0 configuration. Skipping.", node);
-            co_return;
-        }
+        // TODO: there is no API to remove members from group 0 manually. #12153
+        group0_log.error("remove_from_group0({}): could not find the Raft ID of this node."
+                         " Manual removal from group 0 may be required.", node);
+        co_return;
     }
 
     group0_log.info(
@@ -832,6 +852,10 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
         node, *their_id);
 
     co_await remove_from_raft_config(*their_id);
+
+    group0_log.info(
+        "remove_from_group0({}): finished removing from group 0 configuration (Raft ID: {})",
+        node, *their_id);
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {

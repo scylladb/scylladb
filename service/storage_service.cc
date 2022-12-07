@@ -313,6 +313,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
+    std::optional<raft_group0::replace_info> raft_replace_info;
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (is_replacing()) {
@@ -330,6 +331,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             get_broadcast_address(), *replace_address);
         tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
+        raft_replace_info = raft_group0::replace_info {
+            .ip_addr = *replace_address,
+            .raft_id = std::move(ri.raft_id)
+        };
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
@@ -441,7 +446,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
     assert(_group0);
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info);
 
     auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
@@ -497,7 +502,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
                 slogger.info("Sleeping before replacing {}...", *replace_addr);
-                co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
+                co_await sleep_abortable(2 * get_ring_delay(), _abort_source);
 
                 // check for operator errors...
                 const auto tmptr = get_token_metadata_ptr();
@@ -735,7 +740,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             slogger.info("Replace: removing {} from group 0...", *replace_addr);
             assert(_group0);
             _group0->remove_from_group0(*replace_addr).get();
-            slogger.info("Replace: {} removed from group 0.", *replace_addr);
 
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
@@ -1674,6 +1678,19 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
     }
 }
 
+// If the Raft ID is present in gossiper and non-empty, return it.
+// Otherwise return nullopt.
+static std::optional<raft::server_id> get_raft_id_for(gms::gossiper& g, gms::inet_address ep) {
+    auto app_state = g.get_application_state_ptr(ep, gms::application_state::RAFT_SERVER_ID);
+    if (app_state) {
+        auto value = utils::UUID{app_state->value};
+        if (value) {
+            return raft::server_id{value};
+        }
+    }
+    return std::nullopt;
+}
+
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!get_replace_address()) {
@@ -1713,6 +1730,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     }
 
     auto dc_rack = get_dc_rack_for(replace_address);
+    auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
@@ -1723,6 +1741,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     co_return replacement_info {
         .tokens = std::move(tokens),
         .dc_rack = std::move(dc_rack),
+        .raft_id = std::move(raft_id),
     };
 }
 
@@ -2489,7 +2508,6 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
                 assert(ss._group0);
                 ss._group0->remove_from_group0(endpoint).get();
-                slogger.info("removenode[{}]: node {} removed from group 0", uuid, endpoint);
 
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {

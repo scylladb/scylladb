@@ -41,6 +41,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include "locator/snitch_base.hh"
 #include "cdc/generation_id.hh"
+#include "raft/raft.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -289,10 +290,11 @@ private:
     future<> do_stop_ms();
     future<> shutdown_protocol_servers();
 
-    // Tokens and the CDC streams timestamp of the replaced node.
     struct replacement_info {
         std::unordered_set<token> tokens;
         locator::endpoint_dc_rack dc_rack;
+        // Present only if Raft is enabled.
+        std::optional<raft::server_id> raft_id;
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
