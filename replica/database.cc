@@ -70,7 +70,7 @@
 #include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
-
+#include "utils/labels.hh"
 #include "lang/wasm.hh"
 
 using namespace std::chrono_literals;
@@ -498,11 +498,11 @@ database::setup_metrics() {
         sm::make_gauge("requests_blocked_memory_current", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
                        sm::description(
                            seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
+                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
 
         sm::make_counter("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
                        sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
+                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
 
         sm::make_counter("clustering_filter_count", _cf_stats.clustering_filter_count,
                        sm::description("Counts bloom filter invocations.")),
@@ -519,47 +519,47 @@ database::setup_metrics() {
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
         sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
-                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
 
        sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
                       sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
 
         sm::make_counter("total_writes", _stats->total_writes,
-                       sm::description("Counts the total number of successful write operations performed by this shard.")),
+                       sm::description("Counts the total number of successful write operations performed by this shard."))(basic_level),
 
         sm::make_counter("total_writes_failed", _stats->total_writes_failed,
                        sm::description("Counts the total number of failed write operations. "
-                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
+                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard."))(basic_level),
 
         sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
-                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
+                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded."))(basic_level),
 
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
-                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached.")),
+                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
         sm::make_counter("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful user reads on this shard."),
-                       {user_label_instance}),
+                       {user_label_instance, basic_level}),
 
         sm::make_counter("total_reads_failed", _read_concurrency_sem.get_stats().total_failed_reads,
                        sm::description("Counts the total number of failed user read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
-                       {user_label_instance}),
+                       {user_label_instance, basic_level}),
 
         sm::make_counter("total_reads", _system_read_concurrency_sem.get_stats().total_successful_reads,
                        sm::description("Counts the total number of successful system reads on this shard."),
-                       {system_label_instance}),
+                       {system_label_instance, basic_level}),
 
         sm::make_counter("total_reads_failed", _system_read_concurrency_sem.get_stats().total_failed_reads,
                        sm::description("Counts the total number of failed system read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
-                       {system_label_instance}),
+                       {system_label_instance, basic_level}),
 
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().current; },
-                       sm::description("Holds the current size in bytes of the pending view updates for all tables")),
+                       sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
 
         sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
@@ -586,7 +586,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads", [this] { return _read_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations. "),
-                       {user_label_instance}),
+                       {user_label_instance, basic_level}),
     });
 
     // Registering all the metrics with a single call causes the stack size to blow up.
@@ -597,7 +597,7 @@ database::setup_metrics() {
 
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations."),
-                       {user_label_instance}),
+                       {user_label_instance, basic_level}),
 
         sm::make_gauge("paused_reads", _read_concurrency_sem.get_stats().inactive_reads,
                        sm::description("The number of currently active reads that are temporarily paused."),
@@ -624,7 +624,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads", [this] { return _streaming_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
-                       {streaming_label_instance}),
+                       {streaming_label_instance, basic_level}),
 
         sm::make_gauge("reads_memory_consumption", [this] { return _streaming_concurrency_sem.consumed_resources().memory; },
                        sm::description("Holds the amount of memory consumed by current read operations issued on behalf of streaming "),
@@ -632,7 +632,7 @@ database::setup_metrics() {
 
         sm::make_gauge("queued_reads", [this] { return _streaming_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations on behalf of streaming."),
-                       {streaming_label_instance}),
+                       {streaming_label_instance, basic_level}),
 
         sm::make_gauge("paused_reads", _streaming_concurrency_sem.get_stats().inactive_reads,
                        sm::description("The number of currently ongoing streaming reads that are temporarily paused."),
@@ -659,7 +659,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads", [this] { return _system_read_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
-                       {system_label_instance}),
+                       {system_label_instance, basic_level}),
 
         sm::make_gauge("reads_memory_consumption", [this] { return max_memory_system_concurrent_reads() - _system_read_concurrency_sem.consumed_resources().memory; },
                        sm::description("Holds the amount of memory consumed by all read operations from \"system\" keyspace tables. "),
@@ -667,7 +667,7 @@ database::setup_metrics() {
 
         sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables."),
-                       {system_label_instance}),
+                       {system_label_instance, basic_level}),
 
         sm::make_gauge("paused_reads", _system_read_concurrency_sem.get_stats().inactive_reads,
                        sm::description("The number of currently ongoing system reads that are temporarily paused."),
@@ -724,10 +724,10 @@ database::setup_metrics() {
                 "Large partitions have performance impact and should be avoided, check the documentation for details.")),
 
         sm::make_total_operations("total_view_updates_pushed_local", _cf_stats.total_view_updates_pushed_local,
-                sm::description("Total number of view updates generated for tables and applied locally.")),
+                sm::description("Total number of view updates generated for tables and applied locally."))(basic_level),
 
         sm::make_total_operations("total_view_updates_pushed_remote", _cf_stats.total_view_updates_pushed_remote,
-                sm::description("Total number of view updates generated for tables and sent to remote replicas.")),
+                sm::description("Total number of view updates generated for tables and sent to remote replicas."))(basic_level),
 
         sm::make_total_operations("total_view_updates_failed_local", _cf_stats.total_view_updates_failed_local,
                 sm::description("Total number of view updates generated for tables and failed to be applied locally.")),
@@ -738,7 +738,7 @@ database::setup_metrics() {
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
                 sm::make_counter("schema_changed", _schema_change_count,
-                        sm::description("The number of times the schema changed")),
+                        sm::description("The number of times the schema changed"))(basic_level),
         });
     }
 }
