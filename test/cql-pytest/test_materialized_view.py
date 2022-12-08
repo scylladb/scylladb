@@ -214,6 +214,27 @@ def test_filter_with_unused_static_column(cql, test_keyspace, scylla_only):
                         expected = [(42,43,44)] if '4' in where else [(42,43,44),(1,2,3)]
                         assert list(cql.execute(f"SELECT * FROM {mv}")) == expected
 
+# Ensure that we don't allow materialized views which contain static rows.
+# Neither Cassandra nor Scylla support this at the moment.
+def test_static_columns_are_disallowed(cql, test_keyspace):
+    schema = 'p int, c int, v int, s int static, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Case 1: 's' not in primary key
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="[Ss]tatic column"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT p, s FROM {table} WHERE s IS NOT NULL PRIMARY KEY (p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
+        # Case 2: 's' in primary key
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="[Ss]tatic column"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT p, s FROM {table} WHERE s IS NOT NULL PRIMARY KEY (s, p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
 # IS_NOT operator can only be used in the context of materialized view creation and it must be of the form IS NOT NULL.
 # Trying to do something like IS NOT 42 should fail.
 # The error is a SyntaxException because Scylla and Cassandra check this during parsing.

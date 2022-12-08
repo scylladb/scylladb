@@ -41,13 +41,15 @@ private:
     schema_ptr _base_schema;
     // Id of a regular base table column included in the view's PK, if any.
     // Scylla views only allow one such column, alternator can have up to two.
-    std::vector<column_id> _base_non_pk_columns_in_view_pk;
+    std::vector<column_id> _base_regular_columns_in_view_pk;
+    std::vector<column_id> _base_static_columns_in_view_pk;
     // For tracing purposes, if the view is out of sync with its base table
     // and there exists a column which is not in base, its name is stored
     // and added to debug messages.
     std::optional<bytes> _column_missing_in_base = {};
 public:
-    const std::vector<column_id>& base_non_pk_columns_in_view_pk() const;
+    const std::vector<column_id>& base_regular_columns_in_view_pk() const;
+    const std::vector<column_id>& base_static_columns_in_view_pk() const;
     const schema_ptr& base_schema() const;
 
     // Indicates if the view hase pk columns which are not part of the base
@@ -62,7 +64,9 @@ public:
     const bool use_only_for_reads;
 
     // A constructor for a base info that can facilitate reads and writes from the materialized view.
-    base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk);
+    base_dependent_view_info(schema_ptr base_schema,
+            std::vector<column_id>&& base_regular_columns_in_view_pk,
+            std::vector<column_id>&& base_static_columns_in_view_pk);
     // A constructor for a base info that can facilitate only reads from the materialized view.
     base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base);
 };
@@ -74,6 +78,46 @@ using base_info_ptr = lw_shared_ptr<const base_dependent_view_info>;
 struct view_and_base {
     view_ptr view;
     base_info_ptr base;
+};
+
+// An immutable representation of a clustering or static row of the base table.
+struct clustering_or_static_row {
+private:
+    std::optional<clustering_key_prefix> _key;
+    deletable_row _row;
+
+public:
+    explicit clustering_or_static_row(clustering_row&& cr)
+            : _key(std::move(cr.key()))
+            , _row(std::move(cr).as_deletable_row())
+    {}
+
+    explicit clustering_or_static_row(static_row&& sr)
+            : _key()
+            , _row(row_tombstone(), row_marker(), std::move(sr.cells()))
+    {}
+
+    bool is_static_row() const { return !_key.has_value(); }
+    bool is_clustering_row() const { return _key.has_value(); }
+
+    const std::optional<clustering_key_prefix>& key() const { return _key; }
+
+    row_tombstone tomb() const { return _row.deleted_at(); }
+    const row_marker& marker() const { return _row.marker(); }
+    const row& cells() const { return _row.cells(); }
+
+    bool empty() const { return _row.empty(); }
+    bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
+        return _row.is_live(s, column_kind(), base_tombstone, now);
+    }
+
+    column_kind column_kind() const {
+        return _key.has_value()
+                ? column_kind::regular_column : column_kind::static_column;
+    }
+
+    clustering_row as_clustering_row(const schema& s) const;
+    static_row as_static_row(const schema& s) const;
 };
 
 /**
@@ -119,7 +163,7 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
  * @param now the current time in seconds (to decide what is live and what isn't).
  * @return whether the base row matches the view filter.
  */
-bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now);
+bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_or_static_row& update, gc_clock::time_point now);
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
 
@@ -181,24 +225,24 @@ public:
 
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
-    void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+    void generate_update(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
 
     size_t op_count() const;
 
 private:
     mutation_partition& partition_for(partition_key&& key);
-    row_marker compute_row_marker(const clustering_row& base_row) const;
+    row_marker compute_row_marker(const clustering_or_static_row& base_row) const;
     struct view_row_entry {
         deletable_row* _row;
         view_key_and_action::action _action;
     };
-    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing);
-    bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
-    void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
-    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
-    void update_entry_for_computed_column(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+    std::vector<view_row_entry> get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing);
+    bool can_skip_view_updates(const clustering_or_static_row& update, const clustering_or_static_row& existing) const;
+    void create_entry(const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now);
+    void update_entry(const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now);
+    void update_entry_for_computed_column(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
 };
 
 class view_update_builder {
@@ -237,6 +281,7 @@ public:
 
 private:
     void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
+    void generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
     future<stop_iteration> on_results();
 
     future<stop_iteration> advance_all();
@@ -259,6 +304,8 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_and_base>& views);
+
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
 
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;

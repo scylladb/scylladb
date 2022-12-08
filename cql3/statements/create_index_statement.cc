@@ -114,9 +114,9 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
                     format("No column definition found for column {}", target->column_name()));
         }
 
-        //NOTICE(sarna): Should be lifted after resolving issue #2963
-        if (cd->is_static()) {
-            throw exceptions::invalid_request_exception("Indexing static columns is not implemented yet.");
+        if (!db.features().secondary_indexes_on_static_columns && cd->is_static()) {
+            throw exceptions::invalid_request_exception("Cluster does not support secondary indexes on static columns yet,"
+                    " upgrade the whole cluster first in order to be able to create them");
         }
 
         if (cd->type->references_duration()) {
@@ -209,6 +209,12 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
         for (unsigned i = 1; i < _raw_targets.size(); ++i) {
             if (std::holds_alternative<index_target::raw::multiple_columns>(_raw_targets[i]->value)) {
                 throw exceptions::invalid_request_exception(format("Multi-column index targets are currently only supported for partition key"));
+            } else if (auto* raw_ident = std::get_if<index_target::raw::single_column>(&_raw_targets[i]->value)) {
+                auto ident = (*raw_ident)->prepare_column_identifier(schema);
+                auto it = schema.columns_by_name().find(ident->name());
+                if (it != schema.columns_by_name().end() && it->second->is_static()) {
+                    throw exceptions::invalid_request_exception("Local indexes containing static columns are not supported.");
+                }
             }
         }
 }

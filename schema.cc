@@ -1770,7 +1770,7 @@ column_computation_ptr collection_column_computation::for_target_type(std::strin
 
 void collection_column_computation::operate_on_collection_entries(
         std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
-        const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
+        const partition_key& key, const db::view::clustering_or_static_row& update, const std::optional<db::view::clustering_or_static_row>& existing) const {
 
     const column_definition* cdef = schema.get_column_definition(_collection_name);
 
@@ -1840,7 +1840,8 @@ bytes collection_column_computation::compute_value(const schema&, const partitio
     throw std::runtime_error(fmt::format("{}: not supported", __PRETTY_FUNCTION__));
 }
 
-std::vector<db::view::view_key_and_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
+std::vector<db::view::view_key_and_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key,
+        const db::view::clustering_or_static_row& update, const std::optional<db::view::clustering_or_static_row>& existing) const {
     using collection_kv = std::pair<bytes_view, atomic_cell_view>;
     auto serialize_cell = [_kind = _kind](const collection_kv& kv) -> bytes {
         using kind = collection_column_computation::kind;

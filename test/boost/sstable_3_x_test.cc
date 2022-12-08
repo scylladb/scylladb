@@ -3180,7 +3180,7 @@ SEASTAR_TEST_CASE(compact_deleted_cell) {
     auto rows = m->partition().clustered_rows();
     BOOST_REQUIRE(rows.calculate_size() == 1);
     auto& row = rows.begin()->row();
-    BOOST_REQUIRE(row.is_live(*s));
+    BOOST_REQUIRE(row.is_live(*s, column_kind::regular_column));
     auto& cells = row.cells();
     BOOST_REQUIRE(cells.size() == 1);
   });

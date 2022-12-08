@@ -1115,7 +1115,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
     const auto exp_dead_end = expected_part.dead_rows.cend();
 
     for (; res_it != res_end && (exp_live_it != exp_live_end || exp_dead_it != exp_dead_end); ++res_it) {
-        const bool is_live = res_it->row().is_live(schema);
+        const bool is_live = res_it->row().is_live(schema, column_kind::regular_column);
 
         // Check that we have remaining expected rows of the respective liveness.
         if (is_live) {

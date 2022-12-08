@@ -2425,26 +2425,36 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
         co_return row_locker::lock_holder();
     }
     auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
-    if (cr_ranges.empty()) {
+    const bool need_regular = !cr_ranges.empty();
+    const bool need_static = db::view::needs_static_row(m.partition(), views);
+    if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
         co_await generate_and_propagate_view_updates(base, sem.make_tracking_only_permit(s.get(), "push-view-updates-1", timeout), std::move(views), std::move(m), { }, std::move(tr_state), now);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
     }
-    // We read the whole set of regular columns in case the update now causes a base row to pass
+    // We read whole sets of regular and/or static columns in case the update now causes a base row to pass
     // a view's filters, and a view happens to include columns that have no value in this update.
     // Also, one of those columns can determine the lifetime of the base row, if it has a TTL.
-    auto columns = boost::copy_range<query::column_id_vector>(
-            base->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
+    query::column_id_vector static_columns;
+    query::column_id_vector regular_columns;
+    if (need_regular) {
+        boost::copy(base->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)), std::back_inserter(regular_columns));
+    }
+    if (need_static) {
+        boost::copy(base->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)), std::back_inserter(static_columns));
+    }
     query::partition_slice::option_set opts;
     opts.set(query::partition_slice::option::send_partition_key);
-    opts.set(query::partition_slice::option::send_clustering_key);
+    opts.set_if<query::partition_slice::option::send_clustering_key>(need_regular);
+    opts.set_if<query::partition_slice::option::distinct>(need_static && !need_regular);
+    opts.set_if<query::partition_slice::option::always_return_static_content>(need_static);
     opts.set(query::partition_slice::option::send_timestamp);
     opts.set(query::partition_slice::option::send_ttl);
     opts.add(custom_opts);
     auto slice = query::partition_slice(
-            std::move(cr_ranges), { }, std::move(columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
+            std::move(cr_ranges), std::move(static_columns), std::move(regular_columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
     // Take the shard-local lock on the base-table row or partition as needed.
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.

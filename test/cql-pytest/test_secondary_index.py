@@ -1232,6 +1232,32 @@ def test_index_paging_match_partition(cql, test_keyspace):
             # Finally check that altogether, we read the right rows.
             assert sorted(all_rows) == [(i,) for i in range(10)]
 
+# Currently, paging of queries that uses secondary indexes on static columns
+# is unable to page through partitions of the base table and must return them
+# in whole. Related to #7432.
+@pytest.mark.xfail(reason="issue #7432")
+def test_index_paging_static_column(cql, test_keyspace):
+    schema = 'p int, c int, s int static, PRIMARY KEY(p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        insert = cql.prepare(f"INSERT INTO {table}(p,c,s) VALUES (?,?,?)")
+        for p in range(5):
+            for c in range(5):
+                cql.execute(insert, [p, c, 42])
+        for page_size in [1, 2, 3, 4, 100]:
+            stmt = SimpleStatement(f"SELECT p, c FROM {table} WHERE s = 42", fetch_size=page_size)
+
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(p,c) for p in range(5) for c in range(5)]
+
 # If, in contrast with test_index_paging_match_partition above which indexed
 # a partition key column, we index a clustering key column, paging does work
 # as expected and stops at the right page size. However, as was noted in
@@ -1269,3 +1295,210 @@ def test_index_paging_group_by(cql, test_keyspace, use_group_by):
             all_rows.extend(results.current_rows)
             # Finally check that altogether, we read the right rows.
             assert sorted(all_rows) == [(i,) for i in range(10)]
+
+# Tests basic operations on a static column index.
+def test_static_column_index(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+
+        # Insert
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (0, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (1, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (2, 1)')
+
+        assert [(0,),(1,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+
+        # Update
+        cql.execute(f'UPDATE {table} SET s = 1 WHERE pk = 1')
+
+        assert [(0,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(1,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+
+        # Partition delete
+        cql.execute(f'DELETE FROM {table} WHERE pk = 2')
+
+        assert [(0,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(1,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+
+# Tests that building static indexes from a non-empty state works.
+def test_static_column_index_build(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (0, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (1, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s) VALUES (2, 0)')
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+
+        # Indexes are created in the background, so we should wait here.
+        # I don't know how to get information about secondary index build
+        # status on C*, so we'll just wait until 30 seconds elapse or
+        # the index appears to be properly built.
+        start_time = time.time()
+        rows = None
+        while time.time() < start_time + 30:
+            rows = sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+            if len(rows) == 3:
+                break
+
+        assert [(0,),(1,),(2,)] == rows
+
+# Checks that clustering row deletions do not affect static columns.
+def test_static_column_index_unaffected_by_clustering_row_ops(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+
+        cql.execute(f'INSERT INTO {table} (pk, c, s, v) VALUES (0, 0, 42, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES (0, 1, 10)')
+        cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES (0, 2, 20)')
+        cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES (0, 3, 30)')
+        cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES (0, 4, 40)')
+
+        # We are not using SELECT DISTINCT because it is not implemented yet
+        # for queries that restrict a non-pk column. Therefore, `pk` appears
+        # multiple times in the result.
+
+        assert [(0,)]*5 == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 42'))
+
+        # Row delete
+        cql.execute(f'DELETE FROM {table} WHERE pk = 0 AND c = 4')
+        assert [(0,)]*4 == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 42'))
+
+        # Range delete
+        cql.execute(f'DELETE FROM {table} WHERE pk = 0 AND c >= 1 AND c < 3')
+        assert [(0,)]*2 == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 42'))
+
+        # Range delete, but this time get rid of all rows (static row should stay)
+        cql.execute(f'DELETE FROM {table} WHERE pk = 0 AND c >= 0 AND c <= 4')
+        assert [(0,)]*1 == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 42'))
+
+        # Finally, perform a partition delete and get rid of the row
+        cql.execute(f'DELETE FROM {table} WHERE pk = 0')
+        assert [] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 42'))
+
+# Checks that changing a static column's value is correctly reflected by queries
+# accelerated by a secondary index.
+def test_static_column_index_all_clustering_rows_moved_by_static_column_update(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        rows_for_pk = [
+            [(0, 0, 0), (0, 1, 10), (0, 2, 20)],
+            [(1, 0, 0), (1, 1, 10), (1, 2, 20)],
+        ]
+
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+
+        for pk in range(2):
+            cql.execute(f'INSERT INTO {table} (pk, c, s, v) VALUES ({pk}, 0, 0, 0)')
+            cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES ({pk}, 1, 10)')
+            cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES ({pk}, 2, 20)')
+
+        assert rows_for_pk[0] + rows_for_pk[1] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 0'))
+        assert [] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 1'))
+
+        cql.execute(f"UPDATE {table} SET s = 1 WHERE pk = 1")
+
+        assert rows_for_pk[0] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 0'))
+        assert rows_for_pk[1] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 1'))
+
+        cql.execute(f"UPDATE {table} SET s = 1 WHERE pk = 0")
+
+        assert [] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 0'))
+        assert rows_for_pk[0] + rows_for_pk[1] == sorted(cql.execute(f'SELECT pk, c, v FROM {table} WHERE s = 1'))
+
+
+# Tests operations on tables which have both static column and regular column indexes.
+# Checks that one does not interfere with the other.
+def test_static_and_regular_index_operations(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+
+        cql.execute(f'INSERT INTO {table} (pk, s, c, v) VALUES (0, 0, 0, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s, c, v) VALUES (1, 0, 0, 1)')
+        cql.execute(f'INSERT INTO {table} (pk, s, c, v) VALUES (2, 1, 0, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s, c, v) VALUES (3, 1, 0, 1)')
+
+        assert [(0,),(1,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(2,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+        assert [(0,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 0'))
+        assert [(1,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 1'))
+
+        cql.execute(f'UPDATE {table} SET s = 1 WHERE pk = 1')
+
+        assert [(0,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(1,),(2,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+        assert [(0,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 0'))
+        assert [(1,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 1'))
+
+        cql.execute(f'UPDATE {table} SET v = 0 WHERE pk = 1 AND c = 0')
+
+        assert [(0,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+        assert [(1,),(2,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 1'))
+        assert [(0,),(1,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 0'))
+        assert [(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 1'))
+
+        # There are separate codepaths for processing static column addition/removal
+        # in case the static row isn't the last element of the mutation.
+        # The operations below allow us to test those cases
+
+        cql.execute(f'INSERT INTO {table} (pk, c, v) VALUES (4, 0, 4)')
+        assert [] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 2'))
+        assert [(4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 4'))
+
+        # Static column is set on a partition which didn't have a static row yet
+        cql.execute(f'BEGIN BATCH \
+                      UPDATE {table} SET s = 2 WHERE pk = 4; \
+                      UPDATE {table} SET v = 5 WHERE pk = 4 AND c = 0; \
+                      APPLY BATCH')
+        assert [(4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 2'))
+        assert [] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 4'))
+        assert [(4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 5'))
+
+        # Static column is removed from a partition
+        # In order to construct the batch, we need the write timestamp
+        timestamp = list(cql.execute(f'SELECT writetime(v) FROM {table} WHERE pk = 4 AND c = 0'))[0][0]
+        cql.execute(f'BEGIN BATCH \
+                      DELETE FROM {table} USING TIMESTAMP {timestamp} WHERE pk = 4; \
+                      UPDATE {table} USING TIMESTAMP {timestamp+1} SET v = 6 WHERE pk = 4 AND c = 0; \
+                      APPLY BATCH')
+        assert [] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 2'))
+        assert [] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 5'))
+        assert [(4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE v = 6'))
+
+# Make sure that, when there are multiple static column indexes and only one
+# column is modified, only the index relevant to that column is modified.
+def test_multiple_static_column_indexes(cql, test_keyspace):
+    schema = 'pk int, c int, s1 int STATIC, s2 int STATIC, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s1)')
+        cql.execute(f'CREATE INDEX ON {table}(s2)')
+
+        cql.execute(f'INSERT INTO {table} (pk, s1, s2) VALUES (0, 0, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s1, s2) VALUES (1, 0, 1)')
+        cql.execute(f'INSERT INTO {table} (pk, s1, s2) VALUES (2, 1, 0)')
+        cql.execute(f'INSERT INTO {table} (pk, s1, s2) VALUES (3, 1, 1)')
+
+        assert [(0,),(1,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s1 = 0'))
+        assert [(2,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s1 = 1'))
+        assert [(0,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s2 = 0'))
+        assert [(1,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s2 = 1'))
+
+        cql.execute(f'UPDATE {table} SET s1 = 1 WHERE pk = 1')
+
+        assert [(0,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s1 = 0'))
+        assert [(1,),(2,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s1 = 1'))
+        assert [(0,),(2,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s2 = 0'))
+        assert [(1,),(3,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE s2 = 1'))
+
+# Test that creating a local index on a static column is disallowed.
+# Local static indexes are not useful because there is only one value
+# of a static column allowed for a given partition.
+def test_disallow_local_indexes_on_static_columns(scylla_only, cql, test_keyspace):
+    schema = 'pk int, c int, s int static, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Local indexes containing static columns are not supported"):
+            cql.execute(f'CREATE INDEX ON {table}((pk), s)')

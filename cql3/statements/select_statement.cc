@@ -567,6 +567,11 @@ indexed_table_select_statement::do_execute_base_query(
         base_query_state(const base_query_state&) = delete;
     };
 
+    const column_definition* target_cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
+    if (!target_cdef) {
+        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    }
+
     const bool is_paged = bool(paging_state);
     base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
     {
@@ -586,7 +591,7 @@ indexed_table_select_statement::do_execute_base_query(
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
                 auto row_ranges = command->slice.default_row_ranges();
-                if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0) {
+                if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0 && !target_cdef->is_static()) {
                     auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                             old_paging_state->get_clustering_key(), *_schema, *_view_schema);
 
@@ -1013,7 +1018,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
         exploded_index_ck.push_back(bytes_view(token_bytes));
         append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
     }
-    if (last_base_ck) {
+    if (last_base_ck && !cdef->is_static()) {
         append_base_key_to_index_ck<clustering_key>(exploded_index_ck, *last_base_ck, *cdef);
     }
 
@@ -1067,6 +1072,10 @@ indexed_table_select_statement::do_execute(query_processor& qp,
     if (_schema->clustering_key_size() == 0) {
         // Obviously, if there are no clustering columns, then we can work at
         // the granularity of whole partitions.
+        whole_partitions = true;
+    } else if (_schema->get_column_definition(to_bytes(_index.target_column()))->is_static()) {
+        // Index table for a static index does not have the original tables'
+        // clustering key columns, so we must not fetch them.
         whole_partitions = true;
     } else {
         if (_index.depends_on(*(_schema->clustering_key_columns().begin()))) {

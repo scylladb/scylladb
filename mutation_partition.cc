@@ -1505,13 +1505,13 @@ bool mutation_partition::empty() const
 }
 
 bool
-deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const {
+deletable_row::is_live(const schema& s, column_kind kind, tombstone base_tombstone, gc_clock::time_point query_time) const {
     // _created_at corresponds to the row marker cell, present for rows
     // created with the 'insert' statement. If row marker is live, we know the
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at.tomb());
-    return _marker.is_live(base_tombstone, query_time) || _cells.is_live(s, column_kind::regular_column, base_tombstone, query_time);
+    return _marker.is_live(base_tombstone, query_time) || _cells.is_live(s, kind, base_tombstone, query_time);
 }
 
 bool
@@ -1532,7 +1532,7 @@ mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_t
 
     for (const rows_entry& e : non_dummy_rows()) {
         tombstone base_tombstone = range_tombstone_for_row(s, e.key());
-        if (e.row().is_live(s, base_tombstone, query_time)) {
+        if (e.row().is_live(s, column_kind::regular_column, base_tombstone, query_time)) {
             ++count;
         }
     }

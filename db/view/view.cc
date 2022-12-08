@@ -116,11 +116,11 @@ const query::partition_slice& view_info::partition_slice() const {
     return *_partition_slice;
 }
 
-const column_definition* view_info::view_column(const schema& base, column_id base_id) const {
+const column_definition* view_info::view_column(const schema& base, column_kind kind, column_id base_id) const {
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return view_column(base.regular_column_at(base_id));
+    return view_column(base.column_at(kind, base_id));
 }
 
 const column_definition* view_info::view_column(const column_definition& base_def) const {
@@ -135,10 +135,13 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
 }
 
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk)
+db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema,
+        std::vector<column_id>&& base_regular_columns_in_view_pk,
+        std::vector<column_id>&& base_static_columns_in_view_pk)
         : _base_schema{std::move(base_schema)}
-        , _base_non_pk_columns_in_view_pk{std::move(base_non_pk_columns_in_view_pk)}
-        , has_base_non_pk_columns_in_view_pk{!_base_non_pk_columns_in_view_pk.empty()}
+        , _base_regular_columns_in_view_pk{std::move(base_regular_columns_in_view_pk)}
+        , _base_static_columns_in_view_pk{std::move(base_static_columns_in_view_pk)}
+        , has_base_non_pk_columns_in_view_pk{!_base_regular_columns_in_view_pk.empty() || !_base_static_columns_in_view_pk.empty()}
         , use_only_for_reads{false} {
 
 }
@@ -151,13 +154,22 @@ db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_p
         , use_only_for_reads{true} {
 }
 
-const std::vector<column_id>& db::view::base_dependent_view_info::base_non_pk_columns_in_view_pk() const {
+const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_columns_in_view_pk() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
-                format("base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
                 "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
-    return _base_non_pk_columns_in_view_pk;
+    return _base_regular_columns_in_view_pk;
+}
+
+const std::vector<column_id>& db::view::base_dependent_view_info::base_static_columns_in_view_pk() const {
+    if (use_only_for_reads) {
+        on_internal_error(vlogger,
+                format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+    }
+    return _base_static_columns_in_view_pk;
 }
 
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
@@ -170,7 +182,8 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
 }
 
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
-    std::vector<column_id> base_non_pk_columns_in_view_pk;
+    std::vector<column_id> base_regular_columns_in_view_pk;
+    std::vector<column_id> base_static_columns_in_view_pk;
 
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
@@ -182,8 +195,10 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         }
         const bytes& view_col_name = view_col.name();
         auto* base_col = base.get_column_definition(view_col_name);
-        if (base_col && !base_col->is_primary_key()) {
-            base_non_pk_columns_in_view_pk.push_back(base_col->id);
+        if (base_col && base_col->is_regular()) {
+            base_regular_columns_in_view_pk.push_back(base_col->id);
+        } else if (base_col && base_col->is_static()) {
+            base_static_columns_in_view_pk.push_back(base_col->id);
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
                     to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
@@ -202,7 +217,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         }
     }
 
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_non_pk_columns_in_view_pk));
+    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk));
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
@@ -216,6 +231,20 @@ bool view_info::has_base_non_pk_columns_in_view_pk() const {
         on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
     }
     return _base_info->has_base_non_pk_columns_in_view_pk;
+}
+
+clustering_row db::view::clustering_or_static_row::as_clustering_row(const schema& s) const {
+    if (!is_clustering_row()) {
+        on_internal_error(vlogger, "Tried to interpret a static row as a clustering row");
+    }
+    return clustering_row(*_key, tomb(), marker(), row(s, column_kind::regular_column, cells()));
+}
+
+static_row db::view::clustering_or_static_row::as_static_row(const schema& s) const {
+    if (!is_static_row()) {
+        on_internal_error(vlogger, "Tried to interpret a clustering row as a static row");
+    }
+    return static_row(s, cells());
 }
 
 namespace db {
@@ -383,9 +412,11 @@ static query::partition_slice make_partition_slice(const schema& s) {
     opts.set(query::partition_slice::option::send_clustering_key);
     opts.set(query::partition_slice::option::send_timestamp);
     opts.set(query::partition_slice::option::send_ttl);
+    opts.set(query::partition_slice::option::always_return_static_content);
     return query::partition_slice(
             {query::full_clustering_range},
-            { },
+            boost::copy_range<query::column_id_vector>(s.static_columns()
+                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
             boost::copy_range<query::column_id_vector>(s.regular_columns()
                     | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
             std::move(opts));
@@ -416,18 +447,24 @@ public:
     }
 };
 
-bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now) {
+bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_or_static_row& update, gc_clock::time_point now) {
+    // TODO: Filtering is only supported in materialized views which don't support
+    // static rows yet. Skip the whole function if it is a static row update.
+    if (update.is_static_row()) {
+        return true;
+    }
+
     auto slice = make_partition_slice(base);
 
     data_query_result_builder builder(base, slice);
     builder.consume_new_partition(dht::decorate_key(base, key));
-    builder.consume(clustering_row(base, update), row_tombstone{}, update.is_live(base, tombstone{}, now));
+    builder.consume(clustering_row(base, update.as_clustering_row(base)), row_tombstone{}, update.is_live(base, tombstone(), now));
     builder.consume_end_of_partition();
     auto result = builder.consume_end_of_stream();
     view_filter_checking_visitor visitor(base, view);
     query::result_view::consume(result, slice, visitor);
 
-    return clustering_prefix_matches(base, view, key, update.key())
+    return clustering_prefix_matches(base, view, key, *update.key())
             && visitor.matches_view_filter();
 }
 
@@ -454,7 +491,7 @@ size_t view_updates::op_count() const {
     return _op_count++;;
 }
 
-row_marker view_updates::compute_row_marker(const clustering_row& base_row) const {
+row_marker view_updates::compute_row_marker(const clustering_or_static_row& base_row) const {
     /*
      * We need to compute both the timestamp and expiration.
      *
@@ -482,9 +519,11 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     // they share liveness information. It's true especially in the only case currently allowed by CQL,
     // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
     // which does not carry TTL information.
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+    const auto& col_ids = base_row.is_clustering_row()
+            ? _base_info->base_regular_columns_in_view_pk()
+            : _base_info->base_static_columns_in_view_pk();
     if (!col_ids.empty()) {
-        auto& def = _base->regular_column_at(col_ids[0]);
+        auto& def = _base->column_at(base_row.column_kind(), col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
         auto cell = base_row.cells().cell_at(col_ids[0]).as_atomic_cell(def);
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
@@ -492,7 +531,6 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
 
     return base_row.marker();
 }
-
 
 namespace {
 // The following struct is identical to view_key_with_action, except the key
@@ -531,11 +569,11 @@ private:
     const view_ptr& _view;
 
     const partition_key& _base_key;
-    const clustering_row& _update;
-    const std::optional<clustering_row>& _existing;
+    const clustering_or_static_row& _update;
+    const std::optional<clustering_or_static_row>& _existing;
 
 public:
-    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing)
+    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing)
         : _base(base)
         , _view(view)
         , _base_key(base_key)
@@ -555,8 +593,15 @@ public:
         case column_kind::partition_key:
             return {_base_key.get_component(_base, base_col->position())};
         case column_kind::clustering_key:
-            return {_update.key().get_component(_base, base_col->position())};
+            if (_update.is_static_row()) {
+                on_internal_error(vlogger, "Tried to get view row value for a static row update in a view with partition key having clustering columns from original table");
+            }
+            return {_update.key()->get_component(_base, base_col->position())};
         default:
+            if (base_col->kind != _update.column_kind()) {
+                on_internal_error(vlogger, format("Tried to get a {} column from a {} row update, which is impossible",
+                        to_sstring(base_col->kind), _update.is_clustering_row() ? "clustering" : "static"));
+            }
             auto& c = _update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
             return {managed_bytes_view{value_view}};
@@ -601,7 +646,7 @@ private:
 
 
 std::vector<view_updates::view_row_entry>
-view_updates::get_view_rows(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing) {
+view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
     value_getter getter(*_base, _view, base_key, update, existing);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
@@ -675,11 +720,11 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_row&
     return ret;
 }
 
-static const column_definition* view_column(const schema& base, const schema& view, column_id base_id) {
+static const column_definition* view_column(const schema& base, const schema& view, column_kind kind, column_id base_id) {
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return view.get_column_definition(base.regular_column_at(base_id).name());
+    return view.get_column_definition(base.column_at(kind, base_id).name());
 }
 
 // Utility function for taking an existing cell, and creating a copy with an
@@ -816,9 +861,9 @@ void create_virtual_column(schema_builder& builder, const bytes& name, const dat
     }
 }
 
-static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
+static void add_cells_to_view(const schema& base, const schema& view, column_kind kind, row base_cells, row& view_cells) {
     base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
-        auto* view_col = view_column(base, view, id);
+        auto* view_col = view_column(base, view, kind, id);
         if (view_col && !view_col->is_primary_key()) {
             maybe_make_virtual(c, view_col);
             view_cells.append_cell(view_col->id, std::move(c));
@@ -830,13 +875,14 @@ static void add_cells_to_view(const schema& base, const schema& view, row base_c
  * Creates a view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before applying anything.
  */
-void view_updates::create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now) {
+void view_updates::create_entry(const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now) {
     if (!matches_view_filter(*_base, _view_info, base_key, update, now)) {
         return;
     }
 
     auto view_rows = get_view_rows(base_key, update, std::nullopt);
     auto update_marker = compute_row_marker(update);
+    const auto kind = update.column_kind();
     for (const auto& [r, action]: view_rows) {
         if (auto rm = std::get_if<row_marker>(&action)) {
             r->apply(*rm);
@@ -844,7 +890,7 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
             r->apply(update_marker);
         }
         r->apply(update.tomb());
-        add_cells_to_view(*_base, *_view, row(*_base, column_kind::regular_column, update.cells()), r->cells());
+        add_cells_to_view(*_base, *_view, kind, row(*_base, kind, update.cells()), r->cells());
     }
     _op_count += view_rows.size();
 }
@@ -853,7 +899,7 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
  * Deletes the view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before bothering.
  */
-void view_updates::delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
+void view_updates::delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now) {
     // Before deleting an old entry, make sure it was matching the view filter
     // (otherwise there is nothing to delete)
     if (matches_view_filter(*_base, _view_info, base_key, existing, now)) {
@@ -861,10 +907,13 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
     }
 }
 
-void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
+void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now) {
     auto view_rows = get_view_rows(base_key, existing, std::nullopt);
+    const auto kind = existing.column_kind();
     for (const auto& [r, action] : view_rows) {
-        const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
+        const auto& col_ids = existing.is_clustering_row()
+                ? _base_info->base_regular_columns_in_view_pk()
+                : _base_info->base_static_columns_in_view_pk();
         if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
             if (auto ts_tag = std::get_if<view_key_and_action::shadowable_tombstone_tag>(&action)) {
                 r->apply(ts_tag->into_shadowable_tombstone(now));
@@ -873,7 +922,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             // We delete the old row using a shadowable row tombstone, making sure that
             // the tombstone deletes everything in the row (or it might still show up).
             // Note: multi-cell columns can't be part of the primary key.
-            auto& def = _base->regular_column_at(col_ids[0]);
+            auto& def = _base->column_at(kind, col_ids[0]);
             auto cell = existing.cells().cell_at(col_ids[0]).as_atomic_cell(def);
             if (cell.is_live()) {
                 r->apply(shadowable_tombstone(cell.timestamp(), now));
@@ -883,8 +932,8 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             // means view row is the same - so it needs to be deleted as well
             // using the same deletion timestamps for the individual cells.
             r->apply(update.marker());
-            auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-            add_cells_to_view(*_base, *_view, std::move(diff), r->cells());
+            auto diff = update.cells().difference(*_base, kind, existing.cells());
+            add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
         }
         r->apply(update.tomb());
     }
@@ -911,7 +960,7 @@ static bool atomic_cells_liveness_equal(atomic_cell_view left, atomic_cell_view 
     return true;
 }
 
-bool view_updates::can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const {
+bool view_updates::can_skip_view_updates(const clustering_or_static_row& update, const clustering_or_static_row& existing) const {
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
@@ -970,7 +1019,7 @@ bool view_updates::can_skip_view_updates(const clustering_row& update, const clu
  * This method checks that the base row (before and after) matches the view filter before
  * applying anything.
  */
-void view_updates::update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
+void view_updates::update_entry(const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now) {
     // While we know update and existing correspond to the same view entry,
     // they may not match the view filter.
     if (!matches_view_filter(*_base, _view_info, base_key, existing, now)) {
@@ -988,6 +1037,7 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
 
     auto view_rows = get_view_rows(base_key, update, std::nullopt);
     auto update_marker = compute_row_marker(update);
+    const auto kind = update.column_kind();
     for (const auto& [r, action] : view_rows) {
         if (auto rm = std::get_if<row_marker>(&action)) {
             r->apply(*rm);
@@ -996,16 +1046,16 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
         }
         r->apply(update.tomb());
 
-        auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-        add_cells_to_view(*_base, *_view, std::move(diff), r->cells());
+        auto diff = update.cells().difference(*_base, kind, existing.cells());
+        add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
     }
     _op_count += view_rows.size();
 }
 
 void view_updates::update_entry_for_computed_column(
         const partition_key& base_key,
-        const clustering_row& update,
-        const std::optional<clustering_row>& existing,
+        const clustering_or_static_row& update,
+        const std::optional<clustering_or_static_row>& existing,
         gc_clock::time_point now) {
     auto view_rows = get_view_rows(base_key, update, existing);
     for (const auto& [r, action] : view_rows) {
@@ -1026,9 +1076,10 @@ void view_updates::update_entry_for_computed_column(
 
 void view_updates::generate_update(
         const partition_key& base_key,
-        const clustering_row& update,
-        const std::optional<clustering_row>& existing,
+        const clustering_or_static_row& update,
+        const std::optional<clustering_or_static_row>& existing,
         gc_clock::time_point now) {
+
     // Note that the base PK columns in update and existing are the same, since we're intrinsically dealing
     // with the same base row. So we have to check 3 things:
     //   1) that the clustering key doesn't have a null, which can happen for compact tables. If that's the case,
@@ -1036,15 +1087,20 @@ void view_updates::generate_update(
     //   2) if there is a column not part of the base PK in the view PK, whether it is changed by the update.
     //   3) whether the update actually matches the view SELECT filter
 
-    if (!update.key().is_full(*_base)) {
-        return;
+    if (update.is_clustering_row()) {
+        if (!update.key()->is_full(*_base)) {
+            return;
+        }
     }
 
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
     if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
         return update_entry_for_computed_column(base_key, update, existing, now);
     }
-    if (col_ids.empty()) {
+    if (!_base_info->has_base_non_pk_columns_in_view_pk) {
+        if (update.is_static_row()) {
+            // TODO: support static rows in views with pk only including columns from base pk
+            return;
+        }
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
             if (update.is_live(*_base)) {
@@ -1058,6 +1114,20 @@ void view_updates::generate_update(
         return;
     }
 
+    const auto& col_ids = update.is_clustering_row()
+            ? _base_info->base_regular_columns_in_view_pk()
+            : _base_info->base_static_columns_in_view_pk();
+
+    // The view has a non-primary-key column from the base table as its primary key.
+    // That means it's either a regular or static column. If we are currently
+    // processing an update which does not correspond to the column's kind,
+    // just stop here.
+    if (col_ids.empty()) {
+        return;
+    }
+
+    const auto kind = update.column_kind();
+
     // If one of the key columns is missing, set has_new_row = false
     // meaning that after the update there will be no view row.
     // If one of the key columns is missing in the existing value,
@@ -1068,7 +1138,7 @@ void view_updates::generate_update(
     bool same_row = true;
     for (auto col_id : col_ids) {
         auto* after = update.cells().find_cell(col_id);
-        auto& cdef = _base->regular_column_at(col_id);
+        auto& cdef = _base->column_at(kind, col_id);
         if (existing) {
             auto* before = existing->cells().find_cell(col_id);
             // Note that this cell is necessarily atomic, because col_ids are
@@ -1197,8 +1267,39 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     update.marker().compact_and_expire(update.tomb().tomb(), _now, always_gc, gc_before);
     update.cells().compact_and_expire(*_schema, column_kind::regular_column, update.tomb(), _now, always_gc, gc_before, update.marker());
 
+    const auto update_row = clustering_or_static_row(std::move(update));
+    const auto existing_row = existing
+            ? std::make_optional<clustering_or_static_row>(std::move(*existing))
+            : std::optional<clustering_or_static_row>();
     for (auto&& v : _view_updates) {
-        v.generate_update(_key, update, existing, _now);
+        v.generate_update(_key, update_row, existing_row, _now);
+    }
+}
+
+void view_update_builder::generate_update(static_row&& update, const tombstone& update_tomb,
+        std::optional<static_row>&& existing, const tombstone& existing_tomb) {
+    if (!update_tomb && update.empty()) {
+        throw std::logic_error("A materialized view update cannot be empty");
+    }
+
+    auto dk = dht::decorate_key(*_schema, _key);
+    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
+
+    // We allow existing to be disengaged, which we treat the same as an empty row.
+    if (existing) {
+        existing->cells().compact_and_expire(*_schema, column_kind::static_column, row_tombstone(existing_tomb), _now, always_gc, gc_before);
+        update.apply(*_schema, static_row(*_schema, *existing));
+    }
+
+    update.cells().compact_and_expire(*_schema, column_kind::static_column, row_tombstone(update_tomb), _now, always_gc, gc_before);
+
+    const auto update_row = clustering_or_static_row(std::move(update));
+    const auto existing_row = existing
+            ? std::make_optional<clustering_or_static_row>(std::move(*existing))
+            : std::optional<clustering_or_static_row>();
+    for (auto&& v : _view_updates) {
+        v.generate_update(_key, update_row, existing_row, _now);
     }
 }
 
@@ -1223,12 +1324,21 @@ future<stop_iteration> view_update_builder::on_results() {
                               ? std::optional<clustering_row>(std::in_place, update.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row())
                               : std::nullopt;
                 generate_update(std::move(update), std::move(existing));
+            } else if (_update->is_static_row()) {
+                auto update = std::move(*_update).as_static_row();
+                auto tombstone = _existing_partition_tombstone;
+                auto existing = tombstone
+                              ? std::optional<static_row>(std::in_place)
+                              : std::nullopt;
+                generate_update(std::move(update), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
             }
             return stop_updates ? stop() : advance_updates();
         }
         if (cmp > 0) {
             // We have something existing but no update (which will happen either because it's a range tombstone marker in
-            // existing, or because we've fetched the existing row due to some partition/range deletion in the updates)
+            // existing, or because we've fetched the existing row due to some partition/range deletion in the updates).
+            // Due to how the read command for existing rows is constructed, it is also possible that there is a static
+            // row is included, even though we didn't modify it.
             if (_existing->is_range_tombstone_change()) {
                 _existing_current_tombstone = _existing->as_range_tombstone_change().tombstone();
             } else if (_existing->is_clustering_row()) {
@@ -1241,6 +1351,21 @@ future<stop_iteration> view_update_builder::on_results() {
                 if (tombstone) {
                     auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
                     generate_update(std::move(update), { std::move(existing) });
+                }
+            } else if (_existing->is_static_row()) {
+                auto existing = std::move(*_existing).as_static_row();
+                auto tombstone = _update_partition_tombstone;
+                // The static row might be unintentionally included when fetching existing clustering rows,
+                // even if the static row was not updated. We can detect it. A static row can be affected either by:
+                //
+                // 1. A static row in the update mutation
+                // 2. A partition tombstone in the update mutation
+                //
+                // If neither of those is present, this means that the static row is included accidentally.
+                // If we are here, this means that (1) is not present. The `if` that follows checks for (2).
+                if (tombstone) {
+                    auto update = static_row();
+                    generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
                 }
             }
             return stop_updates ? stop () : advance_existings();
@@ -1259,6 +1384,12 @@ future<stop_iteration> view_update_builder::on_results() {
                 cr.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
             });
             generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
+        } else if (_update->is_static_row()) {
+            if (!_existing->is_static_row()) {
+                on_internal_error(vlogger, format("Static row update mutation part {} shouldn't compare equal with an existing, non-static row mutation part {}",
+                                                  mutation_fragment_v2::printer(*_schema, *_update), mutation_fragment_v2::printer(*_schema, *_existing)));
+            }
+            generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, { std::move(*_existing).as_static_row() }, _existing_partition_tombstone);
         }
         return stop_updates ? stop() : advance_all();
     }
@@ -1270,6 +1401,10 @@ future<stop_iteration> view_update_builder::on_results() {
             auto existing = clustering_row(*_schema, _existing->as_clustering_row());
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
+        } else if (_existing->is_static_row()) {
+            auto existing = static_row(*_schema, _existing->as_static_row());
+            auto update = static_row();
+            generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
         }
         return stop_updates ? stop() : advance_existings();
     }
@@ -1285,6 +1420,12 @@ future<stop_iteration> view_update_builder::on_results() {
                           ? std::optional<clustering_row>(std::in_place, _update->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
                           : std::nullopt;
             generate_update(std::move(*_update).as_clustering_row(), std::move(existing));
+        } else if (_update->is_static_row()) {
+            auto existing_tombstone = _existing_partition_tombstone;
+            auto existing = existing_tombstone
+                          ? std::optional<static_row>(std::in_place)
+                          : std::nullopt;
+            generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
         }
         return stop_updates ? stop() : advance_updates();
     }
@@ -1369,6 +1510,12 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
                 return std::move(v).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); });
             }));
 
+}
+
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views) {
+    // TODO: We could also check whether any of the views need static rows
+    // and return false if none of them do
+    return mp.partition_tombstone() || !mp.static_row().empty();
 }
 
 // Calculate the node ("natural endpoint") to which this node should send
@@ -2185,8 +2332,13 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume(static_row&&, tombstone, bool) {
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
         inject_failure("view_builder_consume_static_row");
+        if (_views_to_build.empty() || _builder._as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+
+        add_fragment(std::move(sr));
         return stop_iteration::no;
     }
 
@@ -2199,8 +2351,13 @@ public:
             return stop_iteration::yes;
         }
 
-        _fragments_memory_usage += cr.memory_usage(*_step.reader.schema());
-        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(cr));
+        add_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*_step.reader.schema());
+        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(fragment));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
@@ -2208,7 +2365,6 @@ public:
             // so let's flush these rows now.
             flush_fragments();
         }
-        return stop_iteration::no;
     }
 
     stop_iteration consume(range_tombstone_change&&) {
