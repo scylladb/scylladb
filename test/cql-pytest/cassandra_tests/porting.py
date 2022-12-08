@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.protocol import ConfigurationException
 from cassandra.util import SortedSet, OrderedMapSerializedKey
+from cassandra.query import UNSET_VALUE
 
 import nodetool
 
@@ -107,6 +108,8 @@ def assert_invalid_throw(cql, table, type, cmd, *args):
     with pytest.raises(type):
         execute(cql, table, cmd, *args)
 
+assertInvalidThrow = assert_invalid_throw
+
 def assert_invalid(cql, table, cmd, *args):
     # In the original Java code, assert_invalid() accepts any exception
     # (it's like passing "Exception" below for the exception type).
@@ -125,6 +128,8 @@ def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+assertInvalidMessage = assert_invalid_message
+
 def assert_invalid_syntax_message(cql, table, message, cmd, *args):
     with pytest.raises(SyntaxException, match=re.escape(message)):
         execute(cql, table, cmd, *args)
@@ -132,6 +137,8 @@ def assert_invalid_syntax_message(cql, table, message, cmd, *args):
 def assert_invalid_message_re(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=message):
         execute(cql, table, cmd, *args)
+
+assertInvalidMessageRE = assert_invalid_message_re
 
 def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
     with pytest.raises(typ, match=re.escape(message)):
@@ -285,3 +292,9 @@ def user_type(*args):
 # a row(...) used in assertRows can simply be a list
 def row(*args):
     return list(args)
+
+# Java tests use "null" where we need "None"
+null = None
+
+def unset():
+    return UNSET_VALUE
