@@ -60,6 +60,7 @@
 #include "types/map.hh"
 #include "utils/error_injection.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/labels.hh"
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/evictable.hh"
@@ -2247,7 +2248,7 @@ void view_builder::setup_metrics() {
 
         sm::make_gauge("builds_in_progress",
                 sm::description("Number of currently active view builds."),
-                [this] { return _base_to_build_step.size(); })
+                [this] { return _base_to_build_step.size(); })(basic_level)
     });
 }
 
