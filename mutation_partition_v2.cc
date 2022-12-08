@@ -475,9 +475,14 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
             lb_i = {};
         }
         ++app_stats.row_writes;
+
+        // We must not return stop_iteration::no if we removed the last element from p._rows.
+        // Otherwise, p_i will be left empty, and thus fully continuous, violating the
+        // invariant that the sum of this and p has the same continuity as before merging.
         if (made_progress && need_preempt() && p_i != p._rows.end()) {
             return stop_iteration::no;
         }
+
         made_progress = true;
     }
     if (prev_compacted && lb_i != _rows.end()) {

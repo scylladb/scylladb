@@ -188,6 +188,9 @@ public:
     // object contains at least all the writes it contained before the call (monotonicity). It may contain partial writes.
     // Also, some progress is always guaranteed (liveness).
     //
+    // If returns stop_iteration::yes, then the sum of this and p is NO LONGER the same as before the call,
+    // the state of p is undefined and should not be used for reading.
+    //
     // The operation can be driven to completion like this:
     //
     //   apply_resume res;

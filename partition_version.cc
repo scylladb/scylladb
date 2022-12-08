@@ -196,6 +196,8 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             if (do_stop_iteration == stop_iteration::no) {
                 return stop_iteration::no;
             }
+            // If do_stop_iteration is yes, we have to remove the previous version.
+            // It now appears as fully continuous because it is empty.
             _version_merging_state.reset();
             if (prev->is_referenced()) {
                 _version.release();
