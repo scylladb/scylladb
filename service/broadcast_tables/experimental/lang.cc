@@ -19,7 +19,7 @@
 #include "partition_slice_builder.hh"
 #include "query-request.hh"
 #include "cache_temperature.hh"
-
+#include "service/storage_proxy.hh"
 
 namespace service::broadcast_tables {
 

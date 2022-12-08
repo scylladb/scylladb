@@ -13,8 +13,8 @@
 #include <seastar/core/future.hh>
 
 #include "bytes.hh"
+#include "utils/UUID.hh"
 #include "exceptions/exceptions.hh"
-#include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 
 
@@ -22,6 +22,7 @@ namespace service {
 
 class raft_group0_client;
 class group0_command;
+class storage_proxy;
 
 }
 
