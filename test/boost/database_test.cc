@@ -27,6 +27,7 @@
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/generation_type.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
@@ -37,6 +38,7 @@
 #include "db/snapshot-ctl.hh"
 
 using namespace std::chrono_literals;
+using namespace sstables;
 
 class database_test {
     replica::database& _db;

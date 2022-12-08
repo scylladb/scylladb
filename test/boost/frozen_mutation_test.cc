@@ -18,6 +18,7 @@
 #include "mutation_partition_view.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>

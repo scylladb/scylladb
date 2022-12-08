@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/util/closeable.hh>
 #include "db/virtual_table.hh"
 #include "db/system_keyspace.hh"
 #include "schema.hh"

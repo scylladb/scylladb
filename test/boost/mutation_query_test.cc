@@ -22,6 +22,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 
+#include "querier.hh"
 #include "mutation_query.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
@@ -29,6 +30,8 @@
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations_v2.hh"
 #include "mutation_rebuilder.hh"
+#include "readers/mutation_source.hh"
+#include "service/priority_manager.hh"
 
 using namespace std::literals::chrono_literals;
 

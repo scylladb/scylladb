@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "replica/memtable.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/upgrading_consumer.hh"
 #include "repair/hash.hh"

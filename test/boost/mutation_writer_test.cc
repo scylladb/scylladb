@@ -16,6 +16,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "readers/from_mutations_v2.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"

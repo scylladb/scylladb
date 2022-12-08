@@ -8,12 +8,14 @@
 
 #include "db/timeout_clock.hh"
 
+#include <seastar/util/closeable.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "hashers.hh"
 #include "xx_hasher.hh"
 #include "gc_clock.hh"
 #include "test/lib/simple_schema.hh"
+#include "reader_concurrency_semaphore.hh"
 
 bytes text_part1("sanity");
 bytes text_part2("check");
