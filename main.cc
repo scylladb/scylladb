@@ -95,6 +95,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "utils/labels.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -549,7 +550,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         namespace sm = seastar::metrics;
         app_metrics.add_group("scylladb", {
-            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
+            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label(""), basic_level}, [] { return 0; })
         });
 
         const std::unordered_set<sstring> ignored_options = { "auto-adjust-flush-quota", "background-writer-scheduling-quota" };
