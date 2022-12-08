@@ -16,6 +16,7 @@
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "sstables/exceptions.hh"
+#include "sstables/sstable_directory.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
@@ -1168,12 +1169,7 @@ private:
         co_await t.on_compaction_completion(std::move(completion_desc), sstables::offstrategy::yes);
 
         cleanup_new_unused_sstables_on_failure.cancel();
-        // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
-        // directory until they're moved to the main dir when the time comes. Also, that allows view building to resume
-        // on restart if there's a crash midway.
-        for (auto& sst : sstables_to_remove) {
-            sst->mark_for_deletion();
-        }
+        co_await sstables::sstable_directory::delete_atomically(std::move(sstables_to_remove));
         if (err) {
             co_await coroutine::return_exception_ptr(std::move(err));
         }
