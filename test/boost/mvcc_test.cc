@@ -24,6 +24,7 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/failure_injecting_allocation_strategy.hh"
 #include "test/lib/log.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"

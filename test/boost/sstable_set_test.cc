@@ -10,10 +10,14 @@
 #include <seastar/testing/test_case.hh>
 
 #include "sstables/sstable_set_impl.hh"
+#include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/sstable_utils.hh"
 #include "readers/from_mutations_v2.hh"
+
+using namespace sstables;
 
 static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}, bool use_level_metadata = true) {
     auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema);

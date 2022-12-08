@@ -35,6 +35,8 @@
 #include "db/commitlog/commitlog.hh"
 #include "test/lib/make_random_string.hh"
 
+using namespace std::literals::chrono_literals;
+
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
     return next_timestamp++;

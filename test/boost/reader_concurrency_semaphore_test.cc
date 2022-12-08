@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/util/closeable.hh>
+#include <seastar/core/file.hh>
 #include "reader_concurrency_semaphore.hh"
+#include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
@@ -17,6 +20,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <boost/test/unit_test.hpp>
 #include "readers/empty_v2.hh"
+#include "replica/database.hh" // new_reader_base_cost is there :(
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;

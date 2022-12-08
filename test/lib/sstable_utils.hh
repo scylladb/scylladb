@@ -25,39 +25,10 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-struct local_shard_only_tag { };
-using local_shard_only = bool_class<local_shard_only_tag>;
-
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
 
 inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstables::shared_sstable sst) {
     return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer("memtable"));
-}
-
-//
-// Make set of keys sorted by token for current or remote shard.
-//
-std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size, std::optional<shard_id> shard);
-std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1, local_shard_only lso = local_shard_only::yes);
-
-inline std::vector<sstring> make_keys_for_shard(shard_id shard, unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, shard);
-}
-
-inline sstring make_key_for_shard(shard_id shard, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(1, s, min_key_size, shard).front();
-}
-
-inline std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, local_shard_only::yes);
-}
-
-inline sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(1, s, min_key_size, local_shard_only::yes).front();
-}
-
-inline std::vector<sstring> make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, local_shard_only::no);
 }
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,

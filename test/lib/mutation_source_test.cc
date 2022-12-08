@@ -12,6 +12,7 @@
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "readers/mutation_source.hh"
 #include "counters.hh"
 #include "mutation_rebuilder.hh"
 #include "test/lib/simple_schema.hh"
