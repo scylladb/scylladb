@@ -1,15 +1,15 @@
-Scylla Snitches
+ScyllaDB Snitches
 ==================
 
 Snitches are used in the following ways:
 
-* To determine to which datacenters and racks the Scylla nodes belong to
-* To inform Scylla about the network topology so that requests are routed efficiently
-* To allow Scylla to distribute replicas by grouping machines into data centers and racks.
+* To determine to which datacenters and racks the ScyllaDB nodes belong to
+* To inform ScyllaDB about the network topology so that requests are routed efficiently
+* To allow ScyllaDB to distribute replicas by grouping machines into data centers and racks.
 
-Note, that if you do not choose a Snitch when creating a Scylla cluster, the SimpleSnitch is selected by default.
+Note, that if you do not choose a Snitch when creating a ScyllaDB cluster, the SimpleSnitch is selected by default.
 
-Scylla supports the following snitches:
+ScyllaDB supports the following snitches:
 
 * SimpleSnitch_
 * RackInferringSnitch_
@@ -56,7 +56,7 @@ GossipingPropertyFileSnitch
 
 Use the GossipingPropertyFileSnitch when working with multi-cluster deployments where the nodes are in various datacenters.
 It is recommended to use the GossipingPropertyFileSnitch in production installations.
-This snitch allows Scylla to explicitly define which DC and rack a specific node belongs to.
+This snitch allows ScyllaDB to explicitly define which DC and rack a specific node belongs to.
 In addition, it reads its configuration from the ``cassandra-rackdc.properties`` file, which is located in the ``/etc/scylla/`` directory.
 
 For Example:
@@ -68,9 +68,9 @@ For Example:
    rack=my_rack
 
 
-Setting *prefer_local* to *true* instructs Scylla to use an internal IP address for interactions with nodes in the same DC.
+Setting *prefer_local* to *true* instructs ScyllaDB to use an internal IP address for interactions with nodes in the same DC.
 
-An example use case is when your host uses different addresses for LAN and WAN sessions. You want your cluster to be accessible by clients *outside* the Scylla nodes’ LAN while still allowing Scylla nodes to communicate over internal LAN keeping latency low. In AWS, this is similar to a VM’s “Public” and “Private” addresses.
+An example use case is when your host uses different addresses for LAN and WAN sessions. You want your cluster to be accessible by clients *outside* the ScyllaDB nodes’ LAN while still allowing ScyllaDB nodes to communicate over internal LAN keeping latency low. In AWS, this is similar to a VM’s “Public” and “Private” addresses.
 To set an internal and external address, set a LAN address as a *listen_address* and use a WAN address as a *broadcast_address*.
 
 If you set ``prefer_local: true`` nodes in the same DC would use their LAN addresses to communicate with each other and WAN addresses to access nodes in different DCs and communicate with Clients.
@@ -139,7 +139,7 @@ Running the ``nodetool status`` command shows all three datacenters:
 .. note::
 
    The datacenter naming convention in this example is based on location.
-   You can use other conventions, such as DC1, DC2 or 100, 200, or analytics, search, Scylla, and more.
+   You can use other conventions, such as DC1, DC2 or 100, 200, or analytics, search, ScyllaDB, and more.
    Providing a separator such as a dash keeps the name of the DC readable as the ``dc_suffix`` property adds the suffix to the DC name.
 
 .. note::
@@ -183,13 +183,13 @@ Node - region ``DC='us-east'`` and Rack ``Rack='2'`` will be ``us-east-2`` dc_su
 GoogleCloudSnitch
 .................
 
-Use the GoogleCloudSnitch for deploying Scylla on the Google Cloud Engine (GCE) platform across one or more regions.
+Use the GoogleCloudSnitch for deploying ScyllaDB on the Google Cloud Engine (GCE) platform across one or more regions.
 The region is treated as a datacenter, and the availability zones are treated as racks within the datacenter.
 All communication occurs over private IP addresses within the same logical network.
 
 To use the GoogleCloudSnitch, add the snitch name to the :doc:`scylla.yaml </operating-scylla/admin>` file, which is located in the ``/etc/scylla/`` directory for **all nodes** in the cluster.
 
-You can add a suffix to the data center name as an additional identifier. This suffix is appended to the Zone name without adding any spaces. To add this suffix edit the ``cassandra-rackdc.properties`` file, which can be found under ``/etc/scylla/`` and set the ``dc_suffix`` with an appropriate text string. It may help to add an underscore or dash in front. Keep in mind that this property file is used for all Scylla snitches. When using GoogleCloudSnitch, all other properties are ignored.
+You can add a suffix to the data center name as an additional identifier. This suffix is appended to the Zone name without adding any spaces. To add this suffix edit the ``cassandra-rackdc.properties`` file, which can be found under ``/etc/scylla/`` and set the ``dc_suffix`` with an appropriate text string. It may help to add an underscore or dash in front. Keep in mind that this property file is used for all ScyllaDB snitches. When using GoogleCloudSnitch, all other properties are ignored.
 
 
 
