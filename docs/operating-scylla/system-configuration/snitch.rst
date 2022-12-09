@@ -1,5 +1,5 @@
 Scylla Snitches
-===============
+==================
 
 Snitches are used in the following ways:
 
@@ -193,7 +193,8 @@ You can add a suffix to the data center name as an additional identifier. This s
 
 
 
-**Example**
+Example
+^^^^^^^^
 
 You have two datacenters running on GCE. One is for the office in Miami and is in region **us-east1**, zone **us-east-1-b**.
 The other office is in Portland and is in region **us-west1**,, zone **us-west-1-b**.
@@ -280,7 +281,8 @@ the first character in the suffix. For example:
 Keep in mind that this property file is used for all ScyllaDB snitches. When using AzureSnitch, all other properties are ignored.
 
 
-**Example**
+Example
+^^^^^^^^
 
 In the following example, there are two datacenters running on Azure. One is for the office in Miami and is in **us-east1** location, **us-east-1-b** zone.
 The other office is in Portland and is in **us-west1** location, **us-west-1-b** zone.
@@ -338,11 +340,7 @@ Start the cluster, one node at a time, and then run ``nodetool status`` to check
    UN  192.0.2.5     670.16 KB  256          ?       f0a44a49-0035-4146-8fdc-30e66c037f95  b
 
 
-
-
-
-
-
 Related Topics
+.................
 
 .. include:: /rst_include/advance-index.rst
