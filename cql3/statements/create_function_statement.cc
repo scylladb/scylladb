@@ -50,7 +50,7 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
        // FIXME: need better way to test wasm compilation without real_database()
        wasm::context ctx{db.real_database().wasm_engine(), _name.name, qp.get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
        try {
-            wasm::compile(ctx, arg_names, _body);
+            wasm::precompile(ctx, arg_names, _body);
             return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {

@@ -20,7 +20,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
     auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get(), 100000, 100000000000);
     // Recursive fibonacci function
-    wasm::compile(wasm_ctx, {}, R"(
+    wasm::precompile(wasm_ctx, {}, R"(
 (module
   (type (;0;) (func (param i64) (result i64)))
   (func (;0;) (type 0) (param i64) (result i64)
@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "01"))
 )");
-
+    wasm_ctx.module.value()->compile(*wasm_engine);
     auto argv = wasmtime::get_val_vec();
     argv->push_i64(42);
     auto rets = wasmtime::get_val_vec();

@@ -457,6 +457,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.max_networking_aio_io_control_blocks = 50000;
+    // We need to have the entire app config to run the app, but we need to
+    // run the app to read the config file with UDF specific options so that
+    // we know whether we need to reserve additional memory for UDFs.
+    app_cfg.reserve_additional_memory = 50 * 1024 * 1024;
     app_template app(std::move(app_cfg));
 
     auto ext = std::make_shared<db::extensions>();

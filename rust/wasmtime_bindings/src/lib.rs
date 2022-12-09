@@ -37,6 +37,13 @@ mod ffi {
 
         type Module;
         fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>>;
+        fn raw_size(self: &Module) -> usize;
+        fn is_compiled(self: &Module) -> bool;
+        fn compile(self: &mut Module, engine: &mut Engine) -> Result<()>;
+        fn release(self: &mut Module);
+        fn add_user(self: &mut Module);
+        fn remove_user(self: &mut Module);
+        fn user_count(self: &Module) -> usize;
 
         type Store;
         fn create_store(
@@ -97,8 +104,13 @@ pub struct Instance {
 fn create_instance(engine: &Engine, module: &Module, store: &mut Store) -> Result<Box<Instance>> {
     let mut linker = wasmtime::Linker::new(&engine.wasmtime_engine);
     wasmtime_wasi::add_to_linker(&mut linker, |s| s).context("Failed to add wasi to linker")?;
+    let wasmtime_module = module
+        .wasmtime_module
+        .as_ref()
+        .ok_or_else(|| anyhow!("Module is not compiled"))?;
+
     let mut inst_fut =
-        Box::pin(linker.instantiate_async(&mut store.wasmtime_store, &module.wasmtime_module));
+        Box::pin(linker.instantiate_async(&mut store.wasmtime_store, wasmtime_module));
     let mut ctx = core::task::Context::from_waker(futures::task::noop_waker_ref());
 
     loop {
@@ -119,15 +131,55 @@ fn create_instance(engine: &Engine, module: &Module, store: &mut Store) -> Resul
 }
 
 pub struct Module {
-    wasmtime_module: wasmtime::Module,
+    serialized_module: Vec<u8>,
+    wasmtime_module: Option<wasmtime::Module>,
+    references: usize,
 }
 
 fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>> {
-    let module = wasmtime::Module::new(&engine.wasmtime_engine, script)
+    let module_bytes = engine
+        .wasmtime_engine
+        .precompile_module((&script).as_bytes())
         .map_err(|e| anyhow!("Compilation failed: {:?}", e))?;
-    Ok(Box::new(Module {
-        wasmtime_module: module,
-    }))
+    let module = Box::new(Module {
+        serialized_module: module_bytes,
+        wasmtime_module: None,
+        references: 0,
+    });
+    Ok(module)
+}
+
+impl Module {
+    fn raw_size(&self) -> usize {
+        self.serialized_module.len()
+    }
+    fn is_compiled(&self) -> bool {
+        self.wasmtime_module.is_some()
+    }
+    fn compile(&mut self, engine: &mut Engine) -> Result<()> {
+        if self.is_compiled() {
+            return Ok(());
+        }
+        // `deserialize` is safe because we put the result of `precompile_module` as input.
+        let module = unsafe {
+            wasmtime::Module::deserialize(&engine.wasmtime_engine, &self.serialized_module)
+                .map_err(|e| anyhow!("Deserialization failed: {:?}", e))?
+        };
+        self.wasmtime_module = Some(module);
+        Ok(())
+    }
+    fn release(&mut self) {
+        self.wasmtime_module = None;
+    }
+    fn add_user(&mut self) {
+        self.references += 1;
+    }
+    fn remove_user(&mut self) {
+        self.references -= 1;
+    }
+    fn user_count(&self) -> usize {
+        self.references
+    }
 }
 
 pub struct Store {
@@ -214,6 +266,8 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     config.static_memory_maximum_size(0);
     config.dynamic_memory_reserved_for_growth(0);
     config.dynamic_memory_guard_size(0);
+    config.max_wasm_stack(128 * 1024);
+    config.async_stack_size(256 * 1024);
 
     let engine =
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;

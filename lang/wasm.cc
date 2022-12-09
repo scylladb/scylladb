@@ -210,14 +210,16 @@ struct from_val_visitor {
     }
 };
 
-void compile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
     try {
         ctx.module = wasmtime::create_module(ctx.engine_ptr, rust::Str(script.data(), script.size()));
         // After precompiling the module, we try creating a store, an instance and a function with it to make sure it's valid.
         // If we succeed, we drop them and keep the module, knowing that we will be able to create them again for UDF execution.
+        ctx.module.value()->compile(ctx.engine_ptr);
         auto store = wasmtime::create_store(ctx.engine_ptr, ctx.total_fuel, ctx.yield_fuel);
         auto inst = create_instance(ctx.engine_ptr, **ctx.module, *store);
         create_func(*inst, *store, ctx.function_name);
+        ctx.module.value()->release();
     } catch (const rust::Error& e) {
         throw wasm::exception(e.what());
     }
@@ -293,7 +295,10 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     } catch (...) {
         ex = std::current_exception();
     }
-    ctx.cache->recycle(func_inst);
+    if (func_inst) {
+        // The construction of func_inst may have failed due to a insufficient free memory for compiled modules.
+        ctx.cache->recycle(func_inst);
+    }
     if (ex) {
         std::rethrow_exception(std::move(ex));
     }

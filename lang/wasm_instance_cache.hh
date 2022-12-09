@@ -22,11 +22,21 @@
 
 namespace wasm {
 
+class module_handle {
+    wasmtime::Module& _module;
+    instance_cache& _cache;
+public:
+    module_handle(wasmtime::Module& module, instance_cache& cache, wasmtime::Engine& engine);
+    module_handle(const module_handle&) noexcept;
+    ~module_handle() noexcept;
+};
+
 struct wasm_instance {
     rust::Box<wasmtime::Store> store;
     rust::Box<wasmtime::Instance> instance;
     rust::Box<wasmtime::Func> func;
     rust::Box<wasmtime::Memory> memory;
+    module_handle mh;
 };
 
 // For each UDF full name and a scheduling group, we store a wasmtime instance
@@ -74,6 +84,7 @@ private:
         std::optional<wasm_instance> instance;
         // iterator points to _lru.end() when the entry is being used (at that point, it is not in lru)
         std::list<lru_entry_type>::iterator it;
+        wasmtime::Module& module;
     };
 
 public:
@@ -95,6 +106,12 @@ private:
     size_t _total_size = 0;
     size_t _max_size;
     size_t _max_instance_size;
+    size_t _compiled_size = 0;
+    // The reserved size for compiled code (which is not allocated by the seastar allocator)
+    // is 50MB. We always leave some of this space free for the compilation of new instances
+    // - we only find out the real compiled size after the compilation finishes. (During
+    // the verification of the compiled code, we also allocate a new stack using this memory)
+    size_t _max_compiled_size = 40 * 1024 * 1024;
 
 public:
     explicit instance_cache(size_t size, size_t instance_size, seastar::lowres_clock::duration timer_period);
@@ -112,6 +129,42 @@ public:
     void recycle(value_type inst) noexcept;
 
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept;
+
+private:
+    friend class module_handle;
+
+    // Wasmtime instances hold references to modules, so the module can only be dropped
+    // when all instances are dropped. For a given module, we can have at most one
+    // instance for each scheduling group.
+    // This function is called each time a new instance is created for a given module.
+    // If there were no instances for the module before, i.e. this module was not
+    // compiled, the module is compiled and the size of the compiled code is added
+    // to the total size of compiled code. If the total size of compiled code exceeds
+    // the maximum size as a result of this, the function will evict modules until
+    // there is enough space for the new module. If it is not possible, the function
+    // will throw an exception. If this function succeeds, the counter of instances
+    // for the module is increased by one.
+    void track_module_ref(wasmtime::Module& module, wasmtime::Engine& engine);
+
+    // This function is called each time an instance for a given module is dropped.
+    // If the counter of instances for the module reaches zero, the module is dropped
+    // and the size of the compiled code is subtracted from the total size of compiled code.
+    void remove_module_ref(wasmtime::Module& module) noexcept;
+
+    // When a WASM UDF is executed, a separate stack is first allocated for it.
+    // This stack is used by the WASM code and it is not tracked by the seastar allocator.
+    // This function will evict cached modules until the stack can be allocated. If enough
+    // memory can't be freed, the function will throw an exception.
+    void reserve_wasm_stack();
+
+    // This function should be called after a WASM UDF finishes execution. Its stack is then
+    // destroyed and this function accounts for the freed memory.
+    void free_wasm_stack() noexcept;
+
+    // Evicts instances using lru until a module is no longer referenced by any of them.
+    void evict_modules() noexcept;
+
+public:
 
     size_t size() const;
 
