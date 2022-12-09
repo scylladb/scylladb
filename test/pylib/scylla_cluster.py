@@ -14,7 +14,9 @@ import itertools
 import logging
 import os
 import pathlib
+import re
 import shutil
+import signal
 import tempfile
 import time
 import traceback
@@ -30,7 +32,6 @@ from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 import aiohttp
 import aiohttp.web
 import yaml
-import signal
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -242,6 +243,14 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    def patch_seed_list(self, old_ip_addr: IPAddress, new_ip_addr: IPAddress) -> None:
+        """Replace an IP address in this node's seed list, e.g. because the
+        old address is not in use and the new should be used instead"""
+        old_seeds = self.config["seed_provider"][0]["parameters"][0]["seeds"]
+        new_seeds = re.sub(r"\b" + str(old_ip_addr) + r"\b", str(new_ip_addr), old_seeds)
+        if old_seeds != new_seeds:
+            self.config["seed_provider"][0]["parameters"][0]["seeds"] = new_seeds
+            self._write_config_file()
 
     async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
@@ -870,7 +879,15 @@ class ScyllaCluster:
         self.leased_ips.add(ip_addr)
         logging.info("Cluster %s changed server %s IP from %s to %s", self.name,
                      server_id, server.ip_addr, ip_addr)
+        old_ip_addr = server.ip_addr
         server.change_ip(ip_addr)
+        # Seeds are not supposed to be used after initial boot,
+        # but there is an exception. If IP addresses of all nodes
+        # in the cluster are changed, we need to update the seeds
+        # as well so that gossip can reach at least one node using
+        # a new address and connect to all the other nodes via it.
+        for server in self.servers.values():
+            server.patch_seed_list(old_ip_addr, ip_addr)
         return ScyllaCluster.ActionReturn(success=True)
 
 
