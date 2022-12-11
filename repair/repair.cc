@@ -489,7 +489,7 @@ named_semaphore& repair_module::range_parallelism_semaphore() {
 }
 
 future<> repair_module::run(repair_uniq_id id, std::function<void ()> func) {
-    return seastar::with_gate(async_gate(), [this, id, func =std::move(func)] {
+    return seastar::with_gate(async_gate(), [this, id, func = std::move(func)] () mutable {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
             rlogger.info("repair[{}]: completed successfully", id.uuid());
