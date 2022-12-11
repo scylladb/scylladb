@@ -1443,7 +1443,7 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
     std::ostringstream ss;
 
-    this->schema()->describe(db, ss);
+    this->schema()->describe(db, ss, false);
 
     auto schema_description = ss.str();
     auto schema_file_name = dir + "/schema.cql";

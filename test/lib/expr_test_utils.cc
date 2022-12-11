@@ -450,6 +450,12 @@ public:
     virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
         return {make_keyspace(this, nullptr)};
     }
+    virtual std::vector<sstring> get_user_keyspaces(data_dictionary::database db) const override {
+        return {_table_schema->ks_name()};
+    }
+    virtual std::vector<sstring> get_all_keyspaces(data_dictionary::database db) const override {
+        return {_table_schema->ks_name()};
+    }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
         return {make_table(this, nullptr)};
     }

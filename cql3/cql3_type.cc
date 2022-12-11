@@ -473,25 +473,38 @@ sstring maybe_quote(const sstring& identifier) {
     return result;
 }
 
-sstring quote(const sstring& identifier) {
+template <char C>
+static sstring quote_with(const sstring& str) {
+    static const std::string quote_str{C};
+
     // quote empty string
-    if (identifier.empty()) {
-        return "\"\"";
+    if (str.empty()) {
+        return make_sstring(quote_str, quote_str);
     }
     size_t num_quotes = 0;
-    for (char c : identifier) {
-        num_quotes += (c == '"');
+    for (char c : str) {
+        num_quotes += (c == C);
     }
     if (num_quotes == 0) {
-        return make_sstring("\"", identifier, "\"");
+        return make_sstring(quote_str, str, quote_str);
     }
-    static const std::regex double_quote_re("\"");
+
+    static const std::string double_quote_str{C, C};
+    static const std::regex quote_re(std::string{C});
     std::string result;
-    result.reserve(2 + identifier.size() + num_quotes);
-    result.push_back('"');
-    std::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
-    result.push_back('"');
+    result.reserve(2 + str.size() + num_quotes);
+    result.push_back(C);
+    std::regex_replace(std::back_inserter(result), str.begin(), str.end(), quote_re, double_quote_str);
+    result.push_back(C);
     return result;
+}
+
+sstring quote(const sstring& identifier) {
+    return quote_with<'"'>(identifier);
+}
+
+sstring single_quote(const sstring& str) {
+    return quote_with<'\''>(str);
 }
 
 }

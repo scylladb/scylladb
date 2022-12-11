@@ -19,6 +19,8 @@ public:
     virtual ~impl();
     virtual std::optional<keyspace> try_find_keyspace(database db, std::string_view name) const = 0;
     virtual std::vector<keyspace> get_keyspaces(database db) const = 0;
+    virtual std::vector<sstring> get_user_keyspaces(database db) const = 0;
+    virtual std::vector<sstring> get_all_keyspaces(database db) const = 0;
     virtual std::vector<table> get_tables(database db) const = 0;
     virtual std::optional<table> try_find_table(database db, std::string_view ks, std::string_view tab) const = 0;
     virtual std::optional<table> try_find_table(database db, table_id id) const = 0;

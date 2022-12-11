@@ -33,6 +33,9 @@ public:
     void remove_type(user_type type) {
         _user_types.erase(type->_name);
     }
+    bool has_type(const bytes& name) const {
+        return _user_types.contains(name);
+    }
     friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
 };
 

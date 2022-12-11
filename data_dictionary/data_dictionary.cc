@@ -12,7 +12,9 @@
 #include "keyspace_metadata.hh"
 #include "schema.hh"
 #include "utils/overloaded_functor.hh"
+#include "cql3/util.hh"
 #include <fmt/core.h>
+#include <ios>
 #include <ostream>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -78,6 +80,16 @@ database::find_keyspace(std::string_view name) const {
 std::vector<keyspace>
 database::get_keyspaces() const {
     return _ops->get_keyspaces(*this);
+}
+
+std::vector<sstring> 
+database::get_user_keyspaces() const {
+    return _ops->get_user_keyspaces(*this);
+}
+
+std::vector<sstring> 
+database::get_all_keyspaces() const {
+    return _ops->get_all_keyspaces(*this);
 }
 
 std::vector<table>
@@ -339,6 +351,17 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, std::stri
 no_such_column_family::no_such_column_family(std::string_view ks_name, const table_id& uuid)
     : runtime_error{format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
 {
+}
+
+std::ostream& keyspace_metadata::describe(std::ostream& os) const {
+    os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
+       << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
+    for (const auto& opt: _strategy_options) {
+        os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
+    }
+    os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha << ";";
+
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {

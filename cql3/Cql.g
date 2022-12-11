@@ -51,6 +51,7 @@ options {
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/raw/use_statement.hh"
 #include "cql3/statements/raw/batch_statement.hh"
+#include "cql3/statements/raw/describe_statement.hh"
 #include "cql3/statements/list_users_statement.hh"
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
@@ -358,6 +359,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st46=listServiceLevelStatement { $stmt = std::move(st46); }
     | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
+    | st49=describeStatement           { $stmt = std::move(st49); }
     ;
 
 /*
@@ -1368,6 +1370,59 @@ listServiceLevelAttachStatement returns [std::unique_ptr<list_service_level_atta
       { $stmt = std::make_unique<list_service_level_attachments_statement>(); }
     ;
 
+/**
+ * (DESCRIBE | DESC) (
+ *    CLUSTER
+ *    [FULL] SCHEMA
+ *    KEYSPACES
+ *    [ONLY] KEYSPACE <name>?
+ *    TABLES
+ *    TABLE <name>
+ *    TYPES
+ *    TYPE <name>
+ *    FUNCTIONS
+ *    FUNCTION <name>
+ *    AGGREGATES
+ *    AGGREGATE <name>
+ * ) (WITH INTERNALS)?
+ */
+describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_statement> stmt]
+    @init {
+        bool fullSchema = false;
+        bool pending = false;
+        bool config = false;
+        bool only = false;
+        std::optional<sstring> keyspace;
+        sstring generic_name = "";
+    }
+    : ( K_DESCRIBE | K_DESC )
+    ( (K_CLUSTER) => K_CLUSTER                      { $stmt = cql3::statements::raw::describe_statement::cluster();                }
+    | (K_FULL { fullSchema=true; })? K_SCHEMA       { $stmt = cql3::statements::raw::describe_statement::schema(fullSchema);       }
+    | (K_KEYSPACES) => K_KEYSPACES                  { $stmt = cql3::statements::raw::describe_statement::keyspaces();              }
+    | (K_ONLY { only=true; })? K_KEYSPACE ( ks=keyspaceName { keyspace = ks; })?
+                                                    { $stmt = cql3::statements::raw::describe_statement::keyspace(keyspace, only); }
+    | (K_TABLES) => K_TABLES                        { $stmt = cql3::statements::raw::describe_statement::tables();                 }
+    | K_COLUMNFAMILY cf=columnFamilyName            { $stmt = cql3::statements::raw::describe_statement::table(cf);                }
+    | K_INDEX idx=columnFamilyName                  { $stmt = cql3::statements::raw::describe_statement::index(idx);               }
+    | K_MATERIALIZED K_VIEW view=columnFamilyName   { $stmt = cql3::statements::raw::describe_statement::view(view);               }
+    | (K_TYPES) => K_TYPES                          { $stmt = cql3::statements::raw::describe_statement::types();                  }
+    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(tn);                 }
+    | (K_FUNCTIONS) => K_FUNCTIONS                  { $stmt = cql3::statements::raw::describe_statement::functions();              }
+    | K_FUNCTION fn=functionName                    { $stmt = cql3::statements::raw::describe_statement::function(fn);             }
+    | (K_AGGREGATES) => K_AGGREGATES                { $stmt = cql3::statements::raw::describe_statement::aggregates();             }
+    | K_AGGREGATE ag=functionName                   { $stmt = cql3::statements::raw::describe_statement::aggregate(ag);            }
+    | ( ( ksT=IDENT                                 { keyspace = sstring{$ksT.text}; }
+        | ksT=QUOTED_NAME                           { keyspace = sstring{$ksT.text}; }
+        | ksK=unreserved_keyword                    { keyspace = ksK; } ) 
+        '.' )?
+        ( tT=IDENT                                  { generic_name = sstring{$tT.text}; }
+        | tT=QUOTED_NAME                            { generic_name = sstring{$tT.text}; }
+        | tK=unreserved_keyword                     { generic_name = tK; } )
+                                                    { $stmt = cql3::statements::raw::describe_statement::generic(keyspace, generic_name); }
+    )
+    ( K_WITH K_INTERNALS { $stmt->with_internals_details(); } )?
+    ;
+
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
@@ -1897,10 +1952,13 @@ unreserved_function_keyword returns [sstring str]
 basic_unreserved_keyword returns [sstring str]
     : k=( K_KEYS
         | K_AS
+        | K_CLUSTER
         | K_CLUSTERING
         | K_COMPACT
         | K_STORAGE
+        | K_TABLES
         | K_TYPE
+        | K_TYPES
         | K_VALUES
         | K_MAP
         | K_LIST
@@ -1924,11 +1982,14 @@ basic_unreserved_keyword returns [sstring str]
         | K_TRIGGER
         | K_DISTINCT
         | K_CONTAINS
+        | K_INTERNALS
         | K_STATIC
         | K_FROZEN
         | K_TUPLE
         | K_FUNCTION
+        | K_FUNCTIONS
         | K_AGGREGATE
+        | K_AGGREGATES
         | K_SFUNC
         | K_STYPE
         | K_REDUCEFUNC
@@ -1956,6 +2017,9 @@ basic_unreserved_keyword returns [sstring str]
         | K_LEVEL
         | K_LEVELS
         | K_PRUNE
+        | K_ONLY
+        | K_DESCRIBE
+        | K_DESC
         ) { $str = $k.text; }
     ;
 
@@ -2013,11 +2077,14 @@ K_TRUNCATE:    T R U N C A T E;
 K_DELETE:      D E L E T E;
 K_IN:          I N;
 K_CREATE:      C R E A T E;
+K_SCHEMA:      S C H E M A;
 K_KEYSPACE:    ( K E Y S P A C E
-                 | S C H E M A );
+                 | K_SCHEMA );
 K_KEYSPACES:   K E Y S P A C E S;
 K_COLUMNFAMILY:( C O L U M N F A M I L Y
                  | T A B L E );
+K_TABLES:      ( C O L U M N F A M I L I E S
+                 | T A B L E S );
 K_MATERIALIZED:M A T E R I A L I Z E D;
 K_VIEW:        V I E W;
 K_INDEX:       I N D E X;
@@ -2034,6 +2101,7 @@ K_ALTER:       A L T E R;
 K_RENAME:      R E N A M E;
 K_ADD:         A D D;
 K_TYPE:        T Y P E;
+K_TYPES:       T Y P E S;
 K_COMPACT:     C O M P A C T;
 K_STORAGE:     S T O R A G E;
 K_ORDER:       O R D E R;
@@ -2045,6 +2113,8 @@ K_FILTERING:   F I L T E R I N G;
 K_IF:          I F;
 K_IS:          I S;
 K_CONTAINS:    C O N T A I N S;
+K_INTERNALS:   I N T E R N A L S;
+K_ONLY:        O N L Y;
 
 K_GRANT:       G R A N T;
 K_ALL:         A L L;
@@ -2068,6 +2138,7 @@ K_LOGIN:       L O G I N;
 K_NOLOGIN:     N O L O G I N;
 K_OPTIONS:     O P T I O N S;
 
+K_CLUSTER:     C L U S T E R;
 K_CLUSTERING:  C L U S T E R I N G;
 K_ASCII:       A S C I I;
 K_BIGINT:      B I G I N T;
@@ -2107,7 +2178,9 @@ K_STATIC:      S T A T I C;
 K_FROZEN:      F R O Z E N;
 
 K_FUNCTION:    F U N C T I O N;
+K_FUNCTIONS:   F U N C T I O N S;
 K_AGGREGATE:   A G G R E G A T E;
+K_AGGREGATES:  A G G R E G A T E S;
 K_SFUNC:       S F U N C;
 K_STYPE:       S T Y P E;
 K_REDUCEFUNC:  R E D U C E F U N C;

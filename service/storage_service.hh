@@ -382,11 +382,6 @@ public:
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(const sstring& keyspace) const;
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
 
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map_in_local_dc(
-            locator::effective_replication_map_ptr erm) const;
-
-    future<std::vector<token>> get_tokens_in_local_dc(const locator::token_metadata&) const;
-
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm,
             const std::vector<token>& sorted_tokens) const;
 

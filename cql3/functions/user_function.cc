@@ -7,6 +7,7 @@
  */
 
 #include "user_function.hh"
+#include "cql3/util.hh"
 #include "log.hh"
 #include "cql_serialization_format.hh"
 #include "lang/wasm.hh"
@@ -64,6 +65,34 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
                 throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
             }
         });
+}
+
+std::ostream& user_function::describe(std::ostream& os) const {
+    auto ks = cql3::util::maybe_quote(name().keyspace);
+    auto na = cql3::util::maybe_quote(name().name);
+
+    os << "CREATE FUNCTION " << ks << "." << na << "(";
+    for (size_t i = 0; i < _arg_names.size(); i++) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
+    }
+    os << ")\n";
+
+    if (_called_on_null_input) {
+        os << "CALLED";
+    } else {
+        os << "RETURNS NULL";
+    }
+    os << " ON NULL INPUT\n"
+       << "RETURNS " << _return_type->cql3_type_name() << "\n"
+       << "LANGUAGE " << _language << "\n"
+       << "AS $$\n"
+       << _body << "\n"
+       << "$$;";
+
+    return os;
 }
 
 }

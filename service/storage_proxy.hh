@@ -35,6 +35,7 @@
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
+#include "dht/token_range_endpoints.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -218,6 +219,8 @@ public:
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
     query::tombstone_limit get_tombstone_limit() const;
     inet_address_vector_replica_set get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
+
+    future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
 private:
     distributed<replica::database>& _db;

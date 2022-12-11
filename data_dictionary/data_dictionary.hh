@@ -103,6 +103,8 @@ public:
     std::optional<keyspace> try_find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;  // throws no_keyspace
     std::vector<keyspace> get_keyspaces() const;
+    std::vector<sstring> get_user_keyspaces() const;
+    std::vector<sstring> get_all_keyspaces() const;
     std::vector<table> get_tables() const;
     table find_table(std::string_view ks, std::string_view table) const;  // throws no_such_column_family
     table find_column_family(table_id uuid) const;  // throws no_such_column_family

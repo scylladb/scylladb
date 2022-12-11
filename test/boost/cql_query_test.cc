@@ -4251,7 +4251,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
             auto schema = e.local_db().find_schema("ks", ct.first);
             std::ostringstream ss;
 
-            schema->describe(e.local_db(), ss);
+            schema->describe(e.local_db(), ss, false);
             BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
         }
     });
@@ -4319,12 +4319,12 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
             auto schema = e.local_db().find_schema("KS", ct.first);
             std::ostringstream ss;
 
-            schema->describe(e.local_db(), ss);
+            schema->describe(e.local_db(), ss, false);
             BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
 
             auto base_schema = e.local_db().find_schema("KS", "cF");
             std::ostringstream base_ss;
-            base_schema->describe(e.local_db(), base_ss);
+            base_schema->describe(e.local_db(), base_ss, false);
             BOOST_CHECK_EQUAL(normalize_white_space(base_ss.str()), normalize_white_space(base_table));
         }
     });

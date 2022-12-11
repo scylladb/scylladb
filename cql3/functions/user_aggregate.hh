@@ -11,11 +11,12 @@
 #include "abstract_function.hh"
 #include "scalar_function.hh"
 #include "aggregate_function.hh"
+#include "data_dictionary/keyspace_element.hh"
 
 namespace cql3 {
 namespace functions {
 
-class user_aggregate : public abstract_function, public aggregate_function{
+class user_aggregate : public abstract_function, public aggregate_function, public data_dictionary::keyspace_element {
     bytes_opt _initcond;
     ::shared_ptr<scalar_function> _sfunc;
     ::shared_ptr<scalar_function> _reducefunc;
@@ -30,6 +31,11 @@ public:
     virtual bool is_reducible() const override;
     virtual bool requires_thread() const override;
     bool has_finalfunc() const;
+
+    virtual sstring keypace_name() const override { return name().keyspace; }
+    virtual sstring element_name() const override { return name().name; }
+    virtual sstring element_type() const override { return "aggregate"; }
+    virtual std::ostream& describe(std::ostream& os) const override;
 
     const scalar_function& sfunc() const {
         return *_sfunc;

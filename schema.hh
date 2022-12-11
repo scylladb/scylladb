@@ -19,6 +19,7 @@
 #include "cql3/column_specification.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
+#include "seastar/core/sstring.hh"
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
@@ -30,6 +31,7 @@
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "schema_fwd.hh"
+#include "data_dictionary/keyspace_element.hh"
 
 namespace dht {
 
@@ -565,7 +567,7 @@ public:
  * Not safe to access across cores because of shared_ptr's.
  * Use global_schema_ptr for safe across-shard access.
  */
-class schema final : public enable_lw_shared_from_this<schema> {
+class schema final : public enable_lw_shared_from_this<schema>, public data_dictionary::keyspace_element {
     friend class v3_columns;
 public:
     struct dropped_column {
@@ -919,11 +921,11 @@ public:
     // Search for an existing index with same kind and options.
     std::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
+    virtual sstring keypace_name() const override { return ks_name(); }
+    virtual sstring element_name() const override { return cf_name(); }
+    virtual sstring element_type(replica::database& db) const override;
     /*!
      * \brief stream the CQL DESCRIBE output.
-     *
-     * CQL DESCRIBE is implemented at the driver level. This method mimic that functionality
-     * inside Scylla.
      *
      * The output of DESCRIBE is the CQL command to create the described table with its indexes and views.
      *
@@ -935,8 +937,11 @@ public:
      * or "CREATE INDEX" depends on the type of index that schema describes (ie. Materialized View, Global
      * Index or Local Index).
      *
+     * When `with_internals` is true, the description is extended with table's id and dropped columns.
+     * The dropped columns are present in column definitions and also the `ALTER DROP` statement 
+     * (and `ALTER ADD` if the column has been readded) to the description.
      */
-    std::ostream& describe(replica::database& db, std::ostream& os) const;
+    virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
