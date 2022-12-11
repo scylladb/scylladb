@@ -9,6 +9,7 @@
 #pragma once
 
 #include <source_location>
+#include "utils/source_location-compat.hh"
 #include <functional>
 #include <seastar/core/sstring.hh>
 

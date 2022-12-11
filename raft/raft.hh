@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <functional>
 #include <source_location>
+#include "utils/source_location-compat.hh"
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
