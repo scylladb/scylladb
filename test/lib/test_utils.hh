@@ -9,6 +9,7 @@
 #pragma once
 
 #include <source_location>
+#include "utils/source_location-compat.hh"
 #include <string>
 
 #include <fmt/format.h>
