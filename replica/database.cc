@@ -1020,7 +1020,11 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
     co_await sharded_db.invoke_on_all([&] (database& db) {
         return db.detach_column_family(*table_shards[this_shard_id()]);
     });
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, table_shards, db_clock::time_point::max(), with_snapshot, std::move(snapshot_name_opt)));
+    // Use a time point in the far future (9999-12-31T00:00:00+0000)
+    // to ensure all sstables are truncated,
+    // but be careful to stays within the client's datetime limits.
+    constexpr db_clock::time_point truncated_at(std::chrono::seconds(253402214400));
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
     co_await smp::invoke_on_all([&] {
         return table_shards[this_shard_id()]->stop();
     });
