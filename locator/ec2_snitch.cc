@@ -2,6 +2,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/do_with.hh>
+#include <seastar/http/reply.hh>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -114,6 +115,9 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
 
             // Read HTTP response header first
             auto _rsp = _parser.get_parsed_response();
+            if (_rsp->_status_code != static_cast<int>(httpd::reply::status_type::ok)) {
+                return make_exception_future<sstring>(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status_code)));
+            }
             auto it = _rsp->_headers.find("Content-Length");
             if (it == _rsp->_headers.end()) {
                 return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");

@@ -14,6 +14,7 @@
 #include <seastar/net/dns.hh>
 #include <seastar/core/seastar.hh>
 #include "locator/gce_snitch.hh"
+#include <seastar/http/reply.hh>
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -106,6 +107,10 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
 
         // Read HTTP response header first
         auto rsp = parser.get_parsed_response();
+        if (rsp->_status_code != static_cast<int>(httpd::reply::status_type::ok)) {
+            throw std::runtime_error(format("Error: HTTP response status {}", rsp->_status_code));
+        }
+
         auto it = rsp->_headers.find("Content-Length");
         if (it == rsp->_headers.end()) {
             throw std::runtime_error("Error: HTTP response does not contain: Content-Length\n");
