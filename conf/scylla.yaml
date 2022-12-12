@@ -448,20 +448,20 @@ commitlog_total_space_in_mb: -1
 #    internode_encryption: none
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
-#    truststore: <none, use system trust>
-#    certficate_revocation_list: <none>
+#    truststore: <not set, use system trust>
+#    certficate_revocation_list: <not set>
 #    require_client_auth: False
-#    priority_string: <none, use default>
+#    priority_string: <not set, use default>
 
 # enable or disable client/server encryption.
 # client_encryption_options:
 #    enabled: false
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
-#    truststore: <none, use system trust>
-#    certficate_revocation_list: <none>
+#    truststore: <not set, use system trust>
+#    certficate_revocation_list: <not set>
 #    require_client_auth: False
-#    priority_string: <none, use default>
+#    priority_string: <not set, use default>
 
 # internode_compression controls whether traffic between nodes is
 # compressed.
