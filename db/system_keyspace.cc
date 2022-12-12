@@ -2783,7 +2783,7 @@ future<locator::host_id> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
-        co_return co_await set_local_host_id(locator::host_id::create_random_id());
+        co_return co_await set_local_random_host_id();
     } else {
         auto host_id = locator::host_id(msg->one().get_as<utils::UUID>("host_id"));
         slogger.info("Loaded local host id: {}", host_id);
@@ -2791,7 +2791,8 @@ future<locator::host_id> system_keyspace::load_local_host_id() {
     }
 }
 
-future<locator::host_id> system_keyspace::set_local_host_id(locator::host_id host_id) {
+future<locator::host_id> system_keyspace::set_local_random_host_id() {
+    auto host_id = locator::host_id::create_random_id();
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
