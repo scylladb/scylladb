@@ -337,7 +337,7 @@ public:
             // to perform the operation.
             auto live_members = _gossiper.get_live_members().size();
 
-            return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
+            co_await coroutine::return_exception(exceptions::unavailable_exception(db::consistency_level::ALL,
                     live_members + _gossiper.get_unreachable_members().size(),
                     live_members));
         }
@@ -347,18 +347,16 @@ public:
 
         slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
 
-        return parallel_for_each(all_endpoints, [this, keyspace, cfname, timeout] (auto ep) {
-            return send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
-        }).handle_exception([cfname](auto ep) {
-           try {
-               std::rethrow_exception(ep);
+        try {
+            co_await coroutine::parallel_for_each(all_endpoints, [&] (auto ep) {
+                return send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+            });
            } catch (rpc::timeout_error& e) {
                slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
                throw;
            } catch (...) {
                throw;
            }
-        });
     }
 
 private:
