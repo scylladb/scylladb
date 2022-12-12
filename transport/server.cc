@@ -34,6 +34,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
@@ -613,9 +614,9 @@ future<> cql_server::connection::process_request() {
             write_response(make_error(stream, exceptions::exception_code::INVALID,
                     format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}", f.length, mem_estimate, _server._max_request_size),
                     tracing::trace_state_ptr()));
-            return std::exchange(_ready_to_respond, make_ready_future<>()).then([this] {
-                return _read_buf.close();
-            });
+            return std::exchange(_ready_to_respond, make_ready_future<>())
+                .then([this] { return _read_buf.close(); })
+                .then([this] { return util::skip_entire_stream(_read_buf); });
         }
 
         if (_server._stats.requests_serving > _server._max_concurrent_requests) {
