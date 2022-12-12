@@ -1406,8 +1406,10 @@ table::~table() {
 
 logalloc::occupancy_stats table::occupancy() const {
     logalloc::occupancy_stats res;
-    for (auto m : *_compaction_group->memtables()) {
-        res += m->region().occupancy();
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        for (auto& m : *cg->memtables()) {
+            res += m->region().occupancy();
+        }
     }
     return res;
 }
