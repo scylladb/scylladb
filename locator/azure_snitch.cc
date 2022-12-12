@@ -48,7 +48,8 @@ future<> azure_snitch::load_config() {
 
     logger().info("AzureSnitch using region: {}, zone: {}.", azure_region, azure_zone);
 
-    _my_rack = azure_zone;
+    // Zoneless regions return empty zone
+    _my_rack = (azure_zone != "" ? azure_zone : azure_region);
     _my_dc = azure_region;
 
     co_return co_await _my_distributed->invoke_on_all([this] (snitch_ptr& local_s) {
