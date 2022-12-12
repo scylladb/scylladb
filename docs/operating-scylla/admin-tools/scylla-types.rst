@@ -13,9 +13,6 @@ Run ``scylla types --help`` for additional information about the tool and the op
 Usage
 ------
 
-Syntax
-^^^^^^
-
 The command syntax is as follows:
 
 .. code-block:: console
@@ -31,7 +28,7 @@ The command syntax is as follows:
 .. _scylla-types-type:
 
 Specifying the Value Type
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+-------------------------
 
 You must specify the type of the value(s) you want to examine by adding the ``-t [type name]`` option to the operation. 
 Specify the type by providing its Cassandra class name (the prefix can be omitted, for example, you can provide ``Int32Type`` 
@@ -63,7 +60,7 @@ of the types on the command line must be the same as the order in the compound).
 .. _scylla-types-operations:
 
 Supported Operations
-^^^^^^^^^^^^^^^^^^^^^^^
+--------------------
 * ``serialize`` - Serialize the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form. To avoid problems around special symbols, separate values with ``--`` from the rest of the arguments.
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
@@ -81,7 +78,7 @@ You can learn more about each operation by invoking its help:
 .. _scylla-types-options:
 
 Additional Options
-^^^^^^^^^^^^^^^^^^^
+------------------
 
 You can run ``scylla types [operation] --help`` for additional information on a given operation.
 
@@ -94,7 +91,7 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``--value arg`` - Specifies the value to process (if not provided as a positional argument).
 
 Examples
-^^^^^^^^
+--------
 * Serializing a value of type Int32Type:
 
     .. code-block:: console

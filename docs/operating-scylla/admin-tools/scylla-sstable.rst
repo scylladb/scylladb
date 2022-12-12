@@ -24,9 +24,6 @@ Currently, SStableDump_ works better on production systems as it automatically l
 Usage
 ------
 
-Syntax
-^^^^^^
-
 The command syntax is as follows:
 
 .. code-block:: console
@@ -37,7 +34,7 @@ The command syntax is as follows:
 You can specify more than one SStable.
 
 Schema
-^^^^^^
+------
 All operations need a schema to interpret the SStables with.
 Currently, there are two ways to obtain the schema:
 
@@ -75,7 +72,7 @@ Note:
 * The schema file doesn't have to be called ``schema.cql``, this is just the default name. Any file name is supported (with any extension).
 
 Dropped columns
-***************
+^^^^^^^^^^^^^^^
 
 The examined sstable might have columns which were dropped from the schema definition. In this case providing the up-do-date schema will not be enough, the tool will fail when attempting to process a cell for the dropped column.
 Dropped columns can be provided to the tool in the form of insert statements into the ``system_schema.dropped_columns`` system table, in the schema definition file. Example:
@@ -99,7 +96,7 @@ Dropped columns can be provided to the tool in the form of insert statements int
     CREATE TABLE ks.cf (pk int PRIMARY KEY, v2 int);
 
 System tables
-*************
+^^^^^^^^^^^^^
 
 If the examined table is a system table -- it belongs to one of the system keyspaces (``system``, ``system_schema``, ``system_distributed`` or ``system_distributed_everywhere``) -- you can just tell the tool to use the known built-in definition of said table. This is possible with the ``--system-schema`` flag. Example:
 
@@ -108,7 +105,7 @@ If the examined table is a system table -- it belongs to one of the system keysp
     scylla sstable dump-data --system-schema system.local ./path/to/md-123456-big-Data.db
 
 Supported Operations
-^^^^^^^^^^^^^^^^^^^^^^^
+--------------------
 The ``dump-*`` operations output JSON. For ``dump-data``, you can specify another output format.
 
 * ``dump-data`` - Dumps the content of the SStable. You can use it with additional parameters:
@@ -132,7 +129,7 @@ The ``dump-*`` operations output JSON. For ``dump-data``, you can specify anothe
 * ``decompress`` - Decompresses the data component of the SStable (the ``*-Data.db`` file) if compressed. The decompressed data is written to a ``*-Data.decompressed`` file.
 
 Examples
-^^^^^^^^
+--------
 Dumping the content of the SStable:
 
 .. code-block:: console
