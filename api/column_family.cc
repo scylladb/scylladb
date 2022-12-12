@@ -334,13 +334,13 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t{0}, [](replica::column_family& cf) {
-            return cf.active_memtable().partition_count();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed(std::mem_fn(&replica::memtable::partition_count)), uint64_t(0));
         }, std::plus<>());
     });
 
     cf::get_all_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t{0}, [](replica::column_family& cf) {
-            return cf.active_memtable().partition_count();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed(std::mem_fn(&replica::memtable::partition_count)), uint64_t(0));
         }, std::plus<>());
     });
 
@@ -354,25 +354,33 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
-            return cf.active_memtable().region().occupancy().total_space();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
+                return active_memtable->region().occupancy().total_space();
+            }), uint64_t(0));
         }, std::plus<int64_t>());
     });
 
     cf::get_all_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return cf.active_memtable().region().occupancy().total_space();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
+                return active_memtable->region().occupancy().total_space();
+            }), uint64_t(0));
         }, std::plus<int64_t>());
     });
 
     cf::get_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](replica::column_family& cf) {
-            return cf.active_memtable().region().occupancy().used_space();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
+                return active_memtable->region().occupancy().used_space();
+            }), uint64_t(0));
         }, std::plus<int64_t>());
     });
 
     cf::get_all_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return cf.active_memtable().region().occupancy().used_space();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
+                return active_memtable->region().occupancy().used_space();
+            }), uint64_t(0));
         }, std::plus<int64_t>());
     });
 
@@ -410,7 +418,9 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_all_cf_all_memtables_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         warn(unimplemented::cause::INDEXES);
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
-            return cf.active_memtable().region().occupancy().used_space();
+            return boost::accumulate(cf.active_memtables() | boost::adaptors::transformed([] (replica::memtable* active_memtable) {
+                return active_memtable->region().occupancy().used_space();
+            }), uint64_t(0));
         }, std::plus<int64_t>());
     });
 

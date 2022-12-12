@@ -591,11 +591,11 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
                 assert_that_scanner3.produces(mutations[i]);
             }
 
-            replica::memtable& m = cf.active_memtable(); // held by scanners
+            auto ms = cf.active_memtables(); // held by scanners
 
             auto flushed = cf.flush();
 
-            while (!m.is_flushed()) {
+            while (!std::ranges::all_of(ms, std::mem_fn(&replica::memtable::is_flushed))) {
                 sleep(10ms).get();
             }
 

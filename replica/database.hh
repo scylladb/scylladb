@@ -526,6 +526,7 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    using compaction_group_ptr = std::unique_ptr<compaction_group>;
     std::vector<std::unique_ptr<compaction_group>> make_compaction_groups();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
@@ -713,9 +714,9 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    // FIXME: for supporting multiple compaction groups, this interface will need to return
-    // as many active sstables as there are groups.
-    memtable& active_memtable();
+    // Return all active memtables, where there will be one per compaction group
+    // TODO: expose stats, whatever, instead of exposing active memtables themselves.
+    std::vector<memtable*> active_memtables();
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;

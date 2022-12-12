@@ -290,8 +290,10 @@ future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
 
-memtable& table::active_memtable() {
-    return _compaction_group->memtables()->active_memtable();
+std::vector<memtable*> table::active_memtables() {
+    return boost::copy_range<std::vector<memtable*>>(compaction_groups() | boost::adaptors::transformed([] (const compaction_group_ptr& cg) {
+        return &cg->memtables()->active_memtable();
+    }));
 }
 
 api::timestamp_type compaction_group::min_memtable_timestamp() const {

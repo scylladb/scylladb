@@ -971,8 +971,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family("ks", "cf");
-        replica::memtable& m = t.active_memtable();
-        replica::dirty_memory_manager& dmm = m.get_dirty_memory_manager();
+        auto memtables = t.active_memtables();
 
         // Insert something so that we have data in memtable to flush
         // it has to be somewhat large, as automatic flushing picks the
@@ -992,7 +991,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 
         BOOST_ASSERT(eventually_true([&] {
             // Trigger flush
-            dmm.notify_soft_pressure();
+            for (auto m : memtables) {
+                m->get_dirty_memory_manager().notify_soft_pressure();
+            }
             return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
