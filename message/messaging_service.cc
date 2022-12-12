@@ -427,6 +427,11 @@ future<> messaging_service::shutdown() {
 }
 
 future<> messaging_service::stop() {
+    if (!_shutting_down) {
+        return shutdown().then([this] {
+            return stop();
+        });
+    }
     return unregister_handler(messaging_verb::CLIENT_ID).then([this] {
         if (_rpc->has_handlers()) {
             mlogger.error("RPC server still has handlers registered");
