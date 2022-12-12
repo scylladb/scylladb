@@ -293,8 +293,7 @@ private:
     struct replacement_info {
         std::unordered_set<token> tokens;
         locator::endpoint_dc_rack dc_rack;
-        // Present only if Raft is enabled.
-        std::optional<raft::server_id> raft_id;
+        locator::host_id host_id;
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);

@@ -334,7 +334,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
         raft_replace_info = raft_group0::replace_info {
             .ip_addr = *replace_address,
-            .raft_id = std::move(ri.raft_id)
+            .raft_id = raft::server_id{ri.host_id.uuid()},
         };
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -1650,19 +1650,6 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
     }
 }
 
-// If the Raft ID is present in gossiper and non-empty, return it.
-// Otherwise return nullopt.
-static std::optional<raft::server_id> get_raft_id_for(gms::gossiper& g, gms::inet_address ep) {
-    auto app_state = g.get_application_state_ptr(ep, gms::application_state::RAFT_SERVER_ID);
-    if (app_state) {
-        auto value = utils::UUID{app_state->value};
-        if (value) {
-            return raft::server_id{value};
-        }
-    }
-    return std::nullopt;
-}
-
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!get_replace_address()) {
@@ -1702,16 +1689,15 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     }
 
     auto dc_rack = get_dc_rack_for(replace_address);
-    auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
     auto replace_host_id = _gossiper.get_host_id(replace_address);
-    slogger.info("Host {}/{} is replacing {}/{} using a different address", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
+    slogger.info("Host {}/{} is replacing {}/{}", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
         .tokens = std::move(tokens),
         .dc_rack = std::move(dc_rack),
-        .raft_id = std::move(raft_id),
+        .host_id = std::move(replace_host_id),
     };
 }
 

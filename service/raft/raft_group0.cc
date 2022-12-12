@@ -526,13 +526,6 @@ future<> raft_group0::setup_group0(
         co_return;
     }
 
-    if (replace_info && !replace_info->raft_id) {
-        auto msg = format("Cannot perform replace operation: Raft ID of the replaced server (IP: {}) is missing.",
-                          replace_info->ip_addr);
-        group0_log.error("{}", msg);
-        throw std::runtime_error{std::move(msg)};
-    }
-
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
         if (addr != _gossiper.get_broadcast_address()) {
@@ -554,13 +547,11 @@ future<> raft_group0::setup_group0(
         // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
         // another node and fetch application states from it) and pass it to `setup_group0`.
 
-        // Checked earlier.
-        assert(replace_info->raft_id);
         group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
-                        *replace_info->raft_id, replace_info->ip_addr);
+                        replace_info->raft_id, replace_info->ip_addr);
 
         // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
-        _raft_gr.address_map().opt_add_entry(*replace_info->raft_id, replace_info->ip_addr);
+        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
     }
 
     // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
