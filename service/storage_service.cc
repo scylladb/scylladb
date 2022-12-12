@@ -170,6 +170,21 @@ void storage_service::register_metrics() {
     });
 }
 
+std::optional<gms::inet_address> get_owner_of_tokens(locator::mutable_token_metadata_ptr tmptr, const std::unordered_set<dht::token>& tokens) {
+    std::unordered_set<gms::inet_address> nodes;
+    for (auto& t : tokens) {
+        auto addr = tmptr->get_endpoint(t);
+        if (addr) {
+            nodes.insert(*addr);
+        }
+    }
+    if (nodes.size() == 1) {
+        return *nodes.begin();
+    } else {
+        return {};
+    }
+}
+
 std::optional<gms::inet_address> storage_service::get_replace_address() {
     auto& cfg = _db.local().get_config();
     sstring replace_address = cfg.replace_address();
@@ -799,10 +814,13 @@ future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_t
 
 future<> storage_service::handle_state_replacing(inet_address replacing_node) {
     slogger.debug("endpoint={} handle_state_replacing", replacing_node);
-    auto host_id = _gossiper.get_host_id(replacing_node);
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    auto existing_node_opt = tmptr->get_endpoint_for_host_id(host_id);
+    auto replacing_tokens = get_tokens_for(replacing_node);
+
+    auto existing_node_opt = get_owner_of_tokens(tmptr, replacing_tokens);
+    slogger.info("Node {} replaces existing node existing_node_opt={}", replacing_node, existing_node_opt);
+
     auto replace_addr = get_replace_address();
     if (replacing_node == get_broadcast_address() && replace_addr && *replace_addr == get_broadcast_address()) {
         existing_node_opt = replacing_node;
@@ -813,9 +831,12 @@ future<> storage_service::handle_state_replacing(inet_address replacing_node) {
     }
     auto existing_node = *existing_node_opt;
     auto existing_tokens = get_tokens_for(existing_node);
-    auto replacing_tokens = get_tokens_for(replacing_node);
-    slogger.info("Node {} is replacing existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
-            replacing_node, existing_node, host_id, existing_tokens, replacing_tokens);
+
+    auto existing_host_id = _gossiper.get_host_id(existing_node);
+    auto replacing_host_id = _gossiper.get_host_id(replacing_node);
+
+    slogger.info("Node {} is replacing existing node {}, existing_host_id={}, replacing_host_id={}, existing_tokens={}, replacing_tokens={},",
+            replacing_node, existing_node, existing_host_id, replacing_host_id, existing_tokens, replacing_tokens);
     tmptr->add_replacing_endpoint(existing_node, replacing_node);
     if (_gossiper.is_alive(replacing_node)) {
         slogger.info("handle_state_replacing: Replacing node {} is already alive, update pending ranges", replacing_node);
@@ -880,7 +901,11 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (_gossiper.uses_host_id(endpoint)) {
         auto host_id = _gossiper.get_host_id(endpoint);
-        auto existing = tmptr->get_endpoint_for_host_id(host_id);
+        auto existing = get_owner_of_tokens(tmptr, tokens);
+        auto existing_host_id = existing ?
+            std::optional<locator::host_id>(_gossiper.get_host_id(*existing)) : std::nullopt;
+        slogger.info("Node {} replaces existing node existing={}, existing_host_id={}, replacing_host_id={}",
+                endpoint, existing, existing_host_id, host_id);
         if (existing && *existing != endpoint) {
             if (*existing == get_broadcast_address()) {
                 slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
@@ -895,7 +920,9 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
                 do_remove_node(endpoint);
             }
         } else if (existing && *existing == endpoint) {
+            slogger.info("Existing node and replacing node is the same {}", endpoint);
             tmptr->del_replacing_endpoint(endpoint);
+            tmptr->update_host_id(host_id, endpoint);
         } else {
             auto nodes = _gossiper.get_nodes_with_host_id(host_id);
             bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
@@ -1701,10 +1728,6 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     auto dc_rack = get_dc_rack_for(replace_address);
     auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
-    // use the replacee's host Id as our own so we receive hints, etc
-    auto host_id = _gossiper.get_host_id(replace_address);
-    co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
-    const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
