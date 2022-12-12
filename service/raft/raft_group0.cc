@@ -727,7 +727,7 @@ future<> raft_group0::leave_group0() {
     co_return co_await remove_from_raft_config(my_id);
 }
 
-future<> raft_group0::remove_from_group0(gms::inet_address node) {
+future<> raft_group0::remove_from_group0(raft::server_id node) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
@@ -775,33 +775,11 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
             " Please report a bug.", node));
     }
 
-    auto my_id = load_my_id();
+    group0_log.info("remove_from_group0({}): removing the server from group 0 configuration...", node);
 
-    // Find their group 0 server's Raft ID.
-    // Note: even if the removed node had the same inet_address as us, `find_replace_id` should correctly find them
-    // (if they are still a member of group 0); hence we provide `my_id` to skip us in the search.
-    auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
-    if (!their_id) {
-        // This may mean that the node is a member of group 0 but due to a bug we're missing
-        // an entry from the address map so we're not able to identify the member that must be removed.
-        // In this case group 0 will have a 'garbage' member corresponding to a node that has left,
-        // and that member may be a voter, which is bad because group 0's availability is reduced.
-        //
-        // TODO: there is no API to remove members from group 0 manually. #12153
-        group0_log.error("remove_from_group0({}): could not find the Raft ID of this node."
-                         " Manual removal from group 0 may be required.", node);
-        co_return;
-    }
+    co_await remove_from_raft_config(node);
 
-    group0_log.info(
-        "remove_from_group0({}): found the node in group 0 configuration, Raft ID: {}. Proceeding with the remove...",
-        node, *their_id);
-
-    co_await remove_from_raft_config(*their_id);
-
-    group0_log.info(
-        "remove_from_group0({}): finished removing from group 0 configuration (Raft ID: {})",
-        node, *their_id);
+    group0_log.info("remove_from_group0({}): finished removing from group 0 configuration.", node);
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {

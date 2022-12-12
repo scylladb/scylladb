@@ -164,10 +164,7 @@ public:
     // 2. or we're currently bootstrapping and replacing an existing node.
     //
     // In both cases, `setup_group0()` must have finished earlier.
-    //
-    // The provided address may be our own - if we're replacing a node that had the same address as ours.
-    // We'll look for the other node's Raft ID in the Raft address map.
-    future<> remove_from_group0(gms::inet_address host);
+    future<> remove_from_group0(raft::server_id);
 
     // Assumes that this node's Raft server ID is already initialized and returns it.
     // It's a fatal error if the id is missing.
