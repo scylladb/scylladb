@@ -5,6 +5,7 @@ Scylla in-memory tables
 :label-tip:`ScyllaDB Enterprise`
 
 .. versionadded:: 2018.1.7
+.. deprecated:: 2022.2.0
 
 Overview
 ========
