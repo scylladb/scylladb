@@ -530,6 +530,13 @@ const std::vector<std::unique_ptr<compaction_group>>& table::compaction_groups()
     return _compaction_groups;
 }
 
+future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
+    // TODO: place a barrier here when we allow dynamic groups.
+    co_await coroutine::parallel_for_each(compaction_groups(), [&] (const compaction_group_ptr& cg) {
+        return action(*cg);
+    });
+}
+
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);

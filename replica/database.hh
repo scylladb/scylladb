@@ -538,6 +538,8 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
     // Returns a list of all compaction groups.
     const std::vector<std::unique_ptr<compaction_group>>& compaction_groups() const noexcept;
+    // Safely iterate through compaction groups, while performing async operations on them.
+    future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
