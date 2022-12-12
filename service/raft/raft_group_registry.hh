@@ -132,6 +132,9 @@ class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinge
     gms::echo_pinger& _echo_pinger;
     raft_address_map& _address_map;
 
+    using rate_limits = std::unordered_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
+    rate_limits _rate_limits;
+
 public:
     direct_fd_pinger(gms::echo_pinger& pinger, raft_address_map& address_map)
             : _echo_pinger(pinger), _address_map(address_map) {}

@@ -406,6 +406,10 @@ raft_group_registry::~raft_group_registry() = default;
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
     auto addr = _address_map.find(raft::server_id{id});
     if (!addr) {
+        auto [it, _] = _rate_limits.try_emplace(id, std::chrono::minutes(5));
+        auto& rate_limit = it->second;
+
+        rslog.log(log_level::warn, rate_limit, "Raft server id {} cannot be translated to an IP address.", id);
         co_return false;
     }
 
