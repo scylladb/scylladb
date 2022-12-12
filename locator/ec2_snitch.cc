@@ -2,6 +2,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/do_with.hh>
+#include <seastar/http/reply.hh>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -125,6 +126,9 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
             // Verify EC2 instance metadata access
             if (rc == 403) {
                 return make_exception_future<sstring>(std::runtime_error("Error: Unauthorized response received when trying to communicate with instance metadata service."));
+            }
+            if (_rsp->_status_code != static_cast<int>(http::reply::status_type::ok)) {
+                return make_exception_future<sstring>(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status_code)));
             }
 
             auto it = _rsp->_headers.find("Content-Length");
