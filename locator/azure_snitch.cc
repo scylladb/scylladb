@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/http/response_parser.hh>
+#include <seastar/http/reply.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/dns.hh>
 
@@ -83,6 +84,10 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
 
         // Read HTTP response header first
         auto rsp = parser.get_parsed_response();
+        if (rsp->_status_code != static_cast<int>(httpd::reply::status_type::ok)) {
+            throw std::runtime_error(format("Error: HTTP response status {}", rsp->_status_code));
+        }
+
         auto it = rsp->_headers.find("Content-Length");
         if (it == rsp->_headers.end()) {
             throw std::runtime_error("Error: HTTP response does not contain: Content-Length\n");
