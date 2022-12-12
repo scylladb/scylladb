@@ -18,18 +18,7 @@ from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error_one_shot
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-
-
-async def reconnect_driver(manager: ManagerClient) -> Session:
-    """Workaround for scylladb/python-driver#170:
-       the existing driver session may not reconnect, create a new one.
-    """
-    logging.info(f"Reconnecting driver")
-    manager.driver_close()
-    await manager.driver_connect()
-    cql = manager.cql
-    assert(cql)
-    return cql
+from test.pylib.driver_util import reconnect_driver
 
 
 async def restart(manager: ManagerClient, server: ServerInfo) -> None:
