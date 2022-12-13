@@ -164,17 +164,22 @@ class consumer_wrapper {
 public:
     using filter_type = std::function<bool(const dht::decorated_key&)>;
 private:
+    mutation_fragment_v2::kind _last_kind = mutation_fragment_v2::kind::partition_end;
     sstable_consumer& _consumer;
     filter_type _filter;
 public:
     consumer_wrapper(sstable_consumer& consumer, filter_type filter)
         : _consumer(consumer), _filter(std::move(filter)) {
     }
+    mutation_fragment_v2::kind last_kind() const {
+        return _last_kind;
+    }
     future<stop_iteration> operator()(mutation_fragment_v2&& mf) {
         sst_log.trace("consume {}", mf.mutation_fragment_kind());
         if (mf.is_partition_start() && _filter && !_filter(mf.as_partition_start().key())) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
+        _last_kind = mf.mutation_fragment_kind();
         return std::move(mf).consume(_consumer);
     }
 };
@@ -753,16 +758,17 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
             return pass;
         };
     }
+    auto wrapper = consumer_wrapper(consumer, filter);
     while (!rd.is_end_of_stream()) {
         skip_partition = false;
-        rd.consume_pausable(consumer_wrapper(consumer, filter)).get();
+        rd.consume_pausable(std::ref(wrapper)).get();
         sst_log.trace("consumer paused, skip_partition={}", skip_partition);
         if (!rd.is_end_of_stream() && !skip_partition) {
-            if (auto* mfp = rd.peek().get(); mfp && !mfp->is_partition_start()) {
+            if (wrapper.last_kind() == mutation_fragment_v2::kind::partition_end) {
                 sst_log.trace("consumer returned stop_iteration::yes for partition end, stopping");
                 break;
             }
-            if (consumer.consume(partition_end{}).get() == stop_iteration::yes) {
+            if (wrapper(mutation_fragment_v2(*rd.schema(), rd.permit(), partition_end{})).get() == stop_iteration::yes) {
                 sst_log.trace("consumer returned stop_iteration::yes for synthetic partition end, stopping");
                 break;
             }
