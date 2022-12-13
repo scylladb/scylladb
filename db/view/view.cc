@@ -952,8 +952,12 @@ future<stop_iteration> view_update_builder::stop() const {
     return make_ready_future<stop_iteration>(stop_iteration::yes);
 }
 
-future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
+future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_update_builder::build_some() {
     (void)co_await advance_all();
+    if (!_update && !_existing) {
+        // Tell the caller there is no more data to build.
+        co_return std::nullopt;
+    }
     bool do_advance_updates = false;
     bool do_advance_existings = false;
     if (_update && _update->is_partition_start()) {
