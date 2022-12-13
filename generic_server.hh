@@ -41,7 +41,8 @@ protected:
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
     seastar::gate _pending_requests_gate;
-
+private:
+    future<> process_main();
 public:
     connection(server& server, connected_socket&& fd);
     virtual ~connection();

@@ -61,7 +61,7 @@ static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
     return false;
 }
 
-future<> connection::process()
+future<> connection::process_main()
 {
     return with_gate(_pending_requests_gate, [this] {
         return do_until([this] {
@@ -71,7 +71,11 @@ future<> connection::process()
         }).then_wrapped([this] (future<> f) {
             handle_error(std::move(f));
         });
-    }).finally([this] {
+    });
+}
+
+future<> connection::process() {
+    return process_main().finally([this] {
         return _pending_requests_gate.close().then([this] {
             on_connection_close();
             return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
