@@ -508,16 +508,28 @@ void table::enable_off_strategy_trigger() {
 
 std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
     std::vector<std::unique_ptr<compaction_group>> ret;
-    ret.emplace_back(std::make_unique<compaction_group>(*this));
+    auto number_of_cg = 1 << _x_log2_compaction_groups;
+    ret.reserve(number_of_cg);
+    for (auto i = 0; i < number_of_cg; i++) {
+        ret.emplace_back(std::make_unique<compaction_group>(*this));
+    }
     return ret;
 }
 
 compaction_group* table::single_compaction_group_if_available() const noexcept {
-    return &*_compaction_group;
+    return _compaction_groups.size() == 1 ? &*_compaction_groups[0] : nullptr;
 }
 
 compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
-    return *_compaction_group;
+    unsigned idx = 0;
+    // avoids shift by 64.
+    if (_x_log2_compaction_groups) {
+        auto value = dht::token::to_int64(token);
+        auto mask = (1 << _x_log2_compaction_groups) - 1;
+        idx = (value >> (64 - _x_log2_compaction_groups)) & mask;
+    }
+    assert(idx < _compaction_groups.size());
+    return *_compaction_groups[idx];
 }
 
 compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
@@ -529,8 +541,8 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
 }
 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept {
-    // FIXME: implement it once multiple groups are supported.
-    return *_compaction_group;
+    // FIXME: a sstable can belong to more than one group, change interface to reflect that.
+    return compaction_group_for_token(sst->get_first_decorated_key().token());
 }
 
 const std::vector<std::unique_ptr<compaction_group>>& table::compaction_groups() const noexcept {
@@ -1405,7 +1417,6 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _compaction_groups(make_compaction_groups())
-    , _compaction_group(_compaction_groups.front().get())
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
@@ -2679,7 +2690,8 @@ compaction::table_state& compaction_group::as_table_state() const noexcept {
 }
 
 compaction::table_state& table::as_table_state() const noexcept {
-    return _compaction_group->as_table_state();
+    // FIXME: kill it once we're done with all remaining users.
+    return _compaction_groups[0]->as_table_state();
 }
 
 future<> table::parallel_foreach_table_state(std::function<future<>(table_state&)> action) {

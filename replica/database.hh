@@ -407,11 +407,14 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
+    // TODO: will be later made a config option.
+    // The value of the parameter controls the number of compaction groups in this table.
+    // 0 (default) means 1 compaction group. 3 means 8 compaction groups.
+    static constexpr unsigned _x_log2_compaction_groups = 0;
+
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
     std::vector<std::unique_ptr<compaction_group>> _compaction_groups;
-    // FIXME: will be removed once the last ref to single compaction group is gone.
-    compaction_group* _compaction_group;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
