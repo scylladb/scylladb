@@ -86,28 +86,28 @@ future<> connection::process() {
     if (f.failed()) {
         process_main_exception = f.get_exception();
     }
-    {
-        co_await _pending_requests_gate.close();
-        {
-            on_connection_close();
-            try {
-                co_await std::move(_ready_to_respond);
-            } catch (...) {
-                auto ep = std::current_exception();
-                if (is_broken_pipe_or_connection_reset(ep)) {
-                    // expected if another side closes a connection or we're shutting down
-                    ;
-                } else {
-                    merge_exception(std::move(ep));
-                }
-            }
-            try {
-                 co_await _write_buf.close();
-            } catch (...) {
-                merge_exception(std::current_exception());
-            }
+
+    co_await _pending_requests_gate.close();
+    on_connection_close();
+
+    try {
+        co_await std::move(_ready_to_respond);
+    } catch (...) {
+        auto ep = std::current_exception();
+        if (is_broken_pipe_or_connection_reset(ep)) {
+            // expected if another side closes a connection or we're shutting down
+            ;
+        } else {
+            merge_exception(std::move(ep));
         }
     }
+
+    try {
+        co_await _write_buf.close();
+    } catch (...) {
+        merge_exception(std::current_exception());
+    }
+
     if (process_main_exception) {
         std::rethrow_exception(std::move(process_main_exception));
     }
