@@ -381,6 +381,7 @@ public:
         // Can be updated by a schema change:
         bool enable_optimized_twcs_queries{true};
         uint32_t tombstone_warn_threshold{0};
+        unsigned x_log2_compaction_groups{0};
     };
     struct no_commitlog {};
 
@@ -407,10 +408,9 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
-    // TODO: will be later made a config option.
     // The value of the parameter controls the number of compaction groups in this table.
     // 0 (default) means 1 compaction group. 3 means 8 compaction groups.
-    static constexpr unsigned _x_log2_compaction_groups = 0;
+    const unsigned _x_log2_compaction_groups = 0;
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
