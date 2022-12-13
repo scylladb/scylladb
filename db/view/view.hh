@@ -185,7 +185,15 @@ public:
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
 
-    future<utils::chunked_vector<frozen_mutation_and_schema>> build_some();
+
+    // build_some() works on batches of 100 (max_rows_for_view_updates)
+    // updated rows, but can_skip_view_updates() can decide that some of
+    // these rows do not effect the view, and as a result build_some() can
+    // fewer than 100 rows - in extreme cases even zero (see issue #12297).
+    // So we can't use an empty returned vector to signify that the view
+    // update building is done - and we wrap the return value in an
+    // std::optional, which is disengaged when the iteration is done.
+    future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> build_some();
 
     future<> close() noexcept;
 

@@ -947,8 +947,12 @@ future<stop_iteration> view_update_builder::stop() const {
     return make_ready_future<stop_iteration>(stop_iteration::yes);
 }
 
-future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
+future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_update_builder::build_some() {
     return advance_all().then([this] (stop_iteration ignored) {
+        if (!_update && !_existing) {
+            // Tell the caller there is no more data to build.
+            return make_ready_future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>>(std::nullopt);
+        }
         bool do_advance_updates = false;
         bool do_advance_existings = false;
         if (_update && _update->is_partition_start()) {
@@ -960,22 +964,23 @@ future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::b
             _existing_tombstone_tracker.set_partition_tombstone(_existing->as_partition_start().partition_tombstone());
             do_advance_existings = true;
         }
+        future<stop_iteration> f = make_ready_future<stop_iteration>(stop_iteration::no);
         if (do_advance_updates) {
-            return do_advance_existings ? advance_all() : advance_updates();
+            f = do_advance_existings ? advance_all() : advance_updates();
         } else if (do_advance_existings) {
-            return advance_existings();
+            f = advance_existings();
         }
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }).then([this] (stop_iteration ignored) {
-        return repeat([this] {
-            return this->on_results();
+        return std::move(f).then([this] (stop_iteration ignored) {
+            return repeat([this] {
+                return this->on_results();
+            });
+        }).then([this] {
+            utils::chunked_vector<frozen_mutation_and_schema> mutations;
+            for (auto& update : _view_updates) {
+                update.move_to(mutations);
+            }
+            return std::make_optional(mutations);
         });
-    }).then([this] {
-        utils::chunked_vector<frozen_mutation_and_schema> mutations;
-        for (auto& update : _view_updates) {
-            update.move_to(mutations);
-        }
-        return mutations;
     });
 }
 
