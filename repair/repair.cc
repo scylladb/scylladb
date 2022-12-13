@@ -635,60 +635,60 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
     check_in_shutdown();
     check_in_abort();
     ranges_index++;
-    repair_neighbors neighbors = get_repair_neighbors(range);
-    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range, table_id] (auto& neighbors, auto& mandatory_neighbors) {
-      auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
-                    boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
-      for (auto& node : mandatory_neighbors) {
-           auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
-           if (it == live_neighbors.end()) {
-                nr_failed_ranges++;
-                auto status = format("failed: mandatory neighbor={} is not alive", node);
-                rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                        id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
-                abort_repair_info();
-                return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
-                    node, _status.keyspace, mandatory_neighbors)));
-           }
-      }
-      if (live_neighbors.size() != neighbors.size()) {
+    repair_neighbors r_neighbors = get_repair_neighbors(range);
+    auto neighbors = std::move(r_neighbors.all);
+    auto mandatory_neighbors = std::move(r_neighbors.mandatory);
+    auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
+                boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
+    for (auto& node : mandatory_neighbors) {
+        auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
+        if (it == live_neighbors.end()) {
             nr_failed_ranges++;
-            auto status = live_neighbors.empty() ? "skipped" : "partial";
-            rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+            auto status = format("failed: mandatory neighbor={} is not alive", node);
+            rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                     id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
-            if (live_neighbors.empty()) {
-                return make_ready_future<>();
-            }
-            neighbors.swap(live_neighbors);
-      }
-      if (neighbors.empty()) {
-            auto status = "skipped_no_followers";
-            rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
-            return make_ready_future<>();
-      }
-      rlogger.debug("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-            id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors);
-      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, table_id] {
-            sstring cf;
-            try {
-                cf = db.local().find_column_family(table_id).schema()->cf_name();
-            } catch (replica::no_such_column_family&) {
-                return make_ready_future<>();
-            }
-            // Row level repair
-            if (dropped_tables.contains(cf)) {
-                return make_ready_future<>();
-            }
-            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (replica::no_such_column_family&) mutable {
-                dropped_tables.insert(cf);
-                return make_ready_future<>();
-            }).handle_exception([this] (std::exception_ptr ep) mutable {
-                nr_failed_ranges++;
-                return make_exception_future<>(std::move(ep));
-            });
-      });
-    });
+            abort_repair_info();
+            co_await coroutine::return_exception(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
+                node, _status.keyspace, mandatory_neighbors)));
+        }
+    }
+    if (live_neighbors.size() != neighbors.size()) {
+        nr_failed_ranges++;
+        auto status = live_neighbors.empty() ? "skipped" : "partial";
+        rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
+        if (live_neighbors.empty()) {
+            co_return;
+        }
+        neighbors.swap(live_neighbors);
+    }
+    if (neighbors.empty()) {
+        auto status = "skipped_no_followers";
+        rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
+        co_return;
+    }
+    rlogger.debug("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
+        id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors);
+    co_await mm.sync_schema(db.local(), neighbors);
+    sstring cf;
+    try {
+        cf = db.local().find_column_family(table_id).schema()->cf_name();
+    } catch (replica::no_such_column_family&) {
+        co_return;
+    }
+    // Row level repair
+    if (dropped_tables.contains(cf)) {
+        co_return;
+    }
+    try {
+        co_await repair_cf_range_row_level(*this, cf, table_id, range, neighbors);
+    } catch (replica::no_such_column_family&) {
+        dropped_tables.insert(cf);
+    } catch (...) {
+        nr_failed_ranges++;
+        throw;
+    }
 }
 
 void repair_stats::add(const repair_stats& o) {
