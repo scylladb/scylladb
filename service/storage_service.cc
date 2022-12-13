@@ -1705,7 +1705,8 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
     auto replace_host_id = _gossiper.get_host_id(replace_address);
-    slogger.info("Host {}/{} is replacing {}/{} using a different address", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
+    slogger.info("Host {}/{} is replacing {}/{} using {} address", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address,
+        get_broadcast_address() == replace_address ? "the same" : "a different");
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
