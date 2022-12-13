@@ -13,6 +13,8 @@
 #include <seastar/core/when_all.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 
 namespace generic_server {
 
@@ -63,32 +65,52 @@ static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
 
 future<> connection::process_main()
 {
-    return with_gate(_pending_requests_gate, [this] {
-        return do_until([this] {
-            return _read_buf.eof();
-        }, [this] {
-            return process_request();
-        }).then_wrapped([this] (future<> f) {
+    auto pending_requests_held = _pending_requests_gate.hold();
+    while (!_read_buf.eof()) {
+        auto f = co_await coroutine::as_future(process_request());
+        if (f.failed()) {
             handle_error(std::move(f));
-        });
-    });
+        }
+    }
 }
 
 future<> connection::process() {
-    return process_main().finally([this] {
-        return _pending_requests_gate.close().then([this] {
+    auto f = co_await coroutine::as_future(process_main());
+    std::exception_ptr process_main_exception;
+    auto merge_exception = [&] (std::exception_ptr ep) {
+        if (!process_main_exception) {
+            // adopt _ready_to_respond exception as result of processing
+            process_main_exception = std::move(ep);
+        }
+    };
+    if (f.failed()) {
+        process_main_exception = f.get_exception();
+    }
+    {
+        co_await _pending_requests_gate.close();
+        {
             on_connection_close();
-            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
+            try {
+                co_await std::move(_ready_to_respond);
+            } catch (...) {
+                auto ep = std::current_exception();
                 if (is_broken_pipe_or_connection_reset(ep)) {
                     // expected if another side closes a connection or we're shutting down
-                    return;
+                    ;
+                } else {
+                    merge_exception(std::move(ep));
                 }
-                std::rethrow_exception(ep);
-            }).finally([this] {
-                 return _write_buf.close();
-            });
-        });
-    });
+            }
+            try {
+                 co_await _write_buf.close();
+            } catch (...) {
+                merge_exception(std::current_exception());
+            }
+        }
+    }
+    if (process_main_exception) {
+        std::rethrow_exception(std::move(process_main_exception));
+    }
 }
 
 void connection::on_connection_close()
