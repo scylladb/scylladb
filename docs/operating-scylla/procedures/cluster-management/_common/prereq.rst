@@ -1,14 +1,14 @@
-* cluster_name - ``cat /etc/scylla/scylla.yaml | grep cluster_name``
-* seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
-* endpoint_snitch - ``cat /etc/scylla/scylla.yaml | grep endpoint_snitch``
+* cluster_name - ``grep cluster_name /etc/scylla/scylla.yaml``
+* seeds - ``grep seeds: /etc/scylla/scylla.yaml``
+* endpoint_snitch - ``grep endpoint_snitch /etc/scylla/scylla.yaml``
 * Scylla version - ``scylla --version``
-* Authentication status - ``cat /etc/scylla/scylla.yaml | grep authenticator``
+* Authenticator - ``grep authenticator /etc/scylla/scylla.yaml``
 
 .. Note:: 
 
-   If ``authenticator`` is set to ``PasswordAuthenticator`` - increase the ``system_auth`` table replication factor.
+   If ``authenticator`` is set to ``PasswordAuthenticator`` - increase the replication factor of the ``system_auth`` keyspace.
 
-   For example
+   For example:
 
    ``ALTER KEYSPACE system_auth WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'dc1' : <new_replication_factor>};``
 
