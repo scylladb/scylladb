@@ -87,6 +87,7 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr, pend
         remove_endpoint(ep);
     }
 
+    tlogger.debug("update_endpoint: {} {}/{}", ep, dr.dc, dr.rack);
     _dc_endpoints[dr.dc].insert(ep);
     _dc_racks[dr.dc][dr.rack].insert(ep);
     _datacenters.insert(dr.dc);
@@ -105,6 +106,7 @@ void topology::remove_endpoint(inet_address ep)
 
     const auto& dc = cur_dc_rack->second.dc;
     const auto& rack = cur_dc_rack->second.rack;
+    tlogger.debug("remove_endpoint: {} {}/{}", ep, dc, rack);
     if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
         auto& eps = dit->second;
         eps.erase(ep);
