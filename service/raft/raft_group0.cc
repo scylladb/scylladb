@@ -526,13 +526,6 @@ future<> raft_group0::setup_group0(
         co_return;
     }
 
-    if (replace_info && !replace_info->raft_id) {
-        auto msg = format("Cannot perform replace operation: Raft ID of the replaced server (IP: {}) is missing.",
-                          replace_info->ip_addr);
-        group0_log.error("{}", msg);
-        throw std::runtime_error{std::move(msg)};
-    }
-
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
         if (addr != _gossiper.get_broadcast_address()) {
@@ -554,13 +547,11 @@ future<> raft_group0::setup_group0(
         // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
         // another node and fetch application states from it) and pass it to `setup_group0`.
 
-        // Checked earlier.
-        assert(replace_info->raft_id);
         group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
-                        *replace_info->raft_id, replace_info->ip_addr);
+                        replace_info->raft_id, replace_info->ip_addr);
 
         // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
-        _raft_gr.address_map().opt_add_entry(*replace_info->raft_id, replace_info->ip_addr);
+        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
     }
 
     // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
@@ -600,60 +591,15 @@ future<> raft_group0::setup_group0(
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
 }
 
-future<> raft_group0::persist_initial_raft_address_map() {
-    static constexpr auto max_concurrency = 10;
-    std::vector<gms::inet_address> endpoints;
-    const auto& states = _gossiper.get_endpoint_states();
-    endpoints.reserve(states.size());
-    std::transform(states.begin(), states.end(), std::back_inserter(endpoints), [](const auto& it) { return it.first; });
-    //
-    // Gossiper only persists node state when it switches to
-    // NORMAL. When persisting a node state, Raft ID is only
-    // persisted if the cluster supports raft.  Some nodes switch
-    // to NORMAL before the whole cluster enables raft. For these
-    // nodes we may never persist their Raft ID unless, here, as
-    // soon as we discover that the entire cluster supports Raft,
-    // we go over these nodes and explicitly persist their RAFT
-    // IDs.
-
-    co_await max_concurrent_for_each(endpoints, max_concurrency, [this] (const gms::inet_address& ip_addr) -> future<> {
-        auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(ip_addr);
-        if (state == nullptr) {
-            co_return;
-        }
-        if (!state->is_normal()) {
-            // Handle only NORMAL states, others should not be
-            // persisted to avoid garbage in the peers table if
-            // bootstrap fails.
-            co_return;
-        }
-        auto* value = state->get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
-        if (value == nullptr) {
-            co_return;
-        }
-        auto server_id = utils::UUID(value->value);
-        if (server_id == utils::UUID{}) {
-            upgrade_log.error("empty raft server id for host {} ", ip_addr);
-            co_return;
-        }
-        try {
-            co_await _sys_ks.update_peer_info(ip_addr, "raft_server_id", server_id);
-        } catch (...) {
-            upgrade_log.error("failed to persist raft_server_id for {}: {}",
-                    ip_addr, std::current_exception());
-        }
-    });
-}
-
 void raft_group0::load_initial_raft_address_map() {
     for (auto& [ip_addr, state] : _gossiper.get_endpoint_states()) {
-        auto* value = state.get_application_state_ptr(gms::application_state::RAFT_SERVER_ID);
+        auto* value = state.get_application_state_ptr(gms::application_state::HOST_ID);
         if (value == nullptr) {
             continue;
         }
         auto server_id = utils::UUID(value->value);
         if (server_id == utils::UUID{}) {
-            upgrade_log.error("empty raft server id for host {} ", ip_addr);
+            upgrade_log.error("empty Host ID for host {} ", ip_addr);
             continue;
         }
         // The failure detector needs the IPs on all shards. We
@@ -781,7 +727,7 @@ future<> raft_group0::leave_group0() {
     co_return co_await remove_from_raft_config(my_id);
 }
 
-future<> raft_group0::remove_from_group0(gms::inet_address node) {
+future<> raft_group0::remove_from_group0(raft::server_id node) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
@@ -829,33 +775,11 @@ future<> raft_group0::remove_from_group0(gms::inet_address node) {
             " Please report a bug.", node));
     }
 
-    auto my_id = load_my_id();
+    group0_log.info("remove_from_group0({}): removing the server from group 0 configuration...", node);
 
-    // Find their group 0 server's Raft ID.
-    // Note: even if the removed node had the same inet_address as us, `find_replace_id` should correctly find them
-    // (if they are still a member of group 0); hence we provide `my_id` to skip us in the search.
-    auto their_id = _raft_gr.address_map().find_replace_id(node, my_id);
-    if (!their_id) {
-        // This may mean that the node is a member of group 0 but due to a bug we're missing
-        // an entry from the address map so we're not able to identify the member that must be removed.
-        // In this case group 0 will have a 'garbage' member corresponding to a node that has left,
-        // and that member may be a voter, which is bad because group 0's availability is reduced.
-        //
-        // TODO: there is no API to remove members from group 0 manually. #12153
-        group0_log.error("remove_from_group0({}): could not find the Raft ID of this node."
-                         " Manual removal from group 0 may be required.", node);
-        co_return;
-    }
+    co_await remove_from_raft_config(node);
 
-    group0_log.info(
-        "remove_from_group0({}): found the node in group 0 configuration, Raft ID: {}. Proceeding with the remove...",
-        node, *their_id);
-
-    co_await remove_from_raft_config(*their_id);
-
-    group0_log.info(
-        "remove_from_group0({}): finished removing from group 0 configuration (Raft ID: {})",
-        node, *their_id);
+    group0_log.info("remove_from_group0({}): finished removing from group 0 configuration.", node);
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
@@ -1485,7 +1409,6 @@ future<> raft_group0::upgrade_to_group0() {
             break;
         case group0_upgrade_state::use_pre_raft_procedures:
             upgrade_log.info("starting in `use_pre_raft_procedures` state.");
-            co_await persist_initial_raft_address_map();
             break;
     }
 

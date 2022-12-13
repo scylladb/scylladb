@@ -355,7 +355,7 @@ schema_ptr system_keyspace::built_indexes() {
 }
 
 /*static*/ schema_ptr system_keyspace::peers() {
-    constexpr uint16_t schema_version_offset = 1; // raft_server_id
+    constexpr uint16_t schema_version_offset = 0;
     static thread_local auto peers = [] {
         schema_builder builder(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
@@ -373,7 +373,6 @@ schema_ptr system_keyspace::built_indexes() {
                 {"schema_version", uuid_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, true)},
                 {"supported_features", utf8_type},
-                {"raft_server_id", uuid_type},
         },
         // static columns
         {},
@@ -1541,15 +1540,6 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
         }
         return ret;
     });
-}
-
-future<std::optional<utils::UUID>> system_keyspace::get_peer_raft_id_if_known(gms::inet_address ip_addr) {
-    sstring req = format("SELECT raft_server_id FROM system.{} WHERE peer = ?", PEERS);
-    shared_ptr<cql3::untyped_result_set> res = co_await execute_cql(req, ip_addr.addr());
-    if (res->empty() || !res->one().has("raft_server_id")) {
-        co_return std::nullopt;
-    }
-    co_return res->one().get_as<utils::UUID>("raft_server_id");
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
@@ -3197,17 +3187,8 @@ future<utils::UUID> system_keyspace::get_raft_group0_id() {
     co_return opt.value_or<utils::UUID>({});
 }
 
-future<utils::UUID> system_keyspace::get_raft_server_id() {
-    auto opt = co_await get_scylla_local_param_as<utils::UUID>("raft_server_id");
-    co_return opt.value_or<utils::UUID>({});
-}
-
 future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
     return set_scylla_local_param_as<utils::UUID>("raft_group0_id", uuid);
-}
-
-future<> system_keyspace::set_raft_server_id(utils::UUID uuid) {
-    return set_scylla_local_param_as<utils::UUID>("raft_server_id", uuid);
 }
 
 static constexpr auto GROUP0_HISTORY_KEY = "history";

@@ -314,6 +314,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
+    std::optional<locator::host_id> replaced_host_id;
     std::optional<raft_group0::replace_info> raft_replace_info;
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -332,9 +333,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             get_broadcast_address(), *replace_address);
         tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
+        replaced_host_id = ri.host_id;
         raft_replace_info = raft_group0::replace_info {
             .ip_addr = *replace_address,
-            .raft_id = std::move(ri.raft_id)
+            .raft_id = raft::server_id{ri.host_id.uuid()},
         };
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -414,10 +416,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
-    if (_group0->is_raft_enabled()) {
-        auto my_id = _group0->load_my_id();
-        app_states.emplace(gms::application_state::RAFT_SERVER_ID, versioned_value::raft_server_id(my_id.id));
-    }
     app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
@@ -531,7 +529,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         co_await mark_existing_views_as_built(sys_dist_ks);
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id);
+        co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id, replaced_host_id);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -653,8 +651,8 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 }
 
 // Runs inside seastar::async context
-future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id) {
-    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service] {
+future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<locator::host_id>& replaced_host_id) {
+    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replaced_host_id] {
         auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
         set_mode(mode::BOOTSTRAP);
@@ -741,9 +739,11 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             _sys_ks.local().remove_endpoint(*replace_addr).get();
 
-            slogger.info("Replace: removing {} from group 0...", *replace_addr);
+            assert(replaced_host_id);
+            auto raft_id = raft::server_id{replaced_host_id->uuid()};
+            slogger.info("Replace: removing {}/{} from group 0...", *replace_addr, raft_id);
             assert(_group0);
-            _group0->remove_from_group0(*replace_addr).get();
+            _group0->remove_from_group0(raft_id).get();
 
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
@@ -1327,13 +1327,6 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "schema_version", utils::UUID(value.value));
     } else if (state == application_state::HOST_ID) {
         co_await update_table(endpoint, "host_id", utils::UUID(value.value));
-    } else if (state == application_state::RAFT_SERVER_ID && _feature_service.supports_raft_cluster_mgmt) {
-        auto server_id = utils::UUID(value.value);
-        if (server_id == utils::UUID{}) {
-            slogger.error("empty raft server id in application state for host {} ", endpoint);
-        } else {
-            co_await update_table(endpoint, "raft_server_id", server_id);
-        }
     } else if (state == application_state::SUPPORTED_FEATURES) {
         co_await update_table(endpoint, "supported_features", value.value);
     }
@@ -1650,19 +1643,6 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
     }
 }
 
-// If the Raft ID is present in gossiper and non-empty, return it.
-// Otherwise return nullopt.
-static std::optional<raft::server_id> get_raft_id_for(gms::gossiper& g, gms::inet_address ep) {
-    auto app_state = g.get_application_state_ptr(ep, gms::application_state::RAFT_SERVER_ID);
-    if (app_state) {
-        auto value = utils::UUID{app_state->value};
-        if (value) {
-            return raft::server_id{value};
-        }
-    }
-    return std::nullopt;
-}
-
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!get_replace_address()) {
@@ -1702,16 +1682,15 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     }
 
     auto dc_rack = get_dc_rack_for(replace_address);
-    auto raft_id = get_raft_id_for(_gossiper, replace_address);
 
     auto replace_host_id = _gossiper.get_host_id(replace_address);
-    slogger.info("Host {}/{} is replacing {}/{} using a different address", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
+    slogger.info("Host {}/{} is replacing {}/{}", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
         .tokens = std::move(tokens),
         .dc_rack = std::move(dc_rack),
-        .raft_id = std::move(raft_id),
+        .host_id = std::move(replace_host_id),
     };
 }
 
@@ -2475,9 +2454,10 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     });
                 }).get();
 
-                slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
+                auto raft_id = raft::server_id{host_id.uuid()};
+                slogger.info("removenode[{}]: removing node {}/{} from group 0", uuid, endpoint, raft_id);
                 assert(ss._group0);
-                ss._group0->remove_from_group0(endpoint).get();
+                ss._group0->remove_from_group0(raft_id).get();
 
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
@@ -3398,7 +3378,7 @@ future<> storage_service::force_remove_completion() {
 
                     slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
                     assert(ss._group0);
-                    co_await ss._group0->remove_from_group0(endpoint);
+                    co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
                 }
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");

@@ -98,9 +98,7 @@ public:
     // Passed to `setup_group0` when replacing a node.
     struct replace_info {
         gms::inet_address ip_addr;
-        // Optional because it might be missing when Raft is disabled or in RECOVERY mode.
-        // `setup_group0` will verify that it's present when it's required.
-        std::optional<raft::server_id> raft_id;
+        raft::server_id raft_id;
     };
 
     // Assumes that the provided services are fully started.
@@ -166,10 +164,7 @@ public:
     // 2. or we're currently bootstrapping and replacing an existing node.
     //
     // In both cases, `setup_group0()` must have finished earlier.
-    //
-    // The provided address may be our own - if we're replacing a node that had the same address as ours.
-    // We'll look for the other node's Raft ID in the Raft address map.
-    future<> remove_from_group0(gms::inet_address host);
+    future<> remove_from_group0(raft::server_id);
 
     // Assumes that this node's Raft server ID is already initialized and returns it.
     // It's a fatal error if the id is missing.
@@ -251,10 +246,6 @@ private:
 
     // Remove the node from raft config, retries raft::commit_status_unknown.
     future<> remove_from_raft_config(raft::server_id id);
-
-    // Persist the initial Raft <-> IP address map as seen by
-    // the gossiper.
-    future<> persist_initial_raft_address_map();
 
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.

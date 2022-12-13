@@ -279,17 +279,6 @@ public:
         }
         return entry._addr;
     }
-    // Linear search for id based on inet address. Used when
-    // removing a node which id is unknown. Do not return self
-    // - we need to remove id of the node self is replacing.
-    std::optional<raft::server_id> find_replace_id(gms::inet_address addr, raft::server_id self) const {
-        for (auto& [id, entry] : _map) {
-            if (entry._addr.has_value() && entry._addr.value() == addr && id != self) {
-                return id;
-            }
-        }
-        return {};
-    }
 
     // Convert an expiring entry to a non-expiring one, or
     // insert a new non-expiring entry if the entry is missing.

@@ -293,8 +293,7 @@ private:
     struct replacement_info {
         std::unordered_set<token> tokens;
         locator::endpoint_dc_rack dc_rack;
-        // Present only if Raft is enabled.
-        std::optional<raft::server_id> raft_id;
+        locator::host_id host_id;
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
@@ -369,7 +368,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id);
+    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<locator::host_id>& replaced_host_id);
 
 public:
     /**

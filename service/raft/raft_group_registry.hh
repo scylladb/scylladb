@@ -52,8 +52,6 @@ class direct_fd_pinger;
 class direct_fd_proxy;
 class gossiper_state_change_subscriber_proxy;
 
-future<raft::server_id> load_or_create_my_raft_id(db::system_keyspace&);
-
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
 //
