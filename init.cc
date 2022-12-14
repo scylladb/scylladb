@@ -50,6 +50,10 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg) {
         startlog.error("Use broadcast_address instead of listen_address for seeds list");
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
+    if (!cfg.replace_node_first_boot().empty() && seeds.contains(broadcast_address)) {
+        startlog.error("Bad configuration: replace-node-first-boot is not allowed for seed nodes");
+        throw bad_configuration_error();
+    }
     if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.contains(broadcast_address)) {
         startlog.error("Bad configuration: replace-address and replace-address-first-boot are not allowed for seed nodes");
         throw bad_configuration_error();
