@@ -698,7 +698,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack(), locator::topology::pending::yes);
+                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack());
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
                 }).get();
@@ -854,7 +854,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
         tmptr->remove_endpoint(endpoint);
     }
 
-    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::topology::pending::yes);
+    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
     tmptr->add_bootstrap_tokens(tokens, endpoint);
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
@@ -1185,7 +1185,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
             co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
         }
         if (!is_normal_token_owner) {
-            tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::topology::pending::yes);
+            tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         }
         co_await replicate_to_all_cores(std::move(tmptr));
     }
@@ -2635,7 +2635,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
                     slogger.info("replace[{}]: Added replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node), locator::topology::pending::yes);
+                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node));
                     tmptr->add_replacing_endpoint(existing_node, replacing_node);
                 }
                 return make_ready_future<>();
@@ -2690,7 +2690,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
                     slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
-                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::topology::pending::yes);
+                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
                     tmptr->add_bootstrap_tokens(tokens, endpoint);
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", req.bootstrap_nodes));

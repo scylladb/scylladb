@@ -25,7 +25,7 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
     httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&ctx](const_req req) {
         auto& topology = ctx.shared_token_metadata.local().get()->get_topology();
         auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep, locator::topology::pending::yes)) {
+        if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
             return sstring(locator::production_snitch_base::default_dc);
@@ -36,7 +36,7 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
     httpd::endpoint_snitch_info_json::get_rack.set(r, [&ctx](const_req req) {
         auto& topology = ctx.shared_token_metadata.local().get()->get_topology();
         auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep, locator::topology::pending::yes)) {
+        if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
             return sstring(locator::production_snitch_base::default_rack);

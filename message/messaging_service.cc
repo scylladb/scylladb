@@ -258,7 +258,7 @@ bool messaging_service::topology_known_for(inet_address addr) const {
     // The token metadata pointer is nullptr before
     // the service is start_listen()-ed and after it's being shutdown()-ed.
     return _token_metadata
-        && _token_metadata->get()->get_topology().has_endpoint(addr, locator::topology::pending::yes);
+        && _token_metadata->get()->get_topology().has_endpoint(addr);
 }
 
 // Precondition: `topology_known_for(addr)`.

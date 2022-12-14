@@ -101,8 +101,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
-        _topology.update_endpoint(ep, std::move(dr), pend);
+    void update_topology(inet_address ep, endpoint_dc_rack dr) {
+        _topology.update_endpoint(ep, std::move(dr));
     }
 
     /**
@@ -420,7 +420,7 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
         co_return;
     }
 
-    if (!_topology.has_endpoint(endpoint, topology::pending::no)) {
+    if (!_topology.has_endpoint(endpoint)) {
         on_internal_error(tlogger, format("token_metadata_impl: {} must be a member of topology to update normal tokens", endpoint));
     }
 
@@ -743,7 +743,7 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         map[x.first].emplace(x.second);
         auto ins = endpoints.emplace(x.second);
         if (ins.second) { // insertion took place, i.e. -- new endpoint
-            if (!_topology.has_endpoint(x.second, topology::pending::yes)) {
+            if (!_topology.has_endpoint(x.second)) {
                 on_internal_error(tlogger, format("token_metadata_impl: {} must be member or pending to set pending tokens", x.second));
             }
         }
@@ -1031,8 +1031,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, topology::pending pend) {
-    _impl->update_topology(ep, std::move(dr), pend);
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
+    _impl->update_topology(ep, std::move(dr));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
