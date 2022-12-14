@@ -600,50 +600,53 @@ static void add_to_repair_meta_for_masters(repair_meta& rm);
 static void add_to_repair_meta_for_followers(repair_meta& rm);
 
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
-    return do_with(std::move(rows), std::list<repair_row>(), lw_shared_ptr<const decorated_key_with_hash>(), lw_shared_ptr<mutation_fragment>(), position_in_partition::tri_compare(*s),
-      [s, seed, is_master, permit, hasher] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& dk_ptr, lw_shared_ptr<mutation_fragment>& last_mf, position_in_partition::tri_compare& cmp) mutable {
-        return do_for_each(rows, [&dk_ptr, &row_list, &last_mf, &cmp, s, seed, is_master, permit, hasher] (partition_key_and_mutation_fragments& x) mutable {
-            dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
-            if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
-                dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
+    std::list<repair_row> row_list;
+    lw_shared_ptr<const decorated_key_with_hash> dk_ptr;
+    lw_shared_ptr<mutation_fragment> last_mf;
+    position_in_partition::tri_compare cmp(*s);
+    for (partition_key_and_mutation_fragments& x : rows) {
+        dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
+        if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
+            dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
+        }
+        if (is_master) {
+            for (frozen_mutation_fragment& fmf : x.get_mutation_fragments()) {
+                _metrics.rx_row_nr += 1;
+                _metrics.rx_row_bytes += fmf.representation().size();
+                // Keep the mutation_fragment in repair_row as an
+                // optimization to avoid unfreeze again when
+                // mutation_fragment is needed by _repair_writer.do_write()
+                // to apply the repair_row to disk
+                auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
+                auto hash = hasher.do_hash_for_mf(*dk_ptr, *mf);
+                position_in_partition pos(mf->position());
+                row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), is_dirty_on_master::yes, std::move(mf)));
+                co_await coroutine::maybe_yield();
             }
-            if (is_master) {
-                return do_for_each(x.get_mutation_fragments(), [&dk_ptr, &row_list, s, permit, hasher] (frozen_mutation_fragment& fmf) mutable {
-                    _metrics.rx_row_nr += 1;
-                    _metrics.rx_row_bytes += fmf.representation().size();
-                    // Keep the mutation_fragment in repair_row as an
-                    // optimization to avoid unfreeze again when
-                    // mutation_fragment is needed by _repair_writer.do_write()
-                    // to apply the repair_row to disk
-                    auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
-                    auto hash = hasher.do_hash_for_mf(*dk_ptr, *mf);
-                    position_in_partition pos(mf->position());
-                    row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), is_dirty_on_master::yes, std::move(mf)));
-                });
-            } else {
-                last_mf = {};
-                return do_for_each(x.get_mutation_fragments(), [&dk_ptr, &row_list, &last_mf, &cmp, s, permit] (frozen_mutation_fragment& fmf) mutable {
-                    _metrics.rx_row_nr += 1;
-                    _metrics.rx_row_bytes += fmf.representation().size();
-                    auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
-                    // If the mutation_fragment has the same position as
-                    // the last mutation_fragment, it means they are the
-                    // same row with different contents. We can not feed
-                    // such rows into the sstable writer. Instead we apply
-                    // the mutation_fragment into the previous one.
-                    if (last_mf && cmp(last_mf->position(), mf->position()) == 0 && last_mf->mergeable_with(*mf)) {
-                        last_mf->apply(*s, std::move(*mf));
-                    } else {
-                        last_mf = mf;
-                        // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
-                        row_list.push_back(repair_row({}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
-                    }
-                });
+        } else {
+            last_mf = {};
+            for (frozen_mutation_fragment& fmf : x.get_mutation_fragments()) {
+                _metrics.rx_row_nr += 1;
+                _metrics.rx_row_bytes += fmf.representation().size();
+                auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
+                // If the mutation_fragment has the same position as
+                // the last mutation_fragment, it means they are the
+                // same row with different contents. We can not feed
+                // such rows into the sstable writer. Instead we apply
+                // the mutation_fragment into the previous one.
+                if (last_mf && cmp(last_mf->position(), mf->position()) == 0 && last_mf->mergeable_with(*mf)) {
+                    last_mf->apply(*s, std::move(*mf));
+                } else {
+                    last_mf = mf;
+                    // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
+                    row_list.push_back(repair_row({}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
+                }
+                co_await coroutine::maybe_yield();
             }
-        }).then([&row_list] {
-            return std::move(row_list);
-        });
-    });
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(row_list);
 }
 
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer) {
