@@ -1,15 +1,15 @@
-Scylla Snitches
-===============
+ScyllaDB Snitches
+==================
 
 Snitches are used in the following ways:
 
-* To determine to which datacenters and racks the Scylla nodes belong to
-* To inform Scylla about the network topology so that requests are routed efficiently
-* To allow Scylla to distribute replicas by grouping machines into data centers and racks.
+* To determine to which datacenters and racks the ScyllaDB nodes belong to
+* To inform ScyllaDB about the network topology so that requests are routed efficiently
+* To allow ScyllaDB to distribute replicas by grouping machines into data centers and racks.
 
-Note, that if you do not choose a Snitch when creating a Scylla cluster, the SimpleSnitch is selected by default.
+Note, that if you do not choose a Snitch when creating a ScyllaDB cluster, the SimpleSnitch is selected by default.
 
-Scylla supports the following snitches:
+ScyllaDB supports the following snitches:
 
 * SimpleSnitch_
 * RackInferringSnitch_
@@ -17,6 +17,7 @@ Scylla supports the following snitches:
 * Ec2Snitch_
 * Ec2MultiRegionSnitch_
 * GoogleCloudSnitch_
+* AzureSnitch_
 
 .. note::
 
@@ -55,7 +56,7 @@ GossipingPropertyFileSnitch
 
 Use the GossipingPropertyFileSnitch when working with multi-cluster deployments where the nodes are in various datacenters.
 It is recommended to use the GossipingPropertyFileSnitch in production installations.
-This snitch allows Scylla to explicitly define which DC and rack a specific node belongs to.
+This snitch allows ScyllaDB to explicitly define which DC and rack a specific node belongs to.
 In addition, it reads its configuration from the ``cassandra-rackdc.properties`` file, which is located in the ``/etc/scylla/`` directory.
 
 For Example:
@@ -67,9 +68,9 @@ For Example:
    rack=my_rack
 
 
-Setting *prefer_local* to *true* instructs Scylla to use an internal IP address for interactions with nodes in the same DC.
+Setting *prefer_local* to *true* instructs ScyllaDB to use an internal IP address for interactions with nodes in the same DC.
 
-An example use case is when your host uses different addresses for LAN and WAN sessions. You want your cluster to be accessible by clients *outside* the Scylla nodes’ LAN while still allowing Scylla nodes to communicate over internal LAN keeping latency low. In AWS, this is similar to a VM’s “Public” and “Private” addresses.
+An example use case is when your host uses different addresses for LAN and WAN sessions. You want your cluster to be accessible by clients *outside* the ScyllaDB nodes’ LAN while still allowing ScyllaDB nodes to communicate over internal LAN keeping latency low. In AWS, this is similar to a VM’s “Public” and “Private” addresses.
 To set an internal and external address, set a LAN address as a *listen_address* and use a WAN address as a *broadcast_address*.
 
 If you set ``prefer_local: true`` nodes in the same DC would use their LAN addresses to communicate with each other and WAN addresses to access nodes in different DCs and communicate with Clients.
@@ -138,7 +139,7 @@ Running the ``nodetool status`` command shows all three datacenters:
 .. note::
 
    The datacenter naming convention in this example is based on location.
-   You can use other conventions, such as DC1, DC2 or 100, 200, or analytics, search, Scylla, and more.
+   You can use other conventions, such as DC1, DC2 or 100, 200, or analytics, search, ScyllaDB, and more.
    Providing a separator such as a dash keeps the name of the DC readable as the ``dc_suffix`` property adds the suffix to the DC name.
 
 .. note::
@@ -182,17 +183,18 @@ Node - region ``DC='us-east'`` and Rack ``Rack='2'`` will be ``us-east-2`` dc_su
 GoogleCloudSnitch
 .................
 
-Use the GoogleCloudSnitch for deploying Scylla on the Google Cloud Engine (GCE) platform across one or more regions.
+Use the GoogleCloudSnitch for deploying ScyllaDB on the Google Cloud Engine (GCE) platform across one or more regions.
 The region is treated as a datacenter, and the availability zones are treated as racks within the datacenter.
 All communication occurs over private IP addresses within the same logical network.
 
 To use the GoogleCloudSnitch, add the snitch name to the :doc:`scylla.yaml </operating-scylla/admin>` file, which is located in the ``/etc/scylla/`` directory for **all nodes** in the cluster.
 
-You can add a suffix to the data center name as an additional identifier. This suffix is appended to the Zone name without adding any spaces. To add this suffix edit the ``cassandra-rackdc.properties`` file, which can be found under ``/etc/scylla/`` and set the ``dc_suffix`` with an appropriate text string. It may help to add an underscore or dash in front. Keep in mind that this property file is used for all Scylla snitches. When using GoogleCloudSnitch, all other properties are ignored.
+You can add a suffix to the data center name as an additional identifier. This suffix is appended to the Zone name without adding any spaces. To add this suffix edit the ``cassandra-rackdc.properties`` file, which can be found under ``/etc/scylla/`` and set the ``dc_suffix`` with an appropriate text string. It may help to add an underscore or dash in front. Keep in mind that this property file is used for all ScyllaDB snitches. When using GoogleCloudSnitch, all other properties are ignored.
 
 
 
-**Example**
+Example
+^^^^^^^^
 
 You have two datacenters running on GCE. One is for the office in Miami and is in region **us-east1**, zone **us-east-1-b**.
 The other office is in Portland and is in region **us-west1**,, zone **us-west-1-b**.
@@ -250,6 +252,95 @@ Start the cluster, one node at a time, and then run ``nodetool status`` to check
    UN  192.0.2.5     670.16 KB  256          ?       f0a44a49-0035-4146-8fdc-30e66c037f95  b
 
 
+.. _azuresnitch:
+
+AzureSnitch
+.................
+
+Use the AzureSnitch for deploying ScyllaDB on the Azure platform across one or more locations.
+The location is treated as a datacenter, and the availability zones are treated as racks within the datacenter.
+All communication occurs over private IP addresses within the same logical network.
+
+To use the AzureSnitch, add the snitch name to the :doc:`scylla.yaml </operating-scylla/admin>` file, which is located in the ``/etc/scylla/`` directory, for **all nodes** in the cluster:
+
+.. code-block:: none
+
+   endpoint_snitch: AzureSnitch
+
+
+Optionally, add a suffix to the datacenter name as an additional identifier. To add the suffix, set the ``dc_suffix`` property in 
+the ``cassandra-rackdc.properties`` file, which can be found in ``/etc/scylla/``.
+
+The suffix is appended to the Zone name without adding any spaces, so consider adding an underscore or dash as 
+the first character in the suffix. For example:
+ 
+.. code-block:: none
+
+   dc_suffix=_scylladb_node_2022
+
+Keep in mind that this property file is used for all ScyllaDB snitches. When using AzureSnitch, all other properties are ignored.
+
+
+Example
+^^^^^^^^
+
+In the following example, there are two datacenters running on Azure. One is for the office in Miami and is in **us-east1** location, **us-east-1-b** zone.
+The other office is in Portland and is in **us-west1** location, **us-west-1-b** zone.
+
+It's important to note that:
+
+* DC1 is us-east1 with rack name b
+* DC2 is us-west1 with rack b
+
+Racks are important for distributing replicas, but not for datacenter naming, as this Snitch can work across multiple locations without additional configuration.
+
+After creating the instances on Azure, edit the :doc:`scylla.yaml </operating-scylla/admin>` file to select the AzureSnitch.
+
+.. code-block:: none
+
+   endpoint_snitch: AzureSnitch
+
+To set the datacenter suffix for the nodes in each datacenter, open each node's properties file in the ``cassandra-rackdc.properties``. The file can be found under ``/etc/scylla/``.
+Set the following parameters for Miami:
+
+.. code-block:: none
+
+   # node 1 - 192.0.2.2 (use the same properties for node #2 (192.0.2.3) and #3 (192.0.2.4)) 
+
+   dc_suffix=_scylla_node_Miami
+   
+and for Portland:  
+
+.. code-block:: none
+
+   # node 4 192.0.2.5 
+
+   dc_suffix=_scylla_node_Portland
+
+Start the cluster, one node at a time, and then run ``nodetool status`` to check connectivity. 
+
+.. code-block:: shell
+
+   nodetool status
+
+   Datacenter: us-east1_scylla_node_Miami
+   ======================================
+   Status=Up/Down
+   |/ State=Normal/Leaving/Joining/Moving
+   --  Address       Load       Tokens       Owns    Host ID                               Rack
+   UN  192.0.2.2     1.27 MB    256          ?       5b1d864f-a026-4076-bb19-3e7dd693abf1  b
+   UN  192.0.2.3     954.89 KB  256          ?       783a815e-6e9d-4ab5-a092-bbf15fd76a9f  b
+   UN  192.0.2.4     1.02 MB    256          ?       1edf5b52-6ae3-41c1-9ec1-c431d34a1aa1  b
+
+   Datacenter: us-west1_scylla_node_Portland
+   ======================================
+   Status=Up/Down
+   |/ State=Normal/Leaving/Joining/Moving
+   --  Address       Load       Tokens       Owns    Host ID                               Rack
+   UN  192.0.2.5     670.16 KB  256          ?       f0a44a49-0035-4146-8fdc-30e66c037f95  b
+
+
 Related Topics
+.................
 
 .. include:: /rst_include/advance-index.rst
