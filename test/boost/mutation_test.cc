@@ -2363,11 +2363,11 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
 
         with_allocator(alloc, [&] {
             auto before = alloc.allocated_bytes();
-            auto m2 = m;
+            auto m2 = mutation_partition(*m.schema(), m.partition());
             auto after = alloc.allocated_bytes();
 
             BOOST_CHECK_EQUAL(m.partition().external_memory_usage(*s.schema()),
-                              m2.partition().external_memory_usage(*s.schema()));
+                              m2.external_memory_usage(*s.schema()));
 
             BOOST_CHECK_GE(m.partition().external_memory_usage(*s.schema()), size);
             BOOST_CHECK_EQUAL(m.partition().external_memory_usage(*s.schema()), after - before);
