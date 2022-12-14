@@ -154,6 +154,7 @@ public:
         uint64_t _sequence_number = 0;
     public:
         module(task_manager& tm, std::string name) noexcept;
+        virtual ~module() = default;
 
         uint64_t new_sequence_number() noexcept;
         task_manager& get_task_manager() noexcept;
