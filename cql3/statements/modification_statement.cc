@@ -522,18 +522,10 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
-                auto id = entry.first->prepare_column_identifier(schema);
-                const column_definition* def = get_column_definition(schema, *id);
-                if (!def) {
-                    throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
-                }
+                auto condition = entry->prepare(db, keyspace(), schema);
 
-                auto condition = entry.second->prepare(db, keyspace(), *def);
                 condition->collect_marker_specificaton(ctx);
 
-                if (def->is_primary_key()) {
-                    throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
-                }
                 stmt.add_condition(condition);
             }
         }

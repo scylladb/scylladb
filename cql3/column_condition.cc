@@ -257,7 +257,19 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 }
 
 lw_shared_ptr<column_condition>
-column_condition::raw::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
+column_condition::raw::prepare(data_dictionary::database db, const sstring& keyspace, const schema& schema) const {
+    auto id = _lhs->prepare_column_identifier(schema);
+    const column_definition* def = get_column_definition(schema, *id);
+    if (!def) {
+        throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
+    }
+
+    if (def->is_primary_key()) {
+        throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
+    }
+
+    auto& receiver = *def;
+
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }

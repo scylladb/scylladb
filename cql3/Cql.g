@@ -100,7 +100,7 @@ using namespace cql3::selection;
 using namespace cql3::expr;
 
 using cql3::cql3_type;
-using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,lw_shared_ptr<cql3::column_condition::raw>>>;
+using conditions_type = std::vector<lw_shared_ptr<cql3::column_condition::raw>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
@@ -1681,16 +1681,16 @@ udtColumnOperation[operations_type& operations,
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
-        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, {}, op)); }
+        ( op=relationType t=term { conditions.emplace_back(cql3::column_condition::raw::simple_condition(key, t, {}, op)); }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, {}, values)); }
-            | marker1=marker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition({}, marker1, {})); }
+            ( values=singleColumnInValues { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, {}, {}, values)); }
+            | marker1=marker { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, {}, marker1, {})); }
             )
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, element, op)); }
+            ( op=relationType t=term { conditions.emplace_back(cql3::column_condition::raw::simple_condition(key, t, element, op)); }
             | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, {}, values)); }
-                | marker1=marker { conditions.emplace_back(key, cql3::column_condition::raw::in_condition(element, marker1, {})); }
+                ( values=singleColumnInValues { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, element, {}, values)); }
+                | marker1=marker { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, element, marker1, {})); }
                 )
             )
         )

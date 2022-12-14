@@ -83,6 +83,7 @@ public:
 
     class raw final {
     private:
+        shared_ptr<column_identifier::raw> _lhs;
         std::optional<cql3::expr::expression> _value;
         std::vector<cql3::expr::expression> _in_values;
         std::optional<cql3::expr::expression> _in_marker;
@@ -91,12 +92,14 @@ public:
         std::optional<cql3::expr::expression> _collection_element;
         expr::oper_t _op;
     public:
-        raw(std::optional<cql3::expr::expression> value,
+        raw(shared_ptr<column_identifier::raw> lhs,
+            std::optional<cql3::expr::expression> value,
             std::vector<cql3::expr::expression> in_values,
             std::optional<cql3::expr::expression> in_marker,
             std::optional<cql3::expr::expression> collection_element,
             expr::oper_t op)
-                : _value(std::move(value))
+                : _lhs(std::move(lhs))
+                , _value(std::move(value))
                 , _in_values(std::move(in_values))
                 , _in_marker(std::move(in_marker))
                 , _collection_element(std::move(collection_element))
@@ -110,9 +113,9 @@ public:
          * "IF col = 'foo'"
          * "IF col LIKE 'foo%'"
          */
-        static lw_shared_ptr<raw> simple_condition(cql3::expr::expression value, std::optional<cql3::expr::expression> collection_element,
+        static lw_shared_ptr<raw> simple_condition(shared_ptr<column_identifier::raw> lhs, cql3::expr::expression value, std::optional<cql3::expr::expression> collection_element,
                 expr::oper_t op) {
-            return make_lw_shared<raw>(std::move(value), std::vector<cql3::expr::expression>{},
+            return make_lw_shared<raw>(std::move(lhs), std::move(value), std::vector<cql3::expr::expression>{},
                     std::nullopt, std::move(collection_element), op);
         }
 
@@ -124,13 +127,13 @@ public:
          * "IF col['key'] IN * ('foo', 'bar', ...)"
          * "IF col['key'] IN ?"
          */
-        static lw_shared_ptr<raw> in_condition(std::optional<cql3::expr::expression> collection_element,
+        static lw_shared_ptr<raw> in_condition(shared_ptr<column_identifier::raw> lhs, std::optional<cql3::expr::expression> collection_element,
                 std::optional<cql3::expr::expression> in_marker, std::vector<cql3::expr::expression> in_values) {
-            return make_lw_shared<raw>(std::nullopt, std::move(in_values), std::move(in_marker),
+            return make_lw_shared<raw>(std::move(lhs), std::nullopt, std::move(in_values), std::move(in_marker),
                     std::move(collection_element), expr::oper_t::IN);
         }
 
-        lw_shared_ptr<column_condition> prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const;
+        lw_shared_ptr<column_condition> prepare(data_dictionary::database db, const sstring& keyspace, const schema& schema) const;
     };
 };
 
