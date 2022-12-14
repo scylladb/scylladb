@@ -2994,7 +2994,7 @@ future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mut
     return futurize_invoke([this] (Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
         unique_response_handler_vector ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
-        for (auto& m : mutations) {
+        for (auto&& m : mutations) {
             auto r_handler = create_handler(m, cl, type, permit);
             if (!r_handler) {
                 return make_ready_future<result<unique_response_handler_vector>>(std::move(r_handler).as_failure());
