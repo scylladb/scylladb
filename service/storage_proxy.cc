@@ -2692,6 +2692,14 @@ inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
     return os << "hint_wrapper{" << h.mut << "}";
 }
 
+struct read_repair_mutation {
+    std::unordered_map<gms::inet_address, std::optional<mutation>> value;
+};
+
+inline std::ostream& operator<<(std::ostream& os, const read_repair_mutation& m) {
+    return os << m.value;
+}
+
 using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
@@ -2920,8 +2928,9 @@ storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consiste
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     inet_address_vector_replica_set endpoints;
+    const auto& m = mut.value;
     endpoints.reserve(m.size());
     boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
     auto mh = std::make_unique<per_destination_mutation>(m);
@@ -3846,7 +3855,7 @@ future<result<>> storage_proxy::schedule_repair(std::unordered_map<dht::token, s
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
-    return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state), std::move(permit));
+    return mutate_internal(diffs | boost::adaptors::map_values | boost::adaptors::transformed([] (auto& v) { return read_repair_mutation{std::move(v)}; }), cl, false, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
