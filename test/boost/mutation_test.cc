@@ -2375,6 +2375,49 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_external_memory_usage_v2) {
+    measuring_allocator alloc;
+    auto s = simple_schema();
+
+    auto generate = [&s] {
+        size_t data_size = 0;
+
+        auto m = mutation(s.schema(), s.make_pkey("pk"));
+
+        auto row_count = tests::random::get_int(1, 16);
+        for (auto i = 0; i < row_count; i++) {
+            auto ck_value = to_hex(tests::random::get_bytes(tests::random::get_int(1023) + 1));
+            data_size += ck_value.size();
+            auto ck = s.make_ckey(ck_value);
+
+            auto value = to_hex(tests::random::get_bytes(tests::random::get_int(128 * 1024)));
+            data_size += value.size();
+            s.add_row(m, ck, value);
+        }
+
+        return std::pair(std::move(m), data_size);
+    };
+
+    for (auto i = 0; i < 16; i++) {
+        auto m_and_size = generate();
+        auto&& m = m_and_size.first;
+        auto&& size = m_and_size.second;
+        mutation_partition_v2 m_v2(*m.schema(), m.partition());
+
+        with_allocator(alloc, [&] {
+            auto before = alloc.allocated_bytes();
+            auto m2_v2 = mutation_partition_v2(*m.schema(), m_v2);
+            auto after = alloc.allocated_bytes();
+
+            BOOST_CHECK_EQUAL(m_v2.external_memory_usage(*s.schema()),
+                              m2_v2.external_memory_usage(*s.schema()));
+
+            BOOST_CHECK_GE(m_v2.external_memory_usage(*s.schema()), size);
+            BOOST_CHECK_EQUAL(m_v2.external_memory_usage(*s.schema()), after - before);
+        });
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_cell_equals) {
     auto now = gc_clock::now();
     auto ttl = gc_clock::duration(0);
