@@ -485,7 +485,7 @@ class Test:
         self.mode = suite.mode
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}".format(self.shortname, self.id)
+        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
@@ -604,7 +604,8 @@ class BoostTest(UnitTest):
             name = re.sub(r'^test/', '', name)
             name = re.sub(r'\.cc$', '', name)
             name = re.sub(r'/', '.', name)
-            name = f'{name}.{self.mode}'
+            # add the suite name to disambiguate tests named "run"
+            name = f'{self.suite.name}.{name}.{self.mode}'
             return name
         if self.__junit_etree is None:
             self.__junit_etree = ET.parse(self.xmlout)
@@ -1294,8 +1295,9 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             if test.mode != mode:
                 continue
             total += 1
+            # add the suite name to disambiguate tests named "run"
             xml_res = ET.SubElement(xml_results, 'testcase',
-                                    name="{}.{}.{}".format(test.shortname, mode, test.id))
+                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id))
             if test.success is True:
                 continue
             failed += 1
