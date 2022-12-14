@@ -247,41 +247,38 @@ bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, co
     return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-static std::optional<std::pair<managed_bytes, managed_bytes>> evaluate_binop_sides(const expression& lhs,
+static std::pair<managed_bytes_opt, managed_bytes_opt> evaluate_binop_sides(const expression& lhs,
                                                                                    const expression& rhs,
                                                                                    const oper_t op,
                                                                                    const evaluation_inputs& inputs) {
     raw_value lhs_value = evaluate(lhs, inputs);
     raw_value rhs_value = evaluate(rhs, inputs);
 
-    if (lhs_value.is_null() || rhs_value.is_null()) {
-        return std::nullopt;
-    }
-    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
-    managed_bytes rhs_bytes = std::move(rhs_value).to_managed_bytes();
+    managed_bytes_opt lhs_bytes = std::move(lhs_value).to_managed_bytes_opt();
+    managed_bytes_opt rhs_bytes = std::move(rhs_value).to_managed_bytes_opt();
     return std::pair(std::move(lhs_bytes), std::move(rhs_bytes));
 }
 
 bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::EQ, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+    return type_of(lhs)->equal(managed_bytes_view(*lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
 bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::NEQ, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    return !type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+    return !type_of(lhs)->equal(managed_bytes_view(*lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
@@ -310,26 +307,26 @@ bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, con
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-     std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, op, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    return limits(lhs_bytes, op, rhs_bytes, type_of(lhs)->without_reversed());
+    return limits(*lhs_bytes, op, *rhs_bytes, type_of(lhs)->without_reversed());
 }
 
 /// True iff a column is a collection containing value.
 bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
 
     const abstract_type& lhs_type = type_of(lhs)->without_reversed();
-    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(sides_bytes->first));
+    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(*sides_bytes.first));
 
     const collection_type_impl* collection_type = dynamic_cast<const collection_type_impl*>(&lhs_type);
     data_type element_type =
@@ -337,7 +334,7 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 
     auto exists_in = [&](auto&& range) {
         auto found = std::find_if(range.begin(), range.end(), [&](auto&& element) {
-            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), sides_bytes->second) == 0;
+            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), *sides_bytes.second) == 0;
         });
         return found != range.end();
     };
@@ -356,21 +353,21 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 
 /// True iff a column is a map containing \p key.
 bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS_KEY, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
     data_type lhs_type = type_of(lhs);
     const map_type_impl::native_type data_map =
-        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(lhs_bytes)));
+        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(*lhs_bytes)));
     data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type)->name_comparator();
 
     for (const std::pair<data_value, data_value>& map_element : data_map) {
         bytes serialized_element_key = map_element.first.serialize_nonnull();
-        if (key_type->compare(managed_bytes_view(rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
+        if (key_type->compare(managed_bytes_view(*rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
             0) {
             return true;
         };
@@ -431,30 +428,30 @@ bool_or_null like(const expression& lhs, const expression& rhs, const evaluation
         throw exceptions::invalid_request_exception(
                 format("LIKE is allowed only on string types, which {:user} is not", lhs));
     }
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::LIKE, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(*sides_bytes);
+    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(sides_bytes);
 
-    bytes lhs_bytes = to_bytes(lhs_managed_bytes);
-    bytes rhs_bytes = to_bytes(rhs_managed_bytes);
+    bytes lhs_bytes = to_bytes(*lhs_managed_bytes);
+    bytes rhs_bytes = to_bytes(*rhs_managed_bytes);
 
     return like_matcher(bytes_view(rhs_bytes))(bytes_view(lhs_bytes));
 }
 
 /// True iff the column value is in the set defined by rhs.
 bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
-    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
+    expression lhs_constant = constant(raw_value::make_value(std::move(*lhs_bytes)), type_of(lhs));
+    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(*rhs_bytes)));
     for (const managed_bytes_opt& elem : list_elems) {
         if (equal(lhs_constant, elem, inputs).is_true()) {
             return true;
