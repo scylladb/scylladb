@@ -2864,3 +2864,412 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
 
     test_evaluate_binop_null_unset(oper_t::LIKE, make_text_const("some_text"), make_text_const("some_%"));
 }
+
+// An empty conjunction should evaluate to true
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_empty) {
+    expression empty_conj = conjunction{.children = {}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(empty_conj, evaluation_inputs{}), make_bool_raw(true));
+}
+
+// A conjunction with one false value should evaluate to false
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_false) {
+    expression conj_one_false = conjunction{.children = {make_bool_const(false)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_one_false, evaluation_inputs{}), make_bool_raw(false));
+}
+
+// A conjunction with one true value should evaluate to true
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_true) {
+    expression conj_one_true = conjunction{.children = {make_bool_const(true)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_one_true, evaluation_inputs{}), make_bool_raw(true));
+}
+
+// Helper function that evaluates a conjunction with given elements
+raw_value eval_conj(std::vector<raw_value> elements) {
+    std::vector<expression> conj_children;
+    for (const raw_value& element : elements) {
+        conj_children.push_back(constant(element, boolean_type));
+    }
+
+    return evaluate(conjunction{.children = conj_children}, evaluation_inputs{});
+};
+
+// Evaluate all possible two-element conjunctions containting true, false and null.
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_two_elements) {
+    raw_value true_val = make_bool_raw(true);
+    raw_value false_val = make_bool_raw(false);
+    raw_value null_val = raw_value::make_null();
+
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, true_val}), true_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, null_val}), null_val);
+
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, null_val}), false_val);
+
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, true_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, null_val}), null_val);
+}
+
+// Evaluate all possible three-element conjunctions containting true, false and null.
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_three_elements) {
+    raw_value true_val = make_bool_raw(true);
+    raw_value false_val = make_bool_raw(false);
+    raw_value null_val = raw_value::make_null();
+
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, true_val, true_val}), true_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, true_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, true_val, null_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, false_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, false_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, false_val, null_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, null_val, true_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, null_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({true_val, null_val, null_val}), null_val);
+
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, true_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, true_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, true_val, null_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, false_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, false_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, false_val, null_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, null_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, null_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({false_val, null_val, null_val}), false_val);
+
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, true_val, true_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, true_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, true_val, null_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, false_val, true_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, false_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, false_val, null_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, null_val, true_val}), null_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, null_val, false_val}), false_val);
+    BOOST_REQUIRE_EQUAL(eval_conj({null_val, null_val, null_val}), null_val);
+}
+
+// `true AND true AND true AND ...' should evaluate to true
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_long_true) {
+    expression conj_long_true = conjunction{
+        .children = {make_bool_const(true), make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                     make_bool_const(true), make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                     make_bool_const(true), make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                     make_bool_const(true), make_bool_const(true), make_bool_const(true)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_long_true, evaluation_inputs{}), make_bool_raw(true));
+}
+
+// `true AND true AND false AND ...' should evaluate to false
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_long_mixed) {
+    expression conj_long_mixed = conjunction{
+        .children = {make_bool_const(true), make_bool_const(true), make_bool_const(false), make_bool_const(true),
+                     make_bool_const(true), make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                     make_bool_const(false), make_bool_const(false), make_bool_const(true), make_bool_const(false),
+                     make_bool_const(true), make_bool_const(true), make_bool_const(true)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_long_mixed, evaluation_inputs{}), make_bool_raw(false));
+}
+
+// A conjunction with one null value should evaluate to null
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_null) {
+    expression conj_one_null = conjunction{.children = {constant::make_null(boolean_type)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_one_null, evaluation_inputs{}), raw_value::make_null());
+}
+
+// 'true AND true AND true AND null AND true AND ...' should evaluate to null
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_null) {
+    expression conj_with_null =
+        conjunction{.children = {make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                                 constant::make_null(boolean_type), make_bool_const(true), make_bool_const(true)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_with_null, evaluation_inputs{}), raw_value::make_null());
+}
+
+// Evaluating a conjunction that contains a single unset value should throw an error
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_unset) {
+    expression conj_one_unset = conjunction{.children = {constant::make_unset_value(boolean_type)}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_one_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+// Evaluating 'true AND true AND true AND UNSET_VALUE AND ...' should throw an erorr
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_unset) {
+    expression conj_with_unset = conjunction{
+        .children = {make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                     constant::make_unset_value(boolean_type), make_bool_const(false), make_bool_const(true)}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+// Evaluating a conjunction that contains a single empty value should throw an error
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_empty) {
+    expression conj_one_empty = conjunction{.children = {make_empty_const(boolean_type)}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_one_empty, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+// Evaluating 'true AND true AND true AND EMPTY AND ...' should throw an erorr
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_empty) {
+    expression conj_with_empty =
+        conjunction{.children = {make_bool_const(true), make_bool_const(true), make_bool_const(true),
+                                 make_empty_const(boolean_type), make_bool_const(false), make_bool_const(true)}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_with_empty, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+// Short circuiting on false ignores all further values, even though they could make the expression invalid
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_short_circuit_on_false_does_not_detect_invalid_values) {
+    // An expression which would throw an error when evaluated
+    expression invalid_to_evaluate = conjunction{.children = {constant::make_unset_value(boolean_type)}};
+
+    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression conj_with_false_then_invalid =
+        conjunction{.children = {make_bool_const(true), make_bool_const(false), make_empty_const(boolean_type),
+                                 constant::make_unset_value(boolean_type), invalid_to_evaluate, make_bool_const(true)}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_with_false_then_invalid, evaluation_inputs{}), make_bool_raw(false));
+}
+
+// Null doesn't short-circuit
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_doesnt_short_circuit_on_null) {
+    // An expression which would throw an error when evaluated
+    expression invalid_to_evaluate = conjunction{.children = {constant::make_unset_value(boolean_type)}};
+
+    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, evaluation_inputs{}), exceptions::invalid_request_exception);
+
+    expression conj_with_null_then_invalid = conjunction{
+        .children = {make_bool_const(true), constant::make_null(boolean_type), make_empty_const(boolean_type),
+                     constant::make_unset_value(boolean_type), invalid_to_evaluate, make_bool_const(true)}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_with_null_then_invalid, evaluation_inputs{}),
+                        exceptions::invalid_request_exception);
+}
+
+// '() AND (true AND true) AND (true AND true) AND (true)' evaluates to true.
+// This test also ensures that evaluate(conjunction) calls evaluate
+// for each of the conjunction's children.
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_to_true) {
+    expression conj1 = conjunction{.children = {}};
+
+    expression conj2 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
+
+    expression conj3 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
+
+    expression conj4 = conjunction{.children = {make_bool_const(true)}};
+
+    expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_of_conjs, evaluation_inputs{}), make_bool_raw(true));
+}
+
+// '() AND (true AND true) AND (true AND false) AND (true)' evaluates to false
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_to_false) {
+    expression conj1 = conjunction{.children = {}};
+
+    expression conj2 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
+
+    expression conj3 = conjunction{.children = {make_bool_const(true), make_bool_const(false)}};
+
+    expression conj4 = conjunction{.children = {make_bool_const(true)}};
+
+    expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_of_conjs, evaluation_inputs{}), make_bool_raw(false));
+}
+
+// '() AND (true AND true) AND (true AND null) AND (false)' evaluates to false
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_to_null) {
+    expression conj1 = conjunction{.children = {}};
+
+    expression conj2 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
+
+    expression conj3 = conjunction{.children = {make_bool_const(true), constant::make_null(boolean_type)}};
+
+    expression conj4 = conjunction{.children = {make_bool_const(false)}};
+
+    expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
+
+    BOOST_REQUIRE_EQUAL(evaluate(conj_of_conjs, evaluation_inputs{}), make_bool_raw(false));
+}
+
+// Evaluating '() AND (true AND true) AND (true AND UNSET_VALUE) AND (false)' throws an error
+BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
+    expression conj1 = conjunction{.children = {}};
+
+    expression conj2 = conjunction{.children = {make_bool_const(true), constant::make_unset_value(boolean_type)}};
+
+    expression conj3 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
+
+    expression conj4 = conjunction{.children = {make_bool_const(true)}};
+
+    expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
+
+    BOOST_REQUIRE_THROW(evaluate(conj_of_conjs, evaluation_inputs{}), exceptions::invalid_request_exception);
+}
+
+// It should be possible to prepare an empty conjunction
+BOOST_AUTO_TEST_CASE(prepare_conjunction_empty) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_empty = conjunction{
+        .children = {},
+    };
+
+    expression expected = make_bool_const(true);
+
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        expected);
+}
+
+// Preparing an empty conjunction should check that the type of receiver is correct
+BOOST_AUTO_TEST_CASE(prepare_conjunction_empty_with_int_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_empty = conjunction{
+        .children = {},
+    };
+
+    ::lw_shared_ptr<column_specification> int_receiver = make_receiver(int32_type);
+
+    BOOST_REQUIRE_THROW(prepare_expression(conj_empty, db, "test_ks", table_schema.get(), int_receiver),
+                        exceptions::invalid_request_exception);
+}
+
+// Prepare a conjunction whose only element is the constant `false`
+BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_false) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_one = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"}}};
+
+    expression expected = make_bool_const(false);
+
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        expected);
+}
+
+// Prepare a conjunction whose only element is the constant `true`
+BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_true) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_one = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}}};
+
+    expression expected = make_bool_const(true);
+
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        expected);
+}
+
+// Prepare a conjunction whose only element is the constant `null`
+BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_one = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::null, .raw_text = "null"}}};
+
+    expression expected = constant::make_null(boolean_type);
+
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        expected);
+}
+
+// Try preparing a conjunction which contains an integer `0`.
+// It shouldn't be possible, conjunctions don't accept integers and 0 can't be cast to bool.
+BOOST_AUTO_TEST_CASE(prepare_conjunction_one_int_untyped_const_0) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_one = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "0"}}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Preparing 'true AND true AND 1 AND true` should throw an error
+BOOST_AUTO_TEST_CASE(prepare_conjunction_bools_and_one_int_untyped_const_0) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// AND can only be used to AND booleans, not the binary AND on integers
+BOOST_AUTO_TEST_CASE(prepare_conjunction_and_of_ints_is_invalid) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression conj_one = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "0"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"}}};
+
+    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Prepare a conjunction with many elements:
+// 'true AND true AND b1 AND (false AND b2)'
+BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("b1", boolean_type, column_kind::regular_column)
+                                  .with_column("b2", boolean_type, column_kind::regular_column)
+                                  .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression sub_conj = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"},
+                     unresolved_identifier{::make_shared<column_identifier_raw>("b2", false)}}};
+
+    expression conj_many = conjunction{
+        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
+                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"},
+                     unresolved_identifier{
+                         unresolved_identifier{::make_shared<column_identifier_raw>("b1", false)},
+                     },
+                     sub_conj}};
+
+    expression expected =
+        conjunction{.children = {make_bool_const(true), make_bool_const(false),
+                                 column_value(table_schema->get_column_definition("b1")),
+                                 conjunction{.children = {make_bool_const(false),
+                                                          column_value(table_schema->get_column_definition("b2"))}}}};
+
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+                        expected);
+
+    // Integer receiver is rejected
+    BOOST_REQUIRE_THROW(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
+                        exceptions::invalid_request_exception);
+}

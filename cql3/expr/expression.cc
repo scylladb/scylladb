@@ -1710,13 +1710,59 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
     return raw_value::make_value(boolean_type->decompose(binop_result.get_value()));
 }
 
+// Evaluate a conjunction of elements separated by AND.
+// NULL is treated as an "unkown value" - maybe true maybe false.
+// `TRUE AND NULL` evaluates to NULL because it might be true but also might be false.
+// `FALSE AND NULL` evaluates to FALSE because no matter what value NULL acts as, the result will still be FALSE.
+// Unset and empty values are not allowed.
+//
+// Usually in CQL the rule is that when NULL occurs in an operation the whole expression
+// becomes NULL, but here we decided to deviate from this behavior.
+// Treating NULL as an "unkown value" is the standard SQL way of handing NULLs in conjunctions.
+// It works this way in MySQL and Postgres so we do it this way as well.
+//
+// The evaluation short-circuits. Once FALSE is encountered the function returns FALSE
+// immediately without evaluating any further elements.
+// It works this way in Postgres as well, for example:
+// `SELECT true AND NULL AND 1/0 = 0` will throw a division by zero error
+// but `SELECT false AND 1/0 = 0` will successfully evaluate to FALSE.
+cql3::raw_value evaluate(const conjunction& conj, const evaluation_inputs& inputs) {
+    bool has_null = false;
+
+    for (const expression& element : conj.children) {
+        cql3::raw_value element_val = evaluate(element, inputs);
+        if (element_val.is_null()) {
+            has_null = true;
+            continue;
+        }
+        if (element_val.is_unset_value()) {
+            throw exceptions::invalid_request_exception("unset value found inside AND conjunction");
+        }
+        if (element_val.is_empty_value()) {
+            throw exceptions::invalid_request_exception("empty value found inside AND conjunction");
+        }
+        bool element_val_bool = element_val.view().deserialize<bool>(*boolean_type);
+        if (element_val_bool == false) {
+            // The conjunction contains a false value, so the result must be false.
+            // Don't evaluate other elements, short-circuit and return immediately.
+            return raw_value::make_value(boolean_type->decompose(false));
+        }
+    }
+
+    if (has_null) {
+        return raw_value::make_null();
+    }
+
+    return raw_value::make_value(boolean_type->decompose(true));
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
             return evaluate(binop, inputs);
         },
-        [](const conjunction&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a conjunction");
+        [&](const conjunction& conj) -> cql3::raw_value {
+            return evaluate(conj, inputs);
         },
         [](const token&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate token");

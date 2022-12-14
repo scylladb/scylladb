@@ -875,6 +875,53 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
     }
 }
 
+std::optional<expression> prepare_conjunction(const conjunction& conj,
+                                              data_dictionary::database db,
+                                              const sstring& keyspace,
+                                              const schema* schema_opt,
+                                              lw_shared_ptr<column_specification> receiver) {
+    if (receiver.get() != nullptr && receiver->type->without_reversed().get_kind() != abstract_type::kind::boolean) {
+        throw exceptions::invalid_request_exception(
+            format("AND conjunction produces a boolean value, which doesn't match the type: {} of {}",
+                   receiver->type->name(), receiver->name->text()));
+    }
+
+    lw_shared_ptr<column_specification> child_receiver;
+    if (receiver.get() != nullptr) {
+        ::shared_ptr<column_identifier> child_receiver_name =
+            ::make_shared<column_identifier>(format("AND_element({})", receiver->name->text()), true);
+        child_receiver = make_lw_shared<column_specification>(receiver->ks_name, receiver->cf_name,
+                                                              std::move(child_receiver_name), boolean_type);
+    } else {
+        ::shared_ptr<column_identifier> child_receiver_name =
+            ::make_shared<column_identifier>("AND_element(unknown)", true);
+        sstring cf_name = schema_opt ? schema_opt->cf_name() : "unknown_cf";
+        child_receiver = make_lw_shared<column_specification>(keyspace, std::move(cf_name),
+                                                              std::move(child_receiver_name), boolean_type);
+    }
+
+    std::vector<expression> prepared_children;
+
+    bool all_terminal = true;
+    for (const expression& child : conj.children) {
+        std::optional<expression> prepared_child =
+            try_prepare_expression(child, db, keyspace, schema_opt, child_receiver);
+        if (!prepared_child.has_value()) {
+            throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", child));
+        }
+        if (!is<constant>(*prepared_child)) {
+            all_terminal = false;
+        }
+        prepared_children.push_back(std::move(*prepared_child));
+    }
+
+    conjunction result = conjunction{std::move(prepared_children)};
+    if (all_terminal) {
+        return constant(evaluate(result, evaluation_inputs{}), boolean_type);
+    }
+    return result;
+}
+
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
@@ -884,8 +931,8 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const binary_operator&) -> std::optional<expression> {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via prepare_expression()");
         },
-        [&] (const conjunction&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "conjunctions are not yet reachable via prepare_expression()");
+        [&] (const conjunction& conj) -> std::optional<expression> {
+            return prepare_conjunction(conj, db, keyspace, schema_opt, receiver);
         },
         [] (const column_value& cv) -> std::optional<expression> {
             return cv;
