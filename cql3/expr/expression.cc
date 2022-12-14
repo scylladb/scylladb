@@ -259,9 +259,14 @@ static std::pair<managed_bytes_opt, managed_bytes_opt> evaluate_binop_sides(cons
     return std::pair(std::move(lhs_bytes), std::move(rhs_bytes));
 }
 
-bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::EQ, inputs);
+
+    if (null_handling == null_handling_style::lwt_nulls && (!sides_bytes.first || !sides_bytes.second)) {
+        return bool(sides_bytes.first) == bool(sides_bytes.second);
+    }
+
     if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
@@ -270,9 +275,14 @@ bool_or_null equal(const expression& lhs, const expression& rhs, const evaluatio
     return type_of(lhs)->equal(managed_bytes_view(*lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::NEQ, inputs);
+
+    if (null_handling == null_handling_style::lwt_nulls && (!sides_bytes.first || !sides_bytes.second)) {
+        return bool(sides_bytes.first) != bool(sides_bytes.second);
+    }
+
     if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
@@ -302,16 +312,55 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
     }
 }
 
+bool list_contains_null(managed_bytes_view list) {
+    return boost::algorithm::any_of_equal(partially_deserialize_listlike(list), std::nullopt);
+}
+
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_handling, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, op, inputs);
+
     if (!sides_bytes.first || !sides_bytes.second) {
-        return bool_or_null::null();
+        switch (null_handling) {
+        case null_handling_style::sql:
+            return bool_or_null::null();
+        case null_handling_style::lwt_nulls:
+            switch (op) {
+            case oper_t::LT:
+            case oper_t::LTE:
+            case oper_t::GT:
+            case oper_t::GTE:
+                if (!sides_bytes.second) {
+                    throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
+                } else {
+                    // LWT < > <= >= throws only for NULL second operand, not first
+                    return false;
+                }
+            case oper_t::CONTAINS:
+            case oper_t::CONTAINS_KEY:
+            case oper_t::LIKE:
+            case oper_t::IS_NOT: // IS_NOT doesn't really belong here, luckily this is never reached.
+                throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
+            case oper_t::EQ:
+                return !sides_bytes.first == !sides_bytes.second;
+            case oper_t::NEQ:
+                return !sides_bytes.first != !sides_bytes.second;
+            case oper_t::IN:
+                if (!sides_bytes.second.has_value()) {
+                    // Nothing can be IN a list if there is no list.
+                    return false;
+                } else {
+                    return list_contains_null(*sides_bytes.second);
+                }
+            }
+        }
     }
+    // at this point, both sides are non-NULL
+
     auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
     return limits(*lhs_bytes, op, *rhs_bytes, type_of(lhs)->without_reversed());
@@ -442,12 +491,22 @@ bool_or_null like(const expression& lhs, const expression& rhs, const evaluation
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
     std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
     if (!sides_bytes.first || !sides_bytes.second) {
-        return bool_or_null::null();
+        switch (null_handling) {
+        case null_handling_style::sql:
+            return bool_or_null::null();
+        case null_handling_style::lwt_nulls:
+            if (!sides_bytes.second) {
+                return false;
+            } else {
+                return list_contains_null(*sides_bytes.second);
+            }
+        }
     }
+
     auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
     expression lhs_constant = constant(raw_value::make_value(std::move(*lhs_bytes)), type_of(lhs));
@@ -1078,6 +1137,9 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             [&] (const binary_operator& opr) {
                 if (pr.debug_mode) {
                     os << "(" << to_printer(opr.lhs) << ") " << opr.op << ' ' << to_printer(opr.rhs);
+                    if (opr.null_handling == null_handling_style::lwt_nulls) {
+                        os << " [[lwt_nulls]]";
+                    }
                 } else {
                     if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
                         tuple_constructor rhs_tuple {
@@ -1618,16 +1680,16 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
 
     switch (binop.op) {
         case oper_t::EQ:
-            binop_result = equal(binop.lhs, binop.rhs, inputs);
+            binop_result = equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::NEQ:
-            binop_result = not_equal(binop.lhs, binop.rhs, inputs);
+            binop_result = not_equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::LT:
         case oper_t::LTE:
         case oper_t::GT:
         case oper_t::GTE:
-            binop_result = limits(binop.lhs, binop.op, binop.rhs, inputs);
+            binop_result = limits(binop.lhs, binop.op, binop.null_handling, binop.rhs, inputs);
             break;
         case oper_t::CONTAINS:
             binop_result = contains(binop.lhs, binop.rhs, inputs);
@@ -1639,7 +1701,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             binop_result = like(binop.lhs, binop.rhs, inputs);
             break;
         case oper_t::IN:
-            binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
+            binop_result = is_one_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);

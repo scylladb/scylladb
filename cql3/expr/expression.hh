@@ -249,12 +249,18 @@ enum class comparison_order : char {
     clustering, ///< Table's clustering order. (a,b)>(1,1) means any row past (1,1) in storage.
 };
 
+enum class null_handling_style {
+    sql,           // evaluate(NULL = NULL) -> NULL, evaluate(NULL < x) -> NULL
+    lwt_nulls,     // evaluate(NULL = NULL) -> TRUE, evaluate(NULL < x) -> exception
+};
+
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
     expression lhs;
     oper_t op;
     expression rhs;
     comparison_order order;
+    null_handling_style null_handling = null_handling_style::sql;
 
     binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order = comparison_order::cql);
 
