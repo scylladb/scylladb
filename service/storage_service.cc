@@ -188,12 +188,27 @@ std::optional<gms::inet_address> storage_service::get_replace_address() {
 }
 
 bool storage_service::is_replacing() {
-    sstring replace_address_first_boot = _db.local().get_config().replace_address_first_boot();
-    if (!replace_address_first_boot.empty() && _sys_ks.local().bootstrap_complete()) {
+    const auto& cfg = _db.local().get_config();
+    if (!cfg.replace_node_first_boot().empty()) {
+        if (_sys_ks.local().bootstrap_complete()) {
+            slogger.info("Replace node on first boot requested; this node is already bootstrapped");
+            return false;
+        }
+        return true;
+    }
+    if (!cfg.replace_address_first_boot().empty()) {
+      if (_sys_ks.local().bootstrap_complete()) {
         slogger.info("Replace address on first boot requested; this node is already bootstrapped");
         return false;
+      }
+      return true;
     }
-    return bool(get_replace_address());
+    // Returning true if cfg.replace_address is provided
+    // will trigger an exception down the road if bootstrap_complete(),
+    // as it is an error to use this option post bootstrap.
+    // That said, we should just stop supporting it and force users
+    // to move to the new, replace_node_first_boot config option.
+    return !cfg.replace_address().empty();
 }
 
 bool storage_service::is_first_node() {
