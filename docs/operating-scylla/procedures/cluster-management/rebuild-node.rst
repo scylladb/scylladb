@@ -12,8 +12,8 @@ To recover the data and rebuild the node, follow this procedure:
 
 #. Open the ``/etc/scylla/scylla.yaml`` file.
 
-#. Add, if not present,else edit, the ``replace_address_first_boot`` parameter and change it to the
-   IP of the node before it restarted it might be the same IP after restart.
+#. Add, if not present, else edit, the ``replace_node_first_boot`` parameter and change it to the
+   Host ID of the node before it restarted.
 #. Stop Scylla Server
 
    .. include:: /rst_include/scylla-commands-stop-index.rst
@@ -23,6 +23,6 @@ To recover the data and rebuild the node, follow this procedure:
 
    .. include:: /rst_include/scylla-commands-start-index.rst
 
-#. Revert the ``replace_address_first_boot`` setting to what they were before you ran this procedure.
-   For ease of use, you can comment out the ``replace_address_first_boot`` parameter.
+#. Revert the ``replace_node_first_boot`` setting to what they were before you ran this procedure.
+   For ease of use, you can comment out the ``replace_node_first_boot`` parameter.
 
