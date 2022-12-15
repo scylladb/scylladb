@@ -105,6 +105,8 @@ usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_vie
 
 ::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");
 
+bind_variable make_bind_variable(int32_t index, data_type type);
+
 struct evaluation_inputs_data {
     std::vector<bytes> partition_key;
     std::vector<bytes> clustering_key;
@@ -123,6 +125,8 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
 // Creates a mock implementation of data_dictionary::database, useful in tests.
 std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> make_data_dictionary_database(
     const schema_ptr& table_schema);
+
+raw_value evaluate_with_bind_variables(const expression& e, std::vector<raw_value> bind_variable_values);
 
 }  // namespace test_utils
 }  // namespace expr
