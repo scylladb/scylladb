@@ -4209,9 +4209,13 @@ class scylla_memtables(gdb.Command):
         for table in all_tables(db):
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
             try:
-                scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
+                for cg_ptr in std_vector(table["_compaction_groups"]):
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
             except gdb.error:
-                scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
+                try:
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
+                except gdb.error:
+                    scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
 
 def escape_html(s):
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')

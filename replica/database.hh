@@ -409,9 +409,9 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
-    //  will be able to hold more than one group.
-    std::unique_ptr<compaction_group> _compaction_group;
+    std::vector<std::unique_ptr<compaction_group>> _compaction_groups;
+    // FIXME: will be removed once the last ref to single compaction group is gone.
+    compaction_group* _compaction_group;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -526,6 +526,7 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    std::vector<std::unique_ptr<compaction_group>> make_compaction_groups();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
     // Select a compaction group from a given token.

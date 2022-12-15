@@ -472,6 +472,12 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
+std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
+    std::vector<std::unique_ptr<compaction_group>> ret;
+    ret.emplace_back(std::make_unique<compaction_group>(*this));
+    return ret;
+}
+
 compaction_group* table::single_compaction_group_if_available() const noexcept {
     return &*_compaction_group;
 }
@@ -1324,7 +1330,8 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                         )
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
-    , _compaction_group(std::make_unique<compaction_group>(*this))
+    , _compaction_groups(make_compaction_groups())
+    , _compaction_group(_compaction_groups.front().get())
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
