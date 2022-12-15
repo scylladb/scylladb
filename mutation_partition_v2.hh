@@ -20,6 +20,10 @@
 
 #include "mutation_partition.hh"
 
+// is_evictable::yes means that the object is part of an evictable snapshots in MVCC,
+// and non-evictable one otherwise.
+// See docs/dev/mvcc.md for more details.
+using is_evictable = bool_class<class evictable_tag>;
 
 // Represents a set of writes made to a single partition.
 //
@@ -201,18 +205,18 @@ public:
     // If is_preemptible::yes is passed, apply_resume must also be passed,
     // same instance each time until stop_iteration::yes is returned.
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
-            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&, is_evictable);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&, is_evictable);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
-            mutation_application_stats& app_stats);
+            mutation_application_stats& app_stats, is_evictable);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
             mutation_application_stats& app_stats);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
-            mutation_application_stats& app_stats, preemption_check, apply_resume&);
+            mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable);
 
     // Weak exception guarantees.
-    // Assumes this and p are not owned by a cache_tracker.
+    // Assumes this and p are not owned by a cache_tracker and non-evictable.
     void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema,
                     mutation_application_stats& app_stats);
     void apply_weak(const schema& s, mutation_partition&&,

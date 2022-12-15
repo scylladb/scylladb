@@ -115,12 +115,13 @@ std::ostream& operator<<(std::ostream& out, const apply_resume& res) {
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
-        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
-    return apply_monotonically(s, std::move(p), tracker, app_stats, preemptible ? default_preemption_check() : never_preempt(), res);
+        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res, is_evictable evictable) {
+    return apply_monotonically(s, std::move(p), tracker, app_stats,
+        preemptible ? default_preemption_check() : never_preempt(), res, evictable);
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
-        mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res) {
+        mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable) {
 #ifdef SEASTAR_DEBUG
     assert(s.version() == _schema_version);
     assert(p._schema_version == _schema_version);
@@ -492,27 +493,27 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res) {
+        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res, is_evictable evictable) {
     if (s.version() == p_schema.version()) {
         return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats,
-                                   preemptible ? default_preemption_check() : never_preempt(), res);
+                                   preemptible ? default_preemption_check() : never_preempt(), res, evictable);
     } else {
         mutation_partition_v2 p2(s, p);
         p2.upgrade(p_schema, s);
-        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, never_preempt(), res); // FIXME: make preemptible
+        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, never_preempt(), res, evictable); // FIXME: make preemptible
     }
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker *tracker,
-                                                       mutation_application_stats& app_stats) {
+                                                       mutation_application_stats& app_stats, is_evictable evictable) {
     apply_resume res;
-    return apply_monotonically(s, std::move(p), tracker, app_stats, is_preemptible::no, res);
+    return apply_monotonically(s, std::move(p), tracker, app_stats, is_preemptible::no, res, evictable);
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
                                                        mutation_application_stats& app_stats) {
     apply_resume res;
-    return apply_monotonically(s, std::move(p), p_schema, app_stats, is_preemptible::no, res);
+    return apply_monotonically(s, std::move(p), p_schema, app_stats, is_preemptible::no, res, is_evictable::no);
 }
 
 void mutation_partition_v2::apply(const schema& s, const mutation_partition_v2& p, const schema& p_schema,
@@ -521,7 +522,7 @@ void mutation_partition_v2::apply(const schema& s, const mutation_partition_v2& 
 }
 
 void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, mutation_application_stats& app_stats) {
-    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats);
+    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
 }
 
 void
@@ -541,7 +542,7 @@ void mutation_partition_v2::apply_weak(const schema& s, const mutation_partition
 }
 
 void mutation_partition_v2::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
-    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats);
+    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
 }
 
 void

@@ -152,7 +152,7 @@ public:
     mutation_partition squashed() {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return _e.squashed(*_s);
+            return _e.squashed(*_s, is_evictable(_evictable));
         });
     }
 
@@ -555,7 +555,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
                 auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
                 e.apply(r, cleaner, *s, m1.partition(), *s, app_stats);
 
-                auto expected = e.squashed(*s);
+                auto expected = e.squashed(*s, is_evictable::no);
                 auto snap = e.read(r, cleaner, s, no_cache_tracker);
                 auto actual = read_using_cursor(*snap);
 
@@ -605,7 +605,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
 
                 auto snap = e.read(r, tracker.cleaner(), s, &tracker);
                 auto actual = read_using_cursor(*snap);
-                auto actual2 = e.squashed(*s);
+                auto actual2 = e.squashed(*s, is_evictable::yes);
 
                 assert_that(s, actual)
                     .has_same_continuity(expected)
@@ -1621,15 +1621,15 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
                     break;
                 } catch (const std::bad_alloc&) {
                     mutation_application_stats app_stats;
-                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema(), is_evictable::no)))
                         .is_equal_to_compacted(target)
                         .has_same_continuity(target);
                     e.apply(r, cleaner, *target.schema(), std::move(m2), *second.schema(), app_stats);
-                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema(), is_evictable::no)))
                         .is_equal_to_compacted(expected)
                         .has_same_continuity(expected);
                 }
-                assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema(), is_evictable::no)))
                     .is_equal_to_compacted(expected)
                     .has_same_continuity(expected);
             }
@@ -1675,7 +1675,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
-                assert_that(s, e.squashed(*s)).is_equal_to_compacted((m1 + m2).partition());
+                assert_that(s, e.squashed(*s, is_evictable::no)).is_equal_to_compacted((m1 + m2).partition());
             }
 
             {
@@ -1696,7 +1696,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
-                assert_that(s, e.squashed(*s)).is_equal_to_compacted((m1 + m2).partition());
+                assert_that(s, e.squashed(*s, is_evictable::no)).is_equal_to_compacted((m1 + m2).partition());
             }
         });
     });

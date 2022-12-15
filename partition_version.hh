@@ -119,8 +119,6 @@ public:
         return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
     }
 
-    using is_evictable = bool_class<class evictable_tag>;
-
     explicit partition_version(schema_ptr s) noexcept
         : _partition(std::move(s)) { }
     explicit partition_version(mutation_partition_v2 mp) noexcept
@@ -586,8 +584,8 @@ public:
         return *_version;
     }
 
-    mutation_partition_v2 squashed(schema_ptr from, schema_ptr to);
-    mutation_partition squashed(const schema&);
+    mutation_partition_v2 squashed(schema_ptr from, schema_ptr to, is_evictable);
+    mutation_partition squashed(const schema&, is_evictable);
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
@@ -616,7 +614,7 @@ public:
 };
 
 // Monotonic exception guarantees
-void merge_versions(const schema&, mutation_partition& newer, mutation_partition&& older);
+void merge_versions(const schema&, mutation_partition& newer, mutation_partition&& older, is_evictable);
 
 inline partition_version_ref& partition_snapshot::version()
 {

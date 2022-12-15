@@ -165,9 +165,9 @@ partition_snapshot::~partition_snapshot() {
     });
 }
 
-void merge_versions(const schema& s, mutation_partition_v2& newer, mutation_partition_v2&& older, cache_tracker* tracker) {
+void merge_versions(const schema& s, mutation_partition_v2& newer, mutation_partition_v2&& older, cache_tracker* tracker, is_evictable evictable) {
     mutation_application_stats app_stats;
-    older.apply_monotonically(s, std::move(newer), tracker, app_stats);
+    older.apply_monotonically(s, std::move(newer), tracker, app_stats, evictable);
     newer = std::move(older);
 }
 
@@ -191,7 +191,8 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
                 _version_merging_state = apply_resume();
             }
             const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
-                std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes, *_version_merging_state);
+                std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes, *_version_merging_state,
+                is_evictable(bool(_tracker)));
             app_stats.row_hits += local_app_stats.row_hits;
             if (do_stop_iteration == stop_iteration::no) {
                 return stop_iteration::no;
@@ -373,7 +374,8 @@ void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, cons
                       no_cache_tracker,
                       app_stats,
                       is_preemptible::yes,
-                      res) == stop_iteration::yes) {
+                      res,
+                      is_evictable::no) == stop_iteration::yes) {
                 current_allocator().destroy(new_version);
                 return;
             } else {
@@ -545,7 +547,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     });
 }
 
-mutation_partition_v2 partition_entry::squashed(schema_ptr from, schema_ptr to)
+mutation_partition_v2 partition_entry::squashed(schema_ptr from, schema_ptr to, is_evictable evictable)
 {
     mutation_partition_v2 mp(to);
     mp.set_static_row_continuous(_version->partition().static_row_continuous());
@@ -554,20 +556,20 @@ mutation_partition_v2 partition_entry::squashed(schema_ptr from, schema_ptr to)
         if (from->version() != to->version()) {
             older.upgrade(*from, *to);
         }
-        merge_versions(*to, mp, std::move(older), no_cache_tracker);
+        merge_versions(*to, mp, std::move(older), no_cache_tracker, evictable);
     }
     return mp;
 }
 
-mutation_partition partition_entry::squashed(const schema& s)
+mutation_partition partition_entry::squashed(const schema& s, is_evictable evictable)
 {
-    return squashed(s.shared_from_this(), s.shared_from_this())
+    return squashed(s.shared_from_this(), s.shared_from_this(), evictable)
         .as_mutation_partition(s);
 }
 
 void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
-    auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
+    auto new_version = current_allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))));
     auto old_version = &*_version;
     set_version(new_version);
     if (tracker) {
