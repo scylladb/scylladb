@@ -4041,3 +4041,35 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_with_null_rhs) {
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(optimized_constant_like) {
+    auto check = [] (expression e, std::optional<sstring> target, bool expect_optimization, std::optional<sstring> pattern_arg = {}) {
+        auto optimized = optimize_like(e);
+        bool was_optimized = find_binop(optimized, [] (const binary_operator&) { return true; }) == nullptr;
+        if (was_optimized != expect_optimization) {
+            return false;
+        }
+        auto params = std::vector({target ? make_text_raw(*target) : raw_value::make_null()});
+        if (pattern_arg) {
+            params.push_back(make_text_raw(*pattern_arg));
+        }
+        return evaluate_with_bind_variables(optimized, params) == evaluate_with_bind_variables(e, params);
+    };
+
+    auto target_var = make_bind_variable(0, utf8_type);
+    auto pattern_var = make_bind_variable(1, utf8_type);
+
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "xxyyz", true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "qxyyz", true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), std::nullopt, true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "xxyyz", false, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "qxyyz", false, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), std::nullopt, false, "xx%"));
+
+    // Verify that optimization works for subexpressions, not just top-level expressions
+    auto complex = make_conjunction(
+            binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")),
+            // repeated for simplicity
+            binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")));
+    BOOST_REQUIRE(check(std::move(complex), "xxyyz", true));
+}

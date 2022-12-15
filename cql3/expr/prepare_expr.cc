@@ -19,6 +19,7 @@
 #include "types/map.hh"
 #include "types/user.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
+#include "utils/like_matcher.hh"
 
 #include <boost/range/algorithm/count.hpp>
 
@@ -1240,6 +1241,86 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
     } else {
         return lhs_receiver;
     }
+}
+
+class like_constant_function : public cql3::functions::scalar_function {
+    functions::function_name _name;
+    like_matcher _matcher;
+    std::vector<data_type> _lhs_types;
+public:
+    like_constant_function(data_type arg_type, bytes_view pattern)
+            : _name("system", fmt::format("like({})",
+                    std::string_view(reinterpret_cast<const char*>(pattern.data()), pattern.size())))
+            , _matcher(pattern) {
+        _lhs_types.push_back(std::move(arg_type));
+    }
+
+    virtual const functions::function_name& name() const override {
+        return _name;
+    }
+
+    virtual const std::vector<data_type>& arg_types() const override {
+        return _lhs_types;
+    }
+
+    virtual const data_type& return_type() const override {
+        return boolean_type;
+    }
+
+    virtual bool is_pure() const override {
+        return true;
+    }
+
+    virtual bool is_native() const override {
+        return true;
+    }
+
+    virtual bool requires_thread() const override {
+        return false;
+    }
+
+    virtual bool is_aggregate() const override {
+        return false;
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << "LIKE(compiled)";
+    }
+
+    virtual sstring column_name(const std::vector<sstring>& column_names) const override {
+        return "LIKE";
+    }
+
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+        auto& str_opt = parameters[0];
+        if (!str_opt) {
+            return std::nullopt;
+        }
+        bool match_result = _matcher(*str_opt);
+        return data_value(match_result).serialize();
+    }
+};
+
+expression
+optimize_like(const expression& e) {
+    // Check for LIKE with constant pattern; replace with anonymous 
+    // function that contains the compiled regex.
+    return search_and_replace(e, [] (const expression& subexpression) -> std::optional<expression> {
+        if (auto* binop = as_if<binary_operator>(&subexpression)) {
+            if (binop->op == oper_t::LIKE) {
+                if (auto* rhs = as_if<constant>(&binop->rhs)) {
+                    if ((type_of(*rhs) == utf8_type || type_of(*rhs) == ascii_type) && !rhs->is_null()) {
+                        auto pattern = to_bytes(rhs->value.view());
+                        auto func = ::make_shared<like_constant_function>(type_of(binop->lhs), pattern);
+                        auto args = std::vector<expression>();
+                        args.push_back(binop->lhs);
+                        return function_call{std::move(func), std::move(args)};
+                    }
+                }
+            }
+        }
+        return std::nullopt;
+    });
 }
 
 binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema) {

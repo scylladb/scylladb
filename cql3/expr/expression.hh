@@ -700,6 +700,9 @@ std::optional<expression> try_prepare_expression(const expression& expr, data_di
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema);
 
+// Pre-compile any constant LIKE patterns and return equivalent expression
+expression optimize_like(const expression& e);
+
 
 /**
  * @return whether this object can be assigned to the provided receiver. We distinguish
