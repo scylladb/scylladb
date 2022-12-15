@@ -620,7 +620,7 @@ def test_table_options_quoting(cql, test_keyspace):
     comment = "table''s comment test!\"; DESC TABLES --quoting test"
     comment_plain = "table's comment test!\"; DESC TABLES --quoting test" #without doubling "'" inside comment
 
-    cql.execute(f"CREATE TYPE \"{type_name}\" (a int)")
+    cql.execute(f"CREATE TYPE {test_keyspace}.\"{type_name}\" (a int)")
     try:
         with new_test_table(cql, test_keyspace, f"a int primary key, b list<frozen<\"{type_name}\">>, \"{column_name}\" int", 
             f"with comment = '{comment}'") as tbl:
@@ -636,7 +636,7 @@ def test_table_options_quoting(cql, test_keyspace):
             assert f"comment = {comment}" not in desc
             assert f"comment = '{comment_plain}'" not in desc
     finally:
-        cql.execute(f"DROP TYPE \"{type_name}\"")
+        cql.execute(f"DROP TYPE {test_keyspace}.\"{type_name}\"")
 
 
 ### =========================== UTILITY FUNCTIONS =============================
