@@ -155,6 +155,19 @@ protected:
     }
 };
 
+shared_ptr<selection>
+selection_from_partition_slice(schema_ptr schema, const query::partition_slice& slice) {
+    std::vector<const column_definition*> cdefs;
+    cdefs.reserve(slice.static_columns.size() + slice.regular_columns.size());
+    for (auto static_col : slice.static_columns) {
+        cdefs.push_back(&schema->static_column_at(static_col));
+    }
+    for (auto regular_col : slice.regular_columns) {
+        cdefs.push_back(&schema->regular_column_at(regular_col));
+    }
+    return simple_selection::make(std::move(schema), std::move(cdefs), false);
+}
+
 class selection_with_processing : public selection {
 private:
     ::shared_ptr<selector_factories> _factories;

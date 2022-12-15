@@ -179,6 +179,8 @@ public:
     friend class result_set_builder;
 };
 
+shared_ptr<selection> selection_from_partition_slice(schema_ptr schema, const query::partition_slice& slice);
+
 class result_set_builder {
 private:
     std::unique_ptr<result_set> _result_set;
