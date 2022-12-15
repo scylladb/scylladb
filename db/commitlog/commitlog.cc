@@ -1354,11 +1354,6 @@ db::commitlog::segment_manager::segment_manager(config c)
             cfg.commit_log_location = "/var/lib/scylla/commitlog";
         }
 
-        if (cfg.max_active_writes == 0) {
-            cfg.max_active_writes = // TODO: call someone to get an idea...
-                            25 * smp::count;
-        }
-        cfg.max_active_writes = std::max(uint64_t(1), cfg.max_active_writes / smp::count);
         if (cfg.max_active_flushes == 0) {
             cfg.max_active_flushes = // TODO: call someone to get an idea...
                             5 * smp::count;
@@ -2527,10 +2522,6 @@ future<> db::commitlog::release() {
 
 size_t db::commitlog::max_record_size() const {
     return _segment_manager->max_mutation_size - segment::entry_overhead_size;
-}
-
-uint64_t db::commitlog::max_active_writes() const {
-    return _segment_manager->cfg.max_active_writes;
 }
 
 uint64_t db::commitlog::max_active_flushes() const {

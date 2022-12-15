@@ -98,9 +98,8 @@ public:
         // Max number of segments to keep in pre-alloc reserve.
         // Not (yet) configurable from scylla.conf.
         uint64_t max_reserve_segments = 12;
-        // Max active writes/flushes. Default value
+        // Max active flushes. Default value
         // zero means try to figure it out ourselves
-        uint64_t max_active_writes = 0;
         uint64_t max_active_flushes = 0;
 
         sync_mode mode = sync_mode::PERIODIC;
@@ -307,10 +306,6 @@ public:
      */
     size_t max_record_size() const;
 
-    /**
-     * Return max allowed pending writes (per this shard)
-     */
-    uint64_t max_active_writes() const;
     /**
      * Return max allowed pending flushes (per this shard)
      */
