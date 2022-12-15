@@ -572,7 +572,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         _read_context.cache().on_mispopulate();
         return;
     }
-    auto rt_opt = _rt_assembler.flush(*_schema, position_in_partition::after_key(cr.key()));
+    auto rt_opt = _rt_assembler.flush(*_schema, position_in_partition::after_key(*_schema, cr.key()));
     clogger.trace("csm {}: populate({})", fmt::ptr(this), clustering_row::printer(*_schema, cr));
     _lsa_manager.run_in_update_section_with_allocator([this, &cr, &rt_opt] {
         mutation_partition& mp = _snp->version()->partition();
@@ -634,8 +634,8 @@ inline
 void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", fmt::ptr(this), _next_row.position(), _next_row_in_range);
     _next_row.touch();
-    position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
-    auto upper_bound = _next_row_in_range ? next_lower_bound : _upper_bound;
+    auto next_lower_bound = position_in_partition_view::after_key(table_schema(), _next_row.position());
+    auto upper_bound = _next_row_in_range ? next_lower_bound.view : _upper_bound;
     if (_snp->range_tombstones(_lower_bound, upper_bound, [&] (range_tombstone rts) {
         add_range_tombstone_to_buffer(std::move(rts));
         return stop_iteration(_lower_bound_changed && is_buffer_full());
@@ -774,14 +774,14 @@ void cache_flat_mutation_reader::move_to_next_entry() {
     }
 }
 
-void cache_flat_mutation_reader::flush_tombstones(position_in_partition_view pos, bool end_of_range) {
+void cache_flat_mutation_reader::flush_tombstones(position_in_partition_view pos_, bool end_of_range) {
     // Ensure position is appropriate for range tombstone bound
-    pos = position_in_partition_view::after_key(pos);
-    clogger.trace("csm {}: flush_tombstones({}) end_of_range: {}", fmt::ptr(this), pos, end_of_range);
-    _rt_gen.flush(pos, [this] (range_tombstone_change&& rtc) {
+    auto pos = position_in_partition_view::after_key(*_schema, pos_);
+    clogger.trace("csm {}: flush_tombstones({}) end_of_range: {}", fmt::ptr(this), pos.view, end_of_range);
+    _rt_gen.flush(pos.view, [this] (range_tombstone_change&& rtc) {
         add_to_buffer(std::move(rtc), source::cache);
     }, end_of_range);
-    if (auto rtc_opt = _rt_merger.flush(pos, end_of_range)) {
+    if (auto rtc_opt = _rt_merger.flush(pos.view, end_of_range)) {
         do_add_to_buffer(std::move(*rtc_opt));
     }
 }
@@ -832,7 +832,7 @@ inline
 void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment_v2&& mf) {
     clogger.trace("csm {}: add_clustering_row_to_buffer({})", fmt::ptr(this), mutation_fragment_v2::printer(*_schema, mf));
     auto& row = mf.as_clustering_row();
-    auto new_lower_bound = position_in_partition::after_key(row.key());
+    auto new_lower_bound = position_in_partition::after_key(*_schema, row.key());
     push_mutation_fragment(std::move(mf));
     _lower_bound = std::move(new_lower_bound);
     _lower_bound_changed = true;

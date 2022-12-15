@@ -150,9 +150,10 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
         if (has_ck) {
             query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
-            position_in_partition_view next_pos = _last_pos;
+            position_in_partition next_pos = _last_pos;
             if (_last_pos.has_key()) {
-                next_pos = reversed ? position_in_partition_view::before_key(_last_pos) : position_in_partition_view::after_key(_last_pos);
+                next_pos = reversed ? position_in_partition::before_key(_last_pos)
+                                    : position_in_partition::after_key(*_schema, _last_pos);
             }
             query::trim_clustering_row_ranges_to(*_schema, row_ranges, next_pos, reversed);
 

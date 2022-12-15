@@ -907,7 +907,7 @@ void compacted_fragments_writer::split_large_partition() {
     // will result in current fragment storing an inclusive end bound for last pos, and the
     // next fragment storing an exclusive start bound for last pos. This is very important
     // for not losing information on the range tombstone.
-    auto after_last_pos = position_in_partition::after_key(_current_partition.last_pos.key());
+    auto after_last_pos = position_in_partition::after_key(*_c.schema(), _current_partition.last_pos.key());
     if (_current_partition.current_emitted_tombstone) {
         auto rtc = range_tombstone_change(after_last_pos, tombstone{});
         _c.log_debug("Closing active tombstone {} with {} for partition {}", _current_partition.current_emitted_tombstone, rtc, *_current_partition.dk);

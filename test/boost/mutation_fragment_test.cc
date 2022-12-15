@@ -530,11 +530,11 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
             ss.make_static_row_v2(permit, "v"),
             ss.make_row_v2(permit, ck0, "ck0"),
             ss.make_row_v2(permit, ck1, "ck1"),
-            range_tombstone_change(position_in_partition::after_key(ck1), {ss.new_tombstone()}),
-            range_tombstone_change(position_in_partition::after_key(ck1), {ss.new_tombstone()}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck1), {ss.new_tombstone()}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck1), {ss.new_tombstone()}),
             range_tombstone_change(position_in_partition::before_key(ck2), {ss.new_tombstone()}),
             ss.make_row_v2(permit, ck2, "ck2"),
-            range_tombstone_change(position_in_partition::after_key(ck2), {}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck2), {}),
             partition_end{},
             partition_start(dk1, {}),
             partition_end{});
@@ -554,14 +554,14 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
     expect_valid(
             "2 range tombstone changes",
             partition_start(dk0, {}),
-            range_tombstone_change(position_in_partition::after_key(ck1), {ss.new_tombstone()}),
-            range_tombstone_change(position_in_partition::after_key(ck2), {}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck1), {ss.new_tombstone()}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck2), {}),
             partition_end{});
 
     expect_valid(
             "null range tombstone change alone",
             partition_start(dk0, {}),
-            range_tombstone_change(position_in_partition::after_key(ck2), {}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck2), {}),
             partition_end{});
 
     expect_invalid_at_eos(
@@ -572,13 +572,13 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
             "active range tombstone end at partition end",
             2,
             partition_start(dk0, {}),
-            range_tombstone_change(position_in_partition::after_key(ck1), {ss.new_tombstone()}),
+            range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck1), {ss.new_tombstone()}),
             partition_end{});
 
     const auto ps = mutation_fragment_v2(*ss.schema(), permit, partition_start(dk1, {}));
     const auto sr = ss.make_static_row_v2(permit, "v");
     const auto cr = ss.make_row_v2(permit, ck2, "ck2");
-    const auto rtc = mutation_fragment_v2(*ss.schema(), permit, range_tombstone_change(position_in_partition::after_key(ck1), {ss.new_tombstone()}));
+    const auto rtc = mutation_fragment_v2(*ss.schema(), permit, range_tombstone_change(position_in_partition::after_key(*ss.schema(), ck1), {ss.new_tombstone()}));
     const auto pe = mutation_fragment_v2(*ss.schema(), permit, partition_end{});
 
     auto check_invalid_after = [&] (auto&& mf_raw, std::initializer_list<const mutation_fragment_v2*> invalid_mfs) {
@@ -637,8 +637,8 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_mixed_api_usage
     BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
     BOOST_REQUIRE(validator(mf_kind::clustering_row, position_in_partition_view::for_key(ck1), {}));
     BOOST_REQUIRE(validator(mf_kind::clustering_row, {}));
-    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition_view::after_key(ck1), {}));
-    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition_view::after_key(ck1), {}));
+    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition::after_key(*ss.schema(), ck1), {}));
+    BOOST_REQUIRE(validator(mf_kind::range_tombstone_change, position_in_partition::after_key(*ss.schema(), ck1), {}));
     BOOST_REQUIRE(validator(mf_kind::partition_end, {}));
     BOOST_REQUIRE(validator(dk0));
     BOOST_REQUIRE(!validator(dk0));

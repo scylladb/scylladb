@@ -262,11 +262,11 @@ void test_single_row(int ck,
 }
 
 static expected_row after_cont(int ck) {
-    return expected_row(position_in_partition::after_key(make_ck(ck)), is_continuous::yes, is_dummy::yes);
+    return expected_row(position_in_partition::after_key(*SCHEMA, make_ck(ck)), is_continuous::yes, is_dummy::yes);
 }
 
 static expected_row after_notc(int ck) {
-    return expected_row(position_in_partition::after_key(make_ck(ck)), is_continuous::no, is_dummy::yes);
+    return expected_row(position_in_partition::after_key(*SCHEMA, make_ck(ck)), is_continuous::no, is_dummy::yes);
 }
 
 static expected_row before_cont(int ck) {
@@ -1289,7 +1289,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
         test_slice_single_version(underlying, cache, slice, {
             expected_fragment(position_in_partition::before_key(make_ck(1)), rt.tomb),
             expected_fragment(1),
-            expected_fragment(position_in_partition::after_key(make_ck(1)), {}),
+            expected_fragment(position_in_partition_view::after_all_prefixed(make_ck(1)), {}),
         }, {
             expected_row(1, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
@@ -1336,7 +1336,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
 
         test_slice_single_version(underlying, cache, slice, {
             expected_fragment(position_in_partition_view::before_key(make_ck(0)), rt.tomb),
-            expected_fragment(position_in_partition_view::after_key(make_ck(2)), {}),
+            expected_fragment(position_in_partition_view::after_all_prefixed(make_ck(2)), {}),
             expected_fragment(4)
         }, {
             before_notc(0),

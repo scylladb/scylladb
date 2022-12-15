@@ -325,7 +325,7 @@ void evictable_reader_v2::update_next_position() {
                 push_mutation_fragment(_reader->pop_mutation_fragment());
                 _next_position_in_partition = position_in_partition::for_partition_start();
             } else {
-                _next_position_in_partition = position_in_partition::after_key(last_pos);
+                _next_position_in_partition = position_in_partition::after_key(*_schema, last_pos);
             }
             break;
         case partition_region::partition_end:

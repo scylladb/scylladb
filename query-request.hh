@@ -27,6 +27,7 @@
 #include "bytes.hh"
 
 class position_in_partition_view;
+class position_in_partition;
 class partition_slice_builder;
 
 using query_id = utils::tagged_uuid<struct query_id_tag>;
@@ -80,7 +81,7 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 /// partially overlap are trimmed.
 /// Result: each range will overlap fully with [pos, +inf), or (-int, pos] if
 /// reversed is true.
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition_view pos, bool reversed = false);
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed = false);
 
 /// Trim the clustering ranges.
 ///

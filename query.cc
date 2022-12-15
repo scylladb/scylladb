@@ -107,7 +107,7 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
 }
 
-void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition_view pos, bool reversed) {
+void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed) {
     auto cmp = [reversed, cmp = position_in_partition::composite_tri_compare(s)] (const auto& a, const auto& b) {
         return reversed ? cmp(b, a) : cmp(a, b);
     };
@@ -135,14 +135,8 @@ void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& range
 }
 
 void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, const clustering_key& key, bool reversed) {
-    if (key.is_full(s)) {
-        return trim_clustering_row_ranges_to(s, ranges,
-                reversed ? position_in_partition_view::before_key(key) : position_in_partition_view::after_key(key), reversed);
-    }
-    auto full_key = key;
-    clustering_key::make_full(s, full_key);
     return trim_clustering_row_ranges_to(s, ranges,
-            reversed ? position_in_partition_view::after_key(full_key) : position_in_partition_view::before_key(full_key), reversed);
+            reversed ? position_in_partition::before_key(key) : position_in_partition::after_key(s, key), reversed);
 }
 
 

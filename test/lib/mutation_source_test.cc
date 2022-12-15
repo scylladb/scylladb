@@ -182,7 +182,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                         for (auto current = start; current < start + range_size; current++) {
                             auto ck = s.make_ckey(current);
                             if (expected.partition().find_row(*s.schema(), ck)) {
-                                auto end_position = position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck);
+                                auto end_position = position_in_partition::after_key(*s.schema(), ck);
                                 actual.may_produce_tombstones(position_range(start_position, end_position));
                                 actual.produces_row_with_key(ck, expected.partition().range_tombstone_for_row(*s.schema(), ck));
                                 actual.may_produce_tombstones(position_range(start_position, end_position));
@@ -210,7 +210,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                             auto ck = s.make_ckey(current);
                             auto pos_range = position_range(
                                 position_in_partition(position_in_partition::before_clustering_row_tag_t(), ck),
-                                position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck));
+                                position_in_partition::after_key(*s.schema(), ck));
                             actual.fast_forward_to(pos_range);
                             actual.may_produce_tombstones(pos_range);
                             if (expected.partition().find_row(*s.schema(), ck)) {
@@ -259,7 +259,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                         for (auto current = start; current < start + range_size; current++) {
                             auto ck = s.make_ckey(current);
                             if (expected.partition().find_row(*s.schema(), ck)) {
-                                auto end_position = position_in_partition(position_in_partition::after_clustering_row_tag_t(), ck);
+                                auto end_position = position_in_partition::after_key(*s.schema(), ck);
                                 actual.may_produce_tombstones(position_range(current_position, end_position));
                                 actual.produces_row_with_key(ck, expected.partition().range_tombstone_for_row(*s.schema(), ck));
                                 current_position = std::move(end_position);
@@ -1100,7 +1100,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
             .build();
         auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
-          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(*s, ck2)))
           .produces_row_with_key(ck1)
           .produces_row_with_key(ck2)
           .produces_end_of_stream();
@@ -1112,7 +1112,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
         auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .produces_end_of_stream()
-          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(*s, ck2)))
           .produces_row_with_key(ck1)
           .produces_row_with_key(ck2)
           .produces_end_of_stream();
@@ -1406,10 +1406,10 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
             .produces_row_with_key(s.make_ckey(5))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(7)), t2))
-            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(12)), tombstone()))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(12)), tombstone()))
             .produces_row_with_key(s.make_ckey(15))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(17)), t3))
-            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(19)), tombstone()))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(19)), tombstone()))
             .produces_partition_end()
             .produces_end_of_stream();
 
@@ -1423,7 +1423,7 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
             .produces_end_of_stream()
 
             .fast_forward_to(position_range(
-                    position_in_partition::after_key(s.make_ckey(0)),
+                    position_in_partition::after_key(*s.schema(), s.make_ckey(0)),
                     position_in_partition::before_key(s.make_ckey(2))))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(2)), {}))
@@ -1431,10 +1431,10 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
             .fast_forward_to(position_range(
                     position_in_partition::before_key(s.make_ckey(5)),
-                    position_in_partition::after_key(s.make_ckey(5))))
+                    position_in_partition::after_key(*s.schema(), s.make_ckey(5))))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(5)), t1))
             .produces_row_with_key(s.make_ckey(5))
-            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(5)), {}))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(5)), {}))
             .produces_end_of_stream();
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
@@ -1446,7 +1446,7 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
             .produces_partition_start(pkey)
             .produces_end_of_stream()
             .fast_forward_to(position_range(
-                    position_in_partition::after_key(s.make_ckey(0)),
+                    position_in_partition::after_key(*s.schema(), s.make_ckey(0)),
                     position_in_partition::for_key(s.make_ckey(2))))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
             .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(2)), {}))
@@ -1536,19 +1536,19 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
                     position_in_partition::before_key(s.make_ckey(10)),
                     position_in_partition::before_key(s.make_ckey(13))))
             .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(10)), t2})
-            .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(12)), {}})
+            .produces_range_tombstone_change({position_in_partition::after_key(*s.schema(), s.make_ckey(12)), {}})
             .produces_end_of_stream()
 
             .fast_forward_to(position_range(
                     position_in_partition::before_key(s.make_ckey(16)),
-                    position_in_partition::after_key(s.make_ckey(16))))
+                    position_in_partition::after_key(*s.schema(), s.make_ckey(16))))
             .produces_end_of_stream()
 
             .fast_forward_to(position_range(
                     position_in_partition::before_key(s.make_ckey(17)),
-                    position_in_partition::after_key(s.make_ckey(18))))
+                    position_in_partition::after_key(*s.schema(), s.make_ckey(18))))
             .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(17)), t3})
-            .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(18)), {}})
+            .produces_range_tombstone_change({position_in_partition::after_key(*s.schema(), s.make_ckey(18)), {}})
             .produces_end_of_stream();
 
     // Slicing using query restrictions
@@ -1560,7 +1560,7 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
         assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr, slice))
                 .produces_partition_start(pkey)
                 .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(17)), t3})
-                .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(18)), {}})
+                .produces_range_tombstone_change({position_in_partition::after_key(*s.schema(), s.make_ckey(18)), {}})
                 .produces_partition_end()
                 .produces_end_of_stream();
     }
@@ -1574,9 +1574,9 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
                 .produces_partition_start(pkey)
                 .produces_row_with_key(s.make_ckey(0))
                 .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
-                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(3)), {}))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(3)), {}))
                 .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(8)), t2))
-                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(11)), {}))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition::after_key(*s.schema(), s.make_ckey(11)), {}))
                 .produces_partition_end()
                 .produces_end_of_stream();
     }
@@ -2311,7 +2311,7 @@ public:
                     }
                 }
             } else {
-                m.partition().clustered_row(*_schema, position_in_partition_view::after_key(ckey), is_dummy::yes, continuous);
+                m.partition().clustered_row(*_schema, position_in_partition::after_key(*_schema, ckey), is_dummy::yes, continuous);
             }
         }
 

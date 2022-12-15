@@ -2145,7 +2145,7 @@ stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, 
 
 stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
     if (_rt_assembler.needs_flush()) {
-        if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(cr.key()))) {
+        if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(_schema, cr.key()))) {
             consume(std::move(*rt_opt));
         }
     }
@@ -2368,10 +2368,10 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
         }
         if (i->position().is_clustering_row() && bool(i->dummy()) == !bool(cont)) {
             result.add(s, position_range(position_in_partition(i->position()),
-                position_in_partition::after_key(i->position().key())));
+                position_in_partition::after_key(s, i->position().key())));
         }
         prev_pos = i->position().is_clustering_row()
-            ? position_in_partition::after_key(i->position().key())
+            ? position_in_partition::after_key(s, i->position().key())
             : position_in_partition(i->position());
         ++i;
     }

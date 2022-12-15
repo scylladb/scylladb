@@ -20,7 +20,7 @@ class mutation_fragment_v1_stream final {
     }
     mutation_fragment_opt consume(clustering_row mf) {
         if (_rt_assembler.needs_flush()) [[unlikely]] {
-            if (auto rt_opt = _rt_assembler.flush(*_schema, position_in_partition::after_key(mf.position()))) [[unlikely]] {
+            if (auto rt_opt = _rt_assembler.flush(*_schema, position_in_partition::after_key(*_schema, mf.position()))) [[unlikely]] {
                 _row = std::move(mf);
                 return wrap(std::move(*rt_opt));
             }

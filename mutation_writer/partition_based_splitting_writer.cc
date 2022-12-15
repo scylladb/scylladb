@@ -36,7 +36,7 @@ private:
         _mut_builder->consume_new_partition(key);
         _mut_builder->consume(tomb);
         if (_current_tombstone) {
-            _mut_builder->consume(range_tombstone_change(position_in_partition_view::after_key(_last_pos), _current_tombstone));
+            _mut_builder->consume(range_tombstone_change(position_in_partition::after_key(*_schema, _last_pos), _current_tombstone));
         }
     }
 
@@ -49,7 +49,7 @@ private:
         if (_memtable->occupancy().total_space() + _current_mut_size > _max_memory) {
             if (_mut_builder) {
                 if (_current_tombstone) {
-                    _mut_builder->consume(range_tombstone_change(position_in_partition_view::after_key(_last_pos), {}));
+                    _mut_builder->consume(range_tombstone_change(position_in_partition::after_key(*_schema, _last_pos), {}));
                 }
                 auto mut = _mut_builder->consume_end_of_stream();
                 init_current_mut(mut->decorated_key(), mut->partition().partition_tombstone());

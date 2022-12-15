@@ -2679,15 +2679,15 @@ SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
     auto rev_s = ss.schema()->make_reversed();
     position_in_partition::tri_compare rev_cmp(*rev_s);
 
-    BOOST_REQUIRE(fwd_cmp(p_i_p::before_key(ss.make_ckey(1)), p_i_p::after_key(ss.make_ckey(1))) < 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::before_key(ss.make_ckey(1)), p_i_p::after_key(*ss.schema(), ss.make_ckey(1))) < 0);
     BOOST_REQUIRE(fwd_cmp(p_i_p::before_key(ss.make_ckey(1)), ss.make_ckey(0)) > 0);
-    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(ss.make_ckey(1)), p_i_p::before_key(ss.make_ckey(1))) > 0);
-    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(ss.make_ckey(1)), ss.make_ckey(2)) < 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(*ss.schema(), ss.make_ckey(1)), p_i_p::before_key(ss.make_ckey(1))) > 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(*ss.schema(), ss.make_ckey(1)), ss.make_ckey(2)) < 0);
 
-    BOOST_REQUIRE(rev_cmp(p_i_p::before_key(ss.make_ckey(1)).reversed(), p_i_p::after_key(ss.make_ckey(1)).reversed()) > 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::before_key(ss.make_ckey(1)).reversed(), p_i_p::after_key(*ss.schema(), ss.make_ckey(1)).reversed()) > 0);
     BOOST_REQUIRE(rev_cmp(p_i_p::before_key(ss.make_ckey(1)).reversed(), ss.make_ckey(0)) < 0);
-    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(ss.make_ckey(1)).reversed(), p_i_p::before_key(ss.make_ckey(1)).reversed()) < 0);
-    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(ss.make_ckey(1)).reversed(), ss.make_ckey(2)) > 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(*ss.schema(), ss.make_ckey(1)).reversed(), p_i_p::before_key(ss.make_ckey(1)).reversed()) < 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(*ss.schema(), ss.make_ckey(1)).reversed(), ss.make_ckey(2)) > 0);
 
     // Test reversal-invariant positions
 
@@ -2699,6 +2699,97 @@ SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
 
     BOOST_REQUIRE(rev_cmp(p_i_p::for_static_row().reversed(),
                           p_i_p::for_static_row()) == 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_position_in_partition_order_with_prefix_keys) {
+    using pip = position_in_partition;
+    using pipv = position_in_partition_view;
+
+    schema_ptr s = schema_builder("ks", "cf")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck1", utf8_type, column_kind::clustering_key)
+        .with_column("ck2", utf8_type, column_kind::clustering_key)
+        .with_column("v", utf8_type)
+        .build();
+
+    position_in_partition::tri_compare cmp(*s);
+
+    auto make_ck = [&] (sstring ck1, std::optional<sstring> ck2 = {}) {
+        if (ck2) {
+            return clustering_key::from_exploded(*s, {serialized(ck1), serialized(*ck2)});
+        }
+        return clustering_key::from_exploded(*s, {serialized(ck1)});
+    };
+
+    auto prefix_a = make_ck("a");
+    auto full_a = prefix_a;
+    clustering_key::make_full(*s, full_a);
+    auto full_a_a = make_ck("a", "a");
+
+    BOOST_REQUIRE(cmp(pip::before_key(prefix_a), prefix_a) < 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), prefix_a) > 0);
+
+    BOOST_REQUIRE(cmp(prefix_a, full_a_a) < 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), prefix_a) > 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), full_a_a) < 0);
+    BOOST_REQUIRE(cmp(pipv::after_all_prefixed(prefix_a), full_a_a) > 0);
+
+    BOOST_REQUIRE(cmp(prefix_a, full_a) < 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), full_a) < 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), pip::before_key(full_a)) <= 0);
+
+    // before_key()/after_key() applied to dummy does not change the position.
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), pip::after_key(*s, pip::after_key(*s, prefix_a))) == 0);
+    BOOST_REQUIRE(cmp(pip::before_key(prefix_a), pip::before_key(pip::before_key(prefix_a))) == 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), pip::after_key(*s, pip::after_key(*s, prefix_a))) == 0);
+
+    BOOST_REQUIRE(cmp(pip::for_key(prefix_a), pip::for_key(full_a_a)) < 0);
+    BOOST_REQUIRE(cmp(pip::for_key(full_a_a), pip::for_key(prefix_a)) > 0);
+    BOOST_REQUIRE(cmp(pip::for_key(prefix_a), pip::for_key(full_a)) < 0);
+    BOOST_REQUIRE(cmp(pip::after_key(*s, prefix_a), pip::for_key(prefix_a)) > 0);
+
+    // Check reversed schema
+
+    auto rev_s = s->make_reversed();
+    position_in_partition::tri_compare rev_cmp(*rev_s);
+
+    BOOST_REQUIRE(rev_cmp(pip::before_key(prefix_a).reversed(),
+                          pip::for_key(full_a_a).reversed()) > 0);
+
+    BOOST_REQUIRE(rev_cmp(pip::before_key(prefix_a).reversed(),
+                          pip::for_key(full_a).reversed()) > 0);
+
+    BOOST_REQUIRE(rev_cmp(pip::before_key(prefix_a).reversed(),
+                          pip::for_key(full_a_a).reversed()) > 0);
+
+    BOOST_REQUIRE(rev_cmp(pip::before_key(prefix_a).reversed(),
+                          pip::for_key(full_a).reversed()) > 0);
+
+    BOOST_REQUIRE(rev_cmp(pipv::after_all_prefixed(prefix_a).reversed(),
+                          pip::for_key(full_a_a).reversed()) < 0);
+
+    BOOST_REQUIRE(rev_cmp(pipv::after_all_prefixed(prefix_a).reversed(),
+                          pip::for_key(full_a).reversed()) < 0);
+
+    BOOST_REQUIRE(rev_cmp(pip::after_key(*rev_s, prefix_a).reversed(),
+                          pip::for_key(full_a_a).reversed()) > 0);
+
+    BOOST_REQUIRE(rev_cmp(pip::after_key(*rev_s, prefix_a).reversed(),
+                          pip::for_key(full_a).reversed()) > 0);
+
+// FIXME: Below don't work due to https://github.com/scylladb/scylladb/issues/12258
+//
+//    BOOST_REQUIRE(rev_cmp(pip::for_key(prefix_a).reversed(),
+//                          pip::for_key(full_a_a).reversed()) > 0);
+//
+//    BOOST_REQUIRE(rev_cmp(pip::for_key(full_a_a).reversed(),
+//                          pip::for_key(prefix_a).reversed()) < 0);
+//
+//    BOOST_REQUIRE(rev_cmp(pip::for_key(prefix_a).reversed(),
+//                          pip::for_key(full_a).reversed()) > 0);
+//
+//    BOOST_REQUIRE(rev_cmp(pip::after_key(*rev_s, prefix_a).reversed(),
+//                          pip::for_key(prefix_a).reversed()) < 0);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
@@ -2730,7 +2821,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             frags.emplace_back(mutation_fragment_v2(*s, permit, std::move(row)));
         }
 
-        frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::after_key(ss.make_ckey(10)), tombstone{}));
+        frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::after_key(*s, ss.make_ckey(10)), tombstone{}));
 
         frags.emplace_back(*s, permit, partition_end{});
 
