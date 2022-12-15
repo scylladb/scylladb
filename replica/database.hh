@@ -612,6 +612,7 @@ private:
         return _config.dirty_memory_manager->region_group();
     }
 
+    // reserve_fn will be called before any element is added to readers
     void add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& readers,
              const schema_ptr& s,
              const reader_permit& permit,
@@ -620,7 +621,8 @@ private:
              const io_priority_class& pc,
              const tracing::trace_state_ptr& trace_state,
              streamed_mutation::forwarding fwd,
-             mutation_reader::forwarding fwd_mr) const;
+             mutation_reader::forwarding fwd_mr,
+             std::function<void(size_t)> reserve_fn) const;
 public:
     sstring dir() const {
         return _config.datadir;
