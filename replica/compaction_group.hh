@@ -70,6 +70,7 @@ public:
     future<> flush();
     bool can_flush() const;
     lw_shared_ptr<memtable_list>& memtables() noexcept;
+    size_t memtable_count() const noexcept;
     // Returns minimum timestamp from memtable list
     api::timestamp_type min_memtable_timestamp() const;
     // Add sstable to main set

@@ -1628,6 +1628,10 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
 }
 
+size_t compaction_group::memtable_count() const noexcept {
+    return _memtables->size();
+}
+
 future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
         co_return;
