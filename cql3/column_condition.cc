@@ -140,8 +140,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         cql3::raw_value key_constant = expr::evaluate(*_collection_element, options);
         cql3::raw_value_view key = key_constant.view();
         if (key.is_null()) {
-            throw exceptions::invalid_request_exception(
-                    format("Invalid null value for {} element access", cell_type.cql3_type_name()));
+            return false;
         }
         if (cell_type.is_map()) {
             // If a collection is multi-cell and not frozen, it is returned as a map even if the
@@ -218,7 +217,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         } else {
             auto param = expr::evaluate(*_value, options);  // LIKE pattern
             if (param.is_null()) {
-                throw exceptions::invalid_request_exception("Invalid NULL value in LIKE pattern");
+                return false;
             }
             like_matcher matcher(to_bytes(param.view()));
             return matcher(bytes_view(cell_value->serialize_nonnull()));
@@ -233,7 +232,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     if (_value.has_value()) {
         cql3::raw_value lval = expr::evaluate(*_value, options);
         if (lval.is_null()) {
-            throw exceptions::invalid_request_exception("Invalid null value for IN condition");
+            return false;
         }
         for (const managed_bytes_opt& v : expr::get_elements(lval, *type_of(*_value))) {
             if (v) {

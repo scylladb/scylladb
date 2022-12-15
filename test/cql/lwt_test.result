@@ -1638,9 +1638,17 @@ Error from server: code=2200 [Invalid query] message="Invalid comparison with nu
 > update lwt set b[false] = true where a = 1 if b[1] != true;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "key(b)" of type boolean"
 > update lwt set b = {true:false, true:true, false:false} where a = 1 if b[null] = null;
-Error from server: code=2200 [Invalid query] message="Invalid null value for map<boolean, boolean> element access"
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > update lwt set b = b + {false:true} where a = 1 if b[null] = true;
-Error from server: code=2200 [Invalid query] message="Invalid null value for map<boolean, boolean> element access"
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > update lwt set b[null] = false where a = 1 if b[true] != true;
 Error from server: code=2200 [Invalid query] message="Invalid null map key"
 > update lwt set b[null] = false where a = 1 if b[true] = true;
@@ -1778,9 +1786,17 @@ Error from server: code=2200 [Invalid query] message="null is not supported insi
 | False       | [True, False, True, True, True] |
 +-------------+---------------------------------+
 > update lwt set c = c + [true, false] where a = 1 if c[null] = false;
-Error from server: code=2200 [Invalid query] message="Invalid null value for map<timeuuid, boolean> element access"
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| False       | [True, False, True, True, True] |
++-------------+---------------------------------+
 > update lwt set c = [false] where a = 1 if c[null] = null;
-Error from server: code=2200 [Invalid query] message="Invalid null value for map<timeuuid, boolean> element access"
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| False       | [True, False, True, True, True] |
++-------------+---------------------------------+
 > update lwt set c = c + [false] where a = 1 if c[null] = 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "value(c)" of type boolean"
 > update lwt set c = [true] + c where a = 1 if c = [false];
@@ -2037,7 +2053,11 @@ Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1
 | True        | [True, False] |
 +-------------+---------------+
 > update lwt set c = [false] where a = 1 if c[null] = null;
-Error from server: code=2200 [Invalid query] message="Invalid null value for frozen<list<boolean>> element access"
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| False       | [True] |
++-------------+--------+
 > update lwt set c = [true] + c where a = 1 if c = [false];
 Error from server: code=2200 [Invalid query] message="Invalid operation (c = [true] + c) for frozen list column 63"
 > update lwt set c = [true,true,true,false,false,false] where a = 1 if exists;

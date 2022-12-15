@@ -54,7 +54,11 @@ OK
 > update t set c = 'err' where pk = 1 if c like 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "c" of type text"
 > update t set c = 'err' where pk = 1 if c like null;
-Error from server: code=2200 [Invalid query] message="Invalid NULL value in LIKE pattern"
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| False       | chg |
++-------------+-----+
 > update t set c = 'err' where pk = 1 if c like bigintAsBlob(1);
 Error from server: code=2200 [Invalid query] message="Type error: cannot assign result of function system.bigintasblob (type blob) to c (type text)"
 > -- int column
