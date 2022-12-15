@@ -22,6 +22,14 @@
                   "application/json"
                ],
                "parameters":[
+                  {
+                     "name":"shard",
+                     "description": "The shard to query",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
                ]
             }
          ]
@@ -41,6 +49,14 @@
                   "application/json"
                ],
                "parameters":[
+                  {
+                     "name":"shard",
+                     "description": "The shard to query",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
                ]
             }
          ]
