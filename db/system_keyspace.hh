@@ -27,6 +27,8 @@
 #include "locator/host_id.hh"
 #include "service/raft/group0_fwd.hh"
 #include "tasks/task_manager.hh"
+#include "service/topology_state_machine.hh"
+#include "mutation/canonical_mutation.hh"
 
 namespace service {
 
@@ -153,6 +155,7 @@ public:
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
+    static constexpr auto TOPOLOGY = "topology";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -233,6 +236,7 @@ public:
     static schema_ptr group0_history();
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
+    static schema_ptr topology();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
@@ -438,6 +442,26 @@ public:
     // Checks whether the group 0 history table contains the given state ID.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<bool> group0_history_contains(utils::UUID state_id);
+
+    class topology_mutation_builder {
+        schema_ptr _s;
+        mutation _m;
+        api::timestamp_type _ts;
+        deletable_row& _r;
+    public:
+        topology_mutation_builder(api::timestamp_type ts, raft::server_id);
+        template<typename T>
+        topology_mutation_builder& set(const char* cell, const T& value) {
+            return set(cell, sstring{fmt::format("{}", value)});
+        }
+        topology_mutation_builder& set(const char* cell, const sstring& value);
+        topology_mutation_builder& set(const char* cell, const raft::server_id& value);
+        topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
+        topology_mutation_builder& set(const char* cell, const uint32_t& value);
+        topology_mutation_builder& del(const char* cell);
+        canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
+    };
+    static future<service::topology_state_machine::topology_type> load_topology_state();
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     //

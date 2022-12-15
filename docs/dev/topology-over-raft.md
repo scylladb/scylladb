@@ -47,3 +47,33 @@ When a request is issued to a node the entry is added to the map. A
 request is one of the topology operation currently supported: join,
 leave, replace, remove and rebuild. A request may also have parameters
 associated with it which are also stored in a separate map.
+
+# Topology state persistence table
+
+The in memory state's machine state is persisted in a local table system.topology.
+The schema of the tables is:
+
+CREATE TABLE system.topology (
+    host_id uuid PRIMARY KEY,
+    datacenter text,
+    node_state text,
+    rack text,
+    release_version text,
+    replaced_id uuid,
+    tokens set<text>,
+    replication_state text,
+    topology_request text
+    rebuild_option text
+)
+
+Each node has a row in the table where its host_id is the primary key. The row contains:
+ host_id            -  id of the node
+ datacenter         -  a name of the datacenter the node belongs to
+ rack               -  a name of the rack the node belongs to
+ release_version    -  release version of the Scylla on the node
+ node_state         -  current state of the node
+ topology_request   -  if set contains one of the supported topology requests
+ tokens             -  if set contains a list of tokens that belongs to the node
+ replication_state  -  if set contains a state the state the token replication is now in
+ replaced_id        -  if the node replacing or replaced another node here will be the id of that node
+ rebuild_option     -  if the node is being rebuild contains datacenter name that is used as a rebuild source
