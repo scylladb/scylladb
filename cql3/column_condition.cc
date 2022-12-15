@@ -89,14 +89,24 @@ namespace cql3 {
 
 column_condition::column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
     std::optional<expr::expression> value, std::vector<expr::expression> in_values,
-    std::unique_ptr<like_matcher> matcher, expr::oper_t op)
+    expr::oper_t op)
         : _column(column)
         , _collection_element(std::move(collection_element))
         , _value(std::move(value))
         , _in_values(std::move(in_values))
-        , _matcher(std::move(matcher))
         , _op(op)
 {
+    if (op == expr::oper_t::LIKE) {
+        auto literal_term = _value ? expr::as_if<expr::constant>(&*_value) : nullptr;
+        if (literal_term
+                && (type_of(*literal_term) == utf8_type || type_of(*literal_term) == ascii_type)
+                && !literal_term->is_null()) {
+            auto pattern_value = literal_term->type->deserialize(to_bytes(literal_term->view()));
+            auto pattern = value_cast<sstring>(std::move(pattern_value));
+            _matcher = std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size()));
+        }
+    }
+
     if (op != expr::oper_t::IN) {
         assert(_in_values.empty());
     }
@@ -305,24 +315,14 @@ column_condition::raw::prepare(data_dictionary::database db, const sstring& keys
     if (is_compare(_op)) {
         validate_operation_on_durations(*receiver.type, _op);
         return column_condition::condition(receiver, std::move(collection_element_expression),
-                prepare_expression(*_value, db, keyspace, nullptr, value_spec), nullptr, _op);
+                prepare_expression(*_value, db, keyspace, nullptr, value_spec), _op);
     }
 
     if (_op == expr::oper_t::LIKE) {
-        auto literal_term = expr::as_if<expr::untyped_constant>(&*_value);
-        if (literal_term && literal_term->partial_type != expr::untyped_constant::type_class::null) {
-            // Pass matcher object
-            const sstring& pattern = literal_term->raw_text;
-            return column_condition::condition(receiver, std::move(collection_element_expression),
-                    prepare_expression(*_value, db, keyspace, nullptr, value_spec),
-                    std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),
-                    _op);
-        } else {
-            // Pass through rhs value, matcher object built on execution
+            // Pass through rhs value, matcher object built on execution (or optimized in constructor)
             // TODO: caller should validate parametrized LIKE pattern
             return column_condition::condition(receiver, std::move(collection_element_expression),
-                    prepare_expression(*_value, db, keyspace, nullptr, value_spec), nullptr, _op);
-        }
+                    prepare_expression(*_value, db, keyspace, nullptr, value_spec), _op);
     }
 
     if (_op != expr::oper_t::IN) {

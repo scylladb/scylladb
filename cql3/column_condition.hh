@@ -34,12 +34,12 @@ private:
     std::optional<expr::expression> _value;
     // List of terminals for "a IN (value, value, ...)"
     std::vector<expr::expression> _in_values;
-    const std::unique_ptr<like_matcher> _matcher;
+    std::unique_ptr<like_matcher> _matcher;
     expr::oper_t _op;
 public:
     column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
         std::optional<expr::expression> value, std::vector<expr::expression> in_values,
-        std::unique_ptr<like_matcher> matcher, expr::oper_t op);
+        expr::oper_t op);
 
     /**
      * Collects the column specification for the bind variables of this operation.
@@ -61,16 +61,16 @@ public:
      * "IF col LIKE <pattern>"
      */
     static lw_shared_ptr<column_condition> condition(const column_definition& def, std::optional<expr::expression> collection_element,
-            expr::expression value, std::unique_ptr<like_matcher> matcher, expr::oper_t op) {
+            expr::expression value, expr::oper_t op) {
         return make_lw_shared<column_condition>(def, std::move(collection_element), std::move(value),
-            std::vector<expr::expression>{}, std::move(matcher), op);
+            std::vector<expr::expression>{}, op);
     }
 
     // Helper constructor wrapper for  "IF col IN ... and IF col['key'] IN ... */
     static lw_shared_ptr<column_condition> in_condition(const column_definition& def, std::optional<expr::expression> collection_element,
             std::optional<expr::expression> in_marker, std::vector<expr::expression> in_values) {
         return make_lw_shared<column_condition>(def, std::move(collection_element), std::move(in_marker),
-            std::move(in_values), nullptr, expr::oper_t::IN);
+            std::move(in_values), expr::oper_t::IN);
     }
 
     const std::optional<expr::expression>& get_value() const {
