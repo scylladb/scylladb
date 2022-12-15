@@ -704,7 +704,7 @@ Check test log at {}.""".format(self.log_filename))
                 else:
                     self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
                     if self.is_equal_result is False:
-                        self.unidiff = format_unidiff(self.result, self.tmpfile)
+                        self.unidiff = format_unidiff(str(self.result), self.tmpfile)
                         set_summary("failed: test output does not match expected result")
                         assert self.unidiff is not None
                         logging.info("\n{}".format(palette.nocolor(self.unidiff)))
