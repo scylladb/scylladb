@@ -158,11 +158,26 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         std::function<void(size_t)> reserve_fn) const {
-    reserve_fn(_compaction_group->memtables()->size());
-    for (auto&& mt : *_compaction_group->memtables()) {
-        if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
+    auto add_memtables_from_cg = [&] (compaction_group& cg) mutable {
+        for (auto&& mt: *cg.memtables()) {
+            if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)) {
+                readers.emplace_back(std::move(*reader_opt));
+            }
         }
+    };
+
+    // point queries can be optimized as they span a single compaction group.
+    if (range.is_singular() && range.start()->value().has_key()) {
+        const dht::ring_position& pos = range.start()->value();
+        auto& cg = compaction_group_for_token(pos.token());
+        reserve_fn(cg.memtable_count());
+        add_memtables_from_cg(cg);
+        return;
+    }
+    reserve_fn(boost::accumulate(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0)));
+    // TODO: implement a incremental reader selector for memtable, using existing reader_selector interface for combined_reader.
+    for (const compaction_group_ptr& cg : compaction_groups()) {
+        add_memtables_from_cg(*cg);
     }
 }
 
