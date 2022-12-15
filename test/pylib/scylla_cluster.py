@@ -40,6 +40,10 @@ from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 
+# Number of shards on each node
+NUM_SHARDS = 2
+
+
 class ReplaceConfig(NamedTuple):
     replaced_id: ServerNum
     reuse_ip_addr: bool
@@ -100,7 +104,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
 # it easier to restart. Sic: if you make a typo on the command line,
 # Scylla refuses to boot.
 SCYLLA_CMDLINE_OPTIONS = [
-    '--smp', '2',
+    '--smp', str(NUM_SHARDS),
     '-m', '1G',
     '--collectd', '0',
     '--overprovisioned',

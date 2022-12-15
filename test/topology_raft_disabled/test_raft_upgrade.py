@@ -14,6 +14,7 @@ from typing import Callable, Awaitable, Optional, TypeVar, Generic
 from cassandra.cluster import NoHostAvailable, Session  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                         # type: ignore # pylint: disable=no-name-in-module
 
+from test.pylib.scylla_cluster import NUM_SHARDS
 from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
@@ -214,6 +215,19 @@ async def test_raft_upgrade_with_node_remove(manager: ManagerClient, random_tabl
     logging.info(f"Cluster restarted, waiting until driver reconnects to every server except {srv1}")
     hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
     logging.info(f"Driver reconnected, hosts: {hosts}")
+
+    # Wait until the alive nodes mark each other as alive - otherwise remove_node may fail.
+    async def only_srv1_dead() -> Optional[bool]:
+        expected = [srv1.ip_addr]
+        for srv in others:
+            for shard in range(NUM_SHARDS):
+                down_endpoints = await manager.api.get_down_endpoints(srv.ip_addr, shard = shard)
+                if down_endpoints != expected:
+                    logging.info(f"Waiting until DOWN endpoints on {srv} (shard {shard}) = {expected}."
+                                 f" Currently: {down_endpoints}")
+                    return None
+        return True
+    await wait_for(only_srv1_dead, time.time() + 60)
 
     logging.info(f"Removing {srv1} using {others[0]}")
     await manager.remove_node(others[0].server_id, srv1.server_id)

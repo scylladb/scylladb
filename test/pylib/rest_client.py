@@ -149,12 +149,12 @@ class ScyllaRESTAPIClient():
         assert(type(result) == list)
         return result
 
-    async def get_down_endpoints(self, dst_server_id: str) -> list:
+    async def get_down_endpoints(self, node_ip: IPAddress, shard: int = 0) -> list:
         """Retrieve down endpoints from gossiper's point of view """
-        response = await self.client.get("/gossiper/endpoint/down/", dst_server_id)
-        result = await response.json()
-        assert(type(result) == list)
-        return result
+        data = await self.client.get_json("/gossiper/endpoint/down/",
+                                          host=node_ip, params = {"shard": str(shard)})
+        assert(type(data) == list)
+        return data
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
                           ignore_dead: list[IPAddress]) -> None:
