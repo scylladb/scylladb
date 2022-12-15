@@ -675,7 +675,8 @@ class CQLApprovalTest(Test):
 
         def set_summary(summary):
             self.summary = summary
-            logging.info("Test %s %s", self.uname, summary)
+            log_func = logging.info if self.success else logging.error
+            log_func("Test %s %s", self.uname, summary)
             if self.server_log is not None:
                 logging.info("Server log:\n%s", self.server_log)
 
