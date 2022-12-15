@@ -34,17 +34,6 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
                    lhs.col->name_as_text()));
     }
 
-    if (expr::is_slice(oper) && lhs_col_type.references_duration()) {
-        using statements::request_validations::check_false;
-
-        check_false(lhs_col_type.is_collection(), "Slice restrictions are not supported on collections containing durations");
-        check_false(lhs_col_type.is_user_type(), "Slice restrictions are not supported on UDTs containing durations");
-        check_false(lhs_col_type.is_tuple(), "Slice restrictions are not supported on tuples containing durations");
-
-        // We're a duration.
-        throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
-    }
-
     if (is_lhs_subscripted) {
         check_true(lhs_col_type.is_map() || lhs_col_type.is_list(), "Column {} cannot be subscripted", lhs_col_name);
         check_true(!lhs_col_type.is_map() || lhs_col_type.is_multi_cell(),

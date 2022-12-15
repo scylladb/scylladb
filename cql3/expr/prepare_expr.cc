@@ -1331,6 +1331,10 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     auto& prepared_lhs = *prepared_lhs_opt;
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, table_schema);
 
+    if (type_of(prepared_lhs)->references_duration() && is_slice(binop.op)) {
+        throw exceptions::invalid_request_exception(fmt::format("Duration type is unordered for {}", lhs_receiver->name));
+    }
+
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
 
