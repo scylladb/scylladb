@@ -163,7 +163,7 @@ public:
 
     future<> repair_range(const dht::token_range& range, table_info table);
 
-    size_t ranges_size();
+    size_t ranges_size() const noexcept;
 protected:
     future<> do_repair_ranges();
     future<> run() override;
