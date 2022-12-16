@@ -622,7 +622,7 @@ repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht:
         neighbors[range];
 }
 
-size_t repair::shard_repair_task_impl::ranges_size() {
+size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
     return ranges.size() * table_ids.size();
 }
 

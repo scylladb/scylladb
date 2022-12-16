@@ -160,7 +160,7 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    size_t ranges_size();
+    size_t ranges_size() const noexcept;
 protected:
     future<> do_repair_ranges();
     future<> run() override;
