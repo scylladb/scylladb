@@ -234,3 +234,25 @@ BOOST_AUTO_TEST_CASE(test_negate) {
 
     BOOST_REQUIRE(original_uuid == re_negated_uuid);
 }
+
+BOOST_AUTO_TEST_CASE(test_null_uuid) {
+    // Verify that the default-constructed UUID is null
+    utils::UUID uuid;
+    BOOST_CHECK(uuid.is_null());
+    BOOST_CHECK(!uuid);
+
+    // Verify that the null_uuid is indeed null
+    uuid = utils::null_uuid();
+    BOOST_CHECK(uuid.is_null());
+    BOOST_CHECK(!uuid);
+
+    // Verify that a random uuid is not null
+    uuid = utils::make_random_uuid();
+    BOOST_CHECK(!uuid.is_null());
+    BOOST_CHECK(uuid);
+
+    // Verify that a time uuid is not null
+    uuid = utils::UUID_gen::get_time_UUID();
+    BOOST_CHECK(!uuid.is_null());
+    BOOST_CHECK(uuid);
+}

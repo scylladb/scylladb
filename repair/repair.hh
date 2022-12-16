@@ -67,11 +67,28 @@ struct repair_uniq_id {
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
-struct node_ops_info {
+class node_ops_info {
+public:
     utils::UUID ops_uuid;
-    bool abort = false;
+    shared_ptr<abort_source> as;
     std::list<gms::inet_address> ignore_nodes;
+
+private:
+    optimized_optional<abort_source::subscription> _abort_subscription;
+    sharded<abort_source> _sas;
+    future<> _abort_done = make_ready_future<>();
+
+public:
+    node_ops_info(utils::UUID ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept;
+    node_ops_info(const node_ops_info&) = delete;
+    node_ops_info(node_ops_info&&) = delete;
+
+    future<> start();
+    future<> stop() noexcept;
+
     void check_abort();
+
+    abort_source* local_abort_source();
 };
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
@@ -167,7 +184,7 @@ public:
     int ranges_index = 0;
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
-    std::optional<utils::UUID> _ops_uuid;
+    optimized_optional<abort_source::subscription> _abort_subscription;
     bool _hints_batchlog_flushed = false;
 public:
     repair_info(repair_service& repair,
@@ -179,10 +196,10 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
-            std::optional<utils::UUID> ops_uuid,
+            abort_source* as,
             bool hints_batchlog_flushed);
     void check_failed_ranges();
-    void abort();
+    void abort() noexcept;
     void check_in_abort();
     void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
@@ -192,9 +209,6 @@ public:
     const std::vector<sstring>& table_names() {
         return cfs;
     }
-    const std::optional<utils::UUID>& ops_uuid() const {
-        return _ops_uuid;
-    };
 
     bool hints_batchlog_flushed() const {
         return _hints_batchlog_flushed;
@@ -252,7 +266,6 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
-    void abort_repair_node_ops(utils::UUID ops_uuid);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,

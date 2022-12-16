@@ -109,6 +109,16 @@ public:
         return !(*this < v);
     }
 
+    // Valid (non-null) UUIDs always have their version
+    // nibble set to a non-zero value
+    bool is_null() const noexcept {
+        return !most_sig_bits && !least_sig_bits;
+    }
+
+    explicit operator bool() const noexcept {
+        return !is_null();
+    }
+
     bytes serialize() const {
         bytes b(bytes::initialized_later(), serialized_size());
         auto i = b.begin();
@@ -126,6 +136,10 @@ public:
         serialize_int64(out, least_sig_bits);
     }
 };
+
+inline UUID null_uuid() noexcept {
+    return UUID();
+}
 
 UUID make_random_uuid();
 
