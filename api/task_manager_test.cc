@@ -47,8 +47,6 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
         std::string keyspace = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("table");
         std::string table = it != req->query_parameters.end() ? it->second : "";
-        it = req->query_parameters.find("type");
-        std::string type = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("entity");
         std::string entity = it != req->query_parameters.end() ? it->second : "";
         it = req->query_parameters.find("parent_id");
@@ -60,7 +58,7 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
         }
 
         auto module = tms.local().find_module("test");
-        id = co_await module->make_task<tasks::test_task_impl>(shard, id, keyspace, table, type, entity, data);
+        id = co_await module->make_task<tasks::test_task_impl>(shard, id, keyspace, table, entity, data);
         co_await tms.invoke_on(shard, [id] (tasks::task_manager& tm) {
             auto it = tm.get_all_tasks().find(id);
             if (it != tm.get_all_tasks().end()) {

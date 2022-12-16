@@ -475,7 +475,7 @@ float repair_module::report_progress(streaming::stream_reason reason) {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
             auto& impl = dynamic_cast<shard_repair_task_impl&>(*it->second->_impl);
-            if (impl.reason == reason) {
+            if (impl.reason() == reason) {
                 nr_ranges_total += impl.ranges_size();
                 nr_ranges_finished += impl.nr_ranges_finished;
             }
@@ -553,7 +553,6 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
 shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
         const sstring& keyspace,
-        std::string type,
         std::exception_ptr ex,
         repair_service& repair,
         locator::effective_replication_map_ptr erm_,
@@ -566,7 +565,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
         streaming::stream_reason reason_,
         abort_source* as,
         bool hints_batchlog_flushed)
-    : repair_task_impl(module, id, 0, keyspace, "", std::move(type), "", parent_id_.uuid())
+    : repair_task_impl(module, id, 0, keyspace, "", "", parent_id_.uuid(), reason_)
     , _ex(std::move(ex))
     , rs(repair)
     , db(repair.get_db())
@@ -584,7 +583,6 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
     , data_centers(data_centers_)
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
-    , reason(reason_)
     , total_rf(erm->get_replication_factor())
     , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
@@ -596,7 +594,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
 
 void shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        id.uuid(), id.shard(), reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
+        id.uuid(), id.shard(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid(), id.shard(), nr_failed_ranges, ranges_size());
         throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid(), id.shard(), nr_failed_ranges, ranges_size()));
@@ -946,21 +944,21 @@ future<> shard_repair_task_impl::do_repair_ranges() {
         auto table_name = table_names()[idx];
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
-                id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, reason);
+                id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, _reason);
         co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) {
             return with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_id] {
                 return repair_range(range, table_id).then([this] {
-                    if (reason == streaming::stream_reason::bootstrap) {
+                    if (_reason == streaming::stream_reason::bootstrap) {
                         rs.get_metrics().bootstrap_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::replace) {
+                    } else if (_reason == streaming::stream_reason::replace) {
                         rs.get_metrics().replace_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::rebuild) {
+                    } else if (_reason == streaming::stream_reason::rebuild) {
                         rs.get_metrics().rebuild_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::decommission) {
+                    } else if (_reason == streaming::stream_reason::decommission) {
                         rs.get_metrics().decommission_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::removenode) {
+                    } else if (_reason == streaming::stream_reason::removenode) {
                         rs.get_metrics().removenode_finished_ranges++;
-                    } else if (reason == streaming::stream_reason::repair) {
+                    } else if (_reason == streaming::stream_reason::repair) {
                         rs.get_metrics().repair_finished_ranges_sum++;
                         nr_ranges_finished++;
                     }
@@ -976,7 +974,7 @@ future<> shard_repair_task_impl::do_repair_ranges() {
             });
         });
 
-        if (reason != streaming::stream_reason::repair) {
+        if (_reason != streaming::stream_reason::repair) {
             try {
                 auto& table = db.local().find_column_family(table_id);
                 rlogger.debug("repair[{}]: Trigger off-strategy compaction for keyspace={}, table={}",
@@ -1122,7 +1120,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         co_return id.id;
     }
 
-    auto task_impl_ptr = std::make_unique<user_requested_repair_task_impl>(_repair_module, id, std::move(keyspace), format("{}", streaming::stream_reason::repair), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes));
+    auto task_impl_ptr = std::make_unique<user_requested_repair_task_impl>(_repair_module, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes));
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
     co_return id.id;
 }
@@ -1233,8 +1231,8 @@ future<> user_requested_repair_task_impl::run() {
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 std::exception_ptr ex;
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace, format("{}",
-                        streaming::stream_reason::repair), ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
+                auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
+                        ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, nullptr, hints_batchlog_flushed);
                 auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
                 co_await task->done();
@@ -1308,7 +1306,7 @@ future<> repair_service::sync_data_using_repair(
     }
 
     assert(this_shard_id() == 0);
-    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), format("{}", reason), "", std::move(ranges), std::move(neighbors), reason, ops_info);
+    auto task_impl_ptr = std::make_unique<data_sync_repair_task_impl>(_repair_module, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info);
     auto task = co_await start_repair_task(std::move(task_impl_ptr), _repair_module);
     co_await task->done();
 }
@@ -1349,7 +1347,7 @@ future<> data_sync_repair_task_impl::run() {
                     ex = std::current_exception();
                 }
                 auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
-                        format("{}", streaming::stream_reason::repair), ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
+                        ex, local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, asp, hints_batchlog_flushed);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);

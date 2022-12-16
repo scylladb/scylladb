@@ -15,10 +15,9 @@ namespace tasks {
 
 logging::logger tmlogger("task_manager");
 
-task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string type, std::string entity, task_id parent_id) noexcept
+task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept
     : _status({
         .id = id,
-        .type = std::move(type),
         .state = task_state::created,
         .sequence_number = sequence_number,
         .shard = this_shard_id(),
@@ -105,6 +104,10 @@ task_id task_manager::task::id() {
     return _impl->_status.id;
 }
 
+std::string task_manager::task::type() const {
+    return _impl->type();
+}
+
 task_manager::task::status& task_manager::task::get_status() noexcept {
     return _impl->_status;
 }
@@ -115,10 +118,6 @@ uint64_t task_manager::task::get_sequence_number() const noexcept {
 
 task_id task_manager::task::get_parent_id() const noexcept {
     return _impl->_parent_id;
-}
-
-void task_manager::task::set_type(std::string type) noexcept {
-    _impl->_status.type = std::move(type);
 }
 
 void task_manager::task::change_state(task_state state) noexcept {
