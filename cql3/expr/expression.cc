@@ -134,6 +134,10 @@ extract_column_value(const column_definition* cdef, const evaluation_inputs& inp
         case column_kind::partition_key:
             return managed_bytes((*inputs.partition_key)[cdef->id]);
         case column_kind::clustering_key:
+            if (cdef->id >= inputs.clustering_key->size()) {
+                // partial clustering key, or LWT non-existing row
+                return std::nullopt;
+            }
             return managed_bytes((*inputs.clustering_key)[cdef->id]);
         case column_kind::static_column:
             [[fallthrough]];
