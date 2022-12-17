@@ -495,6 +495,9 @@ struct evaluation_inputs {
 std::vector<managed_bytes_opt> get_non_pk_values(const cql3::selection::selection& selection, const query::result_row_view& static_row,
                                          const query::result_row_view* row);
 
+/// Helper for accessing a column value from evaluation_inputs
+managed_bytes_opt extract_column_value(const column_definition* cdef, const evaluation_inputs& inputs);
+
 /// True iff restr evaluates to true, given these inputs
 extern bool is_satisfied_by(
         const expression& restr, const evaluation_inputs& inputs);

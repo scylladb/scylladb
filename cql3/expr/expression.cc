@@ -126,9 +126,10 @@ struct row_data_from_partition_slice {
     const selection& sel;
 };
 
-/// Returns col's value from queried data.
-managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& inputs) {
-    auto cdef = col.col;
+} // anonymous
+
+managed_bytes_opt
+extract_column_value(const column_definition* cdef, const evaluation_inputs& inputs) {
     switch (cdef->kind) {
         case column_kind::partition_key:
             return managed_bytes((*inputs.partition_key)[cdef->id]);
@@ -148,6 +149,13 @@ managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& in
         default:
             throw exceptions::unsupported_operation_exception("Unknown column kind");
     }
+}
+
+namespace {
+
+/// Returns col's value from queried data.
+managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& inputs) {
+    return extract_column_value(col.col, inputs);
 }
 
 managed_bytes_opt
