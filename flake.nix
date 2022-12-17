@@ -6,7 +6,7 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils } @ inputs: {
+  outputs = { self, nixpkgs, flake-utils }: {
     overlays.default = import ./dist/nix/overlay.nix nixpkgs;
 
     lib = {

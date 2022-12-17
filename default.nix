@@ -26,17 +26,14 @@
 # shell env will want to add stuff to the environment, and the way
 # for it to do so is to pass us a function with this signatire:
 , devInputs ? ({ pkgs, llvm }: [])
-} @ args:
+}:
 
 let
   inherit (builtins)
     baseNameOf
-    fetchurl
     head
-    map
     match
     split
-    trace
   ;
 
   inherit (import (builtins.fetchTarball {
@@ -45,12 +42,12 @@ let
   }) { inherit (pkgs) lib; })
     gitignoreSource;
 
-  # tests don't like boost17x (which is boost177 at the time of writing)
+  # all later Boost versions are problematic one way or another
   boost = pkgs.boost175;
 
-  # current clang13 cannot compile Scylla with sanitizers:
+  # no Clang newer than 12 and older than 15 can compile Scylla with
+  # sanitizers, and 15 is not in Nixpkgs yet
   llvm = pkgs.llvmPackages_12;
-  # llvm = pkgs.llvmPackages_latest;
 
   stdenvUnwrapped = llvm.stdenv;
 
@@ -88,7 +85,7 @@ in derive ({
     boost
     cargo
     cmake
-    cxxbridge
+    cxx-rs
     gcc
     openjdk11_headless
     libtool
@@ -130,12 +127,14 @@ in derive ({
     hwloc
     icu
     jsoncpp
+    libdeflate
     libidn2
     libp11
     libsystemtap
     libtasn1
     libunistring
     liburing
+    libxcrypt
     libxfs
     libxml2
     libyamlcpp
