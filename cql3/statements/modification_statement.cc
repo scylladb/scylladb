@@ -148,7 +148,8 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
     });
 }
 
-bool modification_statement::applies_to(const update_parameters::prefetch_data::row* row,
+bool modification_statement::applies_to(const selection::selection* selection,
+        const update_parameters::prefetch_data::row* row,
         const query_options& options) const {
 
     // Assume the row doesn't exist if it has no static columns and the statement is only interested
@@ -169,12 +170,25 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
         return row == nullptr;
     }
 
-    auto condition_applies = [&row, &options](const lw_shared_ptr<column_condition>& cond) {
-        const data_value* value = nullptr;
+    auto inputs = expr::evaluation_inputs{
+        .static_and_regular_columns = row ? &row->cells : nullptr,
+        .selection = selection,
+    };
+
+    auto condition_applies = [&row, &options, &inputs](const lw_shared_ptr<column_condition>& cond) {
+        data_value value_obj = data_value::make_null(cond->_column.type);
+        data_value* value = nullptr; // callee expects nullptr for NULL, so give it that
+        managed_bytes_opt val_opt;
         if (row != nullptr) {
-            auto it = row->cells.find(cond->_column.ordinal_id);
-            if (it != row->cells.end()) {
-                value = &it->second;
+            val_opt = expr::extract_column_value(&cond->_column, inputs);
+            if (val_opt) {
+                auto type = cond->_column.type;
+                if (type->is_listlike() && type->is_multi_cell()) {
+                    auto collection_type = static_cast<const collection_type_impl*>(type.get());
+                    type = map_type_impl::get_instance(collection_type->name_comparator(), collection_type->value_comparator(), true);
+                }
+                value_obj = type->deserialize(managed_bytes_view(*val_opt));
+                value = &value_obj;
             }
         }
         return cond->applies_to(value, options);

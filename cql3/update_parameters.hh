@@ -17,6 +17,7 @@
 #include "tombstone.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
+#include "cql3/selection/selection.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 
@@ -63,27 +64,19 @@ public:
         };
     public:
         struct row {
-            // Order CAS columns by ordinal column id.
-            std::map<ordinal_column_id, data_value> cells;
+            bool has_static;
+            // indexes are determined by prefetch_data::selection
+            std::vector<managed_bytes_opt> cells;
             // Return true if this row has at least one static column set.
             bool has_static_columns(const schema& schema) const {
-                if (!schema.has_static_columns()) {
-                    return false;
-                }
-                // Static columns use a continuous range of ids so to efficiently check
-                // if a row has a static cell, we can look up the first cell with id >=
-                // first static column id and check if it's static.
-                auto it = cells.lower_bound(schema.static_begin()->ordinal_id);
-                if (it == cells.end() || !schema.column_at(it->first).is_static()) {
-                    return false;
-                }
-                return true;
+                return has_static;
             }
         };
         // Use an ordered map since CAS result set must be naturally ordered
         // when returned to the client.
         std::map<key, row, key_less> rows;
         schema_ptr schema;
+        shared_ptr<cql3::selection::selection> selection;
     public:
         prefetch_data(schema_ptr schema);
         // Find a row object for either static or regular subset of cells, depending
@@ -180,7 +173,7 @@ public:
         return _timestamp;
     }
 
-    const std::vector<std::pair<data_value, data_value>>*
+    std::optional<std::vector<std::pair<data_value, data_value>>>
     get_prefetched_list(const partition_key& pkey, const clustering_key& ckey, const column_definition& column) const;
 
     static prefetch_data build_prefetch_data(schema_ptr schema, const query::result& query_result,

@@ -101,7 +101,8 @@ bool cas_request::applies_to() const {
             continue;
         }
         // No need to check subsequent conditions as we have already failed the current one.
-        if (!op.statement.applies_to(find_old_row(op), op.options)) {
+        auto old_row = find_old_row(op).row;
+        if (!op.statement.applies_to(_rows.selection.get(), old_row, op.options)) {
             return false;
         }
     }
@@ -118,7 +119,7 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
     }
 }
 
-const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas_row_update& op) const {
+cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     static const clustering_key empty_ckey = clustering_key::make_empty();
     const partition_key& pkey = _key.front().start()->value().key().value();
     // We must ignore statement clustering column restriction when
@@ -133,11 +134,16 @@ const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas
     //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
     const clustering_key& ckey = op.ranges.front().start() ?  op.ranges.front().start()->value() : empty_ckey;
     auto row = _rows.find_row(pkey, ckey);
+    auto ckey_ptr = &ckey;
     if (row == nullptr && !ckey.is_empty() &&
         !op.statement.has_if_exist_condition() && !op.statement.has_if_not_exist_condition()) {
         row = _rows.find_row(pkey, empty_ckey);
+        ckey_ptr = &empty_ckey;
     }
-    return row;
+    if (!row) {
+        ckey_ptr = &empty_ckey;
+    }
+    return old_row{ckey_ptr, row};
 }
 
 seastar::shared_ptr<cql_transport::messages::result_message>
@@ -148,14 +154,16 @@ cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
     const clustering_key empty_ckey = clustering_key::make_empty();
     auto result_set = std::make_unique<cql3::result_set>(metadata);
 
+    auto pkey_bytes = pkey.explode();
+
     for (const cas_row_update& op: _updates) {
         // Construct the result set row
         std::vector<bytes_opt> rs_row;
         rs_row.reserve(metadata->value_count());
         rs_row.emplace_back(boolean_type->decompose(is_applied));
         // Get old row from prefetched data for the row update
-        const auto* old_row = find_old_row(op);
-        if (!old_row) {
+        auto old_row = find_old_row(op);
+        if (!old_row.row) {
             // In case there is no old row, leave all other columns null
             // so that we can infer whether the update attempts to insert a
             // non-existing row.
@@ -163,24 +171,34 @@ cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
             result_set->add_row(std::move(rs_row));
             continue;
         }
+        auto ckey_bytes = old_row.ckey->explode();
+
+        auto eval_inputs = expr::evaluation_inputs{
+            .partition_key = &pkey_bytes,
+            .clustering_key = &ckey_bytes,
+            .static_and_regular_columns = &old_row.row->cells,
+            .selection = _rows.selection.get(),
+        };
+
         // Fill in the cells from prefetch data (old row) into the result set row
         for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {
-            const auto it = old_row->cells.find(id);
-            if (it == old_row->cells.end()) {
+            auto& cdef = _schema->column_at(id);
+            auto val = expr::extract_column_value(&cdef, eval_inputs);
+            if (!val) {
                 rs_row.emplace_back(bytes_opt{});
                 continue;
             }
-            const data_value& cell = it->second;
-            const abstract_type& cell_type = *cell.type();
-            const abstract_type& column_type = *_rows.schema->column_at(id).type;
+            const abstract_type& column_type = *cdef.type;
 
-            if (column_type.is_listlike() && cell_type.is_map()) {
+            if (column_type.is_listlike() && column_type.is_multi_cell()) {
                 // List/sets are fetched as maps, but need to be stored as sets.
                 const listlike_collection_type_impl& list_type = static_cast<const listlike_collection_type_impl&>(column_type);
-                const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
+                auto map_type_holder = map_type_impl::get_instance(list_type.name_comparator(), list_type.value_comparator(), list_type.is_multi_cell());
+                const map_type_impl& map_type = static_cast<const map_type_impl&>(*map_type_holder);
+                auto cell = map_type.deserialize(managed_bytes_view(*val));
                 rs_row.emplace_back(list_type.serialize_map(map_type, cell));
             } else {
-                rs_row.emplace_back(cell_type.decompose(cell));
+                rs_row.emplace_back(to_bytes(*val));
             }
         }
         result_set->add_row(std::move(rs_row));
