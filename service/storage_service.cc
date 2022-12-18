@@ -2887,7 +2887,7 @@ future<> storage_service::unbootstrap() {
 
         set_mode(mode::LEAVING);
 
-        auto stream_success = stream_ranges(ranges_to_stream);
+        auto stream_success = stream_ranges(std::move(ranges_to_stream));
 
         // wait for the transfer runnables to signal the latch.
         slogger.debug("waiting for stream acks.");
