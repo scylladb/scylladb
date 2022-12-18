@@ -3086,7 +3086,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -3102,10 +3102,10 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             ranges_per_endpoint[endpoint].emplace_back(r);
             co_await coroutine::maybe_yield();
         }
-        streamer->add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
+        streamer.add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
     }
     try {
-        co_await streamer->stream_async();
+        co_await streamer.stream_async();
         slogger.info("stream_ranges successful");
     } catch (...) {
         auto ep = std::current_exception();
