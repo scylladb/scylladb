@@ -80,7 +80,7 @@ class schema_describe_statement : public describe_statement {
 
 private:
     std::variant<schema_desc, keyspace_desc> _config;
-    bool _with_internals;
+    [[maybe_unused]] bool _with_internals;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
@@ -94,7 +94,7 @@ public:
 class listing_describe_statement : public describe_statement {
 private:
     element_type _element;
-    bool _with_internals;
+    [[maybe_unused]] bool _with_internals;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
@@ -110,7 +110,7 @@ private:
     element_type _element;
     std::optional<sstring> _keyspace;
     sstring _name;
-    bool _with_internals;
+    [[maybe_unused]] bool _with_internals;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
@@ -124,7 +124,7 @@ class generic_describe_statement : public describe_statement {
 private:
     std::optional<sstring> _keyspace;
     sstring _name;
-    bool _with_internals;
+    [[maybe_unused]] bool _with_internals;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
