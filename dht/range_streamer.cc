@@ -221,8 +221,8 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effec
     }
     _nr_rx_added++;
     auto ranges_for_keyspace = !is_replacing && use_strict_sources_for_ranges(keyspace_name, erm)
-        ? get_all_ranges_with_strict_sources_for(keyspace_name, erm, ranges, gossiper)
-        : get_all_ranges_with_sources_for(keyspace_name, erm, ranges);
+        ? get_all_ranges_with_strict_sources_for(keyspace_name, erm, std::move(ranges), gossiper)
+        : get_all_ranges_with_sources_for(keyspace_name, erm, std::move(ranges));
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : ranges_for_keyspace) {
