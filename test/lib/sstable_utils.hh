@@ -139,7 +139,7 @@ public:
     }
 
     void change_dir(sstring dir) {
-        _sst->_dir = dir;
+        _sst->_storage.dir = dir;
     }
 
     void set_data_file_size(uint64_t size) {
@@ -158,12 +158,12 @@ public:
         _sst->_recognized_components.erase(component_type::Index);
         _sst->_recognized_components.erase(component_type::Data);
         return seastar::async([sst = _sst] {
-            sst->write_toc(default_priority_class());
+            sst->open_sstable(default_priority_class());
             sst->write_statistics(default_priority_class());
             sst->write_compression(default_priority_class());
             sst->write_filter(default_priority_class());
             sst->write_summary(default_priority_class());
-            sst->seal_sstable().get();
+            sst->seal_sstable(false).get();
         });
     }
 
@@ -201,8 +201,8 @@ public:
     void rewrite_toc_without_scylla_component() {
         _sst->_recognized_components.erase(component_type::Scylla);
         remove_file(_sst->filename(component_type::TOC)).get();
-        _sst->write_toc(default_priority_class());
-        _sst->seal_sstable().get();
+        _sst->_storage.open(*_sst, default_priority_class());
+        _sst->seal_sstable(false).get();
     }
 
     future<> remove_component(component_type c) {
@@ -215,6 +215,14 @@ public:
 
     void set_shards(std::vector<unsigned> shards) {
         _sst->_shards = std::move(shards);
+    }
+
+    static future<> create_links(const sstable& sst, const sstring& dir) {
+        return sst._storage.create_links(sst, dir);
+    }
+
+    static fs::path filename(const sstable& sst, component_type c) {
+        return fs::path(sst.filename(c));
     }
 };
 

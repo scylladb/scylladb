@@ -787,8 +787,7 @@ public:
         // exactly what callers used to do anyway.
         estimated_partitions = std::max(uint64_t(1), estimated_partitions);
 
-        _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
-        _sst.write_toc(_pc);
+        _sst.open_sstable(_pc);
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
         init_file_writers();

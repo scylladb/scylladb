@@ -488,11 +488,11 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
             gen_tracker.update(sst->generation());
 
             if (sstdir.empty()) {
-                sstdir = sst->get_dir();
+                sstdir = sst->_storage.prefix();
             } else {
                 // All sstables are assumed to be in the same column_family, hence
                 // sharing their base directory.
-                assert (sstdir == sst->get_dir());
+                assert (sstdir == sst->_storage.prefix());
             }
         }
 

@@ -351,14 +351,6 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    sstring filename(component_type f) const {
-        return filename(get_dir(), f);
-    }
-
-    sstring temp_filename(component_type f) const {
-        return filename(get_temp_dir(), f);
-    }
-
     sstring get_filename() const {
         return filename(component_type::Data);
     }
@@ -367,12 +359,12 @@ public:
         return filename(component_type::TOC);
     }
 
-    static sstring sst_dir_basename(generation_type gen) {
-        return fmt::format("{}.sstable", gen);
+    sstring index_filename() const {
+        return filename(component_type::Index);
     }
 
-    static sstring temp_sst_dir(const sstring& dir, generation_type gen) {
-        return dir + "/" + sst_dir_basename(gen);
+    static sstring sst_dir_basename(generation_type gen) {
+        return fmt::format("{}.sstable", gen);
     }
 
     static bool is_temp_dir(const fs::path& dirpath)
@@ -397,11 +389,7 @@ public:
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
-    future<> create_links(const sstring& dir, generation_type generation) const;
-
-    future<> create_links(const sstring& dir) const {
-        return create_links(dir, _generation);
-    }
+    future<> snapshot(const sstring& dir) const;
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
@@ -473,19 +461,47 @@ public:
     const position_in_partition& last_partition_last_position() const noexcept {
         return _last_partition_last_position;
     }
+
+    using mark_for_removal = bool_class<class mark_for_removal_tag>;
+
+    class filesystem_storage {
+        friend class test;
+        sstring dir;
+        std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
+
+    private:
+        future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+        future<> remove_temp_dir();
+        future<> create_links(const sstable& sst, const sstring& dir) const;
+        future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+        future<> touch_temp_dir(const sstable& sst);
+
+    public:
+        explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
+
+        using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
+        future<> seal(const sstable& sst);
+        future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
+        future<> quarantine(const sstable& sst, delayed_commit_changes* delay);
+        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
+        // runs in async context
+        void open(sstable& sst, const io_priority_class& pc);
+        future<> wipe(const sstable& sst) noexcept;
+        future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity);
+
+        sstring prefix() const { return dir; }
+    };
+
 private:
+    sstring filename(component_type f) const {
+        return filename(_storage.prefix(), f);
+    }
+
     sstring filename(const sstring& dir, component_type f) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
     friend class sstable_directory;
-    const sstring& get_dir() const {
-        return _dir;
-    }
-
-    const sstring get_temp_dir() const {
-        return temp_sst_dir(_dir, _generation);
-    }
 
     size_t sstable_buffer_size;
 
@@ -523,9 +539,9 @@ private:
     lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
 
     schema_ptr _schema;
-    sstring _dir;
-    std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
     generation_type _generation{0};
+
+    filesystem_storage _storage;
 
     version_types _version;
     format_types _format;
@@ -577,18 +593,14 @@ private:
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);
 
-    future<> rename_new_sstable_component_file(sstring from_file, sstring to_file);
+    future<> rename_new_sstable_component_file(sstring from_file, sstring to_file) const;
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) noexcept;
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
-    future<> touch_temp_dir();
-    future<> remove_temp_dir();
-
-    void generate_toc(compressor_ptr c, double filter_fp_chance);
-    void write_toc(const io_priority_class& pc);
-    future<> seal_sstable();
+    void generate_toc();
+    void open_sstable(const io_priority_class& pc);
 
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
@@ -696,10 +708,6 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
-
-    future<> check_create_links_replay(const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
-    future<> create_links_common(const sstring& dst_dir, generation_type dst_gen, bool mark_for_removal) const;
-    future<> create_links_and_mark_for_removal(const sstring& dst_dir, generation_type dst_gen) const;
 public:
     future<> read_toc() noexcept;
 
@@ -912,6 +920,9 @@ public:
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
+
+    future<uint32_t> read_digest(io_priority_class pc);
+    future<checksum> read_checksum(io_priority_class pc);
 };
 
 // Validate checksums
