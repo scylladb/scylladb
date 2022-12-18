@@ -3100,6 +3100,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             dht::token_range r = end_point_entry.first;
             inet_address endpoint = end_point_entry.second;
             ranges_per_endpoint[endpoint].emplace_back(r);
+            co_await coroutine::maybe_yield();
         }
         streamer->add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
     }
