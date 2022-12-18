@@ -2615,5 +2615,90 @@ unset_bind_variable_guard::is_unset(const query_options& qo) const {
     return qo.is_unset(_var->bind_index);
 }
 
+static
+expression
+convert_map_back_to_listlike(expression e) {
+    class conversion_function : public functions::scalar_function {
+        functions::function_name _name = { "system", "reserialize_listlike" };
+        shared_ptr<const map_type_impl> _map_type;
+        shared_ptr<const listlike_collection_type_impl> _listlike_type;
+        std::vector<data_type> _arg_types;
+    public:
+        explicit conversion_function(shared_ptr<const map_type_impl> map_type,
+                shared_ptr<const listlike_collection_type_impl> listlike_type)
+                : _map_type(std::move(map_type))
+                , _listlike_type(std::move(listlike_type)) {
+            _arg_types.push_back(_listlike_type);
+        }
+
+        virtual const functions::function_name& name() const override {
+            return _name;
+        }
+
+        virtual const std::vector<data_type>& arg_types() const override {
+            return _arg_types;
+        }
+
+        virtual const data_type& return_type() const override {
+            return _arg_types[0];
+        }
+
+        virtual bool is_pure() const override {
+            return true;
+        }
+
+        virtual bool is_native() const override {
+            return true;
+        }
+
+        virtual bool requires_thread() const override {
+            return false;
+        }
+
+        virtual bool is_aggregate() const override {
+            return false;
+        }
+
+        virtual void print(std::ostream& os) const override {
+            os << "MAP_TO_LIST(internal)";
+        }
+
+        virtual sstring column_name(const std::vector<sstring>& column_names) const override {
+            return "NONE";
+        }
+
+        virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+            auto& p = parameters[0];
+            if (!p) {
+                return std::nullopt;
+            }
+            auto v = _map_type->deserialize_value(*p);
+            return _listlike_type->serialize_map(*_map_type, v);
+        }
+    };
+
+    auto type = dynamic_pointer_cast<const listlike_collection_type_impl>(type_of(e));
+    auto map_type = map_type_impl::get_instance(type->name_comparator(), type->value_comparator(), true);
+    auto args = std::vector<expression>();
+    args.push_back(std::move(e));
+
+    return function_call{
+        .func = make_shared<conversion_function>(std::move(map_type), std::move(type)),
+        .args = std::move(args),
+    };
+}
+
+expression
+adjust_for_collection_as_maps(const expression& e) {
+    return search_and_replace(e, [] (const expression& candidate) -> std::optional<expression> {
+        if (auto* cval = as_if<column_value>(&candidate)) {
+            if (cval->col->type->is_listlike() && cval->col->type->is_multi_cell()) {
+                return convert_map_back_to_listlike(candidate);
+            }
+        }
+        return std::nullopt;
+    });
+}
+
 } // namespace expr
 } // namespace cql3
