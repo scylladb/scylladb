@@ -287,16 +287,37 @@ def test_scan_paging_bytes(test_table_b):
     response = test_table_b.scan(ConsistentRead=True, Limit=1)
     assert 'LastEvaluatedKey' in response
 
-# The following two xfailing tests reproduce issue #7933, where a scan
-# encounters a long string of row/partition tombstones and is expected to
-# return a page in a constant amount of time - so may need to stop in the
-# middle of that string of tombstones. Both tests are currently marked
-# "verylong" so will not run by default, but when we fix #7933 by deciding
-# on a threshold number of tombstones to process in a single page, we can
-# hopefully make these tests shorter and hopefully can drop the "verylong"
-# mark.
+# A fixture to read query_tombstone_page_limit from Scylla's configuration.
+# A test using this fixture will be skipped if the test is not running
+# against Scylla.
+@pytest.fixture(scope="session")
+def query_tombstone_page_limit(dynamodb, scylla_only):
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    return int(config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': 'query_tombstone_page_limit'}
+        )['Items'][0]['value'])
 
-# In the following test, we create a single long partition with just two
+# The following two tests reproduced issue #7933, where a scan encounters a
+# long string of row/partition tombstones, and because it is expected to
+# return a page in a constant amount of time, it should stop in the middle
+# of long that string of tombstones.
+# Before #7933 was fixed, there was no official threshold number of
+# tombstones over which we know that paging must stop a page, so we could
+# only demonstrate the bug asymptotically: If we have two live items with
+# N consecutive tombstones between then, we know that there must be a large
+# enough such N for which fetching the first page should return just the
+# first live item - not both live items. If we try with arbitrarily large N,
+# and the time to read the single page grows as O(N) but still always get
+# two results - this is a bug.
+# But now #7933 is fixed, and we do have an official threshold - configured
+# by "query_tombstone_page_limit" and defaulting to 10,000. As soon as our
+# test has more than this number of tombstones, we know the page must stop.
+# So we can test that this indeed happens - without needing to reach huge
+# sizes.
+#
+# In the first test, we create a single long partition with just two
 # live items and a long contiguous string of row tombstones between them.
 # A Scan of this partition should be able to stop in the middle of this
 # string and *not* return both live items in a single page - because
@@ -304,30 +325,15 @@ def test_scan_paging_bytes(test_table_b):
 # to the number of tombstones), and retrieving a single page must take a
 # bounded amount of time. Reproduces issue #7933.
 #
-# Unfortunately, there is no official threshold number of tombstones over
-# which we know that paging must stop a page, so curently we can only
-# demonstrate the bug asymptotically: We know that there must be a large
-# enough N (number of consecutive tombstones) for which fetching the first
-# page should return just the first live item - not both. If we try with
-# arbitrarily large N, and the time to read the single page grows as O(N)
-# but still always get two results - this is a bug.
-#
-# The test is marked "veryslow" because to reach a high N we need to create
-# a lot of data so the test's preperation is very slow and does a lot of I/O.
-#
 # This test is marked "scylla_only" because it doesn't really test something
-# that *has* to happen (there is no reason why reading a partition with a lot
-# of deleted data should take a long time), but specifically happens in
-# Scylla's tombstone-based implementation - and in that implementation,
-# and only in that implementation, we can require the scan to stop early.
-@pytest.mark.xfail(reason="Issue #7933")
-@pytest.mark.veryslow
-def test_scan_long_row_tombstone_string(dynamodb, scylla_only, rest_api):
-    # TODO: When we fix #7933, we'll probably introduce some limit to the
-    # number of tombstones processed in one page, at which point we can
-    # use this limit here instead of a huge number, and perhaps even
-    # make this test not "veryslow".
-    N = 1000000
+# that *has* to happen - there is no reason in the DynamoDB API why reading
+# a partition with a lot of deleted data must take a long time, or that if
+# we do, that it will stop after a known number of tombstones. But we do
+# expect this in Scylla's tombstone-based implementation - and in that
+# implementation, and only in that implementation, we can require the scan
+# to stop early, and also that we know when- after "query_tombstone_page_limit".
+def test_scan_long_row_tombstone_string(dynamodb, query_tombstone_page_limit):
+    N = query_tombstone_page_limit + 10
     with new_test_table(dynamodb,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' },
                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
@@ -337,26 +343,20 @@ def test_scan_long_row_tombstone_string(dynamodb, scylla_only, rest_api):
         # Create two items with c=0 and c=N, and N-2 deletions between them.
         # Although the deleted items never existed, Scylla is forced to keep
         # tombstones for them.
-        start = time.time()
         with table.batch_writer() as batch:
             batch.put_item(Item={ 'p': 1, 'c': 0 })
             for i in range(1, N-1):
                 batch.delete_item(Key={ 'p': 1, 'c': i })
             batch.put_item(Item={ 'p': 1, 'c': N })
-        print(f"time for test table setup: {time.time() - start} seconds")
-        start = time.time()
         response = table.scan()
-        Tt = time.time() - start
-        print(f"time for single page with deletions: {Tt} seconds")
 
         found = len(response['Items'])
-        print(f"first page found {found}")
         assert found == 1
 
         # Let's finish the scan for as many pages as it takes (some of them
         # may be empty!), and confirm we eventually got the two results.
         while 'LastEvaluatedKey' in response:
-            response = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
             found += len(response['Items'])
         assert found == 2
 
@@ -364,14 +364,13 @@ def test_scan_long_row_tombstone_string(dynamodb, scylla_only, rest_api):
 # separated by a long string of partition tombstones. Again, the Scan should
 # be able to stop in the middle of that string, and not return both partitions
 # in a single page.
-@pytest.mark.xfail(reason="Issue #7933")
-@pytest.mark.veryslow
-def test_scan_long_partition_tombstone_string(dynamodb):
-    # TODO: When we fix #7933, we'll probably introduce some limit to the
-    # number of tombstones processed in one page, at which point we can
-    # use this limit here instead of a huge number, and perhaps even
-    # make this test not "veryslow".
-    N = 1000000
+def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_limit):
+    # Unfortunately, unlike strings of row-tombstones which end a page after
+    # exactly query_tombstone_page_limit, in the case of partition tombstones
+    # the limit applies to separate vnode subscans, so we need to have
+    # significantly more before the split. Experimentally "* 4" works here
+    # with test/alternator/run, but may need to be changed in the future.
+    N = int(query_tombstone_page_limit * 4)
     with new_test_table(dynamodb,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'N' }]
@@ -382,8 +381,7 @@ def test_scan_long_partition_tombstone_string(dynamodb):
         # As a workaround, let's begin by writing just 100 partitions, then
         # read them back and keep the first and last one of those live. If
         # the hash function is random enough, 99% of the partitions we'll
-        # write later will fall between those two partitions two.
-        start = time.time()
+        # write later will fall between those two partitions.
         with table.batch_writer() as batch:
             for i in range(100):
                 batch.put_item(Item={ 'p': i })
@@ -392,6 +390,7 @@ def test_scan_long_partition_tombstone_string(dynamodb):
         while 'LastEvaluatedKey' in r:
             r = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
         last = r['Items'][-1]['p']
+        print("first", first, "last", last)
         # Now write all N items - all except "first" and "last" are deletions
         with table.batch_writer() as batch:
             for i in range(N):
@@ -399,19 +398,15 @@ def test_scan_long_partition_tombstone_string(dynamodb):
                     batch.put_item(Item={ 'p': i })
                 else:
                     batch.delete_item(Key={ 'p': i })
-        print(f"time for test table setup: {time.time() - start} seconds")
-        start = time.time()
         response = table.scan()
-        print(f"time for single page: {time.time() - start} seconds")
 
         found = len(response['Items'])
-        print(f"first page found {found}")
         assert found == 1
 
         # Let's finish the scan for as many pages as it takes (some of them
         # may be empty!), and confirm we eventually got the two results.
         while 'LastEvaluatedKey' in response:
-            response = table.scan(ExclusiveStartKey=r['LastEvaluatedKey'])
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
             found += len(response['Items'])
         assert found == 2
 
