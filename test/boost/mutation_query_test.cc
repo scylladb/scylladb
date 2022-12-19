@@ -567,6 +567,70 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
 }
 
+struct mut_consumer_accumulator {
+    const schema& s;
+    tests::reader_concurrency_semaphore_wrapper& rcsw;
+    std::vector<mutation_fragment_v2> mfs;
+
+    std::vector<mutation_fragment_v2> consume_end_of_stream() {
+        return std::move(mfs);
+    }
+    stop_iteration consume(static_row sr) {
+        mfs.emplace_back(s, rcsw.make_permit(), std::move(sr));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(clustering_row cr) {
+        mfs.emplace_back(s, rcsw.make_permit(), std::move(cr));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(range_tombstone_change rtc) {
+        mfs.emplace_back(s, rcsw.make_permit(), std::move(rtc));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(tombstone _tb) {
+        return stop_iteration::no;
+    }
+    stop_iteration consume_new_partition(dht::decorated_key dk) {
+        mfs.emplace_back(s, rcsw.make_permit(), partition_start{dk, {}});
+        return stop_iteration::no;
+    }
+    stop_iteration consume_end_of_partition() {
+        mfs.emplace_back(s, rcsw.make_permit(), partition_end{});
+        return stop_iteration::no;
+    }
+};
+
+
+SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer_compare_mf) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    schema_ptr s = gen.schema();
+    auto rs = s->make_reversed();
+    std::vector<mutation> mutations = gen(1);
+    tests::reader_concurrency_semaphore_wrapper rcsw = "aabbccdd";
+
+    mut_consumer_accumulator mca_frozen{*rs, rcsw};
+    mut_consumer_accumulator mca_unfrozen{*rs, rcsw};
+
+    const mutation& m = mutations[0];
+    mutation nfm = mutations[0];
+    frozen_mutation fm = freeze(m);
+
+    auto res_frozen = fm.consume(s, mca_frozen, consume_in_reverse::yes);
+
+    auto res_unfrozen = std::move(nfm).consume(mca_unfrozen, consume_in_reverse::yes, mutation_consume_cookie{});
+
+    auto equal = [&rs](const mutation_fragment_v2& mf1, const mutation_fragment_v2& mf2) {
+        return mf1.equal(*rs, mf2);
+    };
+
+    BOOST_REQUIRE_EQUAL(res_frozen.result.size(), res_unfrozen.result.size());
+    for (const auto& res : res_frozen.result) {
+        auto i = &res - &res_frozen.result[0];
+        mutation_fragment_v2::printer p_f(*rs, res), p_nf(*rs, res_unfrozen.result[i]);
+        BOOST_REQUIRE_MESSAGE(equal(res, res_unfrozen.result[i]), fmt::format("idx={}\nfrozen={}\n\nnonfrozen={}", i, p_f, p_nf));
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
     random_mutation_generator gen(random_mutation_generator::generate_counters::no);
     schema_ptr s = gen.schema();
@@ -575,7 +639,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
     frozen_mutation fm = freeze(m);
 
     // sanity check unfreeze first
-    mutation um = fm.unfreeze(s);
+    const mutation um = fm.unfreeze(s);
     BOOST_REQUIRE_EQUAL(um, m);
 
     // Rebuild mutation by consuming from the frozen_mutation
@@ -583,6 +647,28 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
     mutation_rebuilder_v2 rebuilder(s);
     auto res = fm.consume(s, rebuilder);
     BOOST_REQUIRE(res.result);
-    const auto& rebuilt = *res.result;
-    BOOST_REQUIRE_EQUAL(rebuilt, m);
+    BOOST_REQUIRE_EQUAL(*res.result, m);
+    res = fm.consume_gently(s, rebuilder).get0();
+    BOOST_REQUIRE(res.result);
+    BOOST_REQUIRE_EQUAL(*res.result, m);
+
+    // consume_in_reverse::yes
+    auto rs = s->make_reversed();
+
+    // Consume non-frozen for comparison.
+    rebuilder = mutation_rebuilder_v2(rs);
+    auto nonfrozen_consume_result = mutation(um).consume(rebuilder, consume_in_reverse::yes);
+    BOOST_REQUIRE(nonfrozen_consume_result.result);
+
+    // Consume.
+    rebuilder = mutation_rebuilder_v2(rs);
+    auto frozen_consume_result = fm.consume(s, rebuilder, consume_in_reverse::yes);
+    BOOST_REQUIRE(frozen_consume_result.result);
+    BOOST_REQUIRE_EQUAL(*frozen_consume_result.result, *nonfrozen_consume_result.result);
+
+    // Consume gently.
+    rebuilder = mutation_rebuilder_v2(rs);
+    frozen_consume_result = fm.consume_gently(s, rebuilder, consume_in_reverse::yes).get();
+    BOOST_REQUIRE(frozen_consume_result.result);
+    BOOST_REQUIRE_EQUAL(*frozen_consume_result.result, *nonfrozen_consume_result.result);
 }
