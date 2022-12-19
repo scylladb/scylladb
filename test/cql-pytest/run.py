@@ -216,7 +216,9 @@ def run_scylla_cmd(pid, dir):
         '--skip-wait-for-gossip-to-settle', '0',
         '--logger-log-level', 'compaction=warn',
         '--logger-log-level', 'migration_manager=warn',
+        # Use lower settings for some parameters to allow faster testing
         '--num-tokens', '16',
+        '--query-tombstone-page-limit', '1000',
         # Significantly increase default timeouts to allow running tests
         # on a very slow setup (but without network losses). Note that these
         # are server-side timeouts: The client should also avoid timing out
