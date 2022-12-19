@@ -2137,9 +2137,6 @@ static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_
 
     for (const expression& arg : fun_call.args) {
         cql3::raw_value arg_val = evaluate(arg, inputs);
-        if (arg_val.is_null()) {
-            throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *scalar_fun));
-        }
 
         arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
     }
