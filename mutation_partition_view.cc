@@ -274,17 +274,24 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
     }
 }
 
+template <consume_in_reverse reverse>
+mutation_partition_view::accept_ordered_cookie<reverse>::rts_crs_iterators::rts_crs_iterators(ser::mutation_partition_view& mpv)
+    : rts(mpv.range_tombstones().to_forward<reverse==consume_in_reverse::no>())
+    , rts_begin(rts.cbegin())
+    , rts_end(rts.cend())
+    , crs(mpv.rows().to_forward<reverse==consume_in_reverse::no>())
+    , crs_begin(crs.cbegin())
+    , crs_end(crs.cend())
+{}
+
 template <bool is_preemptible, consume_in_reverse reverse>
-mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
-    // TODO: next patches will actually use the reverse parameter
+mutation_partition_view::accept_ordered_result<reverse> mutation_partition_view::do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie<reverse> cookie) const {
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
 
     if (!cookie.schema) {
         if constexpr (reverse == consume_in_reverse::yes) {
-            // FIXME: not yet
-            // cookie.schema = schema.make_reversed();
-            cookie.schema = schema.shared_from_this();
+            cookie.schema = schema.make_reversed();
         } else {
             cookie.schema = schema.shared_from_this();
         }
@@ -313,12 +320,7 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
     }
 
     if (!cookie.iterators) {
-        cookie.iterators.emplace(accept_ordered_cookie::rts_crs_iterators{
-            .rts_begin = mpv.range_tombstones().cbegin(),
-            .rts_end = mpv.range_tombstones().cend(),
-            .crs_begin = mpv.rows().cbegin(),
-            .crs_end = mpv.rows().cend(),
-        });
+        cookie.iterators.emplace(mpv);
     }
 
     auto rt_it = cookie.iterators->rts_begin;
@@ -357,6 +359,11 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
             return;
         }
         rt = *rt_it;
+        if constexpr (reverse != consume_in_reverse::no) {
+            if (rt) {
+                rt->reverse();
+            }
+        }
         ++rt_it;
     };
 
@@ -388,10 +395,10 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
         } else if (cr) {
             stop = consume_cr(std::move(*std::exchange(cr, std::nullopt)), std::move(*cr_key));
         } else {
-            return accept_ordered_result{stop_iteration::yes, accept_ordered_cookie{}};
+            return accept_ordered_result<reverse>{stop_iteration::yes, accept_ordered_cookie<reverse>{}};
         }
         if (stop || (is_preemptible && need_preempt())) {
-            return accept_ordered_result{stop, std::move(cookie)};
+            return accept_ordered_result<reverse>{stop, std::move(cookie)};
         }
     }
 }
@@ -421,10 +428,10 @@ void mutation_partition_view::accept(const column_mapping& cm, mutation_partitio
 void mutation_partition_view::accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, consume_in_reverse reverse) const {
     switch (reverse) {
     case consume_in_reverse::no:
-        do_accept_ordered<false, consume_in_reverse::no>(s, visitor, accept_ordered_cookie{});
+        do_accept_ordered<false, consume_in_reverse::no>(s, visitor, accept_ordered_cookie<consume_in_reverse::no>{});
         break;
     case consume_in_reverse::yes:
-        do_accept_ordered<false, consume_in_reverse::yes>(s, visitor, accept_ordered_cookie{});
+        do_accept_ordered<false, consume_in_reverse::yes>(s, visitor, accept_ordered_cookie<consume_in_reverse::yes>{});
         break;
     }
 }
@@ -432,7 +439,7 @@ void mutation_partition_view::accept_ordered(const schema& s, mutation_partition
 future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, consume_in_reverse reverse) const {
     switch (reverse) {
     case consume_in_reverse::no: {
-        accept_ordered_result res;
+        accept_ordered_result<consume_in_reverse::no> res;
         do {
             res = do_accept_ordered<true, consume_in_reverse::no>(s, visitor, std::move(res.cookie));
             co_await coroutine::maybe_yield();
@@ -440,7 +447,7 @@ future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutatio
         break;
     }
     case consume_in_reverse::yes: {
-        accept_ordered_result res;
+        accept_ordered_result<consume_in_reverse::yes> res;
         do {
             res = do_accept_ordered<true, consume_in_reverse::yes>(s, visitor, std::move(res.cookie));
             co_await coroutine::maybe_yield();

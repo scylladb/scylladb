@@ -301,7 +301,8 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
 
 template<FlattenedConsumerV2 Consumer>
 auto frozen_mutation::consume(schema_ptr s, Consumer& consumer, consume_in_reverse reverse) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
-    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+    schema_ptr ss = reverse == consume_in_reverse::yes ? s->make_reversed() : s;
+    frozen_mutation_consumer_adaptor adaptor(ss, consumer);
     return consume(s, adaptor, reverse);
 }
 
@@ -321,6 +322,7 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
 
 template<FlattenedConsumerV2 Consumer>
 auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer, consume_in_reverse reverse) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
-    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+    schema_ptr ss = reverse == consume_in_reverse::yes ? s->make_reversed() : s;
+    frozen_mutation_consumer_adaptor adaptor(ss, consumer);
     co_return co_await consume_gently(s, adaptor, reverse);
 }

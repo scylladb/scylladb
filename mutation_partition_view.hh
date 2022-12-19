@@ -66,27 +66,41 @@ private:
     requires MutationViewVisitor<Visitor>
     future<> do_accept_gently(const column_mapping&, Visitor& visitor) const;
 
+    template <consume_in_reverse reverse>
     struct accept_ordered_cookie {
         schema_ptr schema;
         bool accepted_partition_tombstone = false;
         bool accepted_static_row = false;
 
+        // We can read the range_tombstone_list in reverse order in consume_in_reverse::yes mode
+        // since we assume they are deoverlapped.
+        using rts_type = ser::vector_deserializer<ser::range_tombstone_view, reverse == consume_in_reverse::no>;
+        using rts_iterator_type = typename rts_type::const_iterator;
+        using crs_type = ser::vector_deserializer<ser::deletable_row_view, reverse == consume_in_reverse::no>;
+        using crs_iterator_type = typename crs_type::const_iterator;
+
         struct rts_crs_iterators {
-            ser::vector_deserializer<ser::range_tombstone_view>::const_iterator rts_begin;
-            ser::vector_deserializer<ser::range_tombstone_view>::const_iterator rts_end;
-            ser::vector_deserializer<ser::deletable_row_view>::const_iterator crs_begin;
-            ser::vector_deserializer<ser::deletable_row_view>::const_iterator crs_end;
+            rts_type rts;
+            rts_iterator_type rts_begin;
+            rts_iterator_type rts_end;
+
+            crs_type crs;
+            crs_iterator_type crs_begin;
+            crs_iterator_type crs_end;
+
+            rts_crs_iterators(ser::mutation_partition_view& mpv);
         };
         std::optional<rts_crs_iterators> iterators;
     };
 
+    template <consume_in_reverse reverse>
     struct accept_ordered_result {
         stop_iteration stop = stop_iteration::no;
-        accept_ordered_cookie cookie;
+        accept_ordered_cookie<reverse> cookie;
     };
 
     template <bool is_preemptible, consume_in_reverse reverse>
-    accept_ordered_result do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv, accept_ordered_cookie cookie) const;
+    accept_ordered_result<reverse> do_accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv, accept_ordered_cookie<reverse> cookie) const;
 
 public:
     static mutation_partition_view from_stream(utils::input_stream v) {
