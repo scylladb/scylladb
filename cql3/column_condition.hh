@@ -26,7 +26,7 @@ public:
     // E.g. if column type is list<string> and expression is "a = ['test']", then the type of the
     // column definition below is list<string>. If expression is "a[0] = 'test'", then the column
     // object stands for the string cell. See column_condition::raw::prepare() for details.
-    const column_definition& _column;
+    expr::expression _column;
 private:
     // For collection, when testing the equality of a specific element, nullopt otherwise.
     std::optional<expr::expression> _collection_element;
@@ -52,7 +52,7 @@ public:
     // Retrieve parameter marker values, if any, find the appropriate collection
     // element if the cell is a collection and an element access is used in the expression,
     // and evaluate the condition.
-    bool applies_to(const data_value* cell_value, const query_options& options) const;
+    bool applies_to(const expr::evaluation_inputs& inputs) const;
 
     /**
      * Helper constructor wrapper for

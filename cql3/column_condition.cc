@@ -90,12 +90,23 @@ namespace cql3 {
 column_condition::column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
     std::optional<expr::expression> value, std::vector<expr::expression> in_values,
     expr::oper_t op)
-        : _column(column)
+        : _column(expr::column_value{&column})
         , _collection_element(std::move(collection_element))
         , _value(std::move(value))
         , _in_values(std::move(in_values))
         , _op(op)
 {
+    // If a collection is multi-cell and not frozen, it is returned as a map even if the
+    // underlying data type is "set" or "list". This is controlled by
+    // partition_slice::collections_as_maps enum, which is set when preparing a read command
+    // object. Representing a list as a map<timeuuid, listval> is necessary to identify the list field
+    // being updated, e.g. in case of UPDATE t SET list[3] = null WHERE a = 1 IF list[3]
+    // = 'key'
+    //
+    // We adjust for it by reinterpreting the returned value as a list, since the map
+    // representation is not needed here.
+    _column = expr::adjust_for_collection_as_maps(_column);
+
     if (op == expr::oper_t::LIKE) {
         auto literal_term = _value ? expr::as_if<expr::constant>(&*_value) : nullptr;
         if (literal_term
@@ -124,7 +135,7 @@ void column_condition::collect_marker_specificaton(prepare_context& ctx) {
     }
 }
 
-bool column_condition::applies_to(const data_value* cell_value, const query_options& options) const {
+bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
 
     // Cassandra condition support has a few quirks:
     // - only a simple conjunct of predicates is supported "predicate AND predicate AND ..."
@@ -141,29 +152,28 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     //  An empty *multi-cell* set/map/list is identical to NULL.
     // The code below implements these rules in a way compatible with Cassandra.
 
+    auto cell_value_serialized = expr::evaluate(_column, inputs);
+    auto cell_value_object = cell_value_serialized.is_null()
+            ? data_value::make_null(type_of(_column))
+            : expr::type_of(_column)->deserialize(managed_bytes_view(std::move(cell_value_serialized).to_managed_bytes()));
+    const data_value* cell_value = cell_value_serialized ? &cell_value_object : nullptr;
+
     // Use a map/list value instead of entire collection if a key is present in the predicate.
     if (_collection_element.has_value() && cell_value != nullptr) {
         // Checked in column_condition::raw::prepare()
         assert(cell_value->type()->is_collection());
         const collection_type_impl& cell_type = static_cast<const collection_type_impl&>(*cell_value->type());
 
-        cql3::raw_value key_constant = expr::evaluate(*_collection_element, options);
+        cql3::raw_value key_constant = expr::evaluate(*_collection_element, inputs);
         cql3::raw_value_view key = key_constant.view();
         if (key.is_null()) {
             return false;
         }
         if (cell_type.is_map()) {
-            // If a collection is multi-cell and not frozen, it is returned as a map even if the
-            // underlying data type is "set" or "list". This is controlled by
-            // partition_slice::collections_as_maps enum, which is set when preparing a read command
-            // object. Representing a list as a map<timeuuid, listval> is necessary to identify the list field
-            // being updated, e.g. in case of UPDATE t SET list[3] = null WHERE a = 1 IF list[3]
-            // = 'key'
             const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
             // A map is serialized as a vector of data value pairs.
             const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(*cell_value);
-            if (_column.type->is_map()) {
-                // We're working with a map *type*, not only map *representation*.
+            if (type_of(_column)->is_map()) {
                 key.with_linearized([&map, &map_type, &cell_value] (bytes_view key) {
                     auto end = map.end();
                     const auto& map_key_type = *map_type.get_keys_type();
@@ -178,16 +188,11 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
                         cell_value = nullptr;
                     }
                 });
-            } else if (_column.type->is_list()) {
-                // We're working with a list type, represented as map.
-                uint32_t idx = read_and_check_list_index(key);
-                cell_value = idx >= map.size() ? nullptr : &map[idx].second;
             } else {
                 // Syntax like "set_column['key'] = constant" is invalid.
                 assert(false);
             }
         } else if (cell_type.is_list()) {
-            // This is a *frozen* list.
             const list_type_impl& list_type = static_cast<const list_type_impl&>(cell_type);
             const std::vector<data_value>& list = list_type.from_value(*cell_value);
             uint32_t idx = read_and_check_list_index(key);
@@ -199,7 +204,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     if (is_compare(_op)) {
         // <, >, >=, <=, !=
-        cql3::raw_value param = expr::evaluate(*_value, options);
+        cql3::raw_value param = expr::evaluate(*_value, inputs);
 
         if (param.is_null()) {
             if (_op == expr::oper_t::EQ) {
@@ -215,7 +220,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
         // type::validate() is called earlier when creating the value, so it's safe to pass to_bytes() result
         // directly to compare.
-        return is_satisfied_by(_op, *cell_value->type(), *_column.type, *cell_value, to_bytes(param.view()));
+        return is_satisfied_by(_op, *cell_value->type(), *type_of(_column), *cell_value, to_bytes(param.view()));
     }
 
     if (_op == expr::oper_t::LIKE) {
@@ -225,7 +230,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (_matcher) {
             return (*_matcher)(bytes_view(cell_value->serialize_nonnull()));
         } else {
-            auto param = expr::evaluate(*_value, options);  // LIKE pattern
+            auto param = expr::evaluate(*_value, inputs);  // LIKE pattern
             if (param.is_null()) {
                 return false;
             }
@@ -240,7 +245,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     std::vector<bytes_opt> in_values;
 
     if (_value.has_value()) {
-        cql3::raw_value lval = expr::evaluate(*_value, options);
+        cql3::raw_value lval = expr::evaluate(*_value, inputs);
         if (lval.is_null()) {
             return false;
         }
@@ -253,13 +258,13 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
     } else {
         for (auto&& v : _in_values) {
-            in_values.emplace_back(to_bytes_opt(expr::evaluate(v, options).view()));
+            in_values.emplace_back(to_bytes_opt(expr::evaluate(v, inputs).view()));
         }
     }
     // If cell value is NULL, IN list must contain NULL or an empty set/list. Otherwise it must contain cell value.
     if (cell_value) {
         return std::any_of(in_values.begin(), in_values.end(), [this, cell_value] (const bytes_opt& value) {
-            return value.has_value() && is_satisfied_by(expr::oper_t::EQ, *cell_value->type(), *_column.type, *cell_value, *value);
+            return value.has_value() && is_satisfied_by(expr::oper_t::EQ, *cell_value->type(), *type_of(_column), *cell_value, *value);
         });
     } else {
         return std::any_of(in_values.begin(), in_values.end(), [] (const bytes_opt& value) { return !value.has_value() || value->empty(); });

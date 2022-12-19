@@ -170,28 +170,25 @@ bool modification_statement::applies_to(const selection::selection* selection,
         return row == nullptr;
     }
 
+    // Fake out an all-null static_and_regular_columns if we didn't find a row
+    auto fake_static_and_regular_columns = std::vector<managed_bytes_opt>();
+    auto static_and_regular_columns = std::invoke([&] () -> const std::vector<managed_bytes_opt>* {
+        if (row) {
+            return &row->cells;
+        } else {
+            fake_static_and_regular_columns.resize(selection->get_column_count());
+            return &fake_static_and_regular_columns;
+        }
+    });
+
     auto inputs = expr::evaluation_inputs{
-        .static_and_regular_columns = row ? &row->cells : nullptr,
+        .static_and_regular_columns = static_and_regular_columns,
         .selection = selection,
+        .options = &options,
     };
 
-    auto condition_applies = [&row, &options, &inputs](const lw_shared_ptr<column_condition>& cond) {
-        data_value value_obj = data_value::make_null(cond->_column.type);
-        data_value* value = nullptr; // callee expects nullptr for NULL, so give it that
-        managed_bytes_opt val_opt;
-        if (row != nullptr) {
-            val_opt = expr::extract_column_value(&cond->_column, inputs);
-            if (val_opt) {
-                auto type = cond->_column.type;
-                if (type->is_listlike() && type->is_multi_cell()) {
-                    auto collection_type = static_cast<const collection_type_impl*>(type.get());
-                    type = map_type_impl::get_instance(collection_type->name_comparator(), collection_type->value_comparator(), true);
-                }
-                value_obj = type->deserialize(managed_bytes_view(*val_opt));
-                value = &value_obj;
-            }
-        }
-        return cond->applies_to(value, options);
+    auto condition_applies = [&row, &inputs](const lw_shared_ptr<column_condition>& cond) {
+        return cond->applies_to(inputs);
     };
     return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
             std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
@@ -362,10 +359,14 @@ void modification_statement::build_cas_result_set_metadata() {
         }
     } else {
         for (const auto& cond : _regular_conditions) {
-            _columns_of_cas_result_set.set(cond->_column.ordinal_id);
+            expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+                _columns_of_cas_result_set.set(col.col->ordinal_id);
+            });
         }
         for (const auto& cond : _static_conditions) {
-            _columns_of_cas_result_set.set(cond->_column.ordinal_id);
+            expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+                _columns_of_cas_result_set.set(col.col->ordinal_id);
+            });
         }
     }
     columns.reserve(columns.size() + all_columns.size());
@@ -614,14 +615,16 @@ bool modification_statement::is_conditional() const {
 }
 
 void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
-    if (cond->_column.is_static()) {
+  expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+    if (col.col->is_static()) {
         _has_static_column_conditions = true;
         _static_conditions.emplace_back(std::move(cond));
     } else {
         _has_regular_column_conditions = true;
-        _selects_a_collection |= cond->_column.type->is_collection();
+        _selects_a_collection |=  col.col->type->is_collection();
         _regular_conditions.emplace_back(std::move(cond));
     }
+  });
 }
 
 void modification_statement::set_if_not_exist_condition() {

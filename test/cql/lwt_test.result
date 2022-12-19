@@ -1740,9 +1740,17 @@ Error from server: code=2200 [Invalid query] message="Invalid null map key"
 | True        | [False] |
 +-------------+---------+
 > update lwt set c = [false] where a = 1 if c = [null];
-Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > update lwt set c = [false] where a = 1 if c = [null, true];
-Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > select c from lwt where a = 1;
 +---------+
 | c       |
