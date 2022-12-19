@@ -1083,7 +1083,9 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
                 for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
-                    co_await cm.perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                    co_await t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                        return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version);
+                    });
                 }
             }
         }).get();
@@ -1110,15 +1112,19 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
         for (auto i = 0; i < smp::count && !found; i++) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = in_strategy_sstables(cf.as_table_state());
-                if (sstables.empty()) {
-                    co_return false;
-                }
-                auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
-                testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
-                auto sst = sstables[idx];
-                co_await sst->move_to_quarantine();
-                co_return true;
+                bool found = false;
+                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        co_return;
+                    }
+                    auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                    testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
+                    auto sst = sstables[idx];
+                    co_await sst->move_to_quarantine();
+                    found |= true;
+                });
+                co_return found;
             });
         }
         BOOST_REQUIRE(found);
@@ -1155,20 +1161,22 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         for (auto i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = in_strategy_sstables(cf.as_table_state());
-                if (sstables.empty()) {
-                    co_return;
-                }
-                // collect all expected sstable data files
-                for (auto sst : sstables) {
-                    expected.insert(sst->component_basename(sstables::component_type::Data));
-                }
-                if (std::exchange(found, true)) {
-                    co_return;
-                }
-                auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
-                auto sst = sstables[idx];
-                co_await sst->move_to_quarantine();
+                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        co_return;
+                    }
+                    // collect all expected sstable data files
+                    for (auto sst : sstables) {
+                        expected.insert(sst->component_basename(sstables::component_type::Data));
+                    }
+                    if (std::exchange(found, true)) {
+                        co_return;
+                    }
+                    auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                    auto sst = sstables[idx];
+                    co_await sst->move_to_quarantine();
+                });
             });
         }
         BOOST_REQUIRE(found);
