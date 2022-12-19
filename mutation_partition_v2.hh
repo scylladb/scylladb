@@ -226,6 +226,12 @@ public:
     // Strong exception guarantees.
     void upgrade(const schema& old_schema, const schema& new_schema);
 
+    // Transforms this instance into a minimal one which still represents the same set of writes.
+    // Does not garbage collect expired data, so the result is clock-independent and
+    // should produce the same result on all replicas.
+    // has_redundant_dummies(*this) is guaranteed to be false after this.
+    void compact(const schema&, cache_tracker*);
+
     mutation_partition as_mutation_partition(const schema&) const;
 private:
     // Erases the entry if it's safe to do so without changing the logical state of the partition.
@@ -292,3 +298,7 @@ inline
 mutation_partition_v2& mutation_partition_v2::container_of(rows_type& rows) {
     return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition_v2::_rows);
 }
+
+// Returns true iff the mutation contains dummy rows which are redundant,
+// meaning that they can be removed without affecting the set of writes represented by the mutation.
+bool has_redundant_dummies(const mutation_partition_v2&);

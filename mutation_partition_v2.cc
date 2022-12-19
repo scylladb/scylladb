@@ -1166,3 +1166,42 @@ mutation_partition_v2::maybe_drop(const schema& s,
     del(&e);
     return next_i;
 }
+
+void mutation_partition_v2::compact(const schema& s, cache_tracker* tracker) {
+    mutation_application_stats stats;
+    auto i = _rows.begin();
+    rows_type::iterator prev_i;
+    while (i != _rows.end()) {
+        i->compact(s, _tombstone);
+        if (prev_i) {
+            // We cannot call maybe_drop() on i because the entry may become redundant
+            // only after the next entry is compacted, e.g. when next entry's range tombstone is dropped.
+            maybe_drop(s, tracker, prev_i, stats);
+        }
+        prev_i = i++;
+    }
+    if (prev_i) {
+        maybe_drop(s, tracker, prev_i, stats);
+    }
+}
+
+bool has_redundant_dummies(const mutation_partition_v2& p) {
+    bool last_dummy = false;
+    bool last_cont = false;
+    tombstone last_rt;
+    auto i = p.clustered_rows().begin();
+    while (i != p.clustered_rows().end()) {
+        const rows_entry& e = *i;
+        if (last_dummy) {
+            bool redundant = last_cont == bool(e.continuous()) && last_rt == e.range_tombstone();
+            if (redundant) {
+                return true;
+            }
+        }
+        last_dummy = bool(e.dummy());
+        last_rt = e.range_tombstone();
+        last_cont = bool(e.continuous());
+        ++i;
+    }
+    return false;
+}
