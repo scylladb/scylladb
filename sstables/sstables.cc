@@ -1373,25 +1373,25 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data() noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data();
-        if (_shards.empty()) {
-            _shards = compute_shards_for_this_sstable();
-        }
-        auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
-        if (sm) {
-            // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
-            co_await utils::clear_gently(sm->token_ranges.elements);
-                sm->token_ranges.elements = {};
-        }
-        auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
-        if (ld_stats) {
-            _large_data_stats.emplace(*ld_stats);
-        }
-        auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
-        if (origin) {
-            _origin = sstring(to_sstring_view(bytes_view(origin->value)));
-        }
-        _open_mode.emplace(open_flags::ro);
-        _stats.on_open_for_reading();
+    if (_shards.empty()) {
+        _shards = compute_shards_for_this_sstable();
+    }
+    auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
+    if (sm) {
+        // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
+        co_await utils::clear_gently(sm->token_ranges.elements);
+        sm->token_ranges.elements = {};
+    }
+    auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
+    if (ld_stats) {
+        _large_data_stats.emplace(*ld_stats);
+    }
+    auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
+    if (origin) {
+        _origin = sstring(to_sstring_view(bytes_view(origin->value)));
+    }
+    _open_mode.emplace(open_flags::ro);
+    _stats.on_open_for_reading();
 }
 
 future<> sstable::update_info_for_opened_data() {
@@ -1497,20 +1497,20 @@ void sstable::write_filter(const io_priority_class& pc) {
 // No need to set tunable priorities for it.
 future<> sstable::load(const io_priority_class& pc) noexcept {
     co_await read_toc();
-        // read scylla-meta after toc. Might need it to parse
-        // rest (hint extensions)
-        co_await read_scylla_metadata(pc);
-            // Read statistics ahead of others - if summary is missing
-            // we'll attempt to re-generate it and we need statistics for that
-            co_await read_statistics(pc);
-                co_await coroutine::all(
-                        [&] { return read_compression(pc); },
-                        [&] { return read_filter(pc); },
-                        [&] { return read_summary(pc); });
-                            validate_min_max_metadata();
-                            validate_max_local_deletion_time();
-                            validate_partitioner();
-                            co_await open_data();
+    // read scylla-meta after toc. Might need it to parse
+    // rest (hint extensions)
+    co_await read_scylla_metadata(pc);
+    // Read statistics ahead of others - if summary is missing
+    // we'll attempt to re-generate it and we need statistics for that
+    co_await read_statistics(pc);
+    co_await coroutine::all(
+            [&] { return read_compression(pc); },
+            [&] { return read_filter(pc); },
+            [&] { return read_summary(pc); });
+    validate_min_max_metadata();
+    validate_max_local_deletion_time();
+    validate_partitioner();
+    co_await open_data();
 }
 
 future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
