@@ -2211,22 +2211,11 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     auto compaction_state = consumer.get_state();
     const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
 
-    // FIXME: frozen_mutation::consume supports only forward consumers
-    if (reverse == consume_in_reverse::no) {
-        frozen_mutation_consumer_adaptor adaptor(s, consumer);
-        for (const partition& p : r.partitions()) {
-            const auto res = co_await p.mut().consume_gently(s, adaptor);
-            if (res.stop == stop_iteration::yes) {
-                break;
-            }
-        }
-    } else {
-        for (const partition& p : r.partitions()) {
-            auto m = co_await p.mut().unfreeze_gently(s);
-            const auto res = co_await std::move(m).consume_gently(consumer, reverse);
-            if (res.stop == stop_iteration::yes) {
-                break;
-            }
+    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+    for (const partition& p : r.partitions()) {
+        const auto res = co_await p.mut().consume_gently(s, adaptor, reverse);
+        if (res.stop == stop_iteration::yes) {
+            break;
         }
     }
     if (r.is_short_read()) {
