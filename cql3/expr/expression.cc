@@ -164,21 +164,14 @@ managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& in
 
 managed_bytes_opt
 get_value(const subscript& s, const evaluation_inputs& inputs) {
-    const column_definition* cdef = get_subscripted_column(s).col;
-
-    auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-    int32_t index = inputs.selection->index_of(*cdef);
-    if (index == -1) {
-        throw std::runtime_error(
-                format("Column definition {} does not match any column in the query selection",
-                cdef->name_as_text()));
-    }
-    const managed_bytes_opt& serialized = (*inputs.static_and_regular_columns)[index];
+    raw_value container_val = evaluate(s.val, inputs);
+    auto serialized = std::move(container_val).to_managed_bytes_opt();
     if (!serialized) {
         // For null[i] we return null.
         return std::nullopt;
     }
-    const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
+    auto col_type = static_pointer_cast<const collection_type_impl>(type_of(s.val));
+    const auto deserialized = type_of(s.val)->deserialize(managed_bytes_view(*serialized));
     const auto key = evaluate(s.sub, inputs);
     auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
     if (key.is_null()) {
@@ -212,7 +205,7 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
         }
         return managed_bytes_opt(data_list[key_int].serialize_nonnull());
     } else {
-        throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
+        throw exceptions::invalid_request_exception(fmt::format("subscripting non-map, non-list column {:user}", s.val));
     }
 }
 
