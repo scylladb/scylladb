@@ -1370,9 +1370,9 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
     ).discard_result();
 }
 
-future<> sstable::open_data() noexcept {
+future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
-    co_await update_info_for_opened_data();
+    co_await update_info_for_opened_data(cfg);
     if (_shards.empty()) {
         _shards = compute_shards_for_this_sstable();
     }
@@ -1394,7 +1394,7 @@ future<> sstable::open_data() noexcept {
     _stats.on_open_for_reading();
 }
 
-future<> sstable::update_info_for_opened_data() {
+future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     struct stat st = co_await _data_file.stat();
 
     if (this->has_component(component_type::CompressionInfo)) {
@@ -1444,7 +1444,9 @@ future<> sstable::update_info_for_opened_data() {
         }));
         _bytes_on_disk += bytes;
     }
-    co_await load_first_and_last_position_in_partition();
+    if (cfg.load_first_and_last_position_metadata) {
+        co_await load_first_and_last_position_in_partition();
+    }
 }
 
 future<> sstable::create_data() noexcept {
@@ -1495,7 +1497,7 @@ void sstable::write_filter(const io_priority_class& pc) {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load(const io_priority_class& pc) noexcept {
+future<> sstable::load(const io_priority_class& pc, sstable_open_config cfg) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -1510,7 +1512,7 @@ future<> sstable::load(const io_priority_class& pc) noexcept {
     validate_min_max_metadata();
     validate_max_local_deletion_time();
     validate_partitioner();
-    co_await open_data();
+    co_await open_data(cfg);
 }
 
 future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {

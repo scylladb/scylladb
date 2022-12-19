@@ -130,6 +130,15 @@ constexpr auto table_subdirectories = std::to_array({
 
 constexpr const char* repair_origin = "repair";
 
+struct sstable_open_config {
+    // Load the first and last position in partition, populating the
+    // `_first_partition_first_position` and `_last_partition_last_position`
+    // fields respectively. Problematic sstables might fail to load. Set to
+    // false if you want to disable this, to be able to read such sstables.
+    // Should only be disabled for diagnostics purposes.
+    bool load_first_and_last_position_metadata = true;
+};
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
@@ -186,9 +195,9 @@ public:
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(const io_priority_class& pc = default_priority_class()) noexcept;
-    future<> open_data() noexcept;
-    future<> update_info_for_opened_data();
+    future<> load(const io_priority_class& pc = default_priority_class(), sstable_open_config cfg = {}) noexcept;
+    future<> open_data(sstable_open_config cfg = {}) noexcept;
+    future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
     class delayed_commit_changes {
         std::unordered_set<sstring> _dirs;
