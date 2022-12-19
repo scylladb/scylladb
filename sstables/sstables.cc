@@ -1371,22 +1371,17 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 }
 
 future<> sstable::open_data() noexcept {
-    return open_or_create_data(open_flags::ro).then([this] {
-        return this->update_info_for_opened_data();
-    }).then([this] {
+    co_await open_or_create_data(open_flags::ro);
+    co_await update_info_for_opened_data();
         if (_shards.empty()) {
             _shards = compute_shards_for_this_sstable();
         }
         auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
         if (sm) {
             // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
-            return utils::clear_gently(sm->token_ranges.elements).then([sm] {
+            co_await utils::clear_gently(sm->token_ranges.elements);
                 sm->token_ranges.elements = {};
-            });
-        } else {
-            return make_ready_future<>();
         }
-    }).then([this] {
         auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
         if (ld_stats) {
             _large_data_stats.emplace(*ld_stats);
@@ -1395,10 +1390,8 @@ future<> sstable::open_data() noexcept {
         if (origin) {
             _origin = sstring(to_sstring_view(bytes_view(origin->value)));
         }
-    }).then([this] {
         _open_mode.emplace(open_flags::ro);
         _stats.on_open_for_reading();
-    });
 }
 
 future<> sstable::update_info_for_opened_data() {
