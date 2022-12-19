@@ -60,6 +60,7 @@
 #include "utils/bloom_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/cached_file.hh"
+#include "utils/stall_free.hh"
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
 #include "db/extensions.hh"
@@ -1377,18 +1378,14 @@ future<> sstable::open_data() noexcept {
             _shards = compute_shards_for_this_sstable();
         }
         auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
-        if (!sm) {
+        if (sm) {
+            // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
+            return utils::clear_gently(sm->token_ranges.elements).then([sm] {
+                sm->token_ranges.elements = {};
+            });
+        } else {
             return make_ready_future<>();
         }
-        auto c = &sm->token_ranges.elements;
-        // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
-        return do_until([c] { return c->empty(); }, [c] {
-            c->pop_back();
-            return make_ready_future<>();
-        }).then([this, c] () mutable {
-            *c = {};
-            return make_ready_future<>();
-        });
     }).then([this] {
         auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
         if (ld_stats) {
