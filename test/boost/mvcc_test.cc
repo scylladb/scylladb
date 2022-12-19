@@ -1358,7 +1358,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
         logalloc::region r;
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         failure_injecting_allocation_strategy alloc(r.allocator());
-        with_allocator(r.allocator(), [&] {
+        with_allocator(alloc, [&] {
             auto target = gen();
             auto second = gen();
             target.partition().make_fully_continuous();
