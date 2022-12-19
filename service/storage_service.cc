@@ -2887,7 +2887,7 @@ future<> storage_service::unbootstrap() {
 
         set_mode(mode::LEAVING);
 
-        auto stream_success = stream_ranges(ranges_to_stream);
+        auto stream_success = stream_ranges(std::move(ranges_to_stream));
 
         // wait for the transfer runnables to signal the latch.
         slogger.debug("waiting for stream acks.");
@@ -3086,7 +3086,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -3100,15 +3100,18 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             dht::token_range r = end_point_entry.first;
             inet_address endpoint = end_point_entry.second;
             ranges_per_endpoint[endpoint].emplace_back(r);
+            co_await coroutine::maybe_yield();
         }
-        streamer->add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
+        streamer.add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
     }
-    return streamer->stream_async().then([streamer] {
+    try {
+        co_await streamer.stream_async();
         slogger.info("stream_ranges successful");
-    }).handle_exception([] (auto ep) {
+    } catch (...) {
+        auto ep = std::current_exception();
         slogger.warn("stream_ranges failed: {}", ep);
-        return make_exception_future<>(std::move(ep));
-    });
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<> storage_service::start_leaving() {
