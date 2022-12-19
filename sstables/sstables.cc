@@ -22,6 +22,7 @@
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/coroutine/all.hh>
 #include <seastar/util/file.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -1505,25 +1506,21 @@ void sstable::write_filter(const io_priority_class& pc) {
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
 future<> sstable::load(const io_priority_class& pc) noexcept {
-    return read_toc().then([this, &pc] {
+    co_await read_toc();
         // read scylla-meta after toc. Might need it to parse
         // rest (hint extensions)
-        return read_scylla_metadata(pc).then([this, &pc] {
+        co_await read_scylla_metadata(pc);
             // Read statistics ahead of others - if summary is missing
             // we'll attempt to re-generate it and we need statistics for that
-            return read_statistics(pc).then([this, &pc] {
-                return seastar::when_all_succeed(
-                        read_compression(pc),
-                        read_filter(pc),
-                        read_summary(pc)).then_unpack([this] {
+            co_await read_statistics(pc);
+                co_await coroutine::all(
+                        [&] { return read_compression(pc); },
+                        [&] { return read_filter(pc); },
+                        [&] { return read_summary(pc); });
                             validate_min_max_metadata();
                             validate_max_local_deletion_time();
                             validate_partitioner();
-                            return open_data();
-                        });
-            });
-        });
-    });
+                            co_await open_data();
 }
 
 future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
