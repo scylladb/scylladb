@@ -14,6 +14,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 #include "utils/s3/client.hh"
 
 /*
@@ -52,5 +53,55 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), std::runtime_error, seastar::testing::exception_predicate::message_contains("404 Not Found"));
 
     testlog.info("Closing\n");
+    cln->close().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
+    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
+    const sstring name(fmt::format("/testbucket/testlargeobject-{}", ::getpid()));
+
+    testlog.info("Make client\n");
+    auto cln = s3::client::make(s3_server);
+
+    testlog.info("Upload object\n");
+    auto out = output_stream<char>(cln->make_upload_sink(name));
+
+    static constexpr unsigned chunk_size = 1024;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    uint64_t object_size = 0;
+    for (unsigned ch = 0; ch < 128 * 1024; ch++) {
+        out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+        object_size += rnd.size();
+    }
+
+    testlog.info("Flush multipart upload\n");
+    out.flush().get();
+
+    testlog.info("Closing\n");
+    out.close().get();
+
+    testlog.info("Checking file size\n");
+    size_t sz = cln->get_object_size(name).get0();
+    BOOST_REQUIRE_EQUAL(sz, object_size);
+
+    testlog.info("Checking correctness\n");
+    for (int samples = 0; samples < 7; samples++) {
+        uint64_t len = tests::random::get_int(1u, chunk_size);
+        uint64_t off = tests::random::get_int(object_size) - len;
+
+        auto s_buf = cln->get_object_contiguous(name, s3::range{ off, len }).get0();
+        unsigned align = off % chunk_size;
+        testlog.info("Got [{}:{}) chunk\n", off, len);
+        testlog.info("Checking {} vs {} len {}\n", align, 0, std::min<uint64_t>(chunk_size - align, len));
+        BOOST_REQUIRE_EQUAL(memcmp(rnd.begin() + align, s_buf.get(), std::min<uint64_t>(chunk_size - align, len)), 0);
+        if (len > chunk_size - align) {
+            testlog.info("Checking {} vs {} len {}\n", 0, chunk_size - align, len - (chunk_size - align));
+            BOOST_REQUIRE_EQUAL(memcmp(rnd.begin(), s_buf.get() + (chunk_size - align), len - (chunk_size - align)), 0);
+        }
+    }
+
+    testlog.info("Delete object\n");
+    cln->delete_object(name).get();
+
     cln->close().get();
 }

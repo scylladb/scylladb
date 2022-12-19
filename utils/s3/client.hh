@@ -21,6 +21,7 @@ struct range {
 };
 
 class client : public enable_shared_from_this<client> {
+    class upload_sink;
     socket_address _addr;
     sstring _host;
     http::experimental::client _http;
@@ -36,6 +37,8 @@ public:
     future<> put_object(sstring object_name, temporary_buffer<char> buf);
     future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs);
     future<> delete_object(sstring object_name);
+
+    data_sink make_upload_sink(sstring object_name);
 
     future<> close();
 };
