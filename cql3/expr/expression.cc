@@ -1517,9 +1517,9 @@ expression search_and_replace(const expression& e,
                 [&] (const subscript& s) -> expression {
                     return subscript {
                         .val = recurse(s.val),
-                        .sub = recurse(s.sub)
+                        .sub = recurse(s.sub),
+                        .type = s.type,
                     };
-                    throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
                 },
                 [&](const token& tok) -> expression {
                     return token {
