@@ -159,4 +159,7 @@ def test_sstable_summary(gdb, sstable):
 def test_read_stats(gdb, sstable):
     scylla(gdb, f'read-stats')
 
+def test_get_config_value(gdb):
+    scylla(gdb, f'get-config-value compaction_static_shares')
+
 # FIXME: need a simple test for lsa-segment

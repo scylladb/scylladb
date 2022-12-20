@@ -5174,6 +5174,48 @@ class scylla_read_stats(gdb.Command):
             scylla_read_stats.dump_reads_from_semaphore(semaphore)
 
 
+class scylla_get_config_value(gdb.Command):
+    """Obtain the config item and print its value and metadata
+
+    Example:
+        (gdb) scylla get-config-value compaction_static_shares
+        value: 100, type: "float", source: SettingsFile, status: Used, live: MustRestart
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla get-config-value', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, cfg_item_name, from_tty):
+        shard_id = current_shard()
+        db = find_db(shard_id)
+        cfg = db['_cfg']
+        try:
+            cfg_item = cfg[cfg_item_name]
+        except gdb.error:
+            gdb.write("Failed to obtain config item with name {}: {}\n".format(cfg_item_name, sys.exc_info()[1]))
+            return
+
+        cfg_type = cfg_item['_type']
+        cfg_src = cfg_item['_source']
+        cfg_status = cfg_item['_value_status']
+        cfg_liveness = cfg_item['_liveness']
+        cfg_value = std_vector(cfg_item['_cf']['_per_shard_values'])[shard_id]
+        cfg_value = std_vector(cfg_value)[int(cfg_item['_per_shard_values_offset'])]
+        cfg_value = std_unique_ptr(cfg_value).get()
+        cfg_value = downcast_vptr(cfg_value)['value']['_value']
+
+        def unqualify(name):
+            name = str(name)
+            return name.split('::')[-1]
+
+        gdb.write("value: {}, type: {}, source: {}, status: {}, live: {}\n".format(
+            cfg_value,
+            cfg_type['_name'],
+            unqualify(cfg_src),
+            unqualify(cfg_status),
+            unqualify(cfg_liveness)))
+
+
 class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
     """Dereference the pointer guarded by the smart pointer instance.
 
@@ -5464,6 +5506,7 @@ scylla_small_objects()
 scylla_compaction_tasks()
 scylla_schema()
 scylla_read_stats()
+scylla_get_config_value()
 
 
 # Convenience functions
