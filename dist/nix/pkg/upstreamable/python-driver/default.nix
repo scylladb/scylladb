@@ -6,7 +6,7 @@
 }:
 
 let
-  version = "3.25.4-scylla";
+  version = "3.25.10-scylla";
 in python3Packages.buildPythonPackage {
   pname = "scylla-driver";
   inherit version;
@@ -16,14 +16,15 @@ in python3Packages.buildPythonPackage {
     owner = "scylladb";
     repo = "python-driver";
     rev = version;
-    sha256 = "sha256-LIPZ4sY/wrhmy+kpFUwBvgvbJoXanQLkzMd5Iv0X2mc=";
+    sha256 = "sha256-ib1XZPLcg5lCMfbUhDwjB968HYtGjt559JX5fxDADQc=";
   };
 
   postPatch = ''
     substituteInPlace setup.py --replace 'geomet>=0.1,<0.3' 'geomet'
+    substituteInPlace setup.py --replace 'cython>=0.20,<0.30' 'cython'
   '';
 
-  nativeBuildInputs = with python3Packages; [ cython ];
+  nativeBuildInputs = with python3Packages; [ cython pyyaml ];
   buildInputs = [ libev ];
   propagatedBuildInputs = with python3Packages; [ six geomet ];
 
