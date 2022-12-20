@@ -55,8 +55,15 @@ static clustering_key make_ck(int value) {
     return clustering_key_prefix::from_single_value(*SCHEMA, int32_type->decompose(value));
 }
 
+static api::timestamp_type new_timestamp() {
+    static thread_local api::timestamp_type last_timestamp = api::min_timestamp;
+    auto t = std::max(api::new_timestamp(), last_timestamp + 1);
+    last_timestamp = t;
+    return t;
+}
+
 static void add_row(mutation& m, int ck, int value) {
-    m.set_clustered_cell(make_ck(ck), "v", data_value(value), api::new_timestamp());
+    m.set_clustered_cell(make_ck(ck), "v", data_value(value), new_timestamp());
 }
 
 static void add_tombstone(mutation& m, range_tombstone rt) {
@@ -1270,7 +1277,7 @@ SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous4) {
  */
 
 static tombstone new_tombstone() {
-    return tombstone(api::new_timestamp(), gc_clock::now());
+    return tombstone(new_timestamp(), gc_clock::now());
 }
 
 SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
