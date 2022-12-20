@@ -59,6 +59,59 @@ def get_field_offset(gdb_type, name):
             return int(field.bitpos / 8)
 
 
+# Defer initialization to first use
+# Don't prevent loading `scylla-gdb.py` due to any problem in the init code.
+vtable_symbol_pattern = None
+vptr_type = None
+
+def _check_vptr(ptr):
+    global vtable_symbol_pattern
+    global vptr_type
+    symbol_name = resolve(ptr.reinterpret_cast(vptr_type).dereference(), startswith='vtable for ')
+    if symbol_name is None:
+        raise ValueError("Failed to resolve first word of virtual object @ {} as a vtable symbol".format(int(ptr)))
+
+    m = re.match(vtable_symbol_pattern, symbol_name)
+    if m is None:
+        raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
+
+    return m
+
+def downcast_vptr(ptr):
+    global vtable_symbol_pattern
+    global vptr_type
+    if vtable_symbol_pattern is None:
+        vtable_symbol_pattern = re.compile('vtable for (.*) \+ ([0-9]+).*')
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+    if not isinstance(ptr, gdb.Value):
+        ptr = gdb.parse_and_eval(ptr)
+
+    m = _check_vptr(ptr)
+
+    actual_type = gdb.lookup_type(m.group(1))
+    actual_type_ptr = actual_type.pointer()
+
+    if int(m.group(2)) == 16:
+        return ptr.reinterpret_cast(actual_type_ptr)
+
+    # We are most likely dealing with multiple inheritance and a pointer to a
+    # non-first base-class type.
+    base_class_field = actual_type.fields()[0]
+    assert(base_class_field.is_base_class)
+    base_classes = list(base_class_field.type.fields())
+
+    # The pointer is surely not to the first base-class, we would have found
+    # the expected m.group(2) == 16 offset otherwise.
+    for bc in base_classes[1:]:
+        speculative_ptr = gdb.Value(int(ptr) - int(bc.bitpos / 8))
+        m = _check_vptr(speculative_ptr)
+        if int(m.group(2)) == 16:
+            return speculative_ptr.reinterpret_cast(actual_type_ptr)
+
+    return None
+
+
 class intrusive_list:
     size_t = gdb.lookup_type('size_t')
 
@@ -5197,47 +5250,9 @@ class scylla_gdb_func_downcast_vptr(gdb.Function):
 
     def __init__(self):
         super(scylla_gdb_func_downcast_vptr, self).__init__('downcast_vptr')
-        self._symbol_pattern = re.compile('vtable for (.*) \+ ([0-9]+).*')
-        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
-
-    def _check_vptr(self, ptr):
-        symbol_name = resolve(ptr.reinterpret_cast(self._vptr_type).dereference(), startswith='vtable for ')
-        if symbol_name is None:
-            raise ValueError("Failed to resolve first word of virtual object @ {} as a vtable symbol".format(int(ptr)))
-
-        m = re.match(self._symbol_pattern, symbol_name)
-        if m is None:
-            raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
-
-        return m
 
     def invoke(self, ptr):
-        if not isinstance(ptr, gdb.Value):
-            ptr = gdb.parse_and_eval(ptr)
-
-        m = self._check_vptr(ptr)
-
-        actual_type = gdb.lookup_type(m.group(1))
-        actual_type_ptr = actual_type.pointer()
-
-        if int(m.group(2)) == 16:
-            return ptr.reinterpret_cast(actual_type_ptr)
-
-        # We are most likely dealing with multiple inheritance and a pointer to a
-        # non-first base-class type.
-        base_class_field = actual_type.fields()[0]
-        assert(base_class_field.is_base_class)
-        base_classes = list(base_class_field.type.fields())
-
-        # The pointer is surely not to the first base-class, we would have found
-        # the expected m.group(2) == 16 offset otherwise.
-        for bc in base_classes[1:]:
-            speculative_ptr = gdb.Value(int(ptr) - int(bc.bitpos / 8))
-            m = self._check_vptr(speculative_ptr)
-            if int(m.group(2)) == 16:
-                return speculative_ptr.reinterpret_cast(actual_type_ptr)
-
-        return None
+        return downcast_vptr(ptr)
 
 class reference_wrapper:
     def __init__(self, ref):
