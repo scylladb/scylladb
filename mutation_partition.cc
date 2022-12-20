@@ -2209,7 +2209,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     auto consumer = compact_for_query_v2<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
     auto compaction_state = consumer.get_state();
-    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
+    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
 
     // FIXME: frozen_mutation::consume supports only forward consumers
     if (reverse == consume_in_reverse::no) {
