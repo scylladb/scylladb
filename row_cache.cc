@@ -1228,6 +1228,10 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // so don't remove it, just unlink from the LRU.
         // That dummy is linked in the LRU, because there may be partitions
         // with no regular rows, and we need to track them.
+
+        // We still need to break continuity in order to preserve the "older versions are evicted first"
+        // invariant.
+        it->set_continuous(false);
     } else {
         // When evicting a dummy with both sides continuous we don't need to break continuity.
         //
