@@ -200,7 +200,7 @@ def linker_flags(compiler):
 
 
 def maybe_static(flag, libs):
-    if flag and not args.static:
+    if flag:
         libs = '-Wl,-Bstatic {} -Wl,-Bdynamic'.format(libs)
     return libs
 
@@ -574,13 +574,6 @@ all_artifacts = apps | tests | other
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
                         help='Output build-file name (by default build.ninja)')
-arg_parser.add_argument('--static', dest='static', action='store_const', default='',
-                        const='-static',
-                        help='Static link (useful for running on hosts outside the build environment')
-arg_parser.add_argument('--pie', dest='pie', action='store_true',
-                        help='Build position-independent executable (PIE)')
-arg_parser.add_argument('--so', dest='so', action='store_true',
-                        help='Build shared object (SO) instead of executable')
 arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes',
                         help="Build modes to generate ninja files for. The available build modes are:\n{}".format("; ".join(["{} - {}".format(m, cfg['description']) for m, cfg in modes.items()])))
 arg_parser.add_argument('--with', dest='artifacts', action='append', default=[],
@@ -1430,16 +1423,6 @@ perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 # Strip if debuginfo is disabled, otherwise we end up with partial
 # debug info from the libraries we static link with
 regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
-
-if args.so:
-    args.pie = '-shared'
-    args.fpie = '-fpic'
-elif args.pie:
-    args.pie = '-pie'
-    args.fpie = '-fpie'
-else:
-    args.pie = ''
-    args.fpie = ''
 
 # a list element means a list of alternative packages to consider
 # the first element becomes the HAVE_pkg define
