@@ -1238,6 +1238,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
+    cfg.x_log2_compaction_groups = db_config.x_log2_compaction_groups();
 
     return cfg;
 }
@@ -2335,10 +2336,14 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
             st->cres.reserve(1 + cf.views().size());
             auto& db = sharded_db.local();
             auto& cm = db.get_compaction_manager();
-            st->cres.emplace_back(co_await cm.stop_and_disable_compaction(cf.as_table_state()));
+            co_await cf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
+                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+            });
             co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
                 auto& vcf = db.find_column_family(v);
-                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(vcf.as_table_state()));
+                co_await vcf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
+                    st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+                });
             });
 
             co_return make_foreign(std::move(st));

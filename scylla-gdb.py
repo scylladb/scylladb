@@ -4192,18 +4192,30 @@ class scylla_memtables(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memtables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
+    @staticmethod
+    def dump_memtable_list(memtable_list):
+        region_ptr_type = gdb.lookup_type('logalloc::region').pointer()
+        for mt_ptr in std_vector(memtable_list['_memtables']):
+            mt = seastar_lw_shared_ptr(mt_ptr).get()
+            reg = lsa_region(mt.cast(region_ptr_type))
+            gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
+
+    @staticmethod
+    def dump_compaction_group_memtables(compaction_group):
+        scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(compaction_group['_memtables']).get())
+
     def invoke(self, arg, from_tty):
         db = find_db()
-        region_ptr_type = gdb.lookup_type('logalloc::region').pointer()
         for table in all_tables(db):
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
-            compaction_group = std_unique_ptr(table["_compaction_group"]).get()
-            memtable_list = seastar_lw_shared_ptr(compaction_group['_memtables']).get()
-            for mt_ptr in std_vector(memtable_list['_memtables']):
-                mt = seastar_lw_shared_ptr(mt_ptr).get()
-                reg = lsa_region(mt.cast(region_ptr_type))
-                gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
-
+            try:
+                for cg_ptr in std_vector(table["_compaction_groups"]):
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
+            except gdb.error:
+                try:
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
+                except gdb.error:
+                    scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
 
 def escape_html(s):
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')

@@ -754,7 +754,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
                 co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
-                    return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                    return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                        return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version);
+                    });
                 });
             });
         } catch (...) {
@@ -1520,10 +1522,15 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         try {
             auto opt_stats = co_await db.map_reduce0([&] (replica::database& db) {
-                return map_reduce(column_families, [&] (sstring cfname) {
+                return map_reduce(column_families, [&] (sstring cfname) -> future<std::optional<sstables::compaction_stats>> {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(cf.as_table_state(), opts);
+                    sstables::compaction_stats stats{};
+                    co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
+                        auto r = co_await cm.perform_sstable_scrub(ts, opts);
+                        stats += r.value_or(sstables::compaction_stats{});
+                    });
+                    co_return stats;
                 }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
             }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
             if (opt_stats && opt_stats->validation_errors) {

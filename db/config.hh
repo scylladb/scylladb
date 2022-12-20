@@ -389,6 +389,8 @@ public:
 
     named_value<bool> cache_index_pages;
 
+    named_value<unsigned> x_log2_compaction_groups;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;

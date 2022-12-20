@@ -10,6 +10,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/file.hh>
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -67,10 +68,23 @@ static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id 
     });
 }
 
+future<> do_with_cql_env_and_compaction_groups(std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
+    std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 1 /* 2 CGs */, 8 /* 256 CGs */ };
+    for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
+        // clean the dir before running
+        if (cfg.db_config->data_file_directories.is_set()) {
+            co_await recursive_remove_directory(fs::path(cfg.db_config->data_file_directories()[0]));
+            co_await recursive_touch_directory(cfg.db_config->data_file_directories()[0]);
+        }
+        cfg.db_config->x_log2_compaction_groups(x_log2_compaction_groups);
+        co_await do_with_cql_env_thread(func, cfg, thread_attr);
+    }
+}
+
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return do_with_cql_env_and_compaction_groups([](cql_test_env& e) {
         e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
         auto& db = e.local_db();
         sstring ks_name = "ks";
@@ -130,7 +144,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
 SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         sstring ks_name = "ks";
         sstring cf_name = "cf";
         e.execute_cql(fmt::format("create table {}.{} (k text, v int, primary key (k));", ks_name, cf_name)).get();
@@ -165,8 +179,8 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
 }
 
 SEASTAR_TEST_CASE(test_querying_with_limits) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&] {
+    return do_with_cql_env_and_compaction_groups([](cql_test_env& e) {
+            // FIXME: restore indent.
             e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
@@ -229,12 +243,11 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                     assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
                 }).get();
             }
-        });
     });
 }
 
 static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
-    do_with_cql_env_thread([run_tests] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([run_tests] (cql_test_env& e) {
         run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             auto& mm = e.migration_manager().local();
             try {
@@ -321,7 +334,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     temp_file_name = sst::filename(sst_dir, ks, cf, sst::version_types::mc, generation_from_value(4), sst::format_types::big, component_type::Data);
     touch_file(temp_file_name);
 
-    do_with_cql_env_thread([&sst_dir, &ks, &cf, &require_exist, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([&sst_dir, &ks, &cf, &require_exist, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
         require_exist(temp_sst_dir_2, false);
         require_exist(temp_sst_dir_3, false);
 
@@ -420,7 +433,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
                component_basename(7, component_type::TOC) + "\n" +
                component_basename(8, component_type::TOC) + "\n");
 
-    do_with_cql_env_thread([&] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([&] (cql_test_env& e) {
         // Empty log file
         require_exist(pending_delete_dir + "/sstables-0-0.log", false);
 
@@ -459,7 +472,7 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
             db_cfg_ptr = make_shared<db::config>();
             db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        do_with_cql_env_thread([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
+        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
                     return *schema_builder(ks_name, cf_name)
@@ -818,7 +831,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
 
 // toppartitions_query caused a lw_shared_ptr to cross shards when moving results, #5104
 SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE ks.tab (id int PRIMARY KEY)").get();
         db::toppartitions_query tq(e.db(), {{"ks", "tab"}}, {}, 1s, 100, 100);
         tq.scatter().get();
@@ -833,7 +846,7 @@ SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
 }
 
 SEASTAR_THREAD_TEST_CASE(read_max_size) {
-    do_with_cql_env_thread([] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk text, ck int, v text, PRIMARY KEY (pk, ck));").get();
         auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
 
@@ -923,7 +936,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
     // configured based on the available memory, so give a small amount to
     // the "node", so we don't have to work with large amount of data.
     cfg.dbcfg->available_memory = 2 * 1024 * 1024;
-    do_with_cql_env_thread([] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk text, ck int, v text, PRIMARY KEY (pk, ck));").get();
         auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
 
@@ -1008,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.gossip_scheduling_group, system_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(unknown_scheduling_group, user_semaphore);
 
-    do_with_cql_env_thread([&scheduling_group_and_expected_semaphore] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([&scheduling_group_and_expected_semaphore] (cql_test_env& e) {
         auto& db = e.local_db();
         database_test tdb(db);
         for (const auto& [sched_group, expected_sem_getter] : scheduling_group_and_expected_semaphore) {
@@ -1053,7 +1066,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.gossip_scheduling_group, system_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(unknown_scheduling_group, user_max_result_size);
 
-    do_with_cql_env_thread([&scheduling_group_and_expected_max_result_size] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([&scheduling_group_and_expected_max_result_size] (cql_test_env& e) {
         auto& db = e.local_db();
         database_test tdb(db);
         for (const auto& [sched_group, expected_max_size] : scheduling_group_and_expected_max_result_size) {
@@ -1075,7 +1088,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
 // Test `upgrade_sstables` on all keyspaces (including the system keyspace).
 // Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
 SEASTAR_TEST_CASE(upgrade_sstables) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.db().invoke_on_all([&e] (replica::database& db) -> future<> {
             auto& cm = db.get_compaction_manager();
             for (auto& [ks_name, ks] : db.get_keyspaces()) {
@@ -1083,7 +1096,9 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
                 for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
-                    co_await cm.perform_sstable_upgrade(owned_ranges_ptr, t.as_table_state(), exclude_current_version);
+                    co_await t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                        return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version);
+                    });
                 }
             }
         }).get();
@@ -1110,15 +1125,19 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
         for (auto i = 0; i < smp::count && !found; i++) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = in_strategy_sstables(cf.as_table_state());
-                if (sstables.empty()) {
-                    co_return false;
-                }
-                auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
-                testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
-                auto sst = sstables[idx];
-                co_await sst->move_to_quarantine();
-                co_return true;
+                bool found = false;
+                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        co_return;
+                    }
+                    auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                    testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
+                    auto sst = sstables[idx];
+                    co_await sst->move_to_quarantine();
+                    found |= true;
+                });
+                co_return found;
             });
         }
         BOOST_REQUIRE(found);
@@ -1155,20 +1174,22 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         for (auto i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
-                auto sstables = in_strategy_sstables(cf.as_table_state());
-                if (sstables.empty()) {
-                    co_return;
-                }
-                // collect all expected sstable data files
-                for (auto sst : sstables) {
-                    expected.insert(sst->component_basename(sstables::component_type::Data));
-                }
-                if (std::exchange(found, true)) {
-                    co_return;
-                }
-                auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
-                auto sst = sstables[idx];
-                co_await sst->move_to_quarantine();
+                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        co_return;
+                    }
+                    // collect all expected sstable data files
+                    for (auto sst : sstables) {
+                        expected.insert(sst->component_basename(sstables::component_type::Data));
+                    }
+                    if (std::exchange(found, true)) {
+                        co_return;
+                    }
+                    auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                    auto sst = sstables[idx];
+                    co_await sst->move_to_quarantine();
+                });
             });
         }
         BOOST_REQUIRE(found);
@@ -1198,7 +1219,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
 }
 
 SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
         auto& db = e.local_db();
         const auto ts = db_clock::now();

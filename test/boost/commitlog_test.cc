@@ -34,6 +34,7 @@
 #include "db/commitlog/commitlog_extensions.hh"
 #include "db/commitlog/rp_set.hh"
 #include "db/extensions.hh"
+#include "readers/combined.hh"
 #include "log.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/exception_utils.hh"
@@ -612,7 +613,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto& table = db.find_column_family("ks", "t");
         auto& cl = *table.commitlog();
         auto s = table.schema();
-        auto& mt = table.active_memtable();
+        auto memtables = table.active_memtables();
 
         auto add_entry = [&db, &cl, s] (bytes key) mutable {
             auto md = tests::data_model::mutation_description({ key });
@@ -630,7 +631,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
 
         add_entry(to_bytes(pk1_raw));
 
-        BOOST_REQUIRE(mt.empty());
+        BOOST_REQUIRE(std::ranges::all_of(memtables, std::mem_fn(&replica::memtable::empty)));
 
         {
             auto paths = cl.get_active_segment_names();
@@ -640,7 +641,13 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         }
 
         {
-            auto rd = mt.make_flat_reader(s, db.get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout));
+            std::vector<flat_mutation_reader_v2> readers;
+            readers.reserve(memtables.size());
+            auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
+            for (auto mt : memtables) {
+                readers.push_back(mt->make_flat_reader(s, permit));
+            }
+            auto rd = make_combined_reader(s, permit, std::move(readers));
             auto close_rd = deferred_close(rd);
             auto mopt = read_mutation_from_flat_mutation_reader(rd).get0();
             BOOST_REQUIRE(mopt);

@@ -381,6 +381,7 @@ public:
         // Can be updated by a schema change:
         bool enable_optimized_twcs_queries{true};
         uint32_t tombstone_warn_threshold{0};
+        unsigned x_log2_compaction_groups{0};
     };
     struct no_commitlog {};
 
@@ -407,11 +408,13 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
+    // The value of the parameter controls the number of compaction groups in this table.
+    // 0 (default) means 1 compaction group. 3 means 8 compaction groups.
+    const unsigned _x_log2_compaction_groups = 0;
+
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    // TODO: Still holds a single compaction group, meaning all sstables are eligible to be compacted with one another. Soon, a table
-    //  will be able to hold more than one group.
-    std::unique_ptr<compaction_group> _compaction_group;
+    std::vector<std::unique_ptr<compaction_group>> _compaction_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -526,6 +529,8 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 private:
+    using compaction_group_ptr = std::unique_ptr<compaction_group>;
+    std::vector<std::unique_ptr<compaction_group>> make_compaction_groups();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
     // Select a compaction group from a given token.
@@ -534,6 +539,10 @@ private:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+    // Returns a list of all compaction groups.
+    const std::vector<std::unique_ptr<compaction_group>>& compaction_groups() const noexcept;
+    // Safely iterate through compaction groups, while performing async operations on them.
+    future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
@@ -602,12 +611,22 @@ private:
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
-    void do_trigger_compaction();
 
     dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
     }
 
+    // reserve_fn will be called before any element is added to readers
+    void add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& readers,
+             const schema_ptr& s,
+             const reader_permit& permit,
+             const dht::partition_range& range,
+             const query::partition_slice& slice,
+             const io_priority_class& pc,
+             const tracing::trace_state_ptr& trace_state,
+             streamed_mutation::forwarding fwd,
+             mutation_reader::forwarding fwd_mr,
+             std::function<void(size_t)> reserve_fn) const;
 public:
     sstring dir() const {
         return _config.datadir;
@@ -710,9 +729,9 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    // FIXME: for supporting multiple compaction groups, this interface will need to return
-    // as many active sstables as there are groups.
-    memtable& active_memtable();
+    // Return all active memtables, where there will be one per compaction group
+    // TODO: expose stats, whatever, instead of exposing active memtables themselves.
+    std::vector<memtable*> active_memtables();
     api::timestamp_type min_memtable_timestamp() const;
     const row_cache& get_row_cache() const {
         return _cache;
@@ -885,7 +904,7 @@ public:
 
     void start_compaction();
     void trigger_compaction();
-    void try_trigger_compaction() noexcept;
+    void try_trigger_compaction(compaction_group& cg) noexcept;
     // Triggers offstrategy compaction, if needed, in the background.
     void trigger_offstrategy_compaction();
     // Performs offstrategy compaction, if needed, returning
@@ -893,6 +912,7 @@ public:
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
     future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges);
+    unsigned estimate_pending_compactions() const;
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
@@ -1094,7 +1114,10 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
+    // FIXME: get rid of it once no users.
     compaction::table_state& as_table_state() const noexcept;
+    // Safely iterate through table states, while performing async operations on them.
+    future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
     friend class compaction_group;
 };

@@ -93,16 +93,19 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
 
 future<>
 with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::sstables_manager& sm, noncopyable_function<future<> (replica::column_family&)> func) {
-    auto tracker = make_lw_shared<cache_tracker>();
-    auto dir = tmpdir();
-    cfg.datadir = dir.path().string();
-    auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
-    auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
-    cf->mark_ready_for_writes();
-    return func(*cf).then([cf, cm] {
-        return cf->stop();
-    }).finally([cf, cm, dir = std::move(dir), cl_stats, tracker] () mutable { cf = { }; });
+    std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 3 /* 8 CGs */ };
+    for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto dir = tmpdir();
+        cfg.datadir = dir.path().string();
+        cfg.x_log2_compaction_groups = x_log2_compaction_groups;
+        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        co_await func(*cf);
+        co_await cf->stop();
+    }
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
@@ -496,7 +499,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (replica::column_family& cf) {
+    with_column_family(s, cfg, env.manager(), [s, &env] (replica::column_family& cf) -> future<> {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -507,14 +510,14 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
             cf.apply(std::move(m));
             return cf.flush();
         };
-        insert_row(1001, 2001).get();
-        insert_row(1002, 2002).get();
-        insert_row(1003, 2003).get();
+        co_await insert_row(1001, 2001);
+        co_await insert_row(1002, 2002);
+        co_await insert_row(1003, 2003);
         {
-            auto verify_row = [&] (int32_t c1, int32_t r1) {
+            auto verify_row = [&] (int32_t c1, int32_t r1) -> future<> {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
                 auto p_key = dht::decorate_key(*s, key);
-                auto r = cf.find_row(cf.schema(), env.make_reader_permit(), p_key, c_key).get0();
+                auto r = co_await cf.find_row(cf.schema(), env.make_reader_permit(), p_key, c_key);
                 {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
@@ -524,11 +527,10 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                     BOOST_REQUIRE(int32_type->equal(cell.value().linearize(), int32_type->decompose(r1)));
                 }
             };
-            verify_row(1001, 2001);
-            verify_row(1002, 2002);
-            verify_row(1003, 2003);
+            co_await verify_row(1001, 2001);
+            co_await verify_row(1002, 2002);
+            co_await verify_row(1003, 2003);
         }
-        return make_ready_future<>();
     }).get();
     });
 }
@@ -591,11 +593,11 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
                 assert_that_scanner3.produces(mutations[i]);
             }
 
-            replica::memtable& m = cf.active_memtable(); // held by scanners
+            auto ms = cf.active_memtables(); // held by scanners
 
             auto flushed = cf.flush();
 
-            while (!m.is_flushed()) {
+            while (!std::ranges::all_of(ms, std::mem_fn(&replica::memtable::is_flushed))) {
                 sleep(10ms).get();
             }
 

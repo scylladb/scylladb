@@ -1769,8 +1769,9 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
                     ++fragments;
-                    cf.active_memtable().apply(*mopt);
-                    if (cf.active_memtable().region().occupancy().used_space() > flush_threshold) {
+                    replica::memtable& active_memtable = *cf.active_memtables().front();
+                    active_memtable.apply(*mopt);
+                    if (active_memtable.region().occupancy().used_space() > flush_threshold) {
                         metrics_snapshot before;
                         cf.flush().get();
                         auto r = test_result(std::move(before), std::exchange(fragments, 0));
