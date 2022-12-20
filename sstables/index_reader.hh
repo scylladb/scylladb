@@ -1087,10 +1087,9 @@ public:
 
     future<> close() noexcept {
         // index_bound::close must not fail
-        return close(_lower_bound).then([this] {
-            if (_upper_bound) {
-                return close(*_upper_bound);
-            }
+        auto close_lb = close(_lower_bound);
+        auto close_ub = _upper_bound ? close(*_upper_bound) : make_ready_future<>();
+        return when_all(std::move(close_lb), std::move(close_ub)).discard_result().finally([this] {
             if (_local_index_cache) {
                 return _local_index_cache->evict_gently();
             }
