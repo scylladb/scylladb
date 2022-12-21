@@ -28,10 +28,7 @@ If you get a response with no errors, Scylla Manager is running.
 
 .. code-block:: none
 
-   ./start-all.sh -s \
-   <ABSOLUTE_PATH>/scylla-monitoring/myconf/scylla_servers.yml -n \
-   <ABSOLUTE_PATH>/scylla-monitoring/myconf/node_exporter_servers.yml -d \
-   <ABSOLUTE_PATH>/scylla-monitoring/mydata -v 3.0 -M 2.0
+   /start-all.sh -s path/to/scylla_servers.yml -n path/to/node_exporter_servers.yml -d path/to/mydata -v 3.0 -M 2.0
 
 3. From Scylla Monitoring, check the Scylla Manager Dashboard and confirm if the Scylla Manager dashboard shows Scylla Manager as connected. If yes, you do not need to continue. If no, continue to the next step.
 
