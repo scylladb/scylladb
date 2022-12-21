@@ -47,6 +47,7 @@ def run_pytest_in_gdb(pytest_dir, additional_parameters):
         sys.stdout.flush()
         os.execvp('gdb', ['gdb',
             '-batch', '-n', '-se', run.scylla,
+            '-ex', 'set python print-stack full',
             '-ex', 'python ' + pytest_cmd,
             ])
         exit(1)
