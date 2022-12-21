@@ -748,7 +748,9 @@ private:
         if (b.context) {
             close_context = b.context->close();
         }
-        return seastar::when_all_succeed(std::move(close_context), reset_clustered_cursor(b)).discard_result();
+        return seastar::when_all_succeed(std::move(close_context), reset_clustered_cursor(b)).discard_result().then([&b] {
+            b.current_list = {};
+        });
     }
 public:
     index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
