@@ -528,6 +528,7 @@ public:
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _query_time = query_time;
         _stats = {};
+        _stop = stop_iteration::no;
 
         noop_compacted_fragments_consumer nc;
 
