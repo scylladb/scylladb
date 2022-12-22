@@ -9,7 +9,7 @@
    Manages driver refresh when cluster is cycled.
 """
 
-from typing import List, Optional, Callable, NamedTuple
+from typing import List, Optional, Callable, NamedTuple, Any
 import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
@@ -147,10 +147,14 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data = {'replace_cfg': replace_cfg._asdict()} if replace_cfg else {}
+            data: dict[str, Any] = {}
+            if replace_cfg:
+                data['replace_cfg'] = replace_cfg._asdict()
+            if cmdline:
+                data['cmdline'] = cmdline
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json")
         except Exception as exc:
             raise Exception("Failed to add server") from exc
