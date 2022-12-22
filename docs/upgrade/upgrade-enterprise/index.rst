@@ -38,7 +38,7 @@ Upgrade Scylla Enterprise
 
   Major Release Upgrade
 
-  * :doc:`Upgrade Guide - From ScyllaDB Enterprise 2022.1 to Scylla Enterprise 2022.2 <upgrade-guide-from-2022.1-to-2022.2/index>`
+  * :doc:`Upgrade Guide - From ScyllaDB Enterprise 2022.1 to Scylla Enterprise 2022.2 (minor release) <upgrade-guide-from-2022.1-to-2022.2/index>`
   * :doc:`Upgrade Guide - From ScyllaDB Enterprise 2021.1 to Scylla Enterprise 2022.1 <upgrade-guide-from-2021.1-to-2022.1/index>`
   * :doc:`Upgrade Guide - From ScyllaDB Enterprise 2020.1 to Scylla Enterprise 2021.1 <upgrade-guide-from-2020.1-to-2021.1/index>`
   * :doc:`Upgrade Guide - From ScyllaDB Enterprise 2019.1 to Scylla Enterprise 2020.1 <upgrade-guide-from-2019.1-to-2020.1/index>`
