@@ -631,7 +631,7 @@ A table supports the following options:
      - map
      - see below
      - :ref:`Compaction options <cql-compaction-options>`
-   * - ``compaction``
+   * - ``compression``
      - map
      - see below
      - :ref:`Compression options <cql-compression-options>`
