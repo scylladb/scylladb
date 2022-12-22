@@ -66,7 +66,7 @@ class raft_group0 {
     seastar::gate _shutdown_gate;
     seastar::abort_source& _abort_source;
     raft_group_registry& _raft_gr;
-    netw::messaging_service& _ms;
+    sharded<netw::messaging_service>& _ms;
     gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
@@ -104,13 +104,17 @@ public:
     // Assumes that the provided services are fully started.
     raft_group0(seastar::abort_source& abort_source,
         service::raft_group_registry& raft_gr,
-        netw::messaging_service& ms,
+        sharded<netw::messaging_service>& ms,
         gms::gossiper& gs,
         cql3::query_processor& qp,
         migration_manager& mm,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
         raft_group0_client& client);
+
+    // Initialises RPC verbs on all shards.
+    // Call after construction but before using the object.
+    future<> start();
 
     // Return true if Raft is enabled (but not necessarily having
     // an active group 0 - e.g. in case we haven't completed an
@@ -173,8 +177,8 @@ public:
     const raft::server_id& load_my_id();
 
 private:
-    void init_rpc_verbs();
-    future<> uninit_rpc_verbs();
+    static void init_rpc_verbs(raft_group0& shard0_this);
+    static future<> uninit_rpc_verbs(netw::messaging_service& ms);
 
     bool joined_group0() const;
 

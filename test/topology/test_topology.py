@@ -16,6 +16,8 @@ from test.pylib.util import wait_for
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
+from cassandra.cluster import Session
+from test.pylib.random_tables import RandomTables
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,45 @@ async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True)
     await manager.server_add(replace_cfg)
     # TODO: check that group 0 no longer contains the replaced node (#12153)
+
+
+# Checks basic functionality on the cluster with different values of the --smp parameter on the nodes.
+@pytest.mark.asyncio
+async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: RandomTables) -> None:
+    # In this test it's more convenient to start with a fresh cluster.
+    # We don't need the default nodes,
+    # but there is currently no way to express this in the test infrastructure
+    servers = await manager.running_servers()
+    await manager.cql.run_async(f"DROP KEYSPACE {random_tables.keyspace}")
+    await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
+
+    # When the node starts it tries to communicate with others
+    # by sending group0_peer_exchange message to them.
+    # This message can be handled on arbitrary shard of the target node.
+    # The method manager.server_add waits for node to start, which can only happen
+    # if this message has been handled correctly.
+    #
+    # Note: messaging_service is initialized with server_socket::load_balancing_algorithm::port
+    # policy, this means that the shard for message will be chosen as client_port % smp::count.
+    # The client port in turn is chosen as rand() * smp::count + current_shard
+    # (posix_socket_impl::find_port_and_connect).
+    # If this succeeds to occupy a free port in 5 tries and smp::count is the same
+    # on both nodes, then it's guaranteed that the message will be
+    # processed on the same shard as the calling code.
+    # In the general case, we cannot assume that this same shard guarantee holds.
+    await manager.server_add(cmdline=['--smp', '3'])
+    await manager.server_add(cmdline=['--smp', '4'])
+    await manager.server_add(cmdline=['--smp', '5'])
+
+    # reconnect the driver to ignore the stopped nodes
+    manager.driver_close()
+    await manager.driver_connect()
+
+    # we just started a new, fresh cluster, so we need to recreate a keyspace
+    await manager.cql.run_async(f"CREATE KEYSPACE {random_tables.keyspace} WITH REPLICATION = "
+                                "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    await random_tables.add_tables(ntables=4, ncolumns=5)
+    await random_tables.verify_schema()
 
 
 @pytest.mark.asyncio
