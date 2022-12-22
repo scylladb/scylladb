@@ -266,11 +266,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
         // The block below reflects the information from interval (lb_i->position(), p_i->position()) to _rows,
         // up to the last entry in _rows which has position() < p_i->position(). The remainder is reflected by the act of
         // moving p_i itself.
-        bool prev_interval_loaded = bool(src_e.continuous());
-        // FIXME: This will be very inefficient for non-evictable snapshots, each merge is a full scan
-        // We cannot uncomment the more efficient version below before changing partition_entry::squashed() to propagate
-        // information about (non)evictability of the snapshot.
-        // bool prev_interval_loaded = (evictable && src_e.continuous()) || (!evictable && src_e.range_tombstone());
+        bool prev_interval_loaded = (evictable && src_e.continuous()) || (!evictable && src_e.range_tombstone());
         if (prev_interval_loaded) {
             // lb_i is only valid if prev_interval_loaded.
             rows_type::iterator prev_lb_i;
@@ -337,11 +333,8 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
         // to the interval (p_i->position(), next_p_i->position), and we
         // have to prepare a sentinel when removing p_i from p in case merging
         // needs to stop before next_p_i is moved.
-        // FIXME: This will be very inefficient for non-evictable snapshots.
         bool next_interval_loaded = next_p_i != p._rows.end()
-                && (next_p_i->continuous());
-//        bool next_interval_loaded = next_p_i != p._rows.end()
-//                && ((evictable && next_p_i->continuous()) || (!evictable && next_p_i->range_tombstone()));
+                && ((evictable && next_p_i->continuous()) || (!evictable && next_p_i->range_tombstone()));
 
         bool do_compact = false;
         if (miss) {
