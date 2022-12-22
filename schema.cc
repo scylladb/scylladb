@@ -656,6 +656,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",comment=" << s._raw._comment;
     os << ",readRepairChance=" << s._raw._read_repair_chance;
     os << ",dcLocalReadRepairChance=" << s._raw._dc_local_read_repair_chance;
+    os << ",tombstoneGcOptions=" << s.tombstone_gc_options().to_sstring();
     os << ",gcGraceSeconds=" << s._raw._gc_grace_seconds;
     os << ",keyValidator=" << s.thrift_key_validator();
     os << ",minCompactionThreshold=" << s._raw._min_compaction_threshold;
