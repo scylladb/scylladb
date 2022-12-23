@@ -15,6 +15,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
@@ -733,8 +734,9 @@ void compaction_manager::enable() {
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         for (auto& e: _compaction_state) {
-            submit(*e.first);
+            postpone_compaction_for_table(e.first);
         }
+        reevaluate_postponed_compactions();
     };
 }
 
@@ -745,15 +747,24 @@ future<> compaction_manager::postponed_compactions_reevaluation() {
             _postponed.clear();
             co_return;
         }
-        auto postponed = std::move(_postponed);
+        // A task_state being reevaluated can re-insert itself into postponed list, which is the reason
+        // for moving the list to be processed into a local.
+        auto postponed = std::exchange(_postponed, {});
         try {
-            for (auto& t : postponed) {
+            for (auto it = postponed.begin(); it != postponed.end();) {
+                compaction::table_state* t = *it;
+                it = postponed.erase(it);
+                // skip reevaluation of a table_state that became invalid post its removal
+                if (!_compaction_state.contains(t)) {
+                    continue;
+                }
                 auto s = t->schema();
                 cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
                 submit(*t);
+                co_await coroutine::maybe_yield();
             }
         } catch (...) {
-            _postponed = std::move(postponed);
+            _postponed.insert(postponed.begin(), postponed.end());
         }
     }
 }
