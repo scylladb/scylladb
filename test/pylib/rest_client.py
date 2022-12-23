@@ -202,6 +202,15 @@ class ScyllaRESTAPIClient():
         assert(type(e) == str for e in data)
         return data
 
+    async def get_logger_level(self, node_ip: str, logger: str) -> str:
+        """Get logger level"""
+        return await self.client.get_text(f"/system/logger/{logger}", host=node_ip)
+
+    async def set_logger_level(self, node_ip: str, logger: str, level: str) -> None:
+        """Set logger level"""
+        assert level in ["debug", "info", "warning", "trace"]
+        await self.client.post(f"/system/logger/{logger}?level={level}", host=node_ip)
+
 
 @asynccontextmanager
 async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
