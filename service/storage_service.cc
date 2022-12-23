@@ -2521,10 +2521,16 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             slogger.debug("repair[{}]: Got repair_updater request from {}", ops_uuid, coordinator);
             _db.invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (replica::database &db) {
                 for (const auto& table_id : tables) {
-                    auto& table = db.find_column_family(table_id);
-                    table.update_off_strategy_trigger();
-                    slogger.debug("repair[{}]: Updated off_strategy_trigger for table {}.{} by node {}",
-                            ops_uuid, table.schema()->ks_name(), table.schema()->cf_name(), coordinator);
+                    try {
+                        auto& table = db.find_column_family(table_id);
+                        table.update_off_strategy_trigger();
+                        slogger.debug("repair[{}]: Updated off_strategy_trigger for table {}.{} by node {}",
+                                ops_uuid, table.schema()->ks_name(), table.schema()->cf_name(), coordinator);
+                    } catch (replica::no_such_column_family&) {
+                        // The table could be dropped by user, ignore it.
+                    } catch (...) {
+                        throw;
+                    }
                 }
             }).get();
             bool ok = true;
