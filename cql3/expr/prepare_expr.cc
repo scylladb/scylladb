@@ -1190,7 +1190,7 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
 // Given type of LHS and the operation finds the expected type of RHS.
 // The type will be the same as LHS for simple operations like =, but it will be different for more complex ones like IN or CONTAINS.
 static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper) {
-    const data_type& lhs_type = lhs_receiver->type->underlying_type();
+    const data_type lhs_type = lhs_receiver->type->underlying_type();
 
     if (oper == oper_t::IN) {
         data_type rhs_receiver_type = list_type_impl::get_instance(std::move(lhs_type), false);
