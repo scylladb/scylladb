@@ -1229,7 +1229,7 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
 }
 
 binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema) {
-    std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, "", &table_schema, {});
+    std::optional<expression> prepared_lhs_opt = try_prepare_expression(binop.lhs, db, table_schema.ks_name(), &table_schema, {});
     if (!prepared_lhs_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
     }
