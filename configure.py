@@ -1771,7 +1771,9 @@ if not args.dist_only:
     for mode, mode_config in build_modes.items():
         configure_abseil(outdir, mode, mode_config)
 
-with open(buildfile, 'w') as f:
+tmp_buildfile = f'{buildfile}.tmp'
+
+with open(tmp_buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2223,7 +2225,7 @@ with open(buildfile, 'w') as f:
 
     f.write(textwrap.dedent('''\
         rule configure
-          command = {python} configure.py --out=build.ninja.new $configure_args && mv build.ninja.new build.ninja
+          command = {python} configure.py $configure_args
           generator = 1
           description = CONFIGURE $configure_args
         build build.ninja {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
@@ -2278,7 +2280,7 @@ compdb = 'compile_commands.json'
 #   header-only compilations, etc.)
 ensure_tmp_dir_exists()
 with tempfile.NamedTemporaryFile() as ninja_compdb:
-    subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
+    subprocess.run([ninja, '-f', tmp_buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
     ninja_compdb.file.flush()
 
     # build mode-specific compdbs
@@ -2297,3 +2299,5 @@ if not os.path.exists(compdb):
         if os.path.exists(compdb_target):
             os.symlink(compdb_target, compdb)
             break
+
+os.rename(tmp_buildfile, buildfile)
