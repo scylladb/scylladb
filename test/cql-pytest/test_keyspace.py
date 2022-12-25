@@ -142,7 +142,7 @@ def test_alter_keyspace_double_with(cql):
 # deleted. But we expect that at the end of the test the database remains in
 # some valid state - the keyspace should either exist or not exist. It
 # shouldn't be in some broken immortal state as reported in issue #8968.
-def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_raft):
+def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_consistent_cluster_management):
     ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
     cfdef = "(a int PRIMARY KEY)"
     with new_test_keyspace(cql, ksdef) as keyspace:

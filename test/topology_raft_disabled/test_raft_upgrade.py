@@ -42,11 +42,8 @@ async def restart(manager: ManagerClient, server: ServerInfo) -> None:
 
 async def enable_raft(manager: ManagerClient, server: ServerInfo) -> None:
     config = await manager.server_get_config(server.server_id)
-    features = config['experimental_features']
-    assert(type(features) == list)
-    features.append('raft')
     logging.info(f"Updating config of server {server}")
-    await manager.server_update_config(server.server_id, 'experimental_features', features)
+    await manager.server_update_config(server.server_id, 'consistent_cluster_management', 'True')
 
 
 async def enable_raft_and_restart(manager: ManagerClient, server: ServerInfo) -> None:

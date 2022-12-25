@@ -2691,7 +2691,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::truncated(),
                     v3::cdc_local(),
     });
-    if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
+    if (cfg.consistent_cluster_management()) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {

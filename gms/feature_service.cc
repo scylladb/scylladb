@@ -60,7 +60,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
         fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
+    if (!cfg.consistent_cluster_management()) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
