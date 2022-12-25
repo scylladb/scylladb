@@ -46,6 +46,7 @@ debian_base_packages=(
     libunistring-dev
     libzstd-dev
     libdeflate-dev
+    libabsl-dev
 )
 
 fedora_packages=(
@@ -61,6 +62,7 @@ fedora_packages=(
     snappy-devel
     libdeflate-devel
     systemd-devel
+    abseil-cpp-devel
     git
     python
     sudo

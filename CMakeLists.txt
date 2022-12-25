@@ -42,22 +42,13 @@ set(Seastar_CXX_FLAGS ${cxx_coro_flag} ${target_arch_flag} CACHE INTERNAL "" FOR
 set(Seastar_CXX_DIALECT gnu++20 CACHE INTERNAL "" FORCE)
 
 add_subdirectory(seastar)
-add_subdirectory(abseil)
-# Exclude absl::strerror from the default "all" target since it's not
-# used in Scylla build and, moreover, makes use of deprecated glibc APIs,
-# such as sys_nerr, which are not exposed from "stdio.h" since glibc 2.32,
-# which happens to be the case for recent Fedora distribution versions.
-#
-# Need to use the internal "absl_strerror" target name instead of namespaced
-# variant because `set_target_properties` does not understand the latter form,
-# unfortunately.
-set_target_properties(absl_strerror PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # System libraries dependencies
 find_package(Boost COMPONENTS filesystem program_options system thread regex REQUIRED)
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
+find_package(Abseil REQUIRED)
 
 set(scylla_build_dir "${CMAKE_BINARY_DIR}/build/${BUILD_TYPE}")
 set(scylla_gen_build_dir "${scylla_build_dir}/gen")
@@ -746,7 +737,6 @@ target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFA
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     libdeflate
-    abseil
     "${scylla_gen_build_dir}")
 
 ###
