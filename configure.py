@@ -1667,50 +1667,12 @@ for mode in build_modes:
     modes[mode]['seastar_cflags'] = seastar_pc_cflags
     modes[mode]['seastar_libs'] = seastar_pc_libs
 
-def configure_abseil(build_dir, mode, mode_config):
-    abseil_build_dir = os.path.join(build_dir, mode, 'abseil')
+abseil_pkgs = [
+    'absl_raw_hash_set',
+    'absl_hash',
+]
 
-    abseil_cflags = seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']
-    cmake_mode = mode_config['cmake_build_type']
-    abseil_cmake_args = [
-        '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
-        '-DCMAKE_INSTALL_PREFIX={}'.format(build_dir + '/inst'), # just to avoid a warning from absl
-        '-DCMAKE_C_COMPILER={}'.format(args.cc),
-        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
-        '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
-        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DCMAKE_CXX_STANDARD=20',
-        '-DABSL_PROPAGATE_CXX_STD=ON',
-    ] + distro_extra_cmake_args
-
-    abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
-
-    os.makedirs(abseil_build_dir, exist_ok=True)
-    subprocess.check_call(abseil_cmd, shell=False, cwd=abseil_build_dir)
-
-abseil_libs = ['absl/' + lib for lib in [
-    'container/libabsl_hashtablez_sampler.a',
-    'container/libabsl_raw_hash_set.a',
-    'synchronization/libabsl_synchronization.a',
-    'synchronization/libabsl_graphcycles_internal.a',
-    'debugging/libabsl_stacktrace.a',
-    'debugging/libabsl_symbolize.a',
-    'debugging/libabsl_debugging_internal.a',
-    'debugging/libabsl_demangle_internal.a',
-    'time/libabsl_time.a',
-    'time/libabsl_time_zone.a',
-    'numeric/libabsl_int128.a',
-    'hash/libabsl_hash.a',
-    'hash/libabsl_city.a',
-    'hash/libabsl_low_level_hash.a',
-    'base/libabsl_malloc_internal.a',
-    'base/libabsl_spinlock_wait.a',
-    'base/libabsl_base.a',
-    'base/libabsl_raw_logging_internal.a',
-    'profiling/libabsl_exponential_biased.a',
-    'strings/libabsl_strings.a',
-    'strings/libabsl_strings_internal.a',
-    'base/libabsl_throw_delegate.a']]
+pkgs += abseil_pkgs
 
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
@@ -1745,7 +1707,6 @@ if any(filter(thrift_version.startswith, thrift_boost_versions)):
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-args.user_cflags += ' -isystem abseil'
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
 user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
 if args.staticcxx:
@@ -1766,10 +1727,6 @@ if args.ragel_exec:
     ragel_exec = args.ragel_exec
 else:
     ragel_exec = "ragel"
-
-if not args.dist_only:
-    for mode, mode_config in build_modes.items():
-        configure_abseil(outdir, mode, mode_config)
 
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
@@ -1931,9 +1888,6 @@ with open(buildfile, 'w') as f:
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
-                objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
-                    'abseil/' + x for x in abseil_libs
-                ]])
                 if binary in tests:
                     local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
@@ -2124,12 +2078,6 @@ with open(buildfile, 'w') as f:
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
 
-        for lib in abseil_libs:
-            f.write('build $builddir/{mode}/abseil/{lib}: ninja $builddir/{mode}/abseil/build.ninja\n'.format(**locals()))
-            f.write('  pool = submodule_pool\n')
-            f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
-            f.write('  target = {lib}\n'.format(**locals()))
-
     checkheaders_mode = 'dev' if 'dev' in modes else modes.keys()[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(checkheaders_mode, hh) for hh in headers])))
 
@@ -2240,7 +2188,7 @@ with open(buildfile, 'w') as f:
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'build/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar', 'abseil']]), **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=' '.join([f'build/{mode}/{dir}/build.ninja' for mode in build_modes for dir in ['seastar']]), **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
@@ -2269,7 +2217,7 @@ with open(buildfile, 'w') as f:
 compdb = 'compile_commands.json'
 # per-mode compdbs are built by taking the relevant entries from the
 # output of "ninja -t compdb" and combining them with the CMake-made
-# compdbs for Seastar and Abseil in the relevant mode.
+# compdbs for Seastar in the relevant mode.
 #
 # "ninja -t compdb" output has to be filtered because
 # - it contains rules for all selected modes, and several entries for
@@ -2284,7 +2232,7 @@ with tempfile.NamedTemporaryFile() as ninja_compdb:
     # build mode-specific compdbs
     for mode in selected_modes:
         mode_out = outdir + '/' + mode
-        submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['abseil', 'seastar']]
+        submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar']]
         with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
             subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
                             ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
