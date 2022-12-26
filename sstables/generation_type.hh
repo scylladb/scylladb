@@ -46,9 +46,7 @@ generation_type generation_from_value(const T& v) noexcept {
 } //namespace sstables
 
 namespace seastar {
-inline sstring to_sstring(const sstables::generation_type& generation) {
-    assert(false && "unimplemented"); // TODO(JS): implement
-}
+sstring to_sstring(const sstables::generation_type& gen);
 } //namespace seastar
 
 namespace std {
