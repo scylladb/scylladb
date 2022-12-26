@@ -133,8 +133,9 @@ supports fine-grain access controls via "IAM policies" - which give each
 authenticated user access to a different subset of the tables, different
 allowed operations, and even different permissions for individual items.
 All of this is not yet implemented in Alternator.
+See <https://github.com/scylladb/scylla/issues/5047>.
 
-### Metrics
+## Metrics
 
 Scylla has an advanced and extensive monitoring framework for inspecting
 and graphing hundreds of different metrics of Scylla's usage and performance.
