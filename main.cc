@@ -1105,15 +1105,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 raft_gr.stop().get();
             });
 
-            if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
-                supervisor::notify("starting Raft Group Registry service");
-            } else {
-                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
-                    throw bad_configuration_error();
-                }
-            }
-
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
@@ -1152,10 +1143,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
+                supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
                     return raft_gr.start(my_raft_id);
                 }).get();
+            } else {
+                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
+                    throw bad_configuration_error();
+                }
             }
+
 
             group0_client.init().get();
 
