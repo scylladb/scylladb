@@ -2111,7 +2111,7 @@ struct deserialize_visitor {
     }
     data_value operator()(const tuple_type_impl& t) { return deserialize_aux(t, v); }
     data_value operator()(const user_type_impl& t) { return deserialize_aux(t, v); }
-    data_value operator()(const empty_type_impl& t) { return data_value::make_null(t.shared_from_this()); }
+    data_value operator()(const empty_type_impl& t) { return data_value(empty_type_representation()); }
 };
 }
 
@@ -2923,8 +2923,7 @@ struct native_value_clone_visitor {
     }
     void* operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
     void* operator()(const empty_type_impl&) {
-        // Can't happen
-        abort();
+        return new empty_type_representation();
     }
 };
 }
@@ -2944,8 +2943,7 @@ struct native_value_delete_visitor {
     }
     void operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
     void operator()(const empty_type_impl&) {
-        // Can't happen
-        abort();
+        delete reinterpret_cast<empty_type_representation*>(object);
     }
 };
 }
@@ -3399,6 +3397,9 @@ data_value::data_value(big_decimal v) : data_value(make_new(decimal_type, v)) {
 }
 
 data_value::data_value(cql_duration d) : data_value(make_new(duration_type, d)) {
+}
+
+data_value::data_value(empty_type_representation e) : data_value(make_new(empty_type, e)) {
 }
 
 sstring data_value::to_parsable_string() const {

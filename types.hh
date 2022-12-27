@@ -332,6 +332,9 @@ const T& value_cast(const data_value& value);
 template <typename T>
 T&& value_cast(data_value&& value);
 
+struct empty_type_representation {
+};
+
 class data_value {
     void* _value;  // FIXME: use "small value optimization" for small types
     data_type _type;
@@ -386,6 +389,7 @@ public:
     data_value(utils::multiprecision_int);
     data_value(big_decimal);
     data_value(cql_duration);
+    data_value(empty_type_representation);
     explicit data_value(std::optional<bytes>);
     template <typename NativeType>
     data_value(std::optional<NativeType>);

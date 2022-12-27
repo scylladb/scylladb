@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <string_view>
 #include <seastar/testing/test_case.hh>
 #include <seastar/net/inet_address.hh>
 #include "utils/UUID_gen.hh"
@@ -25,6 +26,7 @@
 #include "test/lib/exception_utils.hh"
 
 using namespace std::literals::chrono_literals;
+using namespace std::literals::string_view_literals;
 
 void test_parsing_fails(const shared_ptr<const abstract_type>& type, sstring str)
 {
@@ -955,5 +957,13 @@ SEASTAR_TEST_CASE(test_simple_type_compatibility) {
     for (auto&& tc : tests) {
         tc.verify(tc.to, tc.from);
     }
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_empty_type_serialization) {
+    auto v = data_value(empty_type_representation());
+    auto ser = v.serialize();
+    BOOST_REQUIRE(ser.has_value());
+    BOOST_REQUIRE_EQUAL(*ser, to_bytes(sstring(""sv)));
     return make_ready_future<>();
 }
