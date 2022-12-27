@@ -736,8 +736,8 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs&);
 
 cql3::raw_value evaluate(const expression& e, const query_options&);
 
-utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value&);
-utils::chunked_vector<managed_bytes> get_set_elements(const cql3::raw_value&);
+utils::chunked_vector<managed_bytes_opt> get_list_elements(const cql3::raw_value&);
+utils::chunked_vector<managed_bytes_opt> get_set_elements(const cql3::raw_value&);
 std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value&, const abstract_type& type);
 std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value&, const abstract_type& type);
 std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cql3::raw_value&);

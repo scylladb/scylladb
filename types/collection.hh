@@ -45,11 +45,11 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
 
     template <typename Iterator>
-    requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
+    requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view_opt>; }
     static bytes pack(Iterator start, Iterator finish, int elements);
 
     template <typename Iterator>
-    requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view>; }
+    requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view_opt>; }
     static managed_bytes pack_fragmented(Iterator start, Iterator finish, int elements);
 
 private:
@@ -94,13 +94,14 @@ public:
 };
 
 template <typename Iterator>
-requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
+requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view_opt>; }
 bytes
 collection_type_impl::pack(Iterator start, Iterator finish, int elements) {
     size_t len = collection_size_len();
     size_t psz = collection_value_len();
     for (auto j = start; j != finish; j++) {
-        len += j->size() + psz;
+        auto v = bytes_view_opt(*j);
+        len += (v ? v->size() : 0) + psz;
     }
     bytes out(bytes::initialized_later(), len);
     bytes::iterator i = out.begin();
@@ -112,13 +113,14 @@ collection_type_impl::pack(Iterator start, Iterator finish, int elements) {
 }
 
 template <typename Iterator>
-requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view>; }
+requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view_opt>; }
 managed_bytes
 collection_type_impl::pack_fragmented(Iterator start, Iterator finish, int elements) {
     size_t len = collection_size_len();
     size_t psz = collection_value_len();
     for (auto j = start; j != finish; j++) {
-        len += j->size() + psz;
+        auto v = managed_bytes_view_opt(*j);
+        len += (v ? v->size() : 0) + psz;
     }
     managed_bytes out(managed_bytes::initialized_later(), len);
     managed_bytes_mutable_view v(out);

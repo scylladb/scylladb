@@ -259,7 +259,7 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
             const constant& rhs_constant = as<constant>(prepared_binop.rhs);
             const list_type_impl* rhs_list_type =
                 dynamic_cast<const list_type_impl*>(&rhs_constant.type->without_reversed());
-            utils::chunked_vector<managed_bytes> elements = get_list_elements(rhs_constant.value);
+            utils::chunked_vector<managed_bytes_opt> elements = get_list_elements(rhs_constant.value);
             if (elements.size() == 1) {
                 prepared_binop.op = oper_t::EQ;
                 prepared_binop.rhs = constant(cql3::raw_value::make_value(elements[0]),

@@ -46,7 +46,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
             return;
         }
 
-        utils::chunked_vector<managed_bytes> set_elements = expr::get_set_elements(value);
+        utils::chunked_vector<managed_bytes_opt> set_elements = expr::get_set_elements(value);
 
         if (set_elements.empty()) {
             return;
@@ -56,7 +56,10 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         collection_mutation_description mut;
 
         for (auto&& e : set_elements) {
-            mut.cells.emplace_back(to_bytes(e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
+            if (!e) {
+                throw exceptions::invalid_request_exception("Invalid NULL value in set");
+            }
+            mut.cells.emplace_back(to_bytes(*e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
         }
 
         m.set_cell(row_key, column, mut.serialize(set_type));
@@ -81,10 +84,13 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
     }
 
     collection_mutation_description mut;
-    utils::chunked_vector<managed_bytes> set_elements = expr::get_set_elements(svalue);
+    utils::chunked_vector<managed_bytes_opt> set_elements = expr::get_set_elements(svalue);
     mut.cells.reserve(set_elements.size());
     for (auto&& e : set_elements) {
-        mut.cells.push_back({to_bytes(e), params.make_dead_cell()});
+        if (!e) {
+            throw exceptions::invalid_request_exception("Invalid NULL value in set");
+        }
+        mut.cells.push_back({to_bytes(*e), params.make_dead_cell()});
     }
     m.set_cell(row_key, column, mut.serialize(*column.type));
 }

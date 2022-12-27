@@ -348,8 +348,8 @@ static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
     out << '{';
     auto size = read_collection_size(bv);
     for (int i = 0; i < size; ++i) {
-        auto kb = read_collection_value(bv);
-        auto vb = read_collection_value(bv);
+        auto kb = read_collection_key(bv);
+        auto vb = read_collection_value_nonnull(bv);
 
         if (i > 0) {
             out << ", ";
@@ -378,13 +378,18 @@ static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
     bool first = true;
     out << '[';
     managed_bytes_view mbv(bv);
-    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view& e) {
+    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view_opt& e) {
         if (first) {
             first = false;
         } else {
             out << ", ";
         }
-        out << to_json_string(*t.get_elements_type(), e);
+        if (e) {
+            out << to_json_string(*t.get_elements_type(), *e);
+        } else {
+            // Impossible in sets, but let's not insist here.
+            out << "null";
+        }
     });
     out << ']';
     return out.str();
@@ -396,13 +401,17 @@ static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
     bool first = true;
     out << '[';
     managed_bytes_view mbv(bv);
-    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view& e) {
+    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view_opt& e) {
         if (first) {
             first = false;
         } else {
             out << ", ";
         }
-        out << to_json_string(*t.get_elements_type(), e);
+        if (e) {
+            out << to_json_string(*t.get_elements_type(), *e);
+        } else {
+            out << "null";
+        }
     });
     out << ']';
     return out.str();

@@ -5470,7 +5470,7 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
 
         // The predicate that checks the message has to be a lambda to preserve source_location
         auto check_null_msg = [](std::source_location loc = std::source_location::current()) {
-            return exception_predicate::message_equals("null is not supported inside collections", loc);
+            return exception_predicate::message_matches(".*(null|NULL).*", loc);
         };
 
         auto check_unset_msg = [](std::source_location loc = std::source_location::current()) {
