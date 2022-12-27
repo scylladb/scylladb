@@ -459,9 +459,10 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             return sstables::generation_type(gen);
         };
 
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
         reshard(directory, db, ks, cf, [&] (shard_id shard) mutable {
             return make_sstable(*global_table, upload, new_generation_for_shard(shard));
-        }, service::get_local_streaming_priority()).get();
+        }, service::get_local_streaming_priority(), owned_ranges_ptr).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [&] (shard_id shard) {
             return make_sstable(*global_table, upload, new_generation_for_shard(shard));
