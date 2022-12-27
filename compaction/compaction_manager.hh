@@ -375,9 +375,9 @@ private:
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, task>
-    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, Args... args);
+    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;

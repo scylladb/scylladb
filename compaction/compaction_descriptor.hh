@@ -64,10 +64,8 @@ public:
     struct regular {
     };
     struct cleanup {
-        compaction::owned_ranges_ptr owned_ranges;
     };
     struct upgrade {
-        compaction::owned_ranges_ptr owned_ranges;
     };
     struct scrub {
         enum class mode {
@@ -112,12 +110,12 @@ public:
         return compaction_type_options(regular{});
     }
 
-    static compaction_type_options make_cleanup(compaction::owned_ranges_ptr owned_ranges) {
-        return compaction_type_options(cleanup{std::move(owned_ranges)});
+    static compaction_type_options make_cleanup() {
+        return compaction_type_options(cleanup{});
     }
 
-    static compaction_type_options make_upgrade(compaction::owned_ranges_ptr owned_ranges) {
-        return compaction_type_options(upgrade{std::move(owned_ranges)});
+    static compaction_type_options make_upgrade() {
+        return compaction_type_options(upgrade{});
     }
 
     static compaction_type_options make_scrub(scrub::mode mode) {
@@ -160,6 +158,8 @@ struct compaction_descriptor {
     // The options passed down to the compaction code.
     // This also selects the kind of compaction to do.
     compaction_type_options options = compaction_type_options::make_regular();
+    // If engaged, compaction will cleanup the input sstables by skipping non-owned ranges.
+    compaction::owned_ranges_ptr owned_ranges;
 
     compaction_sstable_creator_fn creator;
     compaction_sstable_replacer_fn replacer;
@@ -179,12 +179,14 @@ struct compaction_descriptor {
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                    run_id run_identifier = run_id::create_random_id(),
-                                   compaction_type_options options = compaction_type_options::make_regular())
+                                   compaction_type_options options = compaction_type_options::make_regular(),
+                                   compaction::owned_ranges_ptr owned_ranges_ = {})
         : sstables(std::move(sstables))
         , level(level)
         , max_sstable_bytes(max_sstable_bytes)
         , run_identifier(run_identifier)
         , options(options)
+        , owned_ranges(std::move(owned_ranges_))
         , io_priority(io_priority)
     {}
 

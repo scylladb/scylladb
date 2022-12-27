@@ -478,6 +478,8 @@ protected:
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
+    // optional owned_ranges vector for cleanup;
+    owned_ranges_ptr _owned_ranges = {};
     // Garbage collected sstables that are sealed but were not added to SSTable set yet.
     std::vector<shared_sstable> _unused_garbage_collected_sstables;
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
@@ -506,6 +508,7 @@ protected:
         , _sstable_set(std::move(descriptor.all_sstables_snapshot))
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
+        , _owned_ranges(std::move(descriptor.owned_ranges))
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -1205,7 +1208,6 @@ public:
 };
 
 class cleanup_compaction final : public regular_compaction {
-    owned_ranges_ptr _owned_ranges;
     dht::incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
@@ -1229,19 +1231,12 @@ protected:
         return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
     }
 
-private:
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, owned_ranges_ptr owned_ranges)
+public:
+    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
         : regular_compaction(table_s, std::move(descriptor), cdata)
-        , _owned_ranges(std::move(owned_ranges))
         , _owned_ranges_checker(*_owned_ranges)
     {
     }
-
-public:
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::cleanup opts)
-        : cleanup_compaction(table_s, std::move(descriptor), cdata, std::move(opts.owned_ranges)) {}
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::upgrade opts)
-        : cleanup_compaction(table_s, std::move(descriptor), cdata, std::move(opts.owned_ranges)) {}
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
         return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
@@ -1740,11 +1735,11 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
             return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata);
         }
-        std::unique_ptr<compaction> operator()(compaction_type_options::cleanup options) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, std::move(options));
+        std::unique_ptr<compaction> operator()(compaction_type_options::cleanup) {
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
         }
-        std::unique_ptr<compaction> operator()(compaction_type_options::upgrade options) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, std::move(options));
+        std::unique_ptr<compaction> operator()(compaction_type_options::upgrade) {
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::scrub scrub_options) {
             return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options);
