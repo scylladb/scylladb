@@ -480,6 +480,7 @@ protected:
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
     owned_ranges_ptr _owned_ranges = {};
+    std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;
     // Garbage collected sstables that are sealed but were not added to SSTable set yet.
     std::vector<shared_sstable> _unused_garbage_collected_sstables;
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
@@ -509,6 +510,7 @@ protected:
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _owned_ranges(std::move(descriptor.owned_ranges))
+        , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -633,6 +635,21 @@ protected:
     virtual bool enable_garbage_collected_sstable_writer() const noexcept {
         return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
+
+    flat_mutation_reader_v2::filter make_partition_filter() const {
+        return [this] (const dht::decorated_key& dk) {
+#ifdef SEASTAR_DEBUG
+            // sstables should never be shared with other shards at this point.
+            assert(dht::shard_of(*_schema, dk.token()) == this_shard_id());
+#endif
+
+            if (!_owned_ranges_checker->belongs_to_current_node(dk.token())) {
+                log_trace("Token {} does not belong to this node, skipping", dk.token());
+                return false;
+            }
+            return true;
+        };
+    }
 public:
     compaction& operator=(const compaction&) = delete;
     compaction(const compaction&) = delete;
@@ -645,6 +662,17 @@ public:
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
     virtual flat_mutation_reader_v2 make_sstable_reader() const = 0;
+
+    // Make a filtering reader if needed
+    // FIXME: the sstable reader itself should be pass the owned ranges
+    // so it can skip over the disowned ranges efficiently using the index.
+    // Ref https://github.com/scylladb/scylladb/issues/12998
+    flat_mutation_reader_v2 setup_sstable_reader() const {
+        if (!_owned_ranges_checker) {
+            return make_sstable_reader();
+        }
+        return make_filtering_reader(make_sstable_reader(), make_partition_filter());
+    }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const {
         return _table_s.get_compaction_strategy().make_sstable_set(_schema);
@@ -716,7 +744,7 @@ private:
             });
         });
         const auto& gc_state = _table_s.get_tombstone_gc_state();
-        return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
     }
 
     future<> consume() {
@@ -752,7 +780,7 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(make_sstable_reader());
+        return consumer(setup_sstable_reader());
     }
 
     virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
@@ -1208,7 +1236,6 @@ public:
 };
 
 class cleanup_compaction final : public regular_compaction {
-    dht::incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
     dht::partition_range_vector
@@ -1234,12 +1261,7 @@ protected:
 public:
     cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
         : regular_compaction(table_s, std::move(descriptor), cdata)
-        , _owned_ranges_checker(*_owned_ranges)
     {
-    }
-
-    flat_mutation_reader_v2 make_sstable_reader() const override {
-        return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
     }
 
     std::string_view report_start_desc() const override {
@@ -1248,21 +1270,6 @@ public:
 
     std::string_view report_finish_desc() const override {
         return "Cleaned";
-    }
-
-    flat_mutation_reader_v2::filter make_partition_filter() const {
-        return [this] (const dht::decorated_key& dk) {
-#ifdef SEASTAR_DEBUG
-            // sstables should never be shared with other shards at this point.
-            assert(dht::shard_of(*_schema, dk.token()) == this_shard_id());
-#endif
-
-            if (!_owned_ranges_checker.belongs_to_current_node(dk.token())) {
-                log_trace("Token {} does not belong to this node, skipping", dk.token());
-                return false;
-            }
-            return true;
-        };
     }
 };
 
