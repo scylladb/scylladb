@@ -404,7 +404,8 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 
 future<>
 sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
-                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator)
+                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
+                           compaction::owned_ranges_ptr owned_ranges_ptr)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -418,7 +419,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     auto sstables_per_job = shared_info.size() / num_jobs;
 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
-    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info)] (reshard_buckets& buckets) mutable {
+    return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info), owned_ranges_ptr = std::move(owned_ranges_ptr)] (reshard_buckets& buckets) mutable {
         return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
             auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
@@ -428,15 +429,16 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                 }
                 buckets.back().push_back(std::move(sst));
             });
-        }).then([this, &cm, &table, &buckets, creator = std::move(creator)] () mutable {
+        }).then([this, &cm, &table, &buckets, creator = std::move(creator), owned_ranges_ptr = std::move(owned_ranges_ptr)] () mutable {
             // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
             // parallel_for_each so the statistics about pending jobs are updated to reflect all
             // jobs. But only one will run in parallel at a time
-            return parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) {
+            return parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator), owned_ranges_ptr = std::move(owned_ranges_ptr)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
+                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist, owned_ranges_ptr] (sstables::compaction_data& info) {
                     sstables::compaction_descriptor desc(sstlist, _io_priority);
                     desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
+                    desc.owned_ranges = owned_ranges_ptr;
 
                     return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([this, &sstlist] (sstables::compaction_result result) {
                         // input sstables are moved, to guarantee their resources are released once we're done

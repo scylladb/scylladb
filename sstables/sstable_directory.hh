@@ -184,7 +184,8 @@ public:
     // A creator function must be passed that will create an SSTable object in the correct shard,
     // and an I/O priority must be specified.
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
-                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
+                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
+                     compaction::owned_ranges_ptr owned_ranges_ptr = nullptr);
 
     using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
 
