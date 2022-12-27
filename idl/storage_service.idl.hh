@@ -24,5 +24,12 @@ namespace service {
       service::raft_topology_cmd_result::command_status status;
   };
 
+  struct raft_topology_snapshot {
+      std::vector<canonical_mutation> mutations;
+  };
+
+  struct raft_topology_pull_params {};
+
   verb raft_topology_cmd (raft::term_t term, service::raft_topology_cmd) -> service::raft_topology_cmd_result;
+  verb raft_pull_topology_snapshot (service::raft_topology_pull_params) -> service::raft_topology_snapshot;
 }

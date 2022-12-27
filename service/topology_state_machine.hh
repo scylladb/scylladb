@@ -21,6 +21,7 @@
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
+#include "mutation/canonical_mutation.hh"
 
 namespace service {
 
@@ -86,6 +87,13 @@ struct topology {
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id);
     // Return true if node exists in any state including 'left' one
     bool contains(raft::server_id id);
+};
+
+struct raft_topology_snapshot {
+    std::vector<canonical_mutation> mutations;
+};
+
+struct raft_topology_pull_params {
 };
 
 // State machine that is responsible for topology change

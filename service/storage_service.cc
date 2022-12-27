@@ -279,6 +279,16 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
+future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
+   auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+   std::vector<mutation> muts;
+   muts.reserve(snp.mutations.size());
+   boost::transform(snp.mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+       return m.to_mutation(s);
+   });
+   co_await _db.local().apply(freeze(muts), db::no_timeout);
+}
+
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
@@ -3391,6 +3401,21 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
     ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [this, &sys_dist_ks] (raft::term_t term, raft_topology_cmd cmd) {
         return container().invoke_on(0, [&sys_dist_ks, cmd = std::move(cmd), term] (auto& ss) {
             return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [this, &proxy] (raft_topology_pull_params params) {
+        return container().invoke_on(0, [&proxy] (auto& ss) -> future<raft_topology_snapshot> {
+            if (!ss._raft_topology_change_enabled) {
+               co_return raft_topology_snapshot{};
+            }
+            auto rs = co_await db::system_keyspace::query_mutations(proxy, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+            auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+            std::vector<canonical_mutation> results;
+            results.reserve(rs->partitions().size());
+            boost::range::transform(rs->partitions(), std::back_inserter(results), [s] (const partition& p) {
+                return canonical_mutation{p.mut().unfreeze(s)};
+            });
+            co_return raft_topology_snapshot{std::move(results)};
         });
     });
 }

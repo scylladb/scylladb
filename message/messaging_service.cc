@@ -572,6 +572,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_ADD_ENTRY:
     case messaging_verb::RAFT_MODIFY_CONFIG:
     case messaging_verb::DIRECT_FD_PING:
+    case messaging_verb::RAFT_PULL_TOPOLOGY_SNAPSHOT:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
