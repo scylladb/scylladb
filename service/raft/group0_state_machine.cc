@@ -24,6 +24,8 @@
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/experimental/broadcast_tables_lang.dist.hh"
 #include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
+#include "service/storage_service.hh"
+#include "idl/storage_service.dist.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
@@ -105,7 +107,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             _client.set_query_result(cmd.new_state_id, std::move(result));
         },
         [&] (topology_change& chng) -> future<> {
-           return make_ready_future<>();
+           return _ss.topology_transition(_sp, cmd.creator_addr, std::move(chng.mutations));
         }
         ), cmd.change);
 
@@ -122,7 +124,10 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
-    return make_ready_future<>();
+    // topology_state_load applies persisted state machine state into
+    // memory and thus needs to be protected with apply mutex
+    auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
+    co_await _ss.topology_state_load();
 }
 
 future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
@@ -139,6 +144,9 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
         // (which were introduced a long time ago).
         on_internal_error(slogger, "Expected MIGRATION_REQUEST to return canonical mutations");
     }
+
+    auto topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, service::raft_topology_pull_params{});
+
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
@@ -146,6 +154,10 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
     auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
+
+    if (!topology_snp.mutations.empty()) {
+        co_await _ss.merge_topology_snapshot(std::move(topology_snp));
+    }
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
 }
