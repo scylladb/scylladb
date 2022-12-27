@@ -932,10 +932,10 @@ static void check_bind_variable_evaluate(constant check_value, expected_invalid_
     }
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_in_list) {
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_list) {
     constant list_with_null =
         make_list_const({make_int_const(1), constant::make_null(int32_type), make_int_const(2)}, int32_type);
-    check_bind_variable_evaluate(list_with_null, expected_invalid);
+    check_bind_variable_evaluate(list_with_null, expected_valid);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_list) {
@@ -1013,7 +1013,7 @@ static constant create_nested_list_with_value(constant value_in_list) {
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_lists_recursively) {
     constant list_with_null = create_nested_list_with_value(constant::make_null(int32_type));
-    check_bind_variable_evaluate(list_with_null, expected_invalid);
+    check_bind_variable_evaluate(list_with_null, expected_valid);
 }
 
 // TODO: This fails, but I feel like this is a bug.

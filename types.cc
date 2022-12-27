@@ -58,6 +58,8 @@
 
 static logging::logger tlogger("types");
 
+bytes_view_opt read_collection_value(bytes_view& in);
+
 void on_types_internal_error(std::exception_ptr ex) {
     on_internal_error(tlogger, std::move(ex));
 }
@@ -538,7 +540,7 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
     size_t map_size = read_collection_size(map);
 
     bytes_view_opt list_value;
-    bytes_view map_value[2];
+    bytes_view_opt map_value[2];
 
     // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
     size_t map_value_index = is_list();
@@ -548,11 +550,13 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
 
         list_value = read_collection_value_nonnull(list);
         map_value[0] = read_collection_value_nonnull(map);
-        map_value[1] = read_collection_value_nonnull(map);
+        // sets-as-maps happen to be serialized with NULL
+        map_value[1] = read_collection_value(map);
         if (!list_value) {
             return std::strong_ordering::less;
         }
-        auto cmp = element_type.compare(*list_value, map_value[map_value_index]);
+        // map_value[0] is known non-null, and sets will compare map_value[0].
+        auto cmp = element_type.compare(*list_value, *map_value[map_value_index]);
         if (cmp != 0) {
             return cmp;
         }
@@ -585,6 +589,11 @@ bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type
 
 void
 listlike_collection_type_impl::validate_for_storage(const FragmentedView auto& value) const {
+    for (auto val_opt : partially_deserialize_listlike(value)) {
+        if (!val_opt) {
+            throw exceptions::invalid_request_exception("Cannot store NULL in list or set");
+        }
+    }
 }
 
 template
@@ -660,6 +669,19 @@ bytes_view read_collection_key(bytes_view& in) {
     int32_t size = read_simple<int32_t>(in);
     if (size < 0) {
         throw exceptions::invalid_request_exception("null/unset is not supported inside collections");
+    }
+    return read_simple_bytes(in, size);
+}
+bytes_view_opt read_collection_value(bytes_view& in) {
+    int32_t size = read_simple<int32_t>(in);
+    if (size == -1) {
+        throw std::nullopt;
+    }
+    if (size == -2) {
+        throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+    }
+    if (size < 0) {
+        throw exceptions::invalid_request_exception("null is not supported inside collections");
     }
     return read_simple_bytes(in, size);
 }
@@ -1009,6 +1031,12 @@ const sstring& abstract_type::cql3_type_name() const {
 }
 
 void write_collection_value(bytes::iterator& out, data_type type, const data_value& value) {
+    if (value.is_null()) {
+        auto val_len = -1;
+        serialize_int32(out, val_len);
+        return;
+    }
+
     size_t val_len = value.serialized_size();
 
     serialize_int32(out, val_len);
@@ -1214,7 +1242,7 @@ static std::optional<data_type> update_user_type_aux(
         map_type_impl::get_instance(k ? *k : old_keys, v ? *v : old_values, m.is_multi_cell())));
 }
 
-static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf);
+static void serialize(const abstract_type& t, const void* value, bytes::iterator& out);
 
 set_type
 set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
@@ -1330,7 +1358,7 @@ utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in)
     utils::chunked_vector<managed_bytes_opt> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        elements.emplace_back(read_collection_value_nonnull(in));
+        elements.emplace_back(read_collection_value(in));
     }
     return elements;
 }
@@ -1420,8 +1448,10 @@ template <FragmentedView View>
 static void validate_aux(const list_type_impl& t, View v) {
     auto nr = read_collection_size(v);
     for (int i = 0; i != nr; ++i) {
-        auto val = read_collection_value_nonnull(v);
-        t.get_elements_type()->validate(val);
+        auto val_opt = read_collection_value(v);
+        if (val_opt) {
+            t.get_elements_type()->validate(*val_opt);
+        }
     }
     if (v.size_bytes()) {
         auto hex = with_linearized(v, [] (bytes_view bv) { return to_hex(bv); });
@@ -1447,11 +1477,13 @@ list_type_impl::deserialize(View in) const {
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value_nonnull(in));
-        if (e.is_null()) {
-            throw marshal_exception("Cannot deserialize a list");
+        auto serialized_value_opt = read_collection_value(in);
+        if (serialized_value_opt) {
+            auto e = _elements->deserialize(*serialized_value_opt);
+            s.push_back(std::move(e));
+        } else {
+            s.push_back(data_value::make_null(data_type(shared_from_this())));
         }
-        s.push_back(std::move(e));
     }
     return make_value(std::move(s));
 }

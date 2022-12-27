@@ -5629,8 +5629,8 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
 
         auto where_in_list_marker = e.prepare("SELECT * FROM null_in_col WHERE p IN ?").get0();
 
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_marker, {list_with_null}).get(),
-                                exceptions::invalid_request_exception, check_null_msg());
+        auto msg = e.execute_prepared(where_in_list_marker, {list_with_null}).get();
+        assert_that(msg).is_rows().with_rows({});
     });
 }
 

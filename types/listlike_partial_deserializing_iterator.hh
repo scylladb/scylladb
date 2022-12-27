@@ -37,6 +37,18 @@ View read_collection_key(View& in) {
 }
 
 template <FragmentedView View>
+std::optional<View> read_collection_value(View& in) {
+    auto size = read_simple<int32_t>(in);
+    if (size == -1) {
+        return std::nullopt;
+    }
+    if (size < 0) {
+        throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+    }
+    return read_simple_bytes(in, size);
+}
+
+template <FragmentedView View>
 View read_collection_value_nonnull(View& in) {
     auto size = read_simple<int32_t>(in);
     if (size == -2) {
@@ -97,7 +109,7 @@ public:
 private:
     void parse() {
         if (_remain) {
-            _cur = read_collection_value_nonnull(*_in);
+            _cur = read_collection_value(*_in);
         } else {
             _cur = {};
         }

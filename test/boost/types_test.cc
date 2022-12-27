@@ -967,3 +967,13 @@ SEASTAR_TEST_CASE(test_empty_type_serialization) {
     BOOST_REQUIRE_EQUAL(*ser, to_bytes(sstring(""sv)));
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_list_type_serialization) {
+    auto list_type = list_type_impl::get_instance(int32_type, false);
+    auto list = make_list_value(list_type, {data_value(7), data_value::make_null(int32_type), data_value(6)});
+    auto ser = list.serialize();
+    BOOST_REQUIRE(ser.has_value());
+    BOOST_REQUIRE_EQUAL(*ser, to_bytes(sstring("\0\0\0\3\0\0\0\4\0\0\0\7\xff\xff\xff\xff\0\0\0\4\0\0\0\6"sv)));
+    BOOST_REQUIRE_EQUAL(list, list_type->deserialize_value(managed_bytes_view(*ser)));
+    return make_ready_future<>();
+}
