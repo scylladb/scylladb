@@ -55,7 +55,14 @@ def try_connect(orig_cluster, ssl_version):
         port=orig_cluster.port,
         protocol_version=orig_cluster.protocol_version,
         auth_provider=orig_cluster.auth_provider,
-        ssl_context=ssl_context)
+        ssl_context=ssl_context,
+        # The default timeout for new connections is 5 seconds, and for
+        # requests made by the control connection is 2 seconds. These should
+        # have been more than enough, but in some extreme cases with a very
+        # slow debug build running on a very busy machine, they may not be.
+        # so let's increase them to 60 seconds. See issue #11289.
+        connect_timeout = 60,
+        control_connection_timeout = 60)
     cluster.connect()
     cluster.shutdown()
 
@@ -73,7 +80,14 @@ def test_non_tls_on_tls(cql):
         contact_points=cql.cluster.contact_points,
         port=cql.cluster.port,
         protocol_version=cql.cluster.protocol_version,
-        auth_provider=cql.cluster.auth_provider)
+        auth_provider=cql.cluster.auth_provider,
+        # The default timeout for new connections is 5 seconds, and for
+        # requests made by the control connection is 2 seconds. These should
+        # have been more than enough, but in some extreme cases with a very
+        # slow debug build running on a very busy machine, they may not be.
+        # so let's increase them to 60 seconds. See issue #11289.
+        connect_timeout = 60,
+        control_connection_timeout = 60)
     with pytest.raises(cassandra.cluster.NoHostAvailable, match="ProtocolError"):
         cluster.connect()
     cluster.shutdown() # can't be reached
