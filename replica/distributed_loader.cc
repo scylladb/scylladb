@@ -354,6 +354,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
         }
 
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
         reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
@@ -361,7 +362,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
                     global_table->get_sstables_manager().get_highest_supported_format(),
                     sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
-        }).get();
+        }, owned_ranges_ptr).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
