@@ -88,6 +88,9 @@ public:
     // vector<pair<data_value, empty>> respectively. Serialize this representation
     // as a vector of values, not as a vector of pairs.
     bytes serialize_map(const map_type_impl& map_type, const data_value& value) const;
+
+    // Verify that there are no NULL elements. Throws if there are.
+    void validate_for_storage(const FragmentedView auto& value) const;
 };
 
 template <typename Iterator>
@@ -125,3 +128,11 @@ collection_type_impl::pack_fragmented(Iterator start, Iterator finish, int eleme
     }
     return out;
 }
+
+extern
+template
+void listlike_collection_type_impl::validate_for_storage(const managed_bytes_view& value) const;
+
+extern
+template
+void listlike_collection_type_impl::validate_for_storage(const fragmented_temporary_buffer::view& value) const;

@@ -580,6 +580,17 @@ bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type
     return b;
 }
 
+void
+listlike_collection_type_impl::validate_for_storage(const FragmentedView auto& value) const {
+}
+
+template
+void listlike_collection_type_impl::validate_for_storage(const managed_bytes_view& value) const;
+
+template
+void listlike_collection_type_impl::validate_for_storage(const fragmented_temporary_buffer::view& value) const;
+
+
 static bool is_compatible_with_aux(const collection_type_impl& t, const abstract_type& previous) {
     if (t.get_kind() != previous.get_kind()) {
         return false;

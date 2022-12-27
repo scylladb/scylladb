@@ -170,10 +170,14 @@ lists::do_append(const cql3::raw_value& list_value,
         }
         m.set_cell(prefix, column, appended.serialize(*ltype));
     } else {
+        auto ltype = static_cast<const list_type_impl*>(column.type.get());
         // for frozen lists, we're overwriting the whole cell value
         if (list_value.is_null()) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
+            list_value.view().with_value([&] (const FragmentedView auto& v) {
+                ltype->validate_for_storage(v);
+            });
             m.set_cell(prefix, column, params.make_cell(*column.type, list_value.view()));
         }
     }
