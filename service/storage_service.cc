@@ -289,6 +289,46 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
+    slogger.info("raft topology: start topology coordinator fiber");
+
+    auto abort = as.subscribe([this] () noexcept {
+        _topology_state_machine.event.signal();
+    });
+
+    while (!as.abort_requested()) {
+        co_await _topology_state_machine.event.when();
+    }
+}
+
+future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    std::optional<abort_source> as;
+    try {
+        while (!_abort_source.abort_requested()) {
+            // Wait for a state change in case we are not a leader yet, or we are are the leader
+            // and coordinator work is running (in which case 'as' is engaged)
+            while (!raft.is_leader() || as) {
+                co_await raft.wait_for_state_change(&_abort_source);
+                if (as) {
+                    as->request_abort(); // we are no longer a leader, so abort the coordinator
+                    co_await std::exchange(_topology_change_coordinator, make_ready_future<>());
+                    as = std::nullopt;
+                }
+            }
+            // We are the leader now but that can change any time!
+            as.emplace();
+            // start topology change coordinator in the background
+            _topology_change_coordinator = topology_change_coordinator_fiber(raft, sys_dist_ks, *as);
+        }
+    } catch (...) {
+        slogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
+    }
+    if (as) {
+        as->request_abort(); // abort current coordinator if running
+        co_await std::move(_topology_change_coordinator);
+    }
+}
+
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
