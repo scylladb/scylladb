@@ -70,6 +70,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/util.hh"
 #include "idl/storage_service.dist.hh"
+#include "service/storage_proxy.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -277,6 +278,32 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
         co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
     }
     slogger.info("Checking bootstrapping/leaving nodes: ok");
+}
+
+future<> storage_service::topology_state_load() {
+    co_return;
+}
+
+future<> storage_service::topology_transition(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+    assert(this_shard_id() == 0);
+    // write new state into persistent storage
+    std::vector<mutation> mutations;
+    mutations.reserve(cms.size());
+    try {
+        for (const auto& cm : cms) {
+            auto& tbl = _db.local().find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (replica::no_such_column_family& e) {
+        slogger.error("Error while applying topology mutations from {}: {}", from, e);
+        throw std::runtime_error(fmt::format("Error while applying topology mutations: {}", e));
+    }
+
+    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+
+    co_await topology_state_load(); // reload new state
+
+    _topology_state_machine.event.signal();
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {

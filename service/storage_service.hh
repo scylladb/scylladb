@@ -783,6 +783,7 @@ private:
     bool is_normal_state_handled_on_boot(gms::inet_address);
     future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
 
+    friend class group0_state_machine;
     bool _raft_topology_change_enabled = false;
 
     // This fibers monitors raft state and start/stops the topology change
@@ -797,7 +798,10 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
 
-public:
+    // This is called on all nodes for each new command received through raft
+    future<> topology_transition(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);
+    // load topology state machine snapshot into memory
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 };
