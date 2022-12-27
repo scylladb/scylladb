@@ -319,6 +319,7 @@ public:
         auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
+        _sst->get_stats().on_row_read();
         sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
 
         _in_progress_row.emplace(std::move(key));
