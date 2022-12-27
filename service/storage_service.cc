@@ -69,6 +69,7 @@
 #include "utils/error_injection.hh"
 #include "utils/fb_utilities.hh"
 #include "locator/util.hh"
+#include "idl/storage_service.dist.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -3369,6 +3370,12 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
+future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd) {
+        raft_topology_cmd_result result;
+        slogger.trace("raft topology: boot cmd rpc {} is called", cmd.cmd);
+        co_return result;
+}
+
 void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     _messaging.local().register_replication_finished([] (gms::inet_address from) {
         slogger.info("Got confirm_replication from {}", from);
@@ -3381,12 +3388,18 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
+    ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [this, &sys_dist_ks] (raft::term_t term, raft_topology_cmd cmd) {
+        return container().invoke_on(0, [&sys_dist_ks, cmd = std::move(cmd), term] (auto& ss) {
+            return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd);
+        });
+    });
 }
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         _messaging.local().unregister_replication_finished(),
-        _messaging.local().unregister_node_ops_cmd()
+        _messaging.local().unregister_node_ops_cmd(),
+        ser::storage_service_rpc_verbs::unregister(&_messaging.local())
     ).discard_result();
 }
 

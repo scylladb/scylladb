@@ -45,6 +45,7 @@
 #include "serializer.hh"
 #include "full_position.hh"
 #include "db/per_partition_rate_limit_info.hh"
+#include "service/topology_state_machine.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -73,6 +74,7 @@
 #include "idl/replica_exception.dist.hh"
 #include "idl/per_partition_rate_limit_info.dist.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "idl/storage_service.dist.hh"
 #include "message/rpc_protocol_impl.hh"
 #include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"
@@ -113,6 +115,7 @@
 #include "idl/partition_checksum.dist.impl.hh"
 #include "idl/forward_request.dist.hh"
 #include "idl/forward_request.dist.impl.hh"
+#include "idl/storage_service.dist.impl.hh"
 
 namespace netw {
 
@@ -508,6 +511,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GROUP0_PEER_EXCHANGE:
     case messaging_verb::GROUP0_MODIFY_CONFIG:
     case messaging_verb::GET_GROUP0_UPGRADE_STATE:
+    case messaging_verb::RAFT_TOPOLOGY_CMD:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.

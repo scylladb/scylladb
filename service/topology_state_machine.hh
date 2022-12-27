@@ -95,10 +95,31 @@ struct topology_state_machine {
     condition_variable event;
 };
 
+// Raft leader uses this command to drive bootstrap process on other nodes
+struct raft_topology_cmd {
+      enum class command: uint8_t {
+          barrier,         // request to wait for the latest topology
+          stream_ranges,   // reqeust to stream data, return when streaming is
+                           // done
+          fence_old_reads  // wait for all reads started before to complete
+      };
+      command cmd;
+};
+
+// returned as a result of raft_bootstrap_cmd
+struct raft_topology_cmd_result {
+    enum class command_status: uint8_t {
+        fail,
+        success
+    };
+    command_status status = command_status::fail;
+};
+
 std::ostream& operator<<(std::ostream& os, ring_slice::replication_state s);
 ring_slice::replication_state replication_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, const topology_request& req);
 topology_request topology_request_from_string(const sstring& s);
+std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
 }

@@ -43,6 +43,7 @@
 #include "cdc/generation_id.hh"
 #include "raft/raft.hh"
 #include "repair/id.hh"
+#include "service/topology_state_machine.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -780,6 +781,8 @@ private:
     std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(gms::inet_address);
     future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
+
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
 };
 
 }

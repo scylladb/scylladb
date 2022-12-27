@@ -100,4 +100,19 @@ topology_request topology_request_from_string(const sstring& s) {
     }
     throw std::runtime_error(fmt::format("cannot map name {} to topology_request", s));
 }
+
+std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd) {
+    switch (cmd) {
+        case raft_topology_cmd::command::barrier:
+            os << "barrier";
+            break;
+        case raft_topology_cmd::command::stream_ranges:
+            os << "stream_ranges";
+            break;
+        case raft_topology_cmd::command::fence_old_reads:
+            os << "fence_old_reads";
+            break;
+    }
+    return os;
+}
 }
