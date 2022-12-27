@@ -21,6 +21,16 @@ prints the result to the standard output. You can use commonly available command
 to print the results in the JSON format.
 
 To avoid errors, you should prefer ``scylla-api-client`` over cURL and similar HTTP tools for interacting 
-with the ScyllaDB REST API
+with the ScyllaDB REST API.
 
+Usage
+======
 
+Run ``scylla-api-client --help`` for information about all the available options.
+
+**Examples:**
+
+* ``scylla-api-client --list-modules`` - Shows all the API modules.
+* ``scylla-api-client --list-module-commands system`` - Shows all the API commands for the ``system`` module.
+* ``scylla-api-client system uptime_ms`` - Gets the system uptime (in milliseconds).
+* ``scylla-api-client system log POST --message "hello world" --level warn`` - Sets the logger level.
