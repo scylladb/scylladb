@@ -3120,15 +3120,6 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
     }
 }
 
-future<> storage_service::start_leaving() {
-    co_await _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(co_await _sys_ks.local().get_local_tokens()));
-    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
-        auto endpoint = get_broadcast_address();
-        tmptr->add_leaving_endpoint(endpoint);
-        return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
-    });
-}
-
 void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t expire_time) {
     if (expire_time != 0L) {
         using clk = gms::gossiper::clk;

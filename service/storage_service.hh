@@ -660,7 +660,6 @@ private:
     /**
      * Broadcast leaving status and update local _token_metadata accordingly
      */
-    future<> start_leaving();
     future<> leave_ring();
     future<> unbootstrap();
 
