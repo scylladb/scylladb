@@ -328,6 +328,7 @@ future<> server_impl::start() {
     auto commit_idx = co_await _persistence->load_commit_idx();
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
+    logger.trace("[{}] start raft instance: snapshot id={} commit index={} last stable index={}", id(), snapshot.id, commit_idx, stable_idx);
     if (commit_idx > stable_idx) {
         on_internal_error(logger, "Raft init failed: commited index cannot be larger then persisted one");
     }
