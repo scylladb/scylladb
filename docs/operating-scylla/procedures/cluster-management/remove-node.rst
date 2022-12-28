@@ -61,7 +61,9 @@ command providing the Host ID of the node you are removing. See :doc:`nodetool r
 
 .. warning::
     * Using ``nodetool removenode`` is a fallback procedure that should only be used when a node is permanently down and cannot
-      be recovered. 
+      be recovered.
+    * It’s essential to ensure the removed node will **never** come back to the cluster, which **might lead to data loss**. To prevent 
+      the removed node from rejoining the cluster, remove that node from the cluster network or VPC.
     * You must never use ``nodetool removenode`` to remove a running node that can be reached by other nodes in the cluster.
 
 **Example:**
