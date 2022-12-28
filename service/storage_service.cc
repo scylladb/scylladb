@@ -2044,6 +2044,7 @@ future<> storage_service::decommission() {
                 // Step 5: Start to sync data
                 slogger.info("DECOMMISSIONING: unbootstrap starts");
                 ss.unbootstrap().get();
+                ss.leave_ring().get();
                 slogger.info("DECOMMISSIONING: unbootstrap done");
 
                 // Step 6: Finish
@@ -2905,7 +2906,6 @@ future<> storage_service::unbootstrap() {
         }
         slogger.debug("stream acks all received.");
     }
-    co_await leave_ring();
 }
 
 future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
