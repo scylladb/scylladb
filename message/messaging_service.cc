@@ -735,7 +735,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     std::optional<bool> topology_status;
     auto has_topology = [&] {
         if (!topology_status.has_value()) {
-            topology_status = topology_known_for(id.addr);
+            topology_status = topology_known_for(id.addr) && topology_known_for(broadcast_address);
         }
         return *topology_status;
     };
