@@ -56,7 +56,7 @@ Removing an Unavailable Node
 If the node status is **Down Normal (DN)**, you should try to restore it. Once the node is up, use the ``nodetool decommission``
 command (see `Removing a Running Node`_) to remove it.
 
-If all attempts to restore the node have failed and the node is down, you can remove the node by running the ``nodetool removenode``
+If all attempts to restore the node have failed and the node is **permanently down**, you can remove the node by running the ``nodetool removenode``
 command providing the Host ID of the node you are removing. See :doc:`nodetool removenode </operating-scylla/nodetool-commands/removenode>` for details.
 
 .. warning::
