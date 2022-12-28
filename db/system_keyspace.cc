@@ -43,7 +43,6 @@
 #include <seastar/core/enum.hh>
 #include <seastar/net/inet_address.hh>
 #include "index/secondary_index.hh"
-#include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "db/size_estimates_virtual_reader.hh"
