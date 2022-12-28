@@ -596,14 +596,7 @@ void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens,
         }
     }
 
-    // Unfortunately, std::remove_if does not work with std::map
-    for (auto it = _bootstrap_tokens.begin(); it != _bootstrap_tokens.end();) {
-        if ((*it).second == endpoint) {
-            it = _bootstrap_tokens.erase(it);
-        } else {
-            it++;
-        }
-    }
+    std::erase_if(_bootstrap_tokens, [endpoint] (const std::pair<token, inet_address>& n) { return n.second == endpoint; });
 
     for (auto t : tokens) {
         _bootstrap_tokens[t] = endpoint;
