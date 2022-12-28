@@ -33,4 +33,4 @@ Run ``scylla-api-client --help`` for information about all the available options
 * ``scylla-api-client --list-modules`` - Shows all the API modules.
 * ``scylla-api-client --list-module-commands system`` - Shows all the API commands for the ``system`` module.
 * ``scylla-api-client system uptime_ms`` - Gets the system uptime (in milliseconds).
-* ``scylla-api-client system log POST --message "hello world" --level warn`` - Sets the logger level.
+* ``scylla-api-client system log POST --message "hello world" --level warn`` - Writes the "hello world" message to the ScyllaDB log using the "warn" logging level.
