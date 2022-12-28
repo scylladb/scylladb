@@ -5067,8 +5067,15 @@ SEASTAR_TEST_CASE(timeuuid_fcts_prepared_re_evaluation) {
     });
 }
 
+static future<> with_parallelized_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.enable_parallelized_aggregation({true}, db::config::config_source::CommandLine);
+    return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
+}
+
 SEASTAR_TEST_CASE(test_parallelized_select_count) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5087,7 +5094,7 @@ SEASTAR_TEST_CASE(test_parallelized_select_count) {
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_min) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5105,7 +5112,7 @@ SEASTAR_TEST_CASE(test_parallelized_select_min) {
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_max) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5124,7 +5131,7 @@ SEASTAR_TEST_CASE(test_parallelized_select_max) {
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_sum) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5143,7 +5150,7 @@ SEASTAR_TEST_CASE(test_parallelized_select_sum) {
 }
 
 SEASTAR_TEST_CASE(test_non_parallelized_multiple_select) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5162,7 +5169,7 @@ SEASTAR_TEST_CASE(test_non_parallelized_multiple_select) {
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5184,18 +5191,18 @@ SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
     });
 }
 
-template<typename Func>
-static future<> with_udf_enabled(Func&& func) {
+static future<> with_udf_and_parallel_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
     db_cfg.user_defined_function_time_limit_ms(1000);
     db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
-    return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
+    db_cfg.enable_parallelized_aggregation({true}, db::config::config_source::CommandLine);
+    return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_uda) {
-    return with_udf_enabled([](cql_test_env& e) {
+    return with_udf_and_parallel_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
@@ -5241,7 +5248,7 @@ SEASTAR_TEST_CASE(test_parallelized_select_uda) {
 }
 
 SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
-    return with_udf_enabled([](cql_test_env& e) {
+    return with_udf_and_parallel_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
         auto stat_parallelized = qp.get_cql_stats().select_parallelized;
 
