@@ -20,7 +20,7 @@ When invoking a function, ``scylla-api-client`` performs basic validation of the
 prints the result to the standard output. You can use commonly available command line utilities
 to print the results in the JSON format.
 
-To avoid errors, you should prefer ``scylla-api-client`` over cURL and similar HTTP tools for interacting 
+To avoid errors, you should prefer ``scylla-api-client`` over ``curl`` and similar HTTP tools for interacting 
 with the ScyllaDB REST API.
 
 Usage
