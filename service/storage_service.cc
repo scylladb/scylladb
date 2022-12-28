@@ -3248,10 +3248,10 @@ future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr
         auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
         for (const auto& [keyspace_name, erm] : ks_erms) {
             auto& strategy = erm->get_replication_strategy();
-            slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
+            slogger.debug("Updating pending ranges for keyspace={} starts ({})", keyspace_name, reason);
             locator::dc_rack_fn get_dc_rack_from_gossiper([this] (inet_address ep) { return get_dc_rack_for(ep); });
             co_await tmptr->update_pending_ranges(strategy, keyspace_name, get_dc_rack_from_gossiper);
-            slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
+            slogger.debug("Updating pending ranges for keyspace={} ends ({})", keyspace_name, reason);
         }
     } catch (...) {
         auto ep = std::current_exception();
