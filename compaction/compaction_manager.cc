@@ -81,6 +81,7 @@ public:
         _cm.deregister_compacting_sstables(sstables.begin(), sstables.end());
         for (const auto& sst : sstables) {
             _compacting.erase(sst);
+            _cs.sstables_requiring_cleanup.erase(sst);
         }
     }
 
@@ -1561,15 +1562,22 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         throw std::runtime_error("cleanup request failed: sorted_owned_ranges is empty");
     }
 
+    // Called with compaction_disabled
     auto get_sstables = [this, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
         return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
-            auto sstables = std::vector<sstables::shared_sstable>{};
-            const auto candidates = get_candidates(t);
-            std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&] (const sstables::shared_sstable& sst) {
-                seastar::thread::maybe_yield();
-                return update_sstable_cleanup_state(t, sst, sorted_owned_ranges);
-            });
-            return sstables;
+            auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) {
+                set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                    update_sstable_cleanup_state(t, sst, sorted_owned_ranges);
+                    seastar::thread::maybe_yield();
+                });
+            };
+            update_sstables_cleanup_state(t.main_sstable_set());
+            update_sstables_cleanup_state(t.maintenance_sstable_set());
+            // Some sstables may remain in sstables_requiring_cleanup
+            // for later processing if they can't be cleaned up right now.
+            // They are erased from sstables_requiring_cleanup by compacting.release_compacting
+            auto& cs = get_compaction_state(&t);
+            return get_candidates(t, cs.sstables_requiring_cleanup);
         });
     };
 
