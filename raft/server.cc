@@ -1300,7 +1300,7 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
         co_return stop_iteration::yes;
     });
 
-    logger.trace("[{}] read_barrier read index {}, append index {}", _id, read_idx, _applied_idx);
+    logger.trace("[{}] read_barrier read index {}, applied index {}", _id, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx, as);
 }
 
