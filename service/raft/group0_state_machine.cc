@@ -56,7 +56,7 @@ static mutation convert_history_mutation(canonical_mutation m, const data_dictio
 }
 
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
-    slogger.trace("apply() is called");
+    slogger.trace("apply() is called with {} commands", command.size());
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
         auto cmd = ser::deserialize(is, boost::type<group0_command>{});
