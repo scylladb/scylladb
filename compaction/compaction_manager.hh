@@ -358,6 +358,9 @@ private:
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(compaction::table_state* t);
+    const compaction_state& get_compaction_state(compaction::table_state* t) const {
+        return const_cast<compaction_manager*>(this)->get_compaction_state(t);
+    }
 
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
@@ -557,6 +560,9 @@ public:
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, owned_ranges_ptr owned_ranges_ptr);
+
+    // checks if the sstable is in the respective compaction_state.sstables_requiring_cleanup set.
+    bool requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const;
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
