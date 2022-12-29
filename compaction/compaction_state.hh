@@ -35,6 +35,7 @@ struct compaction_state {
     compaction_backlog_tracker backlog_tracker;
 
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
+    owned_ranges_ptr owned_ranges_ptr;
 
     explicit compaction_state(table_state& t);
     compaction_state(compaction_state&&) = delete;
