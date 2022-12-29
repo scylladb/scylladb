@@ -1100,6 +1100,40 @@ void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
     });
 }
 
+dht::partition_range_vector row_cache::get_partitions_where_tombstones_exceed_limit(int tombstone_clear_cache_threshold,
+        const tombstone_gc_state& gc_state, gc_clock::time_point query_time) {
+    dht::partition_range_vector ranges;
+
+    if (tombstone_clear_cache_threshold > 0) {
+        _read_section(_tracker.region(), [&] {
+            for (auto& e : _partitions) {
+                int expired = 0;
+
+                if (!e.partition().version()) {
+                    continue;
+                }
+
+                auto dkey = e.key();
+
+                for (partition_version& pv : e.partition().versions_from_oldest()) {
+                    auto gc_before = gc_state.get_gc_before_for_key(_schema->shared_from_this(), dkey, query_time);
+
+                    expired += pv.partition().expired_row_count(*_schema, gc_before, query_time);
+                }
+
+                if (expired > tombstone_clear_cache_threshold) {
+                    clogger.debug("table '{}' partition with key '{}' has {} expired rows over limit of {}",
+                        _schema->cf_name(), dkey.key().with_schema(*_schema), expired, tombstone_clear_cache_threshold);
+
+                    ranges.push_back(dht::partition_range::make_singular(std::move(dkey)));
+                }
+            }
+        });
+    }
+
+    return ranges;
+}
+
 void row_cache::invalidate_locked(const dht::decorated_key& dk) {
     auto pos = _partitions.lower_bound(dk, dht::ring_position_comparator(*_schema));
     if (pos == partitions_end() || !pos->key().equal(*_schema, dk)) {

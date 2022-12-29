@@ -2680,6 +2680,10 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _t._compaction_manager.get_backlog_tracker(*this);
     }
+    dht::partition_range_vector get_cached_partitions_where_tombstones_exceed_limit(gc_clock::time_point query_time) const override {
+        return _t.get_row_cache().get_partitions_where_tombstones_exceed_limit(
+            _t.get_config().tombstone_clear_cache_threshold, get_tombstone_gc_state(), query_time);
+    }
 };
 
 compaction_backlog_tracker& compaction_group::get_backlog_tracker() {

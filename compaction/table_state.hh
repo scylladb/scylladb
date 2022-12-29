@@ -45,6 +45,7 @@ public:
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
+    virtual dht::partition_range_vector get_cached_partitions_where_tombstones_exceed_limit(gc_clock::time_point query_time) const = 0;
 };
 
 }

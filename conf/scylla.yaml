@@ -376,6 +376,7 @@ commitlog_total_space_in_mb: -1
 # using the StorageService mbean.
 # tombstone_warn_threshold: 1000
 # tombstone_failure_threshold: 100000
+# tombstone_clear_cache_threshold: 0
 
 # Granularity of the collation index of rows within a partition.
 # Increase if your rows are large, or if you have a very large

@@ -381,6 +381,7 @@ public:
         // Can be updated by a schema change:
         bool enable_optimized_twcs_queries{true};
         uint32_t tombstone_warn_threshold{0};
+        uint32_t tombstone_clear_cache_threshold{0};
         unsigned x_log2_compaction_groups{0};
     };
     struct no_commitlog {};

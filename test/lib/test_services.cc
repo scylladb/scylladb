@@ -118,6 +118,10 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
+    dht::partition_range_vector get_cached_partitions_where_tombstones_exceed_limit(gc_clock::time_point query_time) const override {
+        return table().get_row_cache().get_partitions_where_tombstones_exceed_limit(
+            table().get_config().tombstone_clear_cache_threshold, get_tombstone_gc_state(), query_time);
+    }
 };
 
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)

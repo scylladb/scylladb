@@ -564,7 +564,9 @@ protected:
 
     virtual compaction_completion_desc
     get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) {
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables)};
+        auto partitions_to_invalidate = _table_s.get_cached_partitions_where_tombstones_exceed_limit(gc_clock::now());
+
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(partitions_to_invalidate)};
     }
 
     // Tombstone expiration is enabled based on the presence of sstable set.

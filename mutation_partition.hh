@@ -1426,6 +1426,10 @@ public:
     uint64_t live_row_count(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
+    uint64_t expired_row_count(const schema&,
+        gc_clock::time_point gc_before,
+        gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 

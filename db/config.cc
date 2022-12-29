@@ -561,6 +561,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */
     , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Used, 1000,
         "The maximum number of tombstones a query can scan before warning.")
+    , tombstone_clear_cache_threshold(this, "tombstone_clear_cache_threshold", value_status::Used, 0,
+        "The maximum number of partition tombstones in cache before partition cache will be invalidated")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
     , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,

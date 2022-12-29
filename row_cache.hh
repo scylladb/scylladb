@@ -425,6 +425,9 @@ public:
     // that they are not evicted by memory reclaimer.
     void unlink_from_lru(const dht::decorated_key&);
 
+    dht::partition_range_vector get_partitions_where_tombstones_exceed_limit(int tombstone_clear_cache_threshold,
+        const tombstone_gc_state& gc_state, gc_clock::time_point query_time);
+
     // Synchronizes cache with the underlying mutation source
     // by invalidating ranges which were modified. This will force
     // them to be re-read from the underlying mutation source
