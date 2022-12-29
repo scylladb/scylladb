@@ -1111,6 +1111,9 @@ public:
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
+    // Add sst to or remove it from the sstables_requiring_cleanup set.
+    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr);
+
     friend class compaction_group;
 };
 

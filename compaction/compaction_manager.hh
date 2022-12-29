@@ -22,6 +22,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include "log.hh"
+#include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
 #include "utils/serialized_action.hh"
@@ -87,6 +88,8 @@ private:
         condition_variable compaction_done;
 
         compaction_backlog_tracker backlog_tracker;
+
+        std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
 
         explicit compaction_state(table_state& t);
         compaction_state(compaction_state&&) = delete;
@@ -551,6 +554,9 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
         return _tombstone_gc_state;
     };
+
+    // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
+    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, owned_ranges_ptr owned_ranges_ptr);
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

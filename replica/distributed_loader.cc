@@ -158,7 +158,7 @@ struct reshard_shard_descriptor {
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
 future<sstables::sstable_directory::sstable_info_vector>
-collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, compaction::owned_ranges_ptr owned_ranges_ptr) {
+collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges_ptr owned_ranges_ptr) {
     auto info_vec = sstables::sstable_directory::sstable_info_vector();
 
     // We want to make sure that each distributed object reshards about the same amount of data.
@@ -170,13 +170,13 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, compactio
     auto coordinator = this_shard_id();
     // We will first move all of the foreign open info to temporary storage so that we can sort
     // them. We want to distribute bigger sstables first.
-    co_await dir.invoke_on_all([&info_vec, coordinator, owned_ranges_ptr] (sstables::sstable_directory& d) -> future<> {
+    co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
         auto shared_sstables = d.retrieve_shared_sstables();
         sstables::sstable_directory::sstable_info_vector need_cleanup;
         if (owned_ranges_ptr) {
-            const auto& owned_ranges = *owned_ranges_ptr;
+            auto& table = db.local().find_column_family(ks_name, table_name);
             co_await d.do_for_each_sstable([&] (sstables::shared_sstable sst) -> future<> {
-                if (needs_cleanup(sst, owned_ranges)) {
+                if (table.update_sstable_cleanup_state(sst, owned_ranges_ptr)) {
                     need_cleanup.push_back(co_await sst->get_open_info());
                 }
             });
@@ -260,7 +260,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //    assigned.
 future<>
 distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
-    auto all_jobs = co_await collect_all_shared_sstables(dir, owned_ranges_ptr);
+    auto all_jobs = co_await collect_all_shared_sstables(dir, db, ks_name, table_name, owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
     co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), std::move(owned_ranges_ptr));
 }
@@ -377,6 +377,11 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         // maybe triggerring resharding+cleanup unnecessarily for some sstables.
         // But this is resharding on refresh (sstable loading via upload dir),
         // which will usually require resharding anyway.
+        //
+        // FIXME: take multiple compaction groups into account
+        // - segregate resharded tables into compaction groups
+        // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
+        //   so that cleanup can be considered per compaction group
         auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
         reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
             // we need generation calculated by instance of cf at requested shard
