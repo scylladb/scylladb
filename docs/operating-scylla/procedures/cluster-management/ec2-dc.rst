@@ -59,7 +59,6 @@ Perform the following steps for each node in the new cluster:
      * **cluster_name** - Set the selected cluster_name.
      * **seeds** - IP address of the first node in the cluster. See :doc:`Scylla Seed Nodes </kb/seed-nodes/>` for details.
      * **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster.
-     * **auto_bootstrap** - By default, this parameter is set to **true**. It allows new nodes to migrate data to themselves automatically. If using Scylla AMI add ``--bootstrap`` to the user settings when creating a node.
      * **endpoint_snitch** - Set the selected snitch.
      * **rpc_address** - Address for client connection (Thrift, CQL).
      * **broadcast_address** - The IP address a node tells other nodes in the cluster to contact it by.
