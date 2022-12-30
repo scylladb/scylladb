@@ -62,8 +62,6 @@ Procedure
 
     - **seeds** - Set the seed nodes
 
-    - **auto_bootstrap** - By default, this parameter is set to true, it allows new nodes to migrate data to themselves automatically
-
     - **endpoint_snitch** - Set the selected snitch
 
     - **rpc_address** - Address for client connection (Thrift, CQL)
@@ -182,12 +180,6 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
    .. code-block:: none
 
       sudo sed -e '/.*scylla/s/^/#/g' -i /etc/fstab
-
-#. Run the following command to enable auto_bootstrap after restart to sync the data:
-
-   .. code-block:: none
-
-      sudo sed -e '/auto_bootstrap:.*/s/False/True/g' -i /etc/scylla/scylla.yaml
 
 #. Run the following command, replacing 172.30.0.186 with the listen_address / rpc_address of the node that you are restarting:
 
