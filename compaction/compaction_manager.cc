@@ -397,6 +397,24 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
         on_replace.on_removal(old_sstables);
     };
 
+    // retrieve owned_ranges if_required
+    if (!descriptor.owned_ranges) {
+        std::vector<sstables::shared_sstable> sstables_requiring_cleanup;
+        const auto& cs = _cm.get_compaction_state(_compacting_table);
+        for (const auto& sst : descriptor.sstables) {
+            if (cs.sstables_requiring_cleanup.contains(sst)) {
+                sstables_requiring_cleanup.emplace_back(sst);
+            }
+        }
+        if (!sstables_requiring_cleanup.empty()) {
+            cmlog.info("The following SSTables require cleaned up in this compaction: {}", sstables_requiring_cleanup);
+            if (!cs.owned_ranges_ptr) {
+                on_internal_error_noexcept(cmlog, "SSTables require cleanup but compaction state has null owned ranges");
+            }
+            descriptor.owned_ranges = cs.owned_ranges_ptr;
+        }
+    }
+
     co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t);
 }
 future<> compaction_manager::task::update_history(compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
