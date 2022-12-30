@@ -11,12 +11,10 @@ Use the procedure that follows to correct situations where a node joins a cluste
 The Problem
 ^^^^^^^^^^^
 
-There are two possible causes for a new node not acquiring data from its peers:
+A new node may not acquire data from its peers if the ``seeds`` parameter in the new node's ``scylla.yaml`` file 
+does not specify the IP of an existing node in the cluster (for example, it specifies its own IP).
 
-* The ``seeds`` parameter in the new node's ``scylla.yaml`` file does not specify the IP of an existing node in the cluster (for example, it specifies its own IP).
-* The node was added with the ``auto_bootstrap`` flag set to *False*
-
-Both scenarios constitute user errors and are the incorrect way of adding new nodes to the cluster. See :doc:`Adding New Node </operating-scylla/procedures/cluster-management/add-node-to-cluster/>` for more details. This article explains how to restore a cluster safely in such a case.
+The scenario constitutes a user error and is the incorrect way of adding new nodes to the cluster. See :doc:`Adding New Node </operating-scylla/procedures/cluster-management/add-node-to-cluster/>` for more details. This article explains how to restore a cluster safely in such a case.
 
 .. warning:: You mustn't run nodetool cleanup in any other nodes in the cluster until this is fixed, as it will delete data that is not yet available from the new node.
 
@@ -32,7 +30,7 @@ Steps to fix:
 
    Actual directories might be different than above, check your ``scylla.yaml`` to validate.   
    
-#. Once all the new nodes are decommissioned, add them again with the :doc:`correct procedure </operating-scylla/procedures/cluster-management/add-node-to-cluster/>`. Do not add the nodes with the ``auto_bootstrap`` flag set to *False*.
+#. Once all the new nodes are decommissioned, add them again with the :doc:`correct procedure </operating-scylla/procedures/cluster-management/add-node-to-cluster/>`.
 
 
 Other important considerations:
