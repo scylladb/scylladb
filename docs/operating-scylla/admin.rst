@@ -186,17 +186,6 @@ On RHEL and CentOS, the Automatic Bug Reporting Tool (`ABRT <https://docs.fedora
 
 Scylla places any core dumps in :code:`var/lib/scylla/coredump`. They are not visible with the :code:`coredumpctl` command. See the :doc:`System Configuration Guide </getting-started/system-configuration/>` for details on core dump configuration scripts. Check with Scylla support before sharing any core dump, as they may contain sensitive data.
 
-
-Manual bootstrapping
-====================
-It’s possible to skip the bootstrapping process entirely and join the ring straight away by setting the hidden parameter ``auto_bootstrap: false``. 
-A manual bootstrap node will skip the data stream phase and immediately join the cluster in a *UN* (Up Normal) state and start serving queries, even though it has no data.
-**It is firmly advised not to use Manual bootstrapping.**
-
-Note that starting a node as a seed, by including itself in the seeds list, has a similar effect of and it is similarly dangerous.
-
-See :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>` for troubleshooting a manually bootstrap node.
-
 Schedule fstrim
 ===============
 
