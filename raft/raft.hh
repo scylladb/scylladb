@@ -351,6 +351,19 @@ struct append_request {
     // Log entries to store (empty vector for heartbeat; may send more
     // than one entry for efficiency).
     std::vector<log_entry_ptr> entries;
+
+    append_request copy() const {
+        append_request result;
+        result.current_term = current_term;
+        result.prev_log_idx = prev_log_idx;
+        result.prev_log_term = prev_log_term;
+        result.leader_commit_idx = leader_commit_idx;
+        result.entries.reserve(entries.size());
+        for (const auto& e: entries) {
+            result.entries.push_back(make_lw_shared(*e));
+        }
+        return result;
+    }
 };
 
 struct append_reply {
