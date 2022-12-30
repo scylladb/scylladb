@@ -193,7 +193,7 @@ Add New DC
 
    For example:
 
-   ``nodetool rebuild -- <existing_data_center_name>``
+   ``nodetool rebuild <existing_data_center_name>``
 
    The rebuild ensures that the new nodes that were just added to the cluster will recognize the existing datacenters in the cluster.
 
