@@ -419,31 +419,30 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
     auto sstables_per_job = shared_info.size() / num_jobs;
 
     std::vector<std::vector<sstables::shared_sstable>> buckets(1);
-    // FIXME: indentation
-        co_await coroutine::parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) -> future<> {
-            auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
-            co_await sst->load(std::move(info));
-                // Last bucket gets leftover SSTables
-                if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
-                    buckets.emplace_back();
-                }
-                buckets.back().push_back(std::move(sst));
-        });
-            // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
-            // parallel_for_each so the statistics about pending jobs are updated to reflect all
-            // jobs. But only one will run in parallel at a time
-            co_await coroutine::parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) -> future<> {
-                    sstables::compaction_descriptor desc(sstlist, _io_priority);
-                    desc.options = sstables::compaction_type_options::make_reshard();
-                    desc.creator = std::move(creator);
+    co_await coroutine::parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) -> future<> {
+        auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
+        co_await sst->load(std::move(info));
+        // Last bucket gets leftover SSTables
+        if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
+            buckets.emplace_back();
+        }
+        buckets.back().push_back(std::move(sst));
+    });
+    // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
+    // parallel_for_each so the statistics about pending jobs are updated to reflect all
+    // jobs. But only one will run in parallel at a time
+    co_await coroutine::parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
+        return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) -> future<> {
+            sstables::compaction_descriptor desc(sstlist, _io_priority);
+            desc.options = sstables::compaction_type_options::make_reshard();
+            desc.creator = std::move(creator);
 
-                    auto result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
-                        // input sstables are moved, to guarantee their resources are released once we're done
-                        // resharding them.
-                        co_await when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();
-                });
-            });
+            auto result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
+            // input sstables are moved, to guarantee their resources are released once we're done
+            // resharding them.
+            co_await when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();
+        });
+    });
 }
 
 future<>
