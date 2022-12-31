@@ -70,6 +70,9 @@ public:
     lw_shared_ptr<sstable_list> all() const;
     // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
     void for_each_sstable(std::function<void(const shared_sstable&)> func) const;
+    // Calls func for each sstable or until it returns stop_iteration::yes
+    // Returns the last stop_iteration value.
+    stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const;
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
 

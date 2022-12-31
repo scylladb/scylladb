@@ -162,7 +162,14 @@ sstable_set::all() const {
 }
 
 void sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
-    return _impl->for_each_sstable(std::move(func));
+    _impl->for_each_sstable_until([func = std::move(func)] (const shared_sstable& sst) {
+        func(sst);
+        return stop_iteration::no;
+    });
+}
+
+stop_iteration sstable_set::for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const {
+    return _impl->for_each_sstable_until(std::move(func));
 }
 
 void
@@ -310,10 +317,13 @@ lw_shared_ptr<sstable_list> partitioned_sstable_set::all() const {
     return _all;
 }
 
-void partitioned_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+stop_iteration partitioned_sstable_set::for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const {
     for (auto& sst : *_all) {
-        func(sst);
+        if (func(sst)) {
+            return stop_iteration::yes;
+        }
     }
+    return stop_iteration::no;
 }
 
 void partitioned_sstable_set::insert(shared_sstable sst) {
@@ -436,10 +446,13 @@ lw_shared_ptr<sstable_list> time_series_sstable_set::all() const {
     return make_lw_shared<sstable_list>(boost::copy_range<sstable_list>(*_sstables | boost::adaptors::map_values));
 }
 
-void time_series_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+stop_iteration time_series_sstable_set::for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const {
     for (auto& entry : *_sstables) {
-        func(entry.second);
+        if (func(entry.second)) {
+            return stop_iteration::yes;
+        }
     }
+    return stop_iteration::no;
 }
 
 // O(log n)
@@ -1022,12 +1035,13 @@ lw_shared_ptr<sstable_list> compound_sstable_set::all() const {
     return ret;
 }
 
-void compound_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+stop_iteration compound_sstable_set::for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const {
     for (auto& set : _sets) {
-        set->for_each_sstable([&func] (const shared_sstable& sst) {
-            func(sst);
-        });
+        if (set->for_each_sstable_until([&func] (const shared_sstable& sst) { return func(sst); })) {
+            return stop_iteration::yes;
+        }
     }
+    return stop_iteration::no;
 }
 
 void compound_sstable_set::insert(shared_sstable sst) {
@@ -1219,7 +1233,7 @@ flat_mutation_reader_v2 sstable_set::make_crawling_reader(
         tracing::trace_state_ptr trace_ptr,
         read_monitor_generator& monitor_generator) const {
     std::vector<flat_mutation_reader_v2> readers;
-    _impl->for_each_sstable([&] (const shared_sstable& sst) mutable {
+    for_each_sstable([&] (const shared_sstable& sst) mutable {
         readers.emplace_back(sst->make_crawling_reader(schema, permit, pc, trace_ptr, monitor_generator(sst)));
     });
     return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
