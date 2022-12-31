@@ -553,7 +553,7 @@ BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_does_not_sort) {
 BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_null) {
     expression list_with_null =
         make_list_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type);
-    BOOST_REQUIRE_THROW(evaluate(list_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
+    BOOST_REQUIRE_EQUAL(evaluate(list_with_null, evaluation_inputs{}), make_int_list_raw({1, std::nullopt, 3}));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_empty_value) {
@@ -1739,10 +1739,10 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
                      make_untyped_null()},
         .type = nullptr};
 
-    data_type list_type = list_type_impl::get_instance(long_type, true);
+    data_type list_type = list_type_impl::get_instance(int32_type, true);
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
-                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_EQUAL(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
+                        make_int_list_const({123, 456, std::nullopt}));
 }
 
 BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor) {

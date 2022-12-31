@@ -5616,14 +5616,15 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
 
-        // List of IN values is also a list that can't contain nulls
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT * FROM null_in_col WHERE p IN (1, null, 2)").get(),
-                                exceptions::invalid_request_exception, check_null_msg());
+        // List of IN values can contain NULL (which doesn't match anything)
+        auto msg1 = e.execute_cql("SELECT * FROM null_in_col WHERE p IN (1, null, 2)").get();
+        assert_that(msg1).is_rows().with_rows({});
 
         auto where_in_list_with_marker = e.prepare("SELECT * FROM null_in_col WHERE p IN (1, ?, 2)").get0();
 
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, {null_value}).get(),
-                                exceptions::invalid_request_exception, check_null_msg());
+        auto msg2 = e.execute_prepared(where_in_list_with_marker, {null_value}).get();
+        assert_that(msg2).is_rows().with_rows({});
+
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
 

@@ -563,6 +563,8 @@ update lwt set c = [false] where a = 1 if c = [];
 update lwt set c = [false] where a = 1 if c = [false];
 update lwt set c = [false] where a = 1 if c = [null];
 update lwt set c = [false] where a = 1 if c = [null, true];
+-- lists with NULL are allowed, but cannot be stored
+update lwt set c = [false, null] where a = 1 if c = [false];
 select c from lwt where a = 1;
 -- negative list index
 update lwt set c = [true, false] where a = 1 if c[-1] = false;

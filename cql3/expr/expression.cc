@@ -1930,21 +1930,13 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
 static cql3::raw_value evaluate_list(const collection_constructor& collection,
                               const evaluation_inputs& inputs,
                               bool skip_null = false) {
-    std::vector<managed_bytes> evaluated_elements;
+    std::vector<managed_bytes_opt> evaluated_elements;
     evaluated_elements.reserve(collection.elements.size());
 
     for (const expression& element : collection.elements) {
         cql3::raw_value evaluated_element = evaluate(element, inputs);
 
-        if (evaluated_element.is_null()) {
-            if (skip_null) {
-                continue;
-            }
-
-            throw exceptions::invalid_request_exception("null is not supported inside collections");
-        }
-
-        evaluated_elements.emplace_back(std::move(evaluated_element).to_managed_bytes());
+        evaluated_elements.emplace_back(std::move(evaluated_element).to_managed_bytes_opt());
     }
 
     managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "List");

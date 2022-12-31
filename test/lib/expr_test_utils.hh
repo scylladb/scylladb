@@ -70,12 +70,12 @@ constant make_map_const(const std::vector<std::pair<constant, constant>>& vals,
 constant make_tuple_const(const std::vector<raw_value>& vals, const std::vector<data_type>& element_types);
 constant make_tuple_const(const std::vector<constant>& vals, const std::vector<data_type>& element_types);
 
-raw_value make_int_list_raw(const std::vector<int32_t>& values);
+raw_value make_int_list_raw(const std::vector<std::optional<int32_t>>& values);
 raw_value make_int_set_raw(const std::vector<int32_t>& values);
 
 raw_value make_int_int_map_raw(const std::vector<std::pair<int32_t, int32_t>>& values);
 
-constant make_int_list_const(const std::vector<int32_t>& values);
+constant make_int_list_const(const std::vector<std::optional<int32_t>>& values);
 constant make_int_set_const(const std::vector<int32_t>& values);
 constant make_int_int_map_const(const std::vector<std::pair<int32_t, int32_t>>& values);
 
