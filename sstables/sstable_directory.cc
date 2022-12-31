@@ -420,9 +420,12 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
     return do_with(reshard_buckets(1), [this, &cm, &table, sstables_per_job, num_jobs, creator = std::move(creator), shared_info = std::move(shared_info), owned_ranges_ptr = std::move(owned_ranges_ptr)] (reshard_buckets& buckets) mutable {
-        return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) {
+        return parallel_for_each(shared_info, [this, sstables_per_job, num_jobs, &buckets, &table, owned_ranges_ptr] (sstables::foreign_sstable_open_info& info) {
             auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
-            return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst)] () mutable {
+            return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst), &table, owned_ranges_ptr] () mutable {
+                if (owned_ranges_ptr) {
+                    table.update_sstable_cleanup_state(sst, owned_ranges_ptr);
+                }
                 // Last bucket gets leftover SSTables
                 if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
                     buckets.emplace_back();
