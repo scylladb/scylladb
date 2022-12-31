@@ -242,8 +242,11 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     std::vector<std::vector<sstables::shared_sstable>> buckets;
     buckets.reserve(num_jobs);
     buckets.emplace_back();
-    co_await coroutine::parallel_for_each(shared_info, [&dir, sstables_per_job, num_jobs, &buckets] (sstables::foreign_sstable_open_info& info) -> future<> {
+    co_await coroutine::parallel_for_each(shared_info, [&] (sstables::foreign_sstable_open_info& info) -> future<> {
         auto sst = co_await dir.load_foreign_sstable(info);
+        if (owned_ranges_ptr) {
+            table.update_sstable_cleanup_state(sst, owned_ranges_ptr);
+        }
         // Last bucket gets leftover SSTables
         if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
             buckets.emplace_back();
