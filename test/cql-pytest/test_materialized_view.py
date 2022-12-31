@@ -740,3 +740,27 @@ def test_mv_override_clustering_order_error(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
             with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by (c ASC, x ASC, z DESC)') as mv:
                 pass
+
+# Test views that only refer to the primary key, exercising the invisible
+# empty type columns that are injected into the view schema in order to
+# compute the view row liveness.
+#
+# scylla_only because Cassandra doesn't support synchronous updates.
+def test_mv_with_only_primary_key_rows(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, v1 int, v2 int') as base:
+        # Use a synchronous view so we don't have to worry about races between flush and
+        # view updates.
+        with new_materialized_view(cql, table=base, select='id', pk='id', where='id IS NOT NULL',
+                extra='WITH synchronous_updates = true') as view:
+            cql.execute(f'INSERT INTO {base} (id, v1) VALUES (1, 0)')
+            cql.execute(f'INSERT INTO {base} (id, v2) VALUES (2, 0)')
+            cql.execute(f'INSERT INTO {base} (id) VALUES (3)')
+            # The following row is kept alive by the liveness of v1, since it doesn't have a row marker
+            cql.execute(f'UPDATE {base} SET v1 = 7 WHERE id = 4')
+            nodetool.flush(cql, view)
+            assert(set([row.id for row in cql.execute(f'SELECT id FROM {view}')]) == set([1, 2, 3, 4]))
+            # Remove that special row 4
+            cql.execute(f'DELETE v1 FROM {base} WHERE id = 4')
+            nodetool.flush(cql, view)
+            assert(set([row.id for row in cql.execute(f'SELECT id FROM {view}')]) == set([1, 2, 3]))
+            # We now believe that empty value serialization/deserialization is correct
