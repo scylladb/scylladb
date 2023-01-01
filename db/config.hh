@@ -364,6 +364,9 @@ public:
     named_value<double> alternator_ttl_period_in_seconds;
 
     named_value<bool> abort_on_ebadf;
+    
+    named_value<uint16_t> cql_over_websocket_port;
+    named_value<sstring>  cql_over_websocket_addr;
 
     named_value<uint16_t> redis_port;
     named_value<uint16_t> redis_ssl_port;

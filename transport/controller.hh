@@ -66,6 +66,10 @@ public:
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
     virtual future<utils::chunked_vector<client_data>> get_client_data() override;
+
+    sharded<cql_server>& server() {
+        return *_server;
+    }
 };
 
 } // namespace cql_transport

@@ -54,6 +54,12 @@ num_tokens: 256
 commitlog_sync: periodic
 commitlog_sync_period_in_ms: 10000
 
+# WebSocket server details - set the port in order to activate
+# this layer
+#
+# cql_over_websocket_port: 8222
+# cql_over_websocket_addr: 127.0.0.1
+
 # The size of the individual commitlog file segments.  A commitlog
 # segment may be archived, deleted, or recycled once all the data
 # in it (potentially from each columnfamily in the system) has been
