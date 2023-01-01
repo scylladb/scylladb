@@ -6,7 +6,9 @@
 # Tests for empty values (especially, but not just, empty strings)
 #############################################################################
 
+import struct
 import pytest
+from cassandra.cqltypes import Int32Type, EMPTY
 from cassandra.protocol import InvalidRequest
 from .util import unique_name, unique_key_string, unique_key_int, new_test_table
 
@@ -258,3 +260,64 @@ def test_empty_string_for_nonstring_partition_key2(cql, test_keyspace):
         # a number.
         with pytest.raises(InvalidRequest):
             cql.execute(f"INSERT INTO {table} (p,v) VALUES ('', 3)")
+
+# Tests for empty values in collections. In issue #5825 it was suspected
+# that support for such empty values is broken, but these tests demonstrate
+# that it is working as expected.
+def test_empty_string_in_collection(cql, test_keyspace):
+    schema = 'p int primary key, v list<text>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, ['hi',''])")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, ['hi',''])]
+        # Prepared version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        cql.execute(stmt, [['hello','']])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, ['hello',''])]
+
+def test_empty_int_in_collection(cql, test_keyspace):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, [1, blobAsInt(0x)])")
+        # The support_empty_values flag on Int32Type is normally False,
+        # meaning that both null and empty int values are returned by the
+        # driver as None. We can override it to allow us to distinguish
+        # EMPTY and None, confirming that the server stored an empty int and
+        # not a null.
+        Int32Type.support_empty_values = True
+        try:
+            assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, [1, EMPTY])]
+        finally:
+            Int32Type.support_empty_values = False
+
+# Prepared-statement version of test_empty_int_in_collection above.
+# Marked cassandra_bug because Cassandra gets a NullPointerException when it
+# receives an empty-length integer element inside a collection.
+def test_empty_int_in_collection_prepared(cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # The Python driver provides no direct way to pass an empty (zero-length)
+        # integer value in a prepared statement, since its Int32Type serializer
+        # requires an actual integer. We can hack the driver to do this anyway:
+        # The trick is to manually craft the raw serialized bytes for the list
+        # and inject them into the bound statement's values list, bypassing the
+        # type serializer entirely.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES (?, ?)")
+        # Bind only the first parameter ("p"); the second slot gets UNSET_VALUE
+        # and is overwritten below.
+        bound_stmt = stmt.bind([p])
+        # Set the second slot to the integer list [1, empty_int]
+        # by writing the raw serialized bytes into bound_stmt.values[1].
+        # The serialization format is the list's length (2), then the
+        # first integer's length (4) and the value (1), and then the
+        # second integer's length (0) and no value.
+        bound_stmt.values[1] = struct.pack('>iiii', 2, 4, 1, 0)
+        cql.execute(bound_stmt)
+        Int32Type.support_empty_values = True
+        try:
+            assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, [1, EMPTY])]
+        finally:
+            Int32Type.support_empty_values = False
