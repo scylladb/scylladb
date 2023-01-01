@@ -28,10 +28,6 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
-bool operator==(const endpoint_dc_rack& d1, const endpoint_dc_rack& d2) {
-    return std::tie(d1.dc, d1.rack) == std::tie(d2.dc, d2.rack);
-}
-
 network_topology_strategy::network_topology_strategy(
     const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(config_options,
