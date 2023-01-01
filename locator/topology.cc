@@ -20,6 +20,11 @@ namespace locator {
 
 static logging::logger tlogger("topology");
 
+thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
+    .dc = locator::production_snitch_base::default_dc,
+    .rack = locator::production_snitch_base::default_rack,
+};
+
 future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
@@ -128,13 +133,8 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     // FIXME -- this shouldn't happen. After topology is stable and is
     // correctly populated with endpoints, this should be replaced with
     // on_internal_error()
-    static thread_local endpoint_dc_rack default_location = {
-        .dc = locator::production_snitch_base::default_dc,
-        .rack = locator::production_snitch_base::default_rack,
-    };
-
     tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, current_backtrace());
-    return default_location;
+    return endpoint_dc_rack::default_location;
 }
 
 // FIXME -- both methods below should rather return data from the

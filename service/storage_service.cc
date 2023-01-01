@@ -2072,8 +2072,8 @@ locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint
     auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
     auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
     return locator::endpoint_dc_rack{
-        .dc = dc ? dc->value : locator::production_snitch_base::default_dc,
-        .rack = rack ? rack->value : locator::production_snitch_base::default_rack,
+        .dc = dc ? dc->value : locator::endpoint_dc_rack::default_location.dc,
+        .rack = rack ? rack->value : locator::endpoint_dc_rack::default_location.rack,
     };
 }
 
@@ -2154,10 +2154,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                 if (loaded_dc_rack.contains(ep)) {
                     return loaded_dc_rack[ep];
                 } else {
-                    return locator::endpoint_dc_rack {
-                        .dc = locator::production_snitch_base::default_dc,
-                        .rack = locator::production_snitch_base::default_rack,
-                    };
+                    return locator::endpoint_dc_rack::default_location;
                 }
             };
 

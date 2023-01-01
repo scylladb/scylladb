@@ -26,6 +26,8 @@ struct endpoint_dc_rack {
     sstring dc;
     sstring rack;
 
+    static thread_local const endpoint_dc_rack default_location;
+
     bool operator==(const endpoint_dc_rack&) const = default;
 };
 
