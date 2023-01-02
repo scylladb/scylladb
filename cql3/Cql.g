@@ -1681,16 +1681,61 @@ udtColumnOperation[operations_type& operations,
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
-        ( op=relationType t=term { conditions.emplace_back(cql3::column_condition::raw::simple_condition(key, t, {}, op)); }
+        ( op=relationType t=term { conditions.emplace_back(
+                    column_condition::raw::make(
+                        binary_operator(
+                            unresolved_identifier{key},
+                            op,
+                            t)));
+                }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, {}, {}, values)); }
-            | marker1=marker { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, {}, marker1, {})); }
+            ( values=singleColumnInValues { conditions.emplace_back(
+                    column_condition::raw::make(
+                        binary_operator(
+                            unresolved_identifier{key},
+                            oper_t::IN,
+                            collection_constructor{collection_constructor::style_type::list, values})));
+                }
+            | marker1=marker { conditions.emplace_back(
+                    column_condition::raw::make(
+                        binary_operator(
+                            unresolved_identifier{key},
+                            oper_t::IN,
+                            marker1)));
+                }
             )
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(cql3::column_condition::raw::simple_condition(key, t, element, op)); }
+            ( op=relationType t=term { conditions.emplace_back(
+                    column_condition::raw::make(
+                        binary_operator(
+                            subscript{
+                                unresolved_identifier{key},
+                                 element
+                            },
+                            op,
+                            t)));
+                }
             | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, element, {}, values)); }
-                | marker1=marker { conditions.emplace_back(cql3::column_condition::raw::in_condition(key, element, marker1, {})); }
+                ( values=singleColumnInValues { conditions.emplace_back(
+                        column_condition::raw::make(
+                            binary_operator(
+                                subscript{
+                                    unresolved_identifier{key},
+                                    element
+                                },
+                                oper_t::IN,
+                                collection_constructor{collection_constructor::style_type::list, values})));
+                    }
+                | marker1=marker { conditions.emplace_back(
+                        column_condition::raw::make(
+                            binary_operator(
+                                subscript{
+                                    unresolved_identifier{key},
+                                    element
+                                },
+                                oper_t::IN,
+                                marker1)));
+                    }
                 )
             )
         )

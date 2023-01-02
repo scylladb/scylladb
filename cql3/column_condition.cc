@@ -19,50 +19,7 @@
 #include "utils/like_matcher.hh"
 #include "expr/expression.hh"
 
-namespace {
-
-void validate_operation_on_durations(const abstract_type& type, cql3::expr::oper_t op) {
-    using cql3::statements::request_validations::check_false;
-
-    if (is_slice(op) && type.references_duration()) {
-        check_false(type.is_collection(), "Slice conditions are not supported on collections containing durations");
-        check_false(type.is_tuple(), "Slice conditions are not supported on tuples containing durations");
-        check_false(type.is_user_type(), "Slice conditions are not supported on UDTs containing durations");
-
-        // We're a duration.
-        throw exceptions::invalid_request_exception(format("Slice conditions are not supported on durations"));
-    }
-}
-
-} // end of anonymous namespace
-
 namespace cql3 {
-
-static
-expr::expression
-build_condition(const column_definition& column, std::optional<expr::expression> collection_element,
-        std::optional<expr::expression> value, std::vector<expr::expression> in_values,
-        expr::oper_t op) {
-    using namespace expr;
-
-    auto lhs = expression(column_value{&column});
-    if (collection_element) {
-        auto lhs_type = type_of(lhs);
-        auto col_type = dynamic_pointer_cast<const collection_type_impl>(lhs_type);
-        assert(col_type);
-        auto element_type = col_type->value_comparator();
-        assert(element_type);
-        lhs = subscript{std::move(lhs), std::move(*collection_element), std::move(element_type)};
-    }
-    if (op == oper_t::IN && !value.has_value()) {
-        auto rhs = collection_constructor{collection_constructor::style_type::list, std::move(in_values), list_type_impl::get_instance(type_of(lhs), false)};
-        return binary_operator(std::move(lhs), op, std::move(rhs));
-    } else {
-        assert(value.has_value());
-        assert(in_values.empty());
-        return binary_operator(std::move(lhs), op, std::move(*value));
-    }
-}
 
 static
 expr::expression
@@ -79,10 +36,8 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
     });
 }
 
-column_condition::column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
-    std::optional<expr::expression> value, std::vector<expr::expression> in_values,
-    expr::oper_t op)
-        : _expr(build_condition(column, std::move(collection_element), std::move(value), std::move(in_values), op))
+column_condition::column_condition(expr::expression expr)
+        : _expr(std::move(expr))
 {
     // If a collection is multi-cell and not frozen, it is returned as a map even if the
     // underlying data type is "set" or "list". This is controlled by
@@ -111,82 +66,15 @@ bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
 
 lw_shared_ptr<column_condition>
 column_condition::raw::prepare(data_dictionary::database db, const sstring& keyspace, const schema& schema) const {
-    auto id = _lhs->prepare_column_identifier(schema);
-    const column_definition* def = get_column_definition(schema, *id);
-    if (!def) {
-        throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
-    }
+    auto prepared = expr::prepare_expression(_expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
 
-    if (def->is_primary_key()) {
-        throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
-    }
-
-    auto& receiver = *def;
-
-    if (receiver.type->is_counter()) {
-        throw exceptions::invalid_request_exception("Conditions on counters are not supported");
-    }
-    std::optional<expr::expression> collection_element_expression;
-    lw_shared_ptr<column_specification> value_spec = receiver.column_specification;
-
-    if (_collection_element) {
-        if (!receiver.type->is_collection()) {
-            throw exceptions::invalid_request_exception(format("Invalid element access syntax for non-collection column {}",
-                        receiver.name_as_text()));
-        }
-        // Pass  a correct type specification to the collection_element->prepare(), so that it can
-        // later be used to validate the parameter type is compatible with receiver type.
-        lw_shared_ptr<column_specification> element_spec;
-        auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
-        const column_specification& recv_column_spec = *receiver.column_specification;
-        if (ctype->get_kind() == abstract_type::kind::list) {
-            element_spec = lists::index_spec_of(recv_column_spec);
-            value_spec = lists::value_spec_of(recv_column_spec);
-        } else if (ctype->get_kind() == abstract_type::kind::map) {
-            element_spec = maps::key_spec_of(recv_column_spec);
-            value_spec = maps::value_spec_of(recv_column_spec);
-        } else if (ctype->get_kind() == abstract_type::kind::set) {
-            throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}",
-                        receiver.name_as_text()));
-        } else {
-            throw exceptions::invalid_request_exception(
-                    format("Unsupported collection type {} in a condition with element access", ctype->cql3_type_name()));
-        }
-        collection_element_expression = prepare_expression(*_collection_element, db, keyspace, nullptr, element_spec);
-    }
-
-    if (is_compare(_op)) {
-        validate_operation_on_durations(*receiver.type, _op);
-        return column_condition::condition(receiver, std::move(collection_element_expression),
-                prepare_expression(*_value, db, keyspace, nullptr, value_spec), _op);
-    }
-
-    if (_op == expr::oper_t::LIKE) {
-            // Pass through rhs value, matcher object built on execution (or optimized in constructor)
-            // TODO: caller should validate parametrized LIKE pattern
-            return column_condition::condition(receiver, std::move(collection_element_expression),
-                    prepare_expression(*_value, db, keyspace, nullptr, value_spec), _op);
-    }
-
-    if (_op != expr::oper_t::IN) {
-        throw exceptions::invalid_request_exception(format("Unsupported operator type {} in a condition ", _op));
-    }
-
-    if (_in_marker) {
-        assert(_in_values.empty());
-        auto in_name = ::make_shared<column_identifier>(format("in({})", value_spec->name->text()), true);
-        lw_shared_ptr<column_specification> in_list_receiver = make_lw_shared<column_specification>(value_spec->ks_name, value_spec->cf_name, in_name, list_type_impl::get_instance(value_spec->type, false));
-        expr::expression multi_item_term = prepare_expression(*_in_marker, db, keyspace, nullptr, in_list_receiver);
-        return column_condition::in_condition(receiver, collection_element_expression, std::move(multi_item_term), {});
-    }
-    // Both _in_values and in _in_marker can be missing in case of empty IN list: "a IN ()"
-    std::vector<expr::expression> terms;
-    terms.reserve(_in_values.size());
-    for (auto&& value : _in_values) {
-        terms.push_back(prepare_expression(value, db, keyspace, nullptr, value_spec));
-    }
-    return column_condition::in_condition(receiver, std::move(collection_element_expression),
-                                          std::nullopt, std::move(terms));
+    expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
+      auto def = cval.col;
+      if (def->is_primary_key()) {
+        throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", def->name_as_text()));
+      }
+    });
+    return make_lw_shared<column_condition>(std::move(prepared));
 }
 
 } // end of namespace cql3

@@ -2051,7 +2051,7 @@ Error from server: code=2200 [Invalid query] message="Cannot store NULL in list 
 | False       | [False] |
 +-------------+---------+
 > update lwt set c = [true, false] where a = 1 if c[-1.5] = false;
-Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1.5) for "idx(c)" of type int"
+Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1.5) for "index(c)" of type int"
 > update lwt set c = [true, false] where a = 1 if c[0] = false;
 +-------------+---------+
 | [applied]   | c       |
