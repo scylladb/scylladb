@@ -266,11 +266,7 @@ cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_co
 
 unsigned
 cql_server::connection::frame_size() const {
-    if (_version < 3) {
-        return 8;
-    } else {
-        return 9;
-    }
+    return 9;
 }
 
 cql_binary_frame_v3
@@ -280,17 +276,6 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
     }
     cql_binary_frame_v3 v3;
     switch (_version) {
-    case 1:
-    case 2: {
-        cql_binary_frame_v1 raw = read_unaligned<cql_binary_frame_v1>(buf.get());
-        auto cooked = net::ntoh(raw);
-        v3.version = cooked.version;
-        v3.flags = cooked.flags;
-        v3.opcode = cooked.opcode;
-        v3.stream = cooked.stream;
-        v3.length = cooked.length;
-        break;
-    }
     case 3:
     case 4: {
         cql_binary_frame_v3 raw = read_unaligned<cql_binary_frame_v3>(buf.get());
@@ -319,7 +304,7 @@ cql_server::connection::read_frame() {
             }
             _version = buf[0];
             init_cql_serialization_format();
-            if (_version < 1 || _version > current_version) {
+            if (_version < 3 || _version > current_version) {
                 auto client_version = _version;
                 _version = current_version;
                 throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));

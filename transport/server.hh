@@ -77,19 +77,6 @@ enum cql_frame_flags {
     warning     = 0x08,
 };
 
-struct [[gnu::packed]] cql_binary_frame_v1 {
-    uint8_t  version;
-    uint8_t  flags;
-    uint8_t  stream;
-    uint8_t  opcode;
-    net::packed<uint32_t> length;
-
-    template <typename Adjuster>
-    void adjust_endianness(Adjuster a) {
-        return a(length);
-    }
-};
-
 struct [[gnu::packed]] cql_binary_frame_v3 {
     uint8_t  version;
     uint8_t  flags;
