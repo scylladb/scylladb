@@ -1365,7 +1365,7 @@ warnings = [w
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
-def clang_inline_threshold():
+def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
         return args.clang_inline_threshold
     elif platform.machine() == 'aarch64':
@@ -1386,7 +1386,7 @@ for mode in modes:
 
 optimization_flags = [
     '--param inline-unit-growth=300', # gcc
-    f'-mllvm -inline-threshold={clang_inline_threshold()}',  # clang
+    f'-mllvm -inline-threshold={get_clang_inline_threshold()}',  # clang
     # clang generates 16-byte loads that break store-to-load forwarding
     # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
     '-fno-slp-vectorize',
