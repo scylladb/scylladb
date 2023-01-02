@@ -12,6 +12,7 @@
 
 #include <unordered_set>
 #include <unordered_map>
+#include <iostream>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -259,3 +260,9 @@ private:
 };
 
 } // namespace locator
+
+namespace std {
+
+std::ostream& operator<<(std::ostream& out, const locator::node_ptr& node);
+
+} // namespace std

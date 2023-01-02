@@ -453,3 +453,11 @@ int topology::compare_endpoints(const inet_address& address, const inet_address&
 }
 
 } // namespace locator
+
+namespace std {
+
+std::ostream& operator<<(std::ostream& out, const locator::node_ptr& node) {
+    return out << node->host_id() << '/' << node->endpoint();
+}
+
+} // namespace std
