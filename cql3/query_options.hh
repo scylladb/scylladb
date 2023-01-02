@@ -195,14 +195,6 @@ public:
         return tstamp != api::missing_timestamp ? tstamp : state.get_timestamp();
     }
 
-    /**
-     * The protocol version for the query. Will be 3 if the object don't come from
-     * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
-     */
-    int get_protocol_version() const {
-        return _cql_serialization_format.protocol_version();
-    }
-
     cql_serialization_format get_cql_serialization_format() const {
         return _cql_serialization_format;
     }

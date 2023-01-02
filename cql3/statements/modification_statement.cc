@@ -252,10 +252,6 @@ modification_statement::execute_without_checking_exception_message(query_process
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    if (has_conditions() && options.get_protocol_version() == 1) {
-        throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
-    }
-
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     inc_cql_stats(qs.get_client_state().is_internal());
