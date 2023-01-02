@@ -11,10 +11,10 @@ Tracing is a ScyllaDB tool meant to help debugging and analyzing internal flows 
 
 .. note:: If you're planning to use either **probabilistic tracing** or **slow query logging** (see below), it's advisable to change the ``replication_factor`` of the  ``system_traces`` keyspace to ``ALL``:
           
-          If you use ``NetworkTopologyStrategy``, the replication factor set for each datacenter should equal the number 
-          of nodes in that datacenter. Alternatively, you can use ``EverywhereReplicationStrategy``. 
-          
-          See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>` for details on changing the RF.
+          If you use ``NetworkTopologyStrategy``, we recommend using a replication factor for each datacenter equal to the number 
+          of nodes in that datacenter. Alternatively, you can use ``EverywhereReplicationStrategy``. See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>` for details on changing the RF.
+
+          Such configuration will speed up reads and writes (if combined with a reasonable consistency level, such as ONE or LOCAL_ONE).
 
 User Defined CQL Query Tracing 
 ..............................
