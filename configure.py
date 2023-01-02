@@ -1593,7 +1593,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DSeastar_CXX_FLAGS={}'.format((mode_config['lib_cflags']).replace(' ', ';')),
+        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], mode_config['cxx_ld_flags'])),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
