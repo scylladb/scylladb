@@ -174,10 +174,6 @@ public:
             sstring(DELIMITER_STR) + host_id.to_sstring());
     }
 
-    static versioned_value hibernate(bool value) {
-        return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
-    }
-
     static versioned_value shutdown(bool value) {
         return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
     }

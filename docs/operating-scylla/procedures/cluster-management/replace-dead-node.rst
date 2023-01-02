@@ -95,19 +95,9 @@ Procedure
     ``192.168.1.203`` is the dead node.
     
     The replacing node ``192.168.1.204`` will be bootstrapping data.
-    We will not see ``192.168.1.204`` during the bootstrap.
+    We will not see ``192.168.1.204`` in ``nodetool status`` during the bootstrap.
 
-    .. code-block:: shell
-    
-       Datacenter: dc1
-       ===============
-       Status=Up/Down
-       |/ State=Normal/Leaving/Joining/Moving
-       --  Address    Load       Tokens       Owns    Host ID                               Rack
-           UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
-           UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-   
-    Use ``nodetool gossipinfo`` to see ``192.168.1.204`` is in HIBERNATE status.
+    Use ``nodetool gossipinfo`` to see ``192.168.1.204`` is in NORMAL status.
 
     .. code-block:: shell
                              
@@ -115,7 +105,7 @@ Procedure
          generation:1553759984                                                                                            
          heartbeat:104                      
          HOST_ID:655ae64d-e3fb-45cc-9792-2b648b151b67
-         STATUS:hibernate,true
+         STATUS:NORMAL
          RELEASE_VERSION:3.0.8
          X3:3                                        
          X5:                                                                                    
@@ -128,10 +118,10 @@ Procedure
          RACK:B1
          INTERNAL_IP:192.168.1.204
     
-         /192.168.1.203
+       /192.168.1.203
          generation:1553759866
          heartbeat:2147483647
-        HOST_ID:675ed9f4-6564-6dbd-can8-43fddce952gy
+         HOST_ID:675ed9f4-6564-6dbd-can8-43fddce952gy
          STATUS:shutdown,true
          RELEASE_VERSION:3.0.8
          X3:3

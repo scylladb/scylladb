@@ -542,13 +542,6 @@ private:
      */
     future<> handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
-    /**
-     * Handle notification that a node is replacing another node.
-     *
-     * @param endpoint node
-     */
-    future<> handle_state_replacing(inet_address endpoint);
-
     future<>
     handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);
 
