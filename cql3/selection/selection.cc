@@ -131,11 +131,11 @@ protected:
 
         virtual bool requires_thread() const override { return false; }
 
-        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row() override {
             return std::move(_current);
         }
 
-        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) override {
+        virtual void add_input_row(result_set_builder& rs) override {
             // GROUP BY calls add_input_row() repeatedly without reset() in between, and it expects
             // the output to be the first value encountered:
             // https://cassandra.apache.org/doc/latest/cql/dml.html#grouping-results
@@ -216,18 +216,18 @@ protected:
             return _factories->does_aggregation();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row() override {
             std::vector<bytes_opt> output_row;
             output_row.reserve(_selectors.size());
             for (auto&& s : _selectors) {
-                output_row.emplace_back(s->get_output(sf));
+                output_row.emplace_back(s->get_output());
             }
             return output_row;
         }
 
-        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) override {
+        virtual void add_input_row(result_set_builder& rs) override {
             for (auto&& s : _selectors) {
-                s->add_input(sf, rs);
+                s->add_input(rs);
             }
         }
     };
@@ -292,7 +292,7 @@ selection::collect_metadata(const schema& schema, const std::vector<::shared_ptr
     return r;
 }
 
-result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf,
+result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now,
                                        std::vector<size_t> group_by_cell_indices)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
@@ -300,7 +300,6 @@ result_set_builder::result_set_builder(const selection& s, gc_clock::time_point 
     , _last_group(_group_by_cell_indices.size())
     , _group_began(false)
     , _now(now)
-    , _cql_serialization_format(sf)
 {
     if (s._collect_timestamps) {
         _timestamps.resize(s._columns.size(), 0);
@@ -364,7 +363,7 @@ bool result_set_builder::last_group_ended() const {
 }
 
 void result_set_builder::flush_selectors() {
-    _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
+    _result_set->add_row(_selectors->get_output_row());
     _selectors->reset();
 }
 
@@ -376,7 +375,7 @@ void result_set_builder::process_current_row(bool more_rows_coming) {
         flush_selectors();
     }
     update_last_group();
-    _selectors->add_input_row(_cql_serialization_format, *this);
+    _selectors->add_input_row(*this);
     if (more_rows_coming) {
         current->clear();
     } else {
@@ -395,7 +394,7 @@ void result_set_builder::new_row() {
 std::unique_ptr<result_set> result_set_builder::build() {
     process_current_row(/*more_rows_coming=*/false);
     if (_result_set->empty() && _selectors->is_aggregate()) {
-        _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
+        _result_set->add_row(_selectors->get_output_row());
     }
     return std::move(_result_set);
 }

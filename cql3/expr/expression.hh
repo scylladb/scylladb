@@ -365,7 +365,6 @@ untyped_constant make_untyped_null();
 // Represents a constant value with known value and type
 // For null and unset the type can sometimes be set to empty_type
 struct constant {
-    // A value serialized using the internal (latest) cql_serialization_format
     cql3::raw_value value;
 
     // Never nullptr, for NULL and UNSET might be empty_type

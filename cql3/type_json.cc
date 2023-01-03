@@ -144,49 +144,49 @@ static std::string_view validated_to_string_view(const rjson::value& v, const ch
     return rjson::to_string_view(v); 
 }
 
-static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& value, cql_serialization_format sf) {
+static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& value) {
     if (!value.IsObject()) {
         throw marshal_exception("map_type must be represented as JSON Object");
     }
     std::map<bytes, bytes, serialized_compare> raw_map(t.get_keys_type()->as_less_comparator());
     for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
-        bytes value = from_json_object(*t.get_values_type(), it->value, sf);
+        bytes value = from_json_object(*t.get_values_type(), it->value);
         if (!t.get_keys_type()->is_compatible_with(*utf8_type)) {
             // Keys in maps can only be strings in JSON, but they can also be a string representation
             // of another JSON type, which needs to be reparsed. Example - map<frozen<list<int>>, int>
             // will be represented like this: { "[1, 3, 6]": 3, "[]": 0, "[1, 2]": 2 }
             rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
-            raw_map.emplace(from_json_object(*t.get_keys_type(), map_key, sf), std::move(value));
+            raw_map.emplace(from_json_object(*t.get_keys_type(), map_key), std::move(value));
         } else {
-            raw_map.emplace(from_json_object(*t.get_keys_type(), it->name, sf), std::move(value));
+            raw_map.emplace(from_json_object(*t.get_keys_type(), it->name), std::move(value));
         }
     }
     return map_type_impl::serialize_to_bytes(raw_map);
 }
 
-static bytes from_json_object_aux(const set_type_impl& t, const rjson::value& value, cql_serialization_format sf) {
+static bytes from_json_object_aux(const set_type_impl& t, const rjson::value& value) {
     if (!value.IsArray()) {
         throw marshal_exception("set_type must be represented as JSON Array");
     }
     std::set<bytes, serialized_compare> raw_set(t.get_elements_type()->as_less_comparator());
     for (const rjson::value& v : value.GetArray()) {
-        raw_set.emplace(from_json_object(*t.get_elements_type(), v, sf));
+        raw_set.emplace(from_json_object(*t.get_elements_type(), v));
     }
-    return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
+    return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size());
 }
 
-static bytes from_json_object_aux(const list_type_impl& t, const rjson::value& value, cql_serialization_format sf) {
+static bytes from_json_object_aux(const list_type_impl& t, const rjson::value& value) {
     std::vector<bytes> values;
     if (!value.IsArray()) {
         throw marshal_exception("list_type must be represented as JSON Array");
     }
     for (const rjson::value& v : value.GetArray()) {
-        values.emplace_back(from_json_object(*t.get_elements_type(), v, sf));
+        values.emplace_back(from_json_object(*t.get_elements_type(), v));
     }
-    return collection_type_impl::pack(values.begin(), values.end(), values.size(), sf);
+    return collection_type_impl::pack(values.begin(), values.end(), values.size());
 }
 
-static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& value, cql_serialization_format sf) {
+static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& value) {
     if (!value.IsArray()) {
         throw marshal_exception("tuple_type must be represented as JSON Array");
     }
@@ -198,12 +198,12 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();
     for (auto vi = value.Begin(); vi != value.End(); ++vi, ++ti) {
-        raw_tuple.emplace_back(from_json_object(**ti, *vi, sf));
+        raw_tuple.emplace_back(from_json_object(**ti, *vi));
     }
     return t.build_value(std::move(raw_tuple));
 }
 
-static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& value, cql_serialization_format sf) {
+static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& value) {
     if (!value.IsObject()) {
         throw marshal_exception("user_type must be represented as JSON Object");
     }
@@ -220,7 +220,7 @@ static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& 
         if (!v || v->IsNull()) {
             raw_tuple.push_back(bytes_opt{});
         } else {
-            raw_tuple.push_back(from_json_object(*t, *v, sf));
+            raw_tuple.push_back(from_json_object(*t, *v));
         }
         remaining_names.erase(std::string_view(ut.field_name_as_string(i)));
     }
@@ -235,8 +235,8 @@ static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& 
 namespace {
 struct from_json_object_visitor {
     const rjson::value& value;
-    cql_serialization_format sf;
-    bytes operator()(const reversed_type_impl& t) { return from_json_object(*t.underlying_type(), value, sf); }
+    ;
+    bytes operator()(const reversed_type_impl& t) { return from_json_object(*t.underlying_type(), value); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) {
         if (value.IsString()) {
             return t.from_string(rjson::to_string_view(value));
@@ -323,16 +323,16 @@ struct from_json_object_visitor {
     }
     bytes operator()(const duration_type_impl& t) { return t.from_string(validated_to_string_view(value, "duration_type")); }
     bytes operator()(const empty_type_impl& t) { return bytes(); }
-    bytes operator()(const map_type_impl& t) { return from_json_object_aux(t, value, sf); }
-    bytes operator()(const set_type_impl& t) { return from_json_object_aux(t, value, sf); }
-    bytes operator()(const list_type_impl& t) { return from_json_object_aux(t, value, sf); }
-    bytes operator()(const tuple_type_impl& t) { return from_json_object_aux(t, value, sf); }
-    bytes operator()(const user_type_impl& t) { return from_json_object_aux(t, value, sf); }
+    bytes operator()(const map_type_impl& t) { return from_json_object_aux(t, value); }
+    bytes operator()(const set_type_impl& t) { return from_json_object_aux(t, value); }
+    bytes operator()(const list_type_impl& t) { return from_json_object_aux(t, value); }
+    bytes operator()(const tuple_type_impl& t) { return from_json_object_aux(t, value); }
+    bytes operator()(const user_type_impl& t) { return from_json_object_aux(t, value); }
 };
 }
 
-bytes from_json_object(const abstract_type& t, const rjson::value& value, cql_serialization_format sf) {
-    return visit(t, from_json_object_visitor{value, sf});
+bytes from_json_object(const abstract_type& t, const rjson::value& value) {
+    return visit(t, from_json_object_visitor{value});
 }
 
 template <typename T> static T compose_value(const integer_type_impl<T>& t, bytes_view bv) {
@@ -344,13 +344,12 @@ template <typename T> static T compose_value(const integer_type_impl<T>& t, byte
 
 static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
     std::ostringstream out;
-    auto sf = cql_serialization_format::internal();
 
     out << '{';
-    auto size = read_collection_size(bv, sf);
+    auto size = read_collection_size(bv);
     for (int i = 0; i < size; ++i) {
-        auto kb = read_collection_value(bv, sf);
-        auto vb = read_collection_value(bv, sf);
+        auto kb = read_collection_value(bv);
+        auto vb = read_collection_value(bv);
 
         if (i > 0) {
             out << ", ";
@@ -377,10 +376,9 @@ static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    auto sf = cql_serialization_format::internal();
     out << '[';
     managed_bytes_view mbv(bv);
-    std::for_each(llpdi::begin(mbv, sf), llpdi::end(mbv, sf), [&first, &out, &t] (const managed_bytes_view& e) {
+    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view& e) {
         if (first) {
             first = false;
         } else {
@@ -396,10 +394,9 @@ static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    auto sf = cql_serialization_format::internal();
     out << '[';
     managed_bytes_view mbv(bv);
-    std::for_each(llpdi::begin(mbv, sf), llpdi::end(mbv, sf), [&first, &out, &t] (const managed_bytes_view& e) {
+    std::for_each(llpdi::begin(mbv), llpdi::end(mbv), [&first, &out, &t] (const managed_bytes_view& e) {
         if (first) {
             first = false;
         } else {

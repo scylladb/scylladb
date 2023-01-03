@@ -16,7 +16,6 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
-#include "cql_serialization_format.hh"
 
 enum class allow_prefixes { no, yes };
 
@@ -280,7 +279,7 @@ public:
         }
         for (size_t i = 0; i != values.size(); ++i) {
             //FIXME: is it safe to assume internal serialization-format format?
-            _types[i]->validate(values[i], cql_serialization_format::internal());
+            _types[i]->validate(values[i]);
         }
     }
     bool equal(managed_bytes_view v1, managed_bytes_view v2) const {

@@ -12,7 +12,6 @@
 
 #include "native_function.hh"
 #include "scalar_function.hh"
-#include "cql_serialization_format.hh"
 #include "log.hh"
 #include <seastar/core/shared_ptr.hh>
 
@@ -48,9 +47,9 @@ public:
     virtual bool is_pure() const override {
         return Pure;
     }
-    virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
         try {
-            return _func(sf, parameters);
+            return _func(parameters);
         } catch(exceptions::cassandra_exception&) {
             // If the function's code took the time to produce an official
             // cassandra_exception, pass it through. Otherwise, below we will

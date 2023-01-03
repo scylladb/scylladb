@@ -9,7 +9,6 @@
 
 #include "abstract_function_selector.hh"
 #include "cql3/functions/aggregate_function.hh"
-#include "cql_serialization_format.hh"
 
 #pragma once
 
@@ -24,20 +23,20 @@ public:
         return true;
     }
 
-    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(result_set_builder& rs) override {
         // Aggregation of aggregation is not supported
         size_t m = _arg_selectors.size();
         for (size_t i = 0; i < m; ++i) {
             auto&& s = _arg_selectors[i];
-            s->add_input(sf, rs);
-            _args[i] = s->get_output(sf);
+            s->add_input(rs);
+            _args[i] = s->get_output();
             s->reset();
         }
-        _aggregate->add_input(sf, _args);
+        _aggregate->add_input(_args);
     }
 
-    virtual bytes_opt get_output(cql_serialization_format sf) override {
-        return _aggregate->compute(sf);
+    virtual bytes_opt get_output() override {
+        return _aggregate->compute();
     }
 
     virtual void reset() override {

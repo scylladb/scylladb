@@ -11,7 +11,6 @@
 
 #include "abstract_function_selector.hh"
 #include "cql3/functions/scalar_function.hh"
-#include "cql_serialization_format.hh"
 
 namespace cql3 {
 
@@ -28,25 +27,25 @@ public:
         return _arg_selectors[0]->is_aggregate();
     }
 
-    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(result_set_builder& rs) override {
         size_t m = _arg_selectors.size();
         for (size_t i = 0; i < m; ++i) {
             auto&& s = _arg_selectors[i];
-            s->add_input(sf, rs);
+            s->add_input(rs);
         }
     }
 
     virtual void reset() override {
     }
 
-    virtual bytes_opt get_output(cql_serialization_format sf) override {
+    virtual bytes_opt get_output() override {
         size_t m = _arg_selectors.size();
         for (size_t i = 0; i < m; ++i) {
             auto&& s = _arg_selectors[i];
-            _args[i] = s->get_output(sf);
+            _args[i] = s->get_output();
             s->reset();
         }
-        return fun()->execute(sf, _args);
+        return fun()->execute(_args);
     }
 
     virtual bool requires_thread() const override;

@@ -2558,7 +2558,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     opts.set(query::partition_slice::option::send_ttl);
     opts.add(custom_opts);
     auto slice = query::partition_slice(
-            std::move(cr_ranges), std::move(static_columns), std::move(regular_columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
+            std::move(cr_ranges), std::move(static_columns), std::move(regular_columns), std::move(opts), { }, query::max_rows);
     // Take the shard-local lock on the base-table row or partition as needed.
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.

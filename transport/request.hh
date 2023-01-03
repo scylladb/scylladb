@@ -204,11 +204,11 @@ private:
         options_flag::NAMES_FOR_VALUES
     >;
 public:
-    std::unique_ptr<cql3::query_options> read_options(uint8_t version, cql_serialization_format cql_ser_format, const cql3::cql_config& cql_config) {
+    std::unique_ptr<cql3::query_options> read_options(uint8_t version, const cql3::cql_config& cql_config) {
         auto consistency = read_consistency();
         if (version == 1) {
             return std::make_unique<cql3::query_options>(cql_config, consistency, std::nullopt, std::vector<cql3::raw_value_view>{},
-                false, cql3::query_options::specific_options::DEFAULT, cql_ser_format);
+                false, cql3::query_options::specific_options::DEFAULT);
         }
 
         assert(version >= 2);
@@ -256,11 +256,10 @@ public:
                 onames = std::move(names);
             }
             options = std::make_unique<cql3::query_options>(cql_config, consistency, std::move(onames), std::move(values), skip_metadata,
-                cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts},
-                cql_ser_format);
+                cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
         } else {
             options = std::make_unique<cql3::query_options>(cql_config, consistency, std::nullopt, std::move(values), skip_metadata,
-                cql3::query_options::specific_options::DEFAULT, cql_ser_format);
+                cql3::query_options::specific_options::DEFAULT);
         }
 
         return options;

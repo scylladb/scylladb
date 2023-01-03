@@ -25,6 +25,7 @@
 #include "db/per_partition_rate_limit_info.hh"
 #include "utils/UUID.hh"
 #include "bytes.hh"
+#include "cql_serialization_format.hh"
 
 class position_in_partition_view;
 class position_in_partition;
@@ -193,7 +194,6 @@ public:
     option_set options;
 private:
     std::unique_ptr<specific_ranges> _specific_ranges;
-    cql_serialization_format _cql_format;
     uint32_t _partition_row_limit_low_bits;
     uint32_t _partition_row_limit_high_bits;
 public:
@@ -206,7 +206,6 @@ public:
     partition_slice(clustering_row_ranges row_ranges, column_id_vector static_columns,
         column_id_vector regular_columns, option_set options,
         std::unique_ptr<specific_ranges> specific_ranges = nullptr,
-        cql_serialization_format = cql_serialization_format::internal(),
         uint64_t partition_row_limit = partition_max_rows);
     partition_slice(clustering_row_ranges ranges, const schema& schema, const column_set& mask, option_set options);
     partition_slice(const partition_slice&);
@@ -230,8 +229,8 @@ public:
     const std::unique_ptr<specific_ranges>& get_specific_ranges() const {
         return _specific_ranges;
     }
-    const cql_serialization_format& cql_format() const {
-        return _cql_format;
+    const cql_serialization_format cql_format() const {
+        return cql_serialization_format(4); // For IDL compatibility
     }
     const uint32_t partition_row_limit_low_bits() const {
         return _partition_row_limit_low_bits;

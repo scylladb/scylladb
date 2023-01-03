@@ -250,8 +250,8 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
             std::nullopt,
             std::vector<cql3::raw_value>{},
             false,
-            cql3::query_options::specific_options::DEFAULT,
-            cql_serialization_format::latest()),
+            cql3::query_options::specific_options::DEFAULT
+            ),
         std::move(stmt_value_views));
 
     cql3::statements::batch_statement batch(

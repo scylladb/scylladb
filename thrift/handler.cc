@@ -404,7 +404,7 @@ public:
         }
         clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
         auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
-                std::move(specific_ranges), cql_serialization_format::internal());
+                std::move(specific_ranges));
         auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
                 query::tombstone_limit(proxy.get_tombstone_limit()), query::row_limit(row_limit), query::partition_limit(partition_limit));
         cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -1053,7 +1053,7 @@ public:
             }
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), std::nullopt, std::vector<cql3::raw_value_view>(),
-                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+                            false, cql3::query_options::specific_options::DEFAULT);
             auto f = qp.execute_direct(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
@@ -1133,7 +1133,7 @@ public:
             });
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), std::nullopt, std::move(bytes_values),
-                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+                            false, cql3::query_options::specific_options::DEFAULT);
             auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
@@ -1348,7 +1348,7 @@ private:
             auto column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 auto col_name = to_bytes(col_def.name);
-                column_name_type->validate(col_name, cql_serialization_format::latest());
+                column_name_type->validate(col_name);
                 builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
                                     column_kind::regular_column);
                 auto index = index_metadata_from_thrift(col_def);
@@ -1613,7 +1613,7 @@ private:
             throw make_exception<InvalidRequestException>("SlicePredicate column_names and slice_range may not both be null");
         }
         auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts,
-                nullptr, cql_serialization_format::internal(), per_partition_row_limit);
+                nullptr, per_partition_row_limit);
         auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
                 query::tombstone_limit(proxy.get_tombstone_limit()));
         cmd->allow_limit = db::allow_per_partition_rate_limit::yes;

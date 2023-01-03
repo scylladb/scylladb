@@ -63,7 +63,7 @@ public:
         , _first(true)
     { }
 
-    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(result_set_builder& rs) override {
         // GROUP BY calls add_input() repeatedly without reset() in between, and it expects the
         // output to be the first value encountered:
         // https://cassandra.apache.org/doc/latest/cql/dml.html#grouping-results
@@ -74,7 +74,7 @@ public:
         }
     }
 
-    virtual bytes_opt get_output(cql_serialization_format sf) override {
+    virtual bytes_opt get_output() override {
         return std::move(_current);
     }
 

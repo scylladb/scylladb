@@ -46,7 +46,7 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     while (!p->is_exhausted()) {
         tracing::trace(state.get_trace_state(), "Fetching a page for ghost row deletion");
         auto timeout = db::timeout_clock::now() + timeout_duration;
-        cql3::selection::result_set_builder builder(*selection, now, options.get_cql_serialization_format());
+        cql3::selection::result_set_builder builder(*selection, now);
         co_await p->fetch_page(builder, page_size, now, timeout);
     }
 }

@@ -9,7 +9,6 @@
 #include "user_function.hh"
 #include "cql3/util.hh"
 #include "log.hh"
-#include "cql_serialization_format.hh"
 #include "lang/wasm.hh"
 
 #include <seastar/core/thread.hh>
@@ -33,7 +32,7 @@ bool user_function::is_aggregate() const { return false; }
 
 bool user_function::requires_thread() const { return true; }
 
-bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) {
+bytes_opt user_function::execute(const std::vector<bytes_opt>& parameters) {
     const auto& types = arg_types();
     if (parameters.size() != types.size()) {
         throw std::logic_error("Wrong number of parameters");

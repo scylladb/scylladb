@@ -17,7 +17,6 @@
 #include "types/collection.hh"
 
 class user_type_impl;
-class cql_serialization_format;
 
 namespace Json {
 class Value;
@@ -43,11 +42,9 @@ public:
                         managed_bytes_view o1, managed_bytes_view o2);
     using abstract_type::deserialize;
     using collection_type_impl::deserialize;
-    template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;
-    static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
-            cql_serialization_format sf);
-    static managed_bytes serialize_partially_deserialized_form_fragmented(const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v,
-            cql_serialization_format sf);
+    template <FragmentedView View> data_value deserialize(View v) const;
+    static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v);
+    static managed_bytes serialize_partially_deserialized_form_fragmented(const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v);
 
     // Serializes a map using the internal cql serialization format
     // Takes a range of pair<const bytes, bytes>
@@ -82,7 +79,7 @@ bytes map_type_impl::serialize_to_bytes(const Range& map_range) {
     bytes result(bytes::initialized_later(), serialized_len);
     bytes::iterator out = result.begin();
 
-    write_collection_size(out, map_size, cql_serialization_format::internal());
+    write_collection_size(out, map_size);
     for (const std::pair<const bytes, bytes>& elem : map_range) {
         if (elem.first.size() > std::numeric_limits<int32_t>::max()) {
             throw exceptions::invalid_request_exception(
@@ -94,8 +91,8 @@ bytes map_type_impl::serialize_to_bytes(const Range& map_range) {
                 fmt::format("Map value size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
         }
 
-        write_collection_value(out, cql_serialization_format::internal(), elem.first);
-        write_collection_value(out, cql_serialization_format::internal(), elem.second);
+        write_collection_value(out, elem.first);
+        write_collection_value(out, elem.second);
     }
 
     return result;
@@ -119,7 +116,7 @@ managed_bytes map_type_impl::serialize_to_managed_bytes(const Range& map_range) 
     managed_bytes result(managed_bytes::initialized_later(), serialized_len);
     managed_bytes_mutable_view out(result);
 
-    write_collection_size(out, map_size, cql_serialization_format::internal());
+    write_collection_size(out, map_size);
     for (const std::pair<const managed_bytes, managed_bytes>& elem : map_range) {
         if (elem.first.size() > std::numeric_limits<int32_t>::max()) {
             throw exceptions::invalid_request_exception(
@@ -131,8 +128,8 @@ managed_bytes map_type_impl::serialize_to_managed_bytes(const Range& map_range) 
                 fmt::format("Map value size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
         }
 
-        write_collection_value(out, cql_serialization_format::internal(), elem.first);
-        write_collection_value(out, cql_serialization_format::internal(), elem.second);
+        write_collection_value(out, elem.first);
+        write_collection_value(out, elem.second);
     }
 
     return result;

@@ -212,8 +212,7 @@ future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_
 future<result<std::unique_ptr<cql3::result_set>>> query_pager::fetch_page_result(uint32_t page_size,
         gc_clock::time_point now, db::timeout_clock::time_point timeout) {
     return do_with(
-            cql3::selection::result_set_builder(*_selection, now,
-                    _options.get_cql_serialization_format()),
+            cql3::selection::result_set_builder(*_selection, now),
             [this, page_size, now, timeout](auto& builder) {
                 return this->fetch_page_result(builder, page_size, now, timeout).then(utils::result_wrap([&builder] {
                     return builder.with_thread_if_needed([&builder] () -> result<std::unique_ptr<cql3::result_set>> {

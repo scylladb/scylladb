@@ -13,7 +13,6 @@
 #include "selector.hh"
 #include "types.hh"
 #include "types/user.hh"
-#include "cql_serialization_format.hh"
 
 namespace cql3 {
 
@@ -59,12 +58,12 @@ public:
         return false;
     }
 
-    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
-        _selected->add_input(sf, rs);
+    virtual void add_input(result_set_builder& rs) override {
+        _selected->add_input(rs);
     }
 
-    virtual bytes_opt get_output(cql_serialization_format sf) override {
-        auto&& value = _selected->get_output(sf);
+    virtual bytes_opt get_output() override {
+        auto&& value = _selected->get_output();
         if (!value) {
             return std::nullopt;
         }

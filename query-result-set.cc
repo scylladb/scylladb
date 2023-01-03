@@ -185,7 +185,7 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
                             ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
                         }
 
-                        cells.emplace(col.name_as_text(), ctype->deserialize_value(*cell, _slice.cql_format()));
+                        cells.emplace(col.name_as_text(), ctype->deserialize_value(*cell));
                     } else {
                         cells.emplace(col.name_as_text(), col.type->deserialize_value(*cell));
                     }

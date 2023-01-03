@@ -23,12 +23,11 @@ public:
     /**
      * Applies this function to the specified parameter.
      *
-     * @param protocolVersion protocol version used for parameters and return value
      * @param parameters the input parameters
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) = 0;
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) = 0;
 };
 
 

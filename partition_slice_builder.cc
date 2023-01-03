@@ -62,7 +62,6 @@ partition_slice_builder::build() {
         std::move(regular_columns),
         std::move(_options),
         std::move(_specific_ranges),
-        cql_serialization_format::internal(),
         _partition_row_limit,
     };
 }

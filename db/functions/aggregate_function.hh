@@ -63,24 +63,22 @@ public:
         /**
          * Adds the specified input to this aggregate.
          *
-         * @param protocol_version native protocol version
          * @param values the values to add to the aggregate.
          */
-        virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) = 0;
+        virtual void add_input(const std::vector<opt_bytes>& values) = 0;
 
         /**
          * Computes and returns the aggregate current value.
          *
-         * @param protocol_version native protocol version
          * @return the aggregate current value.
          */
-        virtual opt_bytes compute(cql_serialization_format sf) = 0;
+        virtual opt_bytes compute() = 0;
 
         virtual void set_accumulator(const opt_bytes& acc) = 0;
 
         virtual opt_bytes get_accumulator() const = 0;
 
-        virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) = 0;
+        virtual void reduce(const opt_bytes& acc) = 0;
 
         /**
          * Reset this aggregate.

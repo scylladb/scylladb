@@ -49,7 +49,6 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
         out << ", specific=[" << *ps._specific_ranges << "]";
     }
     out << ", options=" << format("{:x}", ps.options.mask()); // FIXME: pretty print options
-    out << ", cql_format=" << ps.cql_format();
     out << ", partition_row_limit=" << ps.partition_row_limit();
     return out << "}";
 }
@@ -207,20 +206,20 @@ partition_slice::partition_slice(clustering_row_ranges row_ranges,
     , regular_columns(std::move(regular_columns))
     , options(options)
     , _specific_ranges(std::move(specific_ranges))
-    , _cql_format(std::move(cql_format))
     , _partition_row_limit_low_bits(partition_row_limit_low_bits)
     , _partition_row_limit_high_bits(partition_row_limit_high_bits)
-{}
+{
+    cql_format.ensure_supported();
+}
 
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
     query::column_id_vector static_columns,
     query::column_id_vector regular_columns,
     option_set options,
     std::unique_ptr<specific_ranges> specific_ranges,
-    cql_serialization_format cql_format,
     uint64_t partition_row_limit)
     : partition_slice(std::move(row_ranges), std::move(static_columns), std::move(regular_columns), options,
-            std::move(specific_ranges), std::move(cql_format), static_cast<uint32_t>(partition_row_limit),
+            std::move(specific_ranges), cql_serialization_format::latest(), static_cast<uint32_t>(partition_row_limit),
             static_cast<uint32_t>(partition_row_limit >> 32))
 {}
 
@@ -250,7 +249,6 @@ partition_slice::partition_slice(const partition_slice& s)
     , regular_columns(s.regular_columns)
     , options(s.options)
     , _specific_ranges(s._specific_ranges ? std::make_unique<specific_ranges>(*s._specific_ranges) : nullptr)
-    , _cql_format(s._cql_format)
     , _partition_row_limit_low_bits(s._partition_row_limit_low_bits)
     , _partition_row_limit_high_bits(s._partition_row_limit_high_bits)
 {}

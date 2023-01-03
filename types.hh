@@ -37,7 +37,6 @@
 
 class tuple_type_impl;
 class big_decimal;
-class cql_serialization_format;
 
 namespace utils {
 
@@ -517,8 +516,8 @@ public:
         return deserialize_impl(single_fragmented_view(v));
     };
     // Explicitly instantiated in .cc
-    template <FragmentedView View> void validate(const View& v, cql_serialization_format sf) const;
-    void validate(bytes_view view, cql_serialization_format sf) const;
+    template <FragmentedView View> void validate(const View& v) const;
+    void validate(bytes_view view) const;
     bool is_compatible_with(const abstract_type& previous) const;
     /*
      * Types which are wrappers over other types return the inner type.
@@ -602,7 +601,7 @@ public:
 
     // Checks whether a bound value of this type has to be reserialized.
     // This can be for example because there is a set inside that needs to be sorted.
-    bool bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const;
+    bool bound_value_needs_to_be_reserialized() const;
 
     friend class list_type_impl;
 private:
@@ -619,7 +618,7 @@ protected:
     static const void* get_value_ptr(const data_value& v) {
         return v._value;
     }
-    friend void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value);
+    friend void write_collection_value(bytes::iterator& out, data_type type, const data_value& value);
     friend class tuple_type_impl;
     friend class data_value;
     friend class reversed_type_impl;
@@ -1187,21 +1186,21 @@ inline sstring read_simple_short_string(bytes_view& v) {
     return ret;
 }
 
-size_t collection_size_len(cql_serialization_format sf);
-size_t collection_value_len(cql_serialization_format sf);
-void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf);
-void write_collection_size(managed_bytes_mutable_view&, int size, cql_serialization_format sf);
-void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes);
-void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, bytes_view val_bytes);
-void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, const managed_bytes_view& val_bytes);
+size_t collection_size_len();
+size_t collection_value_len();
+void write_collection_size(bytes::iterator& out, int size);
+void write_collection_size(managed_bytes_mutable_view&, int size);
+void write_collection_value(bytes::iterator& out, bytes_view val_bytes);
+void write_collection_value(managed_bytes_mutable_view&, bytes_view val_bytes);
+void write_collection_value(managed_bytes_mutable_view&, const managed_bytes_view& val_bytes);
 void write_int32(bytes::iterator& out, int32_t value);
 
 // Splits a serialized collection into a vector of elements, but does not recursively deserialize the elements.
 // Does not perform validation.
 template <FragmentedView View>
-utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf);
+utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in);
 template <FragmentedView View>
-std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf);
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in);
 
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;

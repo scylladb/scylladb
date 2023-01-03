@@ -605,7 +605,7 @@ private:
 public:
     collection_iterator(managed_bytes_view_opt v = {})
         : _v(v.value_or(managed_bytes_view{}))
-        , _rem(_v.empty() ? 0 : read_collection_size(_v, cql_serialization_format::internal()))
+        , _rem(_v.empty() ? 0 : read_collection_size(_v))
     {
         if (_rem != 0) {
             parse();
@@ -650,8 +650,8 @@ template<>
 void collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>>::parse() {
     assert(_rem > 0);
     _next = _v;
-    auto k = read_collection_value(_next, cql_serialization_format::internal());
-    auto v = read_collection_value(_next, cql_serialization_format::internal());
+    auto k = read_collection_value(_next);
+    auto v = read_collection_value(_next);
     _current = std::make_pair(k, v);
 }
 
@@ -659,7 +659,7 @@ template<>
 void collection_iterator<managed_bytes_view>::parse() {
     assert(_rem > 0);
     _next = _v;
-    auto k = read_collection_value(_next, cql_serialization_format::internal());
+    auto k = read_collection_value(_next);
     _current = k;
 }
 
@@ -728,7 +728,7 @@ auto make_maybe_back_inserter(Container& c, const abstract_type& type, collectio
 static size_t collection_size(const managed_bytes_opt& bo) {
     if (bo) {
         managed_bytes_view mbv(*bo);
-        return read_collection_size(mbv, cql_serialization_format::internal());
+        return read_collection_size(mbv);
     }
     return 0;
 }
@@ -750,7 +750,7 @@ static managed_bytes merge(const collection_type_impl& ctype, const managed_byte
     // note order: set_union, when finding doubles, use value from first1 (j here). So
     // since this is next, it has prio
     std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<managed_bytes_view>(deleted)), cmp);
-    return map_type_impl::serialize_partially_deserialized_form_fragmented(res, cql_serialization_format::internal());
+    return map_type_impl::serialize_partially_deserialized_form_fragmented(res);
 }
 static managed_bytes merge(const set_type_impl& ctype, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
     std::vector<managed_bytes_view> res;
@@ -761,7 +761,7 @@ static managed_bytes merge(const set_type_impl& ctype, const managed_bytes_opt& 
     };
     collection_iterator<managed_bytes_view> e, i(prev), j(next), d(deleted);
     std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
-    return set_type_impl::serialize_partially_deserialized_form_fragmented(res, cql_serialization_format::internal());
+    return set_type_impl::serialize_partially_deserialized_form_fragmented(res);
 }
 static managed_bytes merge(const user_type_impl& type, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
     std::vector<managed_bytes_view_opt> res(type.size());
@@ -812,15 +812,14 @@ static managed_bytes_opt get_preimage_col_value(const column_definition& cdef, c
             // flatten set
             [&] (const set_type_impl& type) {
                 auto v = pirow->get_view(cdef.name_as_text());
-                auto f = cql_serialization_format::internal();
-                auto n = read_collection_size(v, f);
+                auto n = read_collection_size(v);
                 std::vector<managed_bytes> tmp;
                 tmp.reserve(n);
                 while (n--) {
-                    tmp.emplace_back(read_collection_value(v, f)); // key
-                    read_collection_value(v, f); // value. ignore.
+                    tmp.emplace_back(read_collection_value(v)); // key
+                    read_collection_value(v); // value. ignore.
                 }
-                return set_type_impl::serialize_partially_deserialized_form_fragmented({tmp.begin(), tmp.end()}, f);
+                return set_type_impl::serialize_partially_deserialized_form_fragmented({tmp.begin(), tmp.end()});
             },
             [&] (const abstract_type& o) -> managed_bytes {
                 return pirow->get_blob_fragmented(cdef.name_as_text());
@@ -1122,7 +1121,7 @@ struct process_row_visitor {
                 visit_collection(v);
 
                 managed_bytes_opt added_keys = v._added_keys.empty() ? std::nullopt :
-                    std::optional{set_type_impl::serialize_partially_deserialized_form_fragmented(v._added_keys, cql_serialization_format::internal())};
+                    std::optional{set_type_impl::serialize_partially_deserialized_form_fragmented(v._added_keys)};
 
                 return {
                     v._is_column_delete,
@@ -1178,7 +1177,7 @@ struct process_row_visitor {
                 visit_collection(v);
 
                 managed_bytes_opt added_cells = v._added_cells.empty() ? std::nullopt :
-                    std::optional{map_type_impl::serialize_partially_deserialized_form_fragmented(v._added_cells, cql_serialization_format::internal())};
+                    std::optional{map_type_impl::serialize_partially_deserialized_form_fragmented(v._added_cells)};
 
                 return {
                     v._is_column_delete,
@@ -1198,7 +1197,7 @@ struct process_row_visitor {
         // then we deserialize again when merging images below
         managed_bytes_opt deleted_elements = std::nullopt;
         if (!deleted_keys.empty()) {
-            deleted_elements = set_type_impl::serialize_partially_deserialized_form_fragmented(deleted_keys, cql_serialization_format::internal());
+            deleted_elements = set_type_impl::serialize_partially_deserialized_form_fragmented(deleted_keys);
         }
 
         // delta

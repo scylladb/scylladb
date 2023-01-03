@@ -2305,7 +2305,7 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                 rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
             }
         } else if (cell) {
-            auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
+            auto deserialized = attrs_type()->deserialize(*cell);
             auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
             for (auto entry : keys_and_values) {
                 std::string attr_name = value_cast<sstring>(entry.first);
@@ -2340,7 +2340,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const std::optional<attrs_to_get>& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
-    cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
+    cql3::selection::result_set_builder builder(selection, gc_clock::now());
     query::result_view::consume(query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
 
     auto result_set = builder.build();
@@ -2363,7 +2363,7 @@ std::vector<rjson::value> executor::describe_multi_item(schema_ptr schema,
         const cql3::selection::selection& selection,
         const query::result& query_result,
         const std::optional<attrs_to_get>& attrs_to_get) {
-    cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
+    cql3::selection::result_set_builder builder(selection, gc_clock::now());
     query::result_view::consume(query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
     auto result_set = builder.build();
     std::vector<rjson::value> ret;
@@ -3511,7 +3511,7 @@ public:
                     rjson::add_with_string_name(field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
                 }
             } else {
-                auto deserialized = attrs_type()->deserialize(bv, cql_serialization_format::latest());
+                auto deserialized = attrs_type()->deserialize(bv);
                 auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
                 for (auto entry : keys_and_values) {
                     std::string attr_name = value_cast<sstring>(entry.first);

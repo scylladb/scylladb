@@ -50,7 +50,7 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
         return now;
     }
     try {
-        return tval.view().validate_and_deserialize<int64_t>(*long_type, cql_serialization_format::internal());
+        return tval.view().validate_and_deserialize<int64_t>(*long_type);
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid timestamp value");
     }
@@ -70,7 +70,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
 
     int32_t ttl;
     try {
-        ttl = tval.view().validate_and_deserialize<int32_t>(*int32_type, cql_serialization_format::internal());
+        ttl = tval.view().validate_and_deserialize<int32_t>(*int32_type);
     }
     catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid TTL value");

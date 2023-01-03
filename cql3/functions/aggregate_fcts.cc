@@ -13,7 +13,6 @@
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/util.hh"
-#include "cql_serialization_format.hh"
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
 #include "user_aggregate.hh"
@@ -41,10 +40,10 @@ public:
     virtual void reset() override {
         _count = 0;
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         return long_type->decompose(_count);
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         ++_count;
     }
     virtual void set_accumulator(const opt_bytes& acc) override {
@@ -57,7 +56,7 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return long_type->decompose(_count);
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc) {
             auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
             _count += other;
@@ -190,13 +189,13 @@ public:
     virtual void reset() override {
         _acc = _initcond;
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
-        return _finalfunc ? _finalfunc->execute(sf, std::vector<bytes_opt>{_acc}) : _acc;
+    virtual opt_bytes compute() override {
+        return _finalfunc ? _finalfunc->execute(std::vector<bytes_opt>{_acc}) : _acc;
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         std::vector<bytes_opt> args{_acc};
         args.insert(args.end(), values.begin(), values.end());
-        _acc = _sfunc->execute(sf, args);
+        _acc = _sfunc->execute(args);
     }
     virtual void set_accumulator(const opt_bytes& acc) override {
         _acc = acc;
@@ -204,9 +203,9 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return _acc;
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         std::vector<bytes_opt> args{_acc, acc};
-        _acc = _rfunc->execute(sf, args);
+        _acc = _rfunc->execute(args);
     }
 };
 
@@ -219,10 +218,10 @@ public:
     virtual void reset() override {
         _sum = {};
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         return data_type_for<Type>()->decompose(accumulator_for<Type>::narrow(_sum));
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -238,7 +237,7 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return accumulator_for<Type>::decompose(_sum);
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc) {
             auto other = accumulator_for<Type>::deserialize(acc);
             _sum += other;
@@ -249,7 +248,7 @@ public:
 template <typename Type>
 class impl_reducible_sum_function final : public impl_sum_function_for<Type> {
 public:
-    virtual bytes_opt compute(cql_serialization_format sf) override {
+    virtual bytes_opt compute() override {
         return this->get_accumulator();
     }
 };
@@ -317,14 +316,14 @@ public:
         _sum = {};
         _count = 0;
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         Type ret{};
         if (_count) {
             ret = impl_div_for_avg<Type>::div(_sum, _count);
         }
         return data_type_for<Type>()->decompose(ret);
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -349,7 +348,7 @@ public:
         );
         return tuple_val.serialize();
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc) {
             data_type tuple_type = tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type});
             auto tuple = value_cast<tuple_type_impl::native_type>(tuple_type->deserialize(bytes_view(*acc)));
@@ -363,7 +362,7 @@ public:
 template <typename Type>
 class impl_reducible_avg_function : public impl_avg_function_for<Type> {
 public:
-    virtual bytes_opt compute(cql_serialization_format sf) override {
+    virtual bytes_opt compute() override {
         return this->get_accumulator();
     }
 };
@@ -458,13 +457,13 @@ public:
     virtual void reset() override {
         _max = {};
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         if (!_max) {
             return {};
         }
         return data_type_for<Type>()->decompose(data_value(Type{*_max}));
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -488,8 +487,8 @@ public:
         }
         return {};
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
-        return add_input(sf, {acc});
+    virtual void reduce(const opt_bytes& acc) override {
+        return add_input({acc});
     }
 };
 
@@ -503,10 +502,10 @@ public:
     virtual void reset() override {
         _max = {};
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         return _max.value_or(bytes{});
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (values.empty() || !values[0]) {
             return;
         }
@@ -520,11 +519,11 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return _max;
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc && !acc->length()) {
             return;
         }
-        return add_input(sf, {acc});
+        return add_input({acc});
     }
 };
 
@@ -599,13 +598,13 @@ public:
     virtual void reset() override {
         _min = {};
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         if (!_min) {
             return {};
         }
         return data_type_for<Type>()->decompose(data_value(Type{*_min}));
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -629,8 +628,8 @@ public:
         }
         return {};
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
-        return add_input(sf, {acc});
+    virtual void reduce(const opt_bytes& acc) override {
+        return add_input({acc});
     }
 };
 
@@ -644,10 +643,10 @@ public:
     virtual void reset() override {
         _min = {};
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         return _min.value_or(bytes{});
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (values.empty() || !values[0]) {
             return;
         }
@@ -661,11 +660,11 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return _min;
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc && !acc->length()) {
             return;
         }
-        return add_input(sf, {acc});
+        return add_input({acc});
     }
 };
 
@@ -721,10 +720,10 @@ public:
     virtual void reset() override {
         _count = 0;
     }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
+    virtual opt_bytes compute() override {
         return long_type->decompose(_count);
     }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -740,7 +739,7 @@ public:
     virtual opt_bytes get_accumulator() const override {
         return long_type->decompose(_count);
     }
-    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+    virtual void reduce(const opt_bytes& acc) override {
         if (acc) {
             auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
             _count += other;

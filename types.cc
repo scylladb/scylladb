@@ -533,10 +533,9 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
     }
 
     const abstract_type& element_type = *_elements;
-    auto sf = cql_serialization_format::internal();
 
-    size_t list_size = read_collection_size(list, sf);
-    size_t map_size = read_collection_size(map, sf);
+    size_t list_size = read_collection_size(list);
+    size_t map_size = read_collection_size(map);
 
     bytes_view list_value;
     bytes_view map_value[2];
@@ -547,9 +546,9 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
     // List elements are stored in both vectors in list index order.
     for (size_t i = 0; i < std::min(list_size, map_size); ++i) {
 
-        list_value = read_collection_value(list, sf);
-        map_value[0] = read_collection_value(map, sf);
-        map_value[1] = read_collection_value(map, sf);
+        list_value = read_collection_value(list);
+        map_value[0] = read_collection_value(map);
+        map_value[1] = read_collection_value(map);
         auto cmp = element_type.compare(list_value, map_value[map_value_index]);
         if (cmp != 0) {
             return cmp;
@@ -561,13 +560,12 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
 bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type, const data_value& value) const
 {
     assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
-    auto sf = cql_serialization_format::internal();
     const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(value);
     // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
     bool first = is_set();
 
-    size_t len = collection_size_len(sf);
-    size_t psz = collection_value_len(sf);
+    size_t len = collection_size_len();
+    size_t psz = collection_value_len();
     for (const std::pair<data_value, data_value>& entry : map) {
         len += psz + (first ? entry.first : entry.second).serialized_size();
     }
@@ -575,9 +573,9 @@ bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type
     bytes b(bytes::initialized_later(), len);
     bytes::iterator out = b.begin();
 
-    write_collection_size(out, map.size(), sf);
+    write_collection_size(out, map.size());
     for (const std::pair<data_value, data_value>& entry : map) {
-        write_collection_value(out, sf, _elements, first ? entry.first : entry.second);
+        write_collection_value(out, _elements, first ? entry.first : entry.second);
     }
     return b;
 }
@@ -616,39 +614,25 @@ static bool is_value_compatible_with_internal_aux(const collection_type_impl& t,
     return t.is_value_compatible_with_frozen(cprev);
 }
 
-size_t collection_size_len(cql_serialization_format sf) {
-    if (sf.using_32_bits_for_collections()) {
-        return sizeof(int32_t);
-    }
-    return sizeof(uint16_t);
+size_t collection_size_len() {
+    return sizeof(int32_t);
 }
 
-size_t collection_value_len(cql_serialization_format sf) {
-    if (sf.using_32_bits_for_collections()) {
-        return sizeof(int32_t);
-    }
-    return sizeof(uint16_t);
+size_t collection_value_len() {
+    return sizeof(int32_t);
 }
 
 
-int read_collection_size(bytes_view& in, cql_serialization_format sf) {
-    if (sf.using_32_bits_for_collections()) {
-        return read_simple<int32_t>(in);
-    } else {
-        return read_simple<uint16_t>(in);
-    }
+int read_collection_size(bytes_view& in) {
+    return read_simple<int32_t>(in);
 }
 
-void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf) {
-    if (sf.using_32_bits_for_collections()) {
-        serialize_int32(out, size);
-    } else {
-        serialize_int16(out, uint16_t(size));
-    }
+void write_collection_size(bytes::iterator& out, int size) {
+    serialize_int32(out, size);
 }
 
-bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf) {
-    int32_t size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+bytes_view read_collection_value(bytes_view& in) {
+    int32_t size = read_simple<int32_t>(in);
     if (size == -2) {
         throw exceptions::invalid_request_exception("unset value is not supported inside collections");
     }
@@ -658,17 +642,8 @@ bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf) {
     return read_simple_bytes(in, size);
 }
 
-void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes) {
-    if (sf.using_32_bits_for_collections()) {
-        serialize_int32(out, int32_t(val_bytes.size()));
-    } else {
-        if (val_bytes.size() > std::numeric_limits<uint16_t>::max()) {
-            throw marshal_exception(
-                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
-                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val_bytes.size()));
-        }
-        serialize_int16(out, uint16_t(val_bytes.size()));
-    }
+void write_collection_value(bytes::iterator& out, bytes_view val_bytes) {
+    serialize_int32(out, int32_t(val_bytes.size()));
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
@@ -682,17 +657,8 @@ void write_simple(bytes_ostream& out, std::type_identity_t<T> val) {
     out.write(bytes_view(val_ptr, sizeof(T)));
 }
 
-void write_collection_value(bytes_ostream& out, cql_serialization_format sf, atomic_cell_value_view val) {
-    if (sf.using_32_bits_for_collections()) {
-        write_simple<int32_t>(out, int32_t(val.size_bytes()));
-    } else {
-        if (val.size_bytes() > std::numeric_limits<uint16_t>::max()) {
-            throw marshal_exception(
-                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
-                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size_bytes()));
-        }
-        write_simple<uint16_t>(out, uint16_t(val.size_bytes()));
-    }
+void write_collection_value(bytes_ostream& out, atomic_cell_value_view val) {
+    write_simple<int32_t>(out, int32_t(val.size_bytes()));
     for (auto&& frag : fragment_range(val)) {
         out.write(frag);
     }
@@ -722,39 +688,17 @@ void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) 
     }
 }
 
-void write_collection_size(managed_bytes_mutable_view& out, int size, cql_serialization_format sf) {
-    if (sf.using_32_bits_for_collections()) {
-        write_simple<uint32_t>(out, uint32_t(size));
-    } else {
-        write_simple<uint16_t>(out, uint16_t(size));
-    }
+void write_collection_size(managed_bytes_mutable_view& out, int size) {
+    write_simple<uint32_t>(out, uint32_t(size));
 }
 
-void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, bytes_view val) {
-    if (sf.using_32_bits_for_collections()) {
-        write_simple<int32_t>(out, int32_t(val.size()));
-    } else {
-        if (val.size() > std::numeric_limits<uint16_t>::max()) {
-            throw marshal_exception(
-                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
-                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size()));
-        }
-        write_simple<uint16_t>(out, uint16_t(val.size()));
-    }
+void write_collection_value(managed_bytes_mutable_view& out, bytes_view val) {
+    write_simple<int32_t>(out, int32_t(val.size()));
     write_fragmented(out, single_fragmented_view(val));
 }
 
-void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, const managed_bytes_view& val) {
-    if (sf.using_32_bits_for_collections()) {
-        write_simple<int32_t>(out, int32_t(val.size_bytes()));
-    } else {
-        if (val.size_bytes() > std::numeric_limits<uint16_t>::max()) {
-            throw marshal_exception(
-                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
-                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size_bytes()));
-        }
-        write_simple<uint16_t>(out, uint16_t(val.size_bytes()));
-    }
+void write_collection_value(managed_bytes_mutable_view& out, const managed_bytes_view& val) {
+    write_simple<int32_t>(out, int32_t(val.size_bytes()));
     write_fragmented(out, val);
 }
 
@@ -1032,14 +976,10 @@ const sstring& abstract_type::cql3_type_name() const {
     return _cql3_type_name;
 }
 
-void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
+void write_collection_value(bytes::iterator& out, data_type type, const data_value& value) {
     size_t val_len = value.serialized_size();
 
-    if (sf.using_32_bits_for_collections()) {
-        serialize_int32(out, val_len);
-    } else {
-        serialize_int16(out, val_len);
-    }
+    serialize_int32(out, val_len);
 
     value.serialize(out);
 }
@@ -1107,19 +1047,18 @@ map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view
     } else if (o2.empty()) {
         return std::strong_ordering::greater;
     }
-    auto sf = cql_serialization_format::internal();
-    int size1 = read_collection_size(o1, sf);
-    int size2 = read_collection_size(o2, sf);
+    int size1 = read_collection_size(o1);
+    int size2 = read_collection_size(o2);
     // FIXME: use std::lexicographical_compare()
     for (int i = 0; i < std::min(size1, size2); ++i) {
-        auto k1 = read_collection_value(o1, sf);
-        auto k2 = read_collection_value(o2, sf);
+        auto k1 = read_collection_value(o1);
+        auto k2 = read_collection_value(o2);
         auto cmp = keys->compare(k1, k2);
         if (cmp != 0) {
             return cmp;
         }
-        auto v1 = read_collection_value(o1, sf);
-        auto v2 = read_collection_value(o2, sf);
+        auto v1 = read_collection_value(o1);
+        auto v2 = read_collection_value(o2);
         cmp = values->compare(v1, v2);
         if (cmp != 0) {
             return cmp;
@@ -1129,8 +1068,8 @@ map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view
 }
 
 static size_t map_serialized_size(const map_type_impl::native_type* m) {
-    size_t len = collection_size_len(cql_serialization_format::internal());
-    size_t psz = collection_value_len(cql_serialization_format::internal());
+    size_t len = collection_size_len();
+    size_t psz = collection_value_len();
     for (auto&& kv : *m) {
         len += psz + kv.first.serialized_size();
         len += psz + kv.second.serialized_size();
@@ -1139,34 +1078,34 @@ static size_t map_serialized_size(const map_type_impl::native_type* m) {
 }
 
 static void
-serialize_map(const map_type_impl& t, const void* value, bytes::iterator& out, cql_serialization_format sf) {
+serialize_map(const map_type_impl& t, const void* value, bytes::iterator& out) {
     auto& m = t.from_value(value);
-    write_collection_size(out, m.size(), sf);
+    write_collection_size(out, m.size());
     for (auto&& kv : m) {
-        write_collection_value(out, sf, t.get_keys_type(), kv.first);
-        write_collection_value(out, sf, t.get_values_type(), kv.second);
+        write_collection_value(out, t.get_keys_type(), kv.first);
+        write_collection_value(out, t.get_values_type(), kv.second);
     }
 }
 
 template <FragmentedView View>
 data_value
-map_type_impl::deserialize(View in, cql_serialization_format sf) const {
+map_type_impl::deserialize(View in) const {
     native_type m;
-    auto size = read_collection_size(in, sf);
+    auto size = read_collection_size(in);
     for (int i = 0; i < size; ++i) {
-        auto k = _keys->deserialize(read_collection_value(in, sf));
-        auto v = _values->deserialize(read_collection_value(in, sf));
+        auto k = _keys->deserialize(read_collection_value(in));
+        auto v = _values->deserialize(read_collection_value(in));
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
     return make_value(std::move(m));
 }
 
 template <FragmentedView View>
-static void validate_aux(const map_type_impl& t, View v, cql_serialization_format sf) {
-    auto size = read_collection_size(v, sf);
+static void validate_aux(const map_type_impl& t, View v) {
+    auto size = read_collection_size(v);
     for (int i = 0; i < size; ++i) {
-        t.get_keys_type()->validate(read_collection_value(v, sf), sf);
-        t.get_values_type()->validate(read_collection_value(v, sf), sf);
+        t.get_keys_type()->validate(read_collection_value(v));
+        t.get_values_type()->validate(read_collection_value(v));
     }
 }
 
@@ -1195,36 +1134,36 @@ static sstring map_to_string(const std::vector<std::pair<data_value, data_value>
 
 bytes
 map_type_impl::serialize_partially_deserialized_form(
-        const std::vector<std::pair<bytes_view, bytes_view>>& v, cql_serialization_format sf) {
-    size_t len = collection_value_len(sf) * v.size() * 2 + collection_size_len(sf);
+        const std::vector<std::pair<bytes_view, bytes_view>>& v) {
+    size_t len = collection_value_len() * v.size() * 2 + collection_size_len();
     for (auto&& e : v) {
         len += e.first.size() + e.second.size();
     }
     bytes b(bytes::initialized_later(), len);
     bytes::iterator out = b.begin();
 
-    write_collection_size(out, v.size(), sf);
+    write_collection_size(out, v.size());
     for (auto&& e : v) {
-        write_collection_value(out, sf, e.first);
-        write_collection_value(out, sf, e.second);
+        write_collection_value(out, e.first);
+        write_collection_value(out, e.second);
     }
     return b;
 }
 
 managed_bytes
 map_type_impl::serialize_partially_deserialized_form_fragmented(
-        const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v, cql_serialization_format sf) {
-    size_t len = collection_value_len(sf) * v.size() * 2 + collection_size_len(sf);
+        const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v) {
+    size_t len = collection_value_len() * v.size() * 2 + collection_size_len();
     for (auto&& e : v) {
         len += e.first.size() + e.second.size();
     }
     managed_bytes b(managed_bytes::initialized_later(), len);
     managed_bytes_mutable_view out = b;
 
-    write_collection_size(out, v.size(), sf);
+    write_collection_size(out, v.size());
     for (auto&& e : v) {
-        write_collection_value(out, sf, e.first);
-        write_collection_value(out, sf, e.second);
+        write_collection_value(out, e.first);
+        write_collection_value(out, e.second);
     }
     return b;
 }
@@ -1243,19 +1182,6 @@ static std::optional<data_type> update_user_type_aux(
 }
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf);
-
-managed_bytes_opt
-collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, managed_bytes_view_opt v) const {
-    if (!v) {
-        return std::nullopt;
-    }
-    auto val = deserialize(*v, from);
-    bytes ret(bytes::initialized_later(), val.serialized_size());  // FIXME: serialized_size want @to
-    auto out = ret.begin();
-    ::serialize(*this, get_value_ptr(val), out, to);
-    // FIXME: serialize directly to managed_bytes.
-    return managed_bytes(ret);
-}
 
 set_type
 set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
@@ -1311,16 +1237,16 @@ set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
 }
 
 template <FragmentedView View>
-static void validate_aux(const set_type_impl& t, View v, cql_serialization_format sf) {
-    auto nr = read_collection_size(v, sf);
+static void validate_aux(const set_type_impl& t, View v) {
+    auto nr = read_collection_size(v);
     for (int i = 0; i != nr; ++i) {
-        t.get_elements_type()->validate(read_collection_value(v, sf), sf);
+        t.get_elements_type()->validate(read_collection_value(v));
     }
 }
 
 static size_t listlike_serialized_size(const std::vector<data_value>* s) {
-    size_t len = collection_size_len(cql_serialization_format::internal());
-    size_t psz = collection_value_len(cql_serialization_format::internal());
+    size_t len = collection_size_len();
+    size_t psz = collection_value_len();
     for (auto&& e : *s) {
         len += psz + e.serialized_size();
     }
@@ -1328,22 +1254,22 @@ static size_t listlike_serialized_size(const std::vector<data_value>* s) {
 }
 
 static void
-serialize_set(const set_type_impl& t, const void* value, bytes::iterator& out, cql_serialization_format sf) {
+serialize_set(const set_type_impl& t, const void* value, bytes::iterator& out) {
     auto& s = t.from_value(value);
-    write_collection_size(out, s.size(), sf);
+    write_collection_size(out, s.size());
     for (auto&& e : s) {
-        write_collection_value(out, sf, t.get_elements_type(), e);
+        write_collection_value(out, t.get_elements_type(), e);
     }
 }
 
 template <FragmentedView View>
 data_value
-set_type_impl::deserialize(View in, cql_serialization_format sf) const {
-    auto nr = read_collection_size(in, sf);
+set_type_impl::deserialize(View in) const {
+    auto nr = read_collection_size(in);
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value(in, sf));
+        auto e = _elements->deserialize(read_collection_value(in));
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a set");
         }
@@ -1354,43 +1280,43 @@ set_type_impl::deserialize(View in, cql_serialization_format sf) const {
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
-        const std::vector<bytes_view>& v, cql_serialization_format sf) {
-    return pack(v.begin(), v.end(), v.size(), sf);
+        const std::vector<bytes_view>& v) {
+    return pack(v.begin(), v.end(), v.size());
 }
 
 managed_bytes
 set_type_impl::serialize_partially_deserialized_form_fragmented(
-        const std::vector<managed_bytes_view>& v, cql_serialization_format sf) {
-    return pack_fragmented(v.begin(), v.end(), v.size(), sf);
+        const std::vector<managed_bytes_view>& v) {
+    return pack_fragmented(v.begin(), v.end(), v.size());
 }
 
 template <FragmentedView View>
-utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
-    auto nr = read_collection_size(in, sf);
+utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in) {
+    auto nr = read_collection_size(in);
     utils::chunked_vector<managed_bytes> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        elements.emplace_back(read_collection_value(in, sf));
+        elements.emplace_back(read_collection_value(in));
     }
     return elements;
 }
-template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in, cql_serialization_format sf);
-template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in);
+template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in);
 
 template <FragmentedView View>
-std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf) {
-    auto nr = read_collection_size(in, sf);
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in) {
+    auto nr = read_collection_size(in);
     std::vector<std::pair<managed_bytes, managed_bytes>> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto key = managed_bytes(read_collection_value(in, sf));
-        auto value = managed_bytes(read_collection_value(in, sf));
+        auto key = managed_bytes(read_collection_value(in));
+        auto value = managed_bytes(read_collection_value(in));
         elements.emplace_back(std::move(key), std::move(value));
     }
     return elements;
 }
-template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(managed_bytes_view in, cql_serialization_format sf);
-template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(managed_bytes_view in);
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(fragmented_temporary_buffer::view in);
 
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
@@ -1454,10 +1380,10 @@ list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& prev
 }
 
 template <FragmentedView View>
-static void validate_aux(const list_type_impl& t, View v, cql_serialization_format sf) {
-    auto nr = read_collection_size(v, sf);
+static void validate_aux(const list_type_impl& t, View v) {
+    auto nr = read_collection_size(v);
     for (int i = 0; i != nr; ++i) {
-        t.get_elements_type()->validate(read_collection_value(v, sf), sf);
+        t.get_elements_type()->validate(read_collection_value(v));
     }
     if (v.size_bytes()) {
         auto hex = with_linearized(v, [] (bytes_view bv) { return to_hex(bv); });
@@ -1468,22 +1394,22 @@ static void validate_aux(const list_type_impl& t, View v, cql_serialization_form
 }
 
 static void
-serialize_list(const list_type_impl& t, const void* value, bytes::iterator& out, cql_serialization_format sf) {
+serialize_list(const list_type_impl& t, const void* value, bytes::iterator& out) {
     auto& s = t.from_value(value);
-    write_collection_size(out, s.size(), sf);
+    write_collection_size(out, s.size());
     for (auto&& e : s) {
-        write_collection_value(out, sf, t.get_elements_type(), e);
+        write_collection_value(out, t.get_elements_type(), e);
     }
 }
 
 template <FragmentedView View>
 data_value
-list_type_impl::deserialize(View in, cql_serialization_format sf) const {
-    auto nr = read_collection_size(in, sf);
+list_type_impl::deserialize(View in) const {
+    auto nr = read_collection_size(in);
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value(in, sf));
+        auto e = _elements->deserialize(read_collection_value(in));
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a list");
         }
@@ -1554,12 +1480,12 @@ tuple_type_impl::get_instance(std::vector<data_type> types) {
 }
 
 template <FragmentedView View>
-static void validate_aux(const tuple_type_impl& t, View v, cql_serialization_format sf) {
+static void validate_aux(const tuple_type_impl& t, View v) {
     auto ti = t.all_types().begin();
     while (ti != t.all_types().end() && v.size_bytes()) {
         std::optional<View> e = read_tuple_element(v);
         if (e) {
-            (*ti)->validate(*e, sf);
+            (*ti)->validate(*e);
         }
         ++ti;
     }
@@ -1581,10 +1507,10 @@ namespace {
 template <FragmentedView View>
 struct validate_visitor {
     const View& v;
-    cql_serialization_format sf;
+    ;
 
     void operator()(const reversed_type_impl& t) {
-        visit(*t.underlying_type(), validate_visitor<View>{v, sf});
+        visit(*t.underlying_type(), validate_visitor<View>{v});
     }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
@@ -1732,38 +1658,38 @@ struct validate_visitor {
     }
     void operator()(const map_type_impl& t) {
         with_simplified(v, [&] (FragmentedView auto v) {
-            validate_aux(t, v, sf);
+            validate_aux(t, v);
         });
     }
     void operator()(const set_type_impl& t) {
         with_simplified(v, [&] (FragmentedView auto v) {
-            validate_aux(t, v, sf);
+            validate_aux(t, v);
         });
     }
     void operator()(const list_type_impl& t) {
         with_simplified(v, [&] (FragmentedView auto v) {
-            validate_aux(t, v, sf);
+            validate_aux(t, v);
         });
     }
     void operator()(const tuple_type_impl& t) {
         with_simplified(v, [&] (FragmentedView auto v) {
-            validate_aux(t, v, sf);
+            validate_aux(t, v);
         });
     }
 };
 }
 
 template <FragmentedView View>
-void abstract_type::validate(const View& view, cql_serialization_format sf) const {
-    visit(*this, validate_visitor<View>{view, sf});
+void abstract_type::validate(const View& view) const {
+    visit(*this, validate_visitor<View>{view});
 }
 // Explicit instantiation.
-template void abstract_type::validate<>(const single_fragmented_view&, cql_serialization_format) const;
-template void abstract_type::validate<>(const fragmented_temporary_buffer::view&, cql_serialization_format) const;
-template void abstract_type::validate<>(const managed_bytes_view&, cql_serialization_format) const;
+template void abstract_type::validate<>(const single_fragmented_view&) const;
+template void abstract_type::validate<>(const fragmented_temporary_buffer::view&) const;
+template void abstract_type::validate<>(const managed_bytes_view&) const;
 
-void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
-    visit(*this, validate_visitor<single_fragmented_view>{single_fragmented_view(v), sf});
+void abstract_type::validate(bytes_view v) const {
+    visit(*this, validate_visitor<single_fragmented_view>{single_fragmented_view(v)});
 }
 
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
@@ -1834,7 +1760,7 @@ static void serialize(const abstract_type& t, const void* value, bytes::iterator
 namespace {
 struct serialize_visitor {
     bytes::iterator& out;
-    cql_serialization_format sf;
+    ;
     void operator()(const reversed_type_impl& t, const void* v) { return serialize(*t.underlying_type(), v, out); }
     template <typename T>
     void operator()(const integer_type_impl<T>& t, const typename integer_type_impl<T>::native_type* v1) {
@@ -1957,13 +1883,13 @@ struct serialize_visitor {
         out += signed_vint::serialize(d.nanoseconds, out);
     }
     void operator()(const list_type_impl& t, const void* value) {
-        serialize_list(t, value, out, sf);
+        serialize_list(t, value, out);
     }
     void operator()(const map_type_impl& t, const void* value) {
-        serialize_map(t, value, out, sf);
+        serialize_map(t, value, out);
     }
     void operator()(const set_type_impl& t, const void* value) {
-        serialize_set(t, value, out, sf);
+        serialize_set(t, value, out);
     }
     void operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* value) {
         return serialize_aux(t, value, out);
@@ -1971,43 +1897,39 @@ struct serialize_visitor {
 };
 }
 
-static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf) {
-    visit(t, value, serialize_visitor{out, sf});
-}
-
-static void serialize(const abstract_type& t, const void* value, bytes::iterator& out)  {
-    return ::serialize(t, value, out, cql_serialization_format::internal());
+static void serialize(const abstract_type& t, const void* value, bytes::iterator& out) {
+    visit(t, value, serialize_visitor{out});
 }
 
 template <FragmentedView View>
-data_value collection_type_impl::deserialize_impl(View v, cql_serialization_format sf) const {
+data_value collection_type_impl::deserialize_impl(View v) const {
     struct visitor {
         View v;
-        cql_serialization_format sf;
+        ;
         data_value operator()(const abstract_type&) {
             on_internal_error(tlogger, "collection_type_impl::deserialize called on a non-collection type. This should be impossible.");
         }
         data_value operator()(const list_type_impl& t) {
-            return t.deserialize(v, sf);
+            return t.deserialize(v);
         }
         data_value operator()(const map_type_impl& t) {
-            return t.deserialize(v, sf);
+            return t.deserialize(v);
         }
         data_value operator()(const set_type_impl& t) {
-            return t.deserialize(v, sf);
+            return t.deserialize(v);
         }
     };
-    return ::visit(*this, visitor{v, sf});
+    return ::visit(*this, visitor{v});
 }
 // Explicit instantiation.
 // This should be repeated for every View type passed to collection_type_impl::deserialize.
-template data_value collection_type_impl::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
-template data_value collection_type_impl::deserialize_impl<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
-template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view, cql_serialization_format) const;
-template data_value collection_type_impl::deserialize_impl<>(managed_bytes_view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value collection_type_impl::deserialize_impl<>(fragmented_temporary_buffer::view) const;
+template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view) const;
+template data_value collection_type_impl::deserialize_impl<>(managed_bytes_view) const;
 
-template int read_collection_size(ser::buffer_view<bytes_ostream::fragment_iterator>& in, cql_serialization_format);
-template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value(ser::buffer_view<bytes_ostream::fragment_iterator>& in, cql_serialization_format);
+template int read_collection_size(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
+template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
 
 template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
@@ -2176,13 +2098,13 @@ struct deserialize_visitor {
         return static_cast<const long_type_impl&>(*long_type).make_value(read_simple_exactly<int64_t>(v));
     }
     data_value operator()(const list_type_impl& t) {
-        return t.deserialize(v, cql_serialization_format::internal());
+        return t.deserialize(v);
     }
     data_value operator()(const map_type_impl& t) {
-        return t.deserialize(v, cql_serialization_format::internal());
+        return t.deserialize(v);
     }
     data_value operator()(const set_type_impl& t) {
-        return t.deserialize(v, cql_serialization_format::internal());
+        return t.deserialize(v);
     }
     data_value operator()(const tuple_type_impl& t) { return deserialize_aux(t, v); }
     data_value operator()(const user_type_impl& t) { return deserialize_aux(t, v); }
@@ -2297,10 +2219,9 @@ struct compare_visitor {
     }
     std::strong_ordering operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
-        auto sf = cql_serialization_format::internal();
         return with_empty_checks([&] {
-            return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
-                    llpdi::end(v2, sf),
+            return lexicographical_tri_compare(llpdi::begin(v1), llpdi::end(v1), llpdi::begin(v2),
+                    llpdi::end(v2),
                     [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
         });
     }
@@ -2589,7 +2510,7 @@ template<typename T>
 static bytes serialize_value(const T& t, const typename T::native_type& v) {
     bytes b(bytes::initialized_later(), serialized_size_visitor{}(t, &v));
     auto i = b.begin();
-    serialize_visitor{i, cql_serialization_format::internal()}(t, &v);
+    serialize_visitor{i}(t, &v);
     return b;
 }
 
@@ -3107,7 +3028,7 @@ sstring abstract_type::get_string(const bytes& b) const {
     struct visitor {
         const bytes& b;
         sstring operator()(const abstract_type& t) {
-            t.validate(b, cql_serialization_format::latest());
+            t.validate(b);
             return t.to_string(b);
         }
         sstring operator()(const reversed_type_impl& r) { return r.underlying_type()->get_string(b); }
@@ -3206,50 +3127,50 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
-static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut) {
     bytes_ostream out;
-    auto len_slot = out.write_place_holder(collection_size_len(sf));
+    auto len_slot = out.write_place_holder(collection_size_len());
     int elements = 0;
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, sf, atomic_cell_value_view(e.first));
-            write_collection_value(out, sf, e.second.value());
+            write_collection_value(out, atomic_cell_value_view(e.first));
+            write_collection_value(out, e.second.value());
             elements += 1;
         }
     }
-    write_collection_size(len_slot, elements, sf);
+    write_collection_size(len_slot, elements);
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut) {
     bytes_ostream out;
-    auto len_slot = out.write_place_holder(collection_size_len(sf));
+    auto len_slot = out.write_place_holder(collection_size_len());
     int elements = 0;
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, sf, atomic_cell_value_view(e.first));
+            write_collection_value(out, atomic_cell_value_view(e.first));
             elements += 1;
         }
     }
-    write_collection_size(len_slot, elements, sf);
+    write_collection_size(len_slot, elements);
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut) {
     bytes_ostream out;
-    auto len_slot = out.write_place_holder(collection_size_len(sf));
+    auto len_slot = out.write_place_holder(collection_size_len());
     int elements = 0;
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, sf, e.second.value());
+            write_collection_value(out, e.second.value());
             elements += 1;
         }
     }
-    write_collection_size(len_slot, elements, sf);
+    write_collection_size(len_slot, elements);
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut, cql_serialization_format) {
+static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut) {
     assert(type.is_multi_cell());
     assert(mut.cells.size() <= type.size());
 
@@ -3287,15 +3208,15 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
     return out;
 }
 
-bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
+bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
     assert(type.is_multi_cell());
 
     return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
         return visit(type, make_visitor(
-            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
-            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
-            [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
-            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, std::move(mv), sf); },
+            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
+            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
+            [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
+            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, std::move(mv)); },
             [&] (const abstract_type& o) -> bytes_ostream {
                 throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
             }
@@ -3641,16 +3562,10 @@ bool abstract_type::contains_collection() const {
     return _contains_collection;
 }
 
-bool abstract_type::bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const {
+bool abstract_type::bound_value_needs_to_be_reserialized() const {
     // If a value contains set or map, then this collection can be sent in the wrong order
     // or there could be duplicates inside. We need to reserialize it into proper set or map.
     if (contains_set_or_map()) {
-        return true;
-    }
-
-    // If a value contains a collection and it's serialized using the old serialization format,
-    // then we need to reserialize the collection to the current serialization format.
-    if (!sf.using_32_bits_for_collections() && contains_collection()) {
         return true;
     }
 

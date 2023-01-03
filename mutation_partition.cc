@@ -822,7 +822,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
 
     w.add().write().skip_timestamp()
         .skip_expiry()
-        .write_fragmented_value(serialize_for_cql(*type, std::move(v), slice.cql_format()))
+        .write_fragmented_value(serialize_for_cql(*type, std::move(v)))
         .skip_ttl()
         .end_qr_cell();
 }

@@ -26,7 +26,7 @@ public:
         sstring bitcode;
         // FIXME: We should not need a copy in each function. It is here
         // because user_function::execute is only passed the
-        // cql_serialization_format and the runtime arguments.  We could
+        // the runtime arguments.  We could
         // avoid it by having a runtime->execute(user_function) instead,
         // but that is a large refactoring. We could also store a
         // lua_runtime in a thread_local variable, but that is one extra
@@ -59,7 +59,7 @@ public:
     virtual bool is_native() const override;
     virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
-    virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override;
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override;
 
     virtual sstring keypace_name() const override { return name().keyspace; }
     virtual sstring element_name() const override { return name().name; }
