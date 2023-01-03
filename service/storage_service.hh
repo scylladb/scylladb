@@ -298,7 +298,7 @@ private:
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
+    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);

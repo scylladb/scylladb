@@ -747,7 +747,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             _group0->remove_from_group0(raft_id).get();
 
             slogger.info("Starting to bootstrap...");
-            run_replace_ops(bootstrap_tokens);
+            run_replace_ops(bootstrap_tokens, *replacement_info);
         }
 
         _db.invoke_on_all([this] (replica::database& db) {
@@ -2214,8 +2214,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 }
 
 // Runs inside seastar::async context
-void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens) {
-    auto replace_address = get_replace_address().value();
+void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info) {
+    gms::inet_address replace_address = replace_info.address;
     auto uuid = node_ops_id::create_random_id();
     auto tmptr = get_token_metadata_ptr();
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace(*tmptr);
