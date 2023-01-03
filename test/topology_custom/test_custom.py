@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_custom(request, manager: ManagerClient):
     servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
-    tables = RandomTables(request.node.name, manager, unique_name())
+    tables = RandomTables(request.node.name, manager, unique_name(), 3)
     table = await tables.add_table(ncolumns=5)
     await table.insert_seq()
     await table.add_index(2)
