@@ -419,6 +419,10 @@ public:
         return _resources;
     }
 
+    const resources consumed_resources() const {
+        return _initial_resources - _resources;
+    }
+
     void consume(resources r) {
         _resources -= r;
     }
