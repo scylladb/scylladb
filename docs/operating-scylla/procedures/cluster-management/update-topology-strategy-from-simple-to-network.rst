@@ -55,7 +55,7 @@ Nodes are on different racks
 This is a more complex scenario, as the new strategy may select different replicas depending on whether the nodes are on different racks.
 To fix that, you will need a **full shutdown of the cluster**.
 
-#. Stop traffic to all nodes (using ``nodetool disablebinary``)
+#. Stop all traffic to the cluster. **A failure to stop the traffic can cause data loss.**
 #. Run :doc:`full repair on the cluster </operating-scylla/procedures/maintenance/repair>`
 #. Alter the strategy as detailed above
 #. Run a second full repair
