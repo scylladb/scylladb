@@ -141,6 +141,7 @@ public:
         future<> done() const noexcept;
         void register_task();
         void unregister_task() noexcept;
+        const foreign_task_vector& get_children() const noexcept;
 
         friend class test_task;
         friend class ::repair_module;
