@@ -83,6 +83,10 @@ public:
         uint64_t used_permits = 0;
         // Current number of blocked permits.
         uint64_t blocked_permits = 0;
+        // Current number of reads reading from the disk.
+        uint64_t disk_reads = 0;
+        // The number of sstables read currently.
+        uint64_t sstables_read = 0;
     };
 
     using permit_list_type = bi::list<

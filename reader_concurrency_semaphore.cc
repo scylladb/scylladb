@@ -82,6 +82,7 @@ class reader_permit::impl
     bool _marked_as_blocked = false;
     db::timeout_clock::time_point _timeout;
     query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
+    uint64_t _sstables_read = 0;
 
 private:
     void on_permit_used() {
@@ -168,6 +169,10 @@ public:
                         _blocked_branches));
             _semaphore.on_permit_unblocked();
         }
+
+        // Should probably make a scene here, but its not worth it.
+        _semaphore._stats.sstables_read -= _sstables_read;
+        _semaphore._stats.disk_reads -= bool(_sstables_read);
 
         _semaphore.on_permit_destroyed(*this);
     }
@@ -326,6 +331,22 @@ public:
     void set_max_result_size(query::max_result_size s) {
         _max_result_size = std::move(s);
     }
+
+    void on_start_sstable_read() noexcept {
+        if (!_sstables_read) {
+            ++_semaphore._stats.disk_reads;
+        }
+        ++_sstables_read;
+        ++_semaphore._stats.sstables_read;
+    }
+
+    void on_finish_sstable_read() noexcept {
+        --_sstables_read;
+        --_semaphore._stats.sstables_read;
+        if (!_sstables_read) {
+            --_semaphore._stats.disk_reads;
+        }
+    }
 };
 
 static_assert(std::is_nothrow_copy_constructible_v<reader_permit>);
@@ -432,6 +453,14 @@ query::max_result_size reader_permit::max_result_size() const {
 
 void reader_permit::set_max_result_size(query::max_result_size s) {
     _impl->set_max_result_size(std::move(s));
+}
+
+void reader_permit::on_start_sstable_read() noexcept {
+    _impl->on_start_sstable_read();
+}
+
+void reader_permit::on_finish_sstable_read() noexcept {
+    _impl->on_finish_sstable_read();
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
