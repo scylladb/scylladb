@@ -900,6 +900,8 @@ public:
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction();
     future<> run_offstrategy_compaction(sstables::compaction_data& info);
+    future<> perform_cleanup_compaction(replica::database& db);
+
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
@@ -925,7 +927,11 @@ public:
         return _config;
     }
 
-    compaction_manager& get_compaction_manager() const {
+    const compaction_manager& get_compaction_manager() const noexcept {
+        return _compaction_manager;
+    }
+
+    compaction_manager& get_compaction_manager() noexcept {
         return _compaction_manager;
     }
 
