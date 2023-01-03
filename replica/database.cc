@@ -577,7 +577,7 @@ database::setup_metrics() {
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
-        sm::make_gauge("active_reads", [this] { return max_count_concurrent_reads - _read_concurrency_sem.available_resources().count; },
+        sm::make_gauge("active_reads", [this] { return _read_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations. "),
                        {user_label_instance}),
 
@@ -610,7 +610,7 @@ database::setup_metrics() {
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {user_label_instance}),
 
-        sm::make_gauge("active_reads", [this] { return max_count_streaming_concurrent_reads - _streaming_concurrency_sem.available_resources().count; },
+        sm::make_gauge("active_reads", [this] { return _streaming_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
                        {streaming_label_instance}),
 
@@ -640,7 +640,7 @@ database::setup_metrics() {
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {streaming_label_instance}),
 
-        sm::make_gauge("active_reads", [this] { return max_count_system_concurrent_reads - _system_read_concurrency_sem.available_resources().count; },
+        sm::make_gauge("active_reads", [this] { return _system_read_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
 

@@ -440,4 +440,8 @@ public:
     void set_max_queue_length(size_t size) {
         _max_queue_length = size;
     }
+
+    uint64_t active_reads() const noexcept {
+        return _stats.current_permits - _stats.inactive_reads - waiters();
+    }
 };
