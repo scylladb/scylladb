@@ -55,6 +55,10 @@ public:
 // Fortunately, the default policy can be overridden, and so rapidjson errors will
 // throw an rjson::error exception instead.
 #define RAPIDJSON_ASSERT(x) do { if (!(x)) throw rjson::error(std::string("JSON error: condition not met: ") + #x); } while (0)
+// This macro is used for functions which are called for every json char making it
+// quite costly if not inlined, by default rapidjson only enables it if NDEBUG
+// is defined which isn't the case for us.
+#define RAPIDJSON_FORCEINLINE __attribute__((always_inline))
 
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
