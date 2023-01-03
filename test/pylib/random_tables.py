@@ -245,7 +245,8 @@ class RandomTable():
 
 class RandomTables():
     """A list of managed random tables"""
-    def __init__(self, test_name: str, manager: ManagerClient, keyspace: str):
+    def __init__(self, test_name: str, manager: ManagerClient, keyspace: str,
+                 replication_factor: int):
         self.test_name = test_name
         self.manager = manager
         self.keyspace = keyspace
@@ -253,7 +254,8 @@ class RandomTables():
         self.removed_tables: List[RandomTable] = []
         assert self.manager.cql is not None
         self.manager.cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
-                                 "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+                                 "{ 'class' : 'NetworkTopologyStrategy', "
+                                 f"'replication_factor' : {replication_factor} }}")
 
     async def add_tables(self, ntables: int = 1, ncolumns: int = 5, if_not_exists: bool = False) -> None:
         """Add random tables to the list.

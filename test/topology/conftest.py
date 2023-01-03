@@ -216,7 +216,7 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 # unless the cluster is dirty or the test has failed.
 @pytest.fixture(scope="function")
 async def random_tables(request, manager):
-    tables = RandomTables(request.node.name, manager, unique_name())
+    tables = RandomTables(request.node.name, manager, unique_name(), 1)
     yield tables
 
     # Don't drop tables at the end if we failed or the cluster is dirty - it may be impossible
