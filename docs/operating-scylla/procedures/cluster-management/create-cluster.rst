@@ -24,7 +24,6 @@ The file can be found under ``/etc/scylla/``
 - **cluster_name** - Set the selected cluster_name
 - **seeds** - Specify the IP of the first node and **only the first node**. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state.
 - **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster
-- **auto_bootstrap** - By default, this parameter is set to **true**, it allows new nodes to migrate data to themselves automatically.
 - **endpoint_snitch** - Set the selected snitch
 - **rpc_address** - Address for client connection (Thrift, CQL)
 

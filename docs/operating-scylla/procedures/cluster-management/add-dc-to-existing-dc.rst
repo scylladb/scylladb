@@ -117,7 +117,6 @@ Add New DC
    * **cluster_name** - Set the selected cluster_name.
    * **seeds** - IP address of an existing node (or nodes).
    * **listen_address** - IP address that Scylla used to connect to the other Scylla nodes in the cluster.
-   * **auto_bootstrap** - By default, this parameter is set to true, it allows new nodes to migrate data to themselves automatically.
    * **endpoint_snitch** - Set the selected snitch.
    * **rpc_address** - Address for client connections (Thrift, CQL).
 
