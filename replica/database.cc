@@ -607,6 +607,14 @@ database::setup_metrics() {
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {user_label_instance}),
 
+        sm::make_gauge("disk_reads", [this] { return _read_concurrency_sem.get_stats().disk_reads; },
+                       sm::description("Holds the number of currently active disk read operations. "),
+                       {user_label_instance}),
+
+        sm::make_gauge("sstables_read", [this] { return _read_concurrency_sem.get_stats().sstables_read; },
+                       sm::description("Holds the number of currently read sstables. "),
+                       {user_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return _streaming_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
                        {streaming_label_instance}),
@@ -634,6 +642,14 @@ database::setup_metrics() {
                                        " When the queue is full, excessive reads are shed to avoid overload."),
                        {streaming_label_instance}),
 
+        sm::make_gauge("disk_reads", [this] { return _streaming_concurrency_sem.get_stats().disk_reads; },
+                       sm::description("Holds the number of currently active disk read operations. "),
+                       {streaming_label_instance}),
+
+        sm::make_gauge("sstables_read", [this] { return _streaming_concurrency_sem.get_stats().sstables_read; },
+                       sm::description("Holds the number of currently read sstables. "),
+                       {streaming_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return _system_read_concurrency_sem.active_reads(); },
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
@@ -659,6 +675,14 @@ database::setup_metrics() {
         sm::make_counter("reads_shed_due_to_overload", _system_read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("The number of reads shed because the admission queue reached its max capacity."
                                        " When the queue is full, excessive reads are shed to avoid overload."),
+                       {system_label_instance}),
+
+        sm::make_gauge("disk_reads", [this] { return _system_read_concurrency_sem.get_stats().disk_reads; },
+                       sm::description("Holds the number of currently active disk read operations. "),
+                       {system_label_instance}),
+
+        sm::make_gauge("sstables_read", [this] { return _system_read_concurrency_sem.get_stats().sstables_read; },
+                       sm::description("Holds the number of currently read sstables. "),
                        {system_label_instance}),
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
