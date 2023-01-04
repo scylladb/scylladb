@@ -387,14 +387,13 @@ def test_update_table_non_existent(dynamodb, test_table):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
 
-# While the raft-based schema modifications are still experimental and only
-# optionally enabled (use the "--raft" option to test/alternator/run to
-# enable it), some tests are expected to fail on Scylla without this option
-# enabled, and pass with it enabled (and also pass on DynamoDB). These tests
-# should use the "fails_without_raft" fixture. When Raft mode becomes the
-# default, this fixture can be removed.
+# Consistent schema change feature is optionally enabled and
+# some tests are expected to fail on Scylla without this
+# option enabled, and pass with it enabled (and also pass on Cassandra).
+# These tests should use the "fails_without_consistent_cluster_management"
+# fixture. When consistent mode becomes the default, this fixture can be removed.
 @pytest.fixture(scope="session")
-def check_pre_raft(dynamodb):
+def check_pre_consistent_cluster_management(dynamodb):
     from util import is_aws
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
@@ -402,16 +401,16 @@ def check_pre_raft(dynamodb):
     # In Scylla, we check Raft mode by inspecting the configuration via a
     # system table (which is also visible in Alternator)
     config_table = dynamodb.Table('.scylla.alternator.system.config')
-    experimental_features = config_table.query(
+    consistent = config_table.query(
             KeyConditionExpression='#key=:val',
             ExpressionAttributeNames={'#key': 'name'},
-            ExpressionAttributeValues={':val': 'experimental_features'}
-        )['Items'][0]['value']
-    return not '"raft"' in experimental_features
+            ExpressionAttributeValues={':val': 'consistent_cluster_management'}
+        )['Items']
+    return len(consistent) == 0 or consistent[0]['value'] == 'false'
 @pytest.fixture(scope="function")
-def fails_without_raft(request, check_pre_raft):
-    if check_pre_raft:
-        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without Raft experimental feature on'))
+def fails_without_consistent_cluster_management(request, check_pre_consistent_cluster_management):
+    if check_pre_consistent_cluster_management:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail without consistent cluster management feature on'))
 
 # Test for reproducing issues #6391 and #9868 - where CreateTable did not
 # *atomically* perform all the schema modifications - creating a keyspace,
@@ -470,7 +469,7 @@ def fails_without_raft(request, check_pre_raft):
         'Tags': [{'Key': 'k1', 'Value': 'v1'}]
     }
 ])
-def test_concurrent_create_and_delete_table(dynamodb, table_def, fails_without_raft):
+def test_concurrent_create_and_delete_table(dynamodb, table_def, fails_without_consistent_cluster_management):
     # According to boto3 documentation, "Unlike Resources and Sessions,
     # clients are generally thread-safe.". So because we have two threads
     # in this test, we must not use "dynamodb" (containing the boto3

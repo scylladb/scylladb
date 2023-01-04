@@ -29,7 +29,7 @@ print('Scylla is: ' + run.scylla + '.')
 extra_scylla_options = []
 if '--raft' in sys.argv:
     sys.argv.remove('--raft')
-    extra_scylla_options += ['--experimental-features=raft']
+    extra_scylla_options += ['--consistent-cluster-management', 'true']
 
 # run_alternator_cmd runs the same as run_scylla_cmd with *additional*
 # parameters, so in particular both CQL and Alternator will be enabled.

@@ -1083,7 +1083,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
-            raft_gr.start(cfg->check_experimental(db::experimental_features_t::feature::RAFT),
+            raft_gr.start(cfg->consistent_cluster_management(),
                 std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
@@ -1104,15 +1104,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-
-            if (cfg->check_experimental(db::experimental_features_t::feature::RAFT)) {
-                supervisor::notify("starting Raft Group Registry service");
-            } else {
-                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
-                    throw bad_configuration_error();
-                }
-            }
 
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
@@ -1152,10 +1143,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
+                supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
                     return raft_gr.start(my_raft_id);
                 }).get();
+            } else {
+                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
+                    throw bad_configuration_error();
+                }
             }
+
 
             group0_client.init().get();
 

@@ -1,2 +1,2 @@
 type: Python
-extra_scylla_cmdline_options: ["--experimental-features=raft", "--experimental-features=broadcast-tables"]
+extra_scylla_cmdline_options: ["--consistent-cluster-management=true", "--experimental-features=broadcast-tables"]
