@@ -2966,22 +2966,6 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
     };
     auto status_checker = check_status_loop();
-    auto stop_status_checker = defer([endpoint, &status_checker, &as] () mutable {
-        try {
-            slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-            status_checker.get();
-        } catch (const seastar::sleep_aborted& ignored) {
-            slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
-        } catch (...) {
-            slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
-                    endpoint, std::current_exception());
-        }
-        slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
-    });
-
     std::exception_ptr ex;
     try {
         streamer->stream_async().get();
@@ -2999,6 +2983,19 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             ex = std::move(ex2);
         }
     }
+    try {
+        slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
+        if (!as.abort_requested()) {
+            as.request_abort();
+        }
+        status_checker.get();
+    } catch (const seastar::sleep_aborted& ignored) {
+        slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
+    } catch (...) {
+        slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
+                endpoint, std::current_exception());
+    }
+    slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
     if (ex) {
         std::rethrow_exception(std::move(ex));
     }
