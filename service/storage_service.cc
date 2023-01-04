@@ -2949,7 +2949,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
     auto check_status_loop = [this, endpoint, &as] () -> future<> {
-        slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
+        slogger.debug("restore_replica_count: Started status checker for removing node {}", endpoint);
         while (!as.abort_requested()) {
             auto status = _gossiper.get_gossip_status(endpoint);
             // If the node to be removed is already in removed status, it has
@@ -2987,7 +2987,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
     }
     try {
-        slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
+        slogger.debug("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
         if (!as.abort_requested()) {
             as.request_abort();
         }
@@ -2998,7 +2998,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
                 endpoint, std::current_exception());
     }
-    slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
+    slogger.debug("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
