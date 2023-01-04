@@ -123,7 +123,7 @@ public:
 
 raft_group0::raft_group0(seastar::abort_source& abort_source,
         raft_group_registry& raft_gr,
-        netw::messaging_service& ms,
+        sharded<netw::messaging_service>& ms,
         gms::gossiper& gs,
         cql3::query_processor& qp,
         service::migration_manager& mm,
@@ -133,31 +133,44 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
     : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _sys_ks(sys_ks), _client(client)
     , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
 {
-    init_rpc_verbs();
     register_metrics();
 }
 
-void raft_group0::init_rpc_verbs() {
-    ser::group0_rpc_verbs::register_group0_peer_exchange(&_ms, [this] (const rpc::client_info&, rpc::opt_time_point, discovery::peer_list peers) {
-        return peer_exchange(std::move(peers));
+future<> raft_group0::start() {
+    return smp::invoke_on_all([shard0_this=this]() {
+        init_rpc_verbs(*shard0_this);
     });
-
-    ser::group0_rpc_verbs::register_group0_modify_config(&_ms, [this] (const rpc::client_info&, rpc::opt_time_point,
-            raft::group_id gid, std::vector<raft::config_member> add, std::vector<raft::server_id> del) {
-        return _raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
-    });
-
-    ser::group0_rpc_verbs::register_get_group0_upgrade_state(&_ms,
-        std::bind_front([] (raft_group0& self, const rpc::client_info&) -> future<group0_upgrade_state> {
-            co_return (co_await self._client.get_group0_upgrade_state()).second;
-        }, std::ref(*this)));
 }
 
-future<> raft_group0::uninit_rpc_verbs() {
+void raft_group0::init_rpc_verbs(raft_group0& shard0_this) {
+    ser::group0_rpc_verbs::register_group0_peer_exchange(&shard0_this._ms.local(),
+        [&shard0_this] (const rpc::client_info&, rpc::opt_time_point, discovery::peer_list peers) {
+            return smp::submit_to(0, [&shard0_this, peers = std::move(peers)]() mutable {
+                return shard0_this.peer_exchange(std::move(peers));
+            });
+        });
+
+    ser::group0_rpc_verbs::register_group0_modify_config(&shard0_this._ms.local(),
+        [&shard0_this] (const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, std::vector<raft::config_member> add, std::vector<raft::server_id> del) {
+            return smp::submit_to(0, [&shard0_this, gid, add = std::move(add), del = std::move(del)]() mutable {
+                return shard0_this._raft_gr.get_server(gid).modify_config(std::move(add), std::move(del));
+            });
+        });
+
+    ser::group0_rpc_verbs::register_get_group0_upgrade_state(&shard0_this._ms.local(),
+        [&shard0_this] (const rpc::client_info&) -> future<group0_upgrade_state> {
+            return smp::submit_to(0, [&shard0_this]() -> future<group0_upgrade_state> {
+                const auto [holder, state] = co_await shard0_this._client.get_group0_upgrade_state();
+                co_return state;
+            });
+        });
+}
+
+future<> raft_group0::uninit_rpc_verbs(netw::messaging_service& ms) {
     return when_all_succeed(
-        ser::group0_rpc_verbs::unregister_group0_peer_exchange(&_ms),
-        ser::group0_rpc_verbs::unregister_group0_modify_config(&_ms),
-        ser::group0_rpc_verbs::unregister_get_group0_upgrade_state(&_ms)
+        ser::group0_rpc_verbs::unregister_group0_peer_exchange(&ms),
+        ser::group0_rpc_verbs::unregister_group0_modify_config(&ms),
+        ser::group0_rpc_verbs::unregister_get_group0_upgrade_state(&ms)
     ).discard_result();
 }
 
@@ -178,7 +191,7 @@ const raft::server_id& raft_group0::load_my_id() {
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id) {
     auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy());
-    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms, _raft_gr.address_map(), gid, my_id);
+    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_id);
@@ -224,7 +237,7 @@ raft_group0::discover_group0(raft::server_id my_id, const std::vector<gms::inet_
 
     auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(peers), _qp));
     co_return co_await futurize_invoke([this, &p_discovery, my_addr = std::move(my_addr)] () mutable {
-        return p_discovery.run(_ms, _shutdown_gate.hold(), _abort_source, std::move(my_addr));
+        return p_discovery.run(_ms.local(), _shutdown_gate.hold(), _abort_source, std::move(my_addr));
     }).finally(std::bind_front([] (raft_group0& self, persistent_discovery& p_discovery) -> future<> {
         co_await p_discovery.stop();
         self._group0 = std::monostate{};
@@ -346,7 +359,9 @@ future<group0_info> persistent_discovery::run(
 }
 
 future<> raft_group0::abort() {
-    co_await uninit_rpc_verbs();
+    co_await smp::invoke_on_all([this]() {
+        return uninit_rpc_verbs(_ms.local());
+    });
     co_await _shutdown_gate.close();
 }
 
@@ -429,7 +444,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
         netw::msg_addr peer(g0_info.ip_addr);
         try {
             // TODO: aborts?
-            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, group0_id, {{my_addr, as_voter}}, {});
+            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms.local(), peer, timeout, group0_id, {{my_addr, as_voter}}, {});
             break;
         } catch (std::runtime_error& e) {
             // Retry
@@ -578,11 +593,11 @@ future<> raft_group0::setup_group0(
         // In a fully upgraded cluster this should finish immediately (if the network works well) - everyone is in `use_post_raft_procedures`.
         // In a cluster that is currently in the middle of `upgrade_to_group0`, this will cause us to wait until the procedure finishes.
         group0_log.info("setup_group0: waiting for peers to synchronize state...");
-        if (co_await wait_for_peers_to_enter_synchronize_state(members0, _ms, _abort_source, _shutdown_gate.hold())) {
+        if (co_await wait_for_peers_to_enter_synchronize_state(members0, _ms.local(), _abort_source, _shutdown_gate.hold())) {
             // Everyone entered `synchronize` state. That means we're bootstrapping in the middle of `upgrade_to_group0`.
             // We need to finish upgrade as others do.
-            auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms), std::ref(_abort_source));
-            co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source);
+            auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
+            co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source);
         }
     }
 
@@ -1452,7 +1467,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         current_config.push_back(_gossiper.get_broadcast_address());
         co_return current_config;
     };
-    co_await check_remote_group0_upgrade_state_dry_run(get_inet_addrs, _ms, _abort_source);
+    co_await check_remote_group0_upgrade_state_dry_run(get_inet_addrs, _ms.local(), _abort_source);
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
@@ -1487,7 +1502,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         // to do any additional schema pulls (only verify quickly that the schema is still in sync).
         upgrade_log.info("Waiting for schema to synchronize across all nodes in group 0...");
         auto can_finish_early = [] { return make_ready_future<bool>(false); };
-        co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source);
+        co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source);
 
         // Before entering `synchronize`, perform a round-trip of `get_group0_upgrade_state` RPC calls
         // to everyone as a dry run, just to check that nodes respond to this RPC.
@@ -1499,7 +1514,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         co_await check_remote_group0_upgrade_state_dry_run(
                 [members0] {
                     return make_ready_future<std::vector<gms::inet_address>>(members0.get_inet_addrs());
-                }, _ms, _abort_source);
+                }, _ms.local(), _abort_source);
 
         utils::get_local_injector().inject("group0_upgrade_before_synchronize",
             [] { throw std::runtime_error("error injection before group 0 upgrade enters synchronize"); });
@@ -1511,14 +1526,14 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
     }
 
     upgrade_log.info("Waiting for all peers to enter synchronize state...");
-    if (!(co_await wait_for_peers_to_enter_synchronize_state(members0, _ms, _abort_source, _shutdown_gate.hold()))) {
+    if (!(co_await wait_for_peers_to_enter_synchronize_state(members0, _ms.local(), _abort_source, _shutdown_gate.hold()))) {
         upgrade_log.info("Another node already finished upgrade. We can finish early.");
         co_return;
     }
 
     upgrade_log.info("All peers in synchronize state. Waiting for schema to synchronize...");
-    auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms), std::ref(_abort_source));
-    if (!(co_await synchronize_schema(_qp.db().real_database(), _ms, members0, _mm, can_finish_early, _abort_source))) {
+    auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
+    if (!(co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source))) {
         upgrade_log.info("Another node already finished upgrade. We can finish early.");
         co_return;
     }

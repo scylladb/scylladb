@@ -113,6 +113,61 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--abort-on-ebadf', '1'
 ]
 
+# [--smp, 1], [--smp, 2] -> [--smp, 2]
+# [--smp, 1], [--smp] -> [--smp]
+# [--smp, 1], [--smp, __missing__] -> [--smp]
+# [--smp, 1], [--smp, __remove__] -> []
+# [--smp=1], [--smp=2] -> [--smp, 2]
+# [--smp=1], [--smp=__remove__] -> []
+# [--overprovisioned, --smp=1, --abort-on-ebadf], [--smp=2] -> [--overprovisioned, --smp=2, --abort-on-ebadf]
+# [], [--experimental-features, raft, --experimental-features, broadcast-tables] ->
+# [--experimental-features, raft, --experimental-features, broadcast-tables]
+def merge_cmdline_options(base: List[str], override: List[str]) -> List[str]:
+    if len(override) == 0:
+        return base
+
+    def to_dict(args: List[str]) -> Dict[str, List[Optional[str]]]:
+        result: Dict[str, List[Optional[str]]] = {}
+        i = 0
+        while i < len(args):
+            name = args[i]
+            if not name.startswith('-'):
+                raise ValueError(f'invalid argument name {name}, all args {args}')
+            if '=' in name:
+                name, _, value = name.partition('=')
+                i += 1
+            elif i < len(args) - 1 and not args[i + 1].startswith('-'):
+                value = args[i + 1]
+                i += 2
+            else:
+                value = None
+                i += 1
+            result.setdefault(name, []).append(value)
+        return result
+
+    def run() -> List[str]:
+        merged: Dict[str, List[Optional[str]]] = to_dict(base)
+        for name, values in to_dict(override).items():
+            merged_values = None
+            for v in values:
+                if v != '__remove__':
+                    if merged_values is None:
+                        merged_values = merged.setdefault(name, [])
+                        merged_values.clear()
+                    merged_values.append(v if v != '__missing__' else None)
+                elif name in merged:
+                    del merged[name]
+                    merged_values = None
+
+        result: List[str] = []
+        for name, values in merged.items():
+            for v in values:
+                result.append(name)
+                if v is not None:
+                    result.append(v)
+        return result
+
+    return run()
 
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
@@ -133,7 +188,7 @@ class ScyllaServer:
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
-        self.cmdline_options = cmdline_options
+        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, cmdline_options)
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
@@ -288,13 +343,11 @@ class ScyllaServer:
     async def start(self, api: ScyllaRESTAPIClient) -> None:
         """Start an installed server. May be used for restarts."""
 
-        # Add suite-specific command line options
-        scylla_args = SCYLLA_CMDLINE_OPTIONS + self.cmdline_options
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
-            *scylla_args,
+            *self.cmdline_options,
             cwd=self.workdir,
             stderr=self.log_file,
             stdout=self.log_file,
@@ -443,6 +496,7 @@ class ScyllaCluster:
         ip_addr: IPAddress
         seeds: List[str]
         config_from_test: dict[str, str]
+        cmdline_from_test: List[str]
 
     def __init__(self, host_registry: HostRegistry, replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
@@ -515,7 +569,7 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -547,7 +601,8 @@ class ScyllaCluster:
             cluster_name = self.name,
             ip_addr = ip_addr,
             seeds = seeds,
-            config_from_test = extra_config
+            config_from_test = extra_config,
+            cmdline_from_test = cmdline or []
         )
 
         try:
@@ -887,7 +942,7 @@ class ScyllaClusterManager:
         assert self.cluster
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
-        s_info = await self.cluster.add_server(replace_cfg)
+        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'))
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
                                           "ip_addr": s_info.ip_addr})
 

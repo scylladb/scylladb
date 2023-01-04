@@ -175,9 +175,12 @@ void raft_group_registry::init_rpc_verbs() {
     });
 
     ser::raft_rpc_verbs::register_raft_append_entries(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-           raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
-        return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request)] (raft_rpc& rpc) mutable {
-            rpc.append_entries(std::move(from), std::move(append_request));
+        raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request), original_shard_id = this_shard_id()] (raft_rpc& rpc) mutable {
+            // lw_shared_ptr (raft::log_entry_ptr) doesn't support cross-shard ref counting (see debug_shared_ptr_counter_type),
+            // so we are copying entries to this shard if it isn't equal the original one.
+            rpc.append_entries(std::move(from),
+                this_shard_id() == original_shard_id ? std::move(append_request) : append_request.copy());
             return netw::messaging_service::no_wait();
         });
     });
