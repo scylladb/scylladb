@@ -127,6 +127,20 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
 // See https://github.com/scylladb/scylla/issues/4480
 static constexpr int max_table_name_length = 222;
 
+static bool valid_table_name_chars(std::string_view name) {
+    for (auto c : name) {
+        if ((c < 'a' || c > 'z') &&
+            (c < 'A' || c > 'Z') &&
+            (c < '0' || c > '9') &&
+            c != '_' &&
+            c != '-' &&
+            c != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
 // specifies that table names "names must be between 3 and 255 characters long
 // and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
@@ -136,8 +150,7 @@ static void validate_table_name(const std::string& name) {
         throw api_error::validation(
                 format("TableName must be at least 3 characters long and at most {} characters long", max_table_name_length));
     }
-    static const std::regex valid_table_name_chars ("[a-zA-Z0-9_.-]*");
-    if (!std::regex_match(name.c_str(), valid_table_name_chars)) {
+    if (!valid_table_name_chars(name)) {
         throw api_error::validation(
                 "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
     }
@@ -153,11 +166,10 @@ static void validate_table_name(const std::string& name) {
 // The view_name() function assumes the table_name has already been validated
 // but validates the legality of index_name and the combination of both.
 static std::string view_name(const std::string& table_name, std::string_view index_name, const std::string& delim = ":") {
-    static const std::regex valid_index_name_chars ("[a-zA-Z0-9_.-]*");
     if (index_name.length() < 3) {
         throw api_error::validation("IndexName must be at least 3 characters long");
     }
-    if (!std::regex_match(index_name.data(), valid_index_name_chars)) {
+    if (!valid_table_name_chars(index_name)) {
         throw api_error::validation(
                 format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
