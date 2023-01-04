@@ -1118,7 +1118,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
             // OK to discard future since _async_gate is closed on stop()
             (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
               return restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
-                slogger.info("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
+                slogger.warn("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
               });
             });
         }
@@ -2982,17 +2982,26 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
     });
 
-    streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
-        try {
-            f.get();
-            return this->send_replication_notification(notify_endpoint);
-        } catch (...) {
-            slogger.warn("Streaming to restore replica count failed: {}", std::current_exception());
-            // We still want to send the notification
-            return this->send_replication_notification(notify_endpoint);
+    std::exception_ptr ex;
+    try {
+        streamer->stream_async().get();
+    } catch (...) {
+        ex = std::current_exception();
+        slogger.debug("Streaming to restore replica count failed: {}.", ex);
+        // We still want to send the notification
+    }
+    try {
+        this->send_replication_notification(notify_endpoint).get();
+    } catch (...) {
+        auto ex2 = std::current_exception();
+        slogger.debug("Sending replication notification to {} failed: {}", notify_endpoint, ex2);
+        if (!ex) {
+            ex = std::move(ex2);
         }
-        return make_ready_future<>();
-    }).get();
+    }
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
   });
 }
 
