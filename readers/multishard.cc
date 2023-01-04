@@ -763,7 +763,10 @@ future<> shard_reader_v2::close() noexcept {
         try {
             co_await *std::exchange(_read_ahead, std::nullopt);
         } catch (...) {
-            mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, std::current_exception());
+            auto ex = std::current_exception();
+            if (!is_timeout_exception(ex)) {
+                mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, ex);
+            }
         }
     }
 
