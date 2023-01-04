@@ -63,6 +63,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "utils/stall_free.hh"
 #include "utils/error_injection.hh"
 #include "locator/util.hh"
@@ -2944,7 +2945,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     });
     auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
-    auto status_checker = seastar::async([this, endpoint, &as] {
+    auto check_status_loop = [this, endpoint, &as] () -> future<> {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
         while (!as.abort_requested()) {
             auto status = _gossiper.get_gossip_status(endpoint);
@@ -2958,12 +2959,13 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
                 if (!as.abort_requested()) {
                     as.request_abort();
                 }
-                return;
+                co_return;
             }
             slogger.debug("restore_replica_count: Sleep and detect removing node {}, status={}", endpoint, status);
-            sleep_abortable(std::chrono::seconds(10), as).get();
+            co_await sleep_abortable(std::chrono::seconds(10), as);
         }
-    });
+    };
+    auto status_checker = check_status_loop();
     auto stop_status_checker = defer([endpoint, &status_checker, &as] () mutable {
         try {
             slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
