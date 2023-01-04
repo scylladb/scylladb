@@ -669,70 +669,8 @@ future<> raft_group0::finish_setup_after_join() {
 }
 
 future<> raft_group0::leave_group0() {
-    assert(this_shard_id() == 0);
-
-    if (!_raft_gr.is_enabled()) {
-        group0_log.info("leave_group0: local RAFT feature disabled, skipping.");
-        co_return;
-    }
-
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    if (upgrade_state == group0_upgrade_state::recovery) {
-        group0_log.warn("leave_group0: in Raft RECOVERY mode, skipping.");
-        co_return;
-    }
-
-    if (!_feat.supports_raft_cluster_mgmt) {
-        // The Raft feature is not yet enabled.
-        //
-        // In that case we assume the cluster is in a partially-upgraded state (some nodes still use a version
-        // without the raft/group 0 code enabled) and skip the leaving group 0 step.
-        //
-        // In theory we could be wrong: the cluster may have just upgraded but the user managed to call decommission
-        // before we noticed it. Us leaving at this point could cause `upgrade_to_group0`
-        // on other nodes to get stuck because it requires contacting all peers which may include us.
-        //
-        // For this to happen, the following conditions would have to be true:
-        // 1. decommission is called immediately after upgrade, before we notice that the Raft feature is enabled
-        // 2. we don't notice it during decommission - including the long streaming phase - even until we reach
-        //    the `leave_group0` step which is almost at the end of the procedure
-        // 3. some node did notice that the feature is enabled and started `upgrade_to_group0`, using us
-        //    as one of the peers for running group 0 discovery, before we entered LEFT state
-        //
-        // These conditions together give a very unlikely scenario. If it does happen the user can perform
-        // the manual recovery procedure for group 0.
-        group0_log.warn(
-            "leave_group0: Raft feature not enabled yet. Assuming that the cluster is partially upgraded"
-            " and skipping the step. However, if your already finished the rolling upgrade procedure,"
-            " this means we just haven't noticed it yet. The internal upgrade-to-raft procedure on other nodes"
-            " may get stuck (they may try to contact us during the procedure). If that happens, manual recovery"
-            " will be required. Consult the documentation for more details.");
-        // TODO: link to the docs
-        co_return;
-    }
-
-    if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
-        // The feature is enabled but `upgrade_to_group0` did not finish yet.
-        // The upgrade procedure requires everyone to participate. In order to not block others
-        // from doing their upgrades, we'll wait until we finish our procedure - then we can safely leave.
-        //
-        // FIXME: well, to be completely precise, it could happen that everyone enters `synchronize` state,
-        // then we're the first to enter `use_post_raft_procedures` state and consider the procedure finished,
-        // then we leave before others contact us to confirm that everyone entered `synchronize` and
-        // they get stuck trying to contact us. To completely ensure liveness we should wait not only until
-        // we enter `use_post_raft_procedures`, but until somebody else also does (then others can use that
-        // node to confirm that they can also finish their procedures).
-        // Extend `wait_until_upgrade_to_group0_finishes` with an extra step which RPCs a peer
-        // to confirm they entered `use_post_raft_procedures`.
-        group0_log.info("leave_group0: waiting until cluster fully upgrades to use Raft before proceeding...");
-        co_await _client.wait_until_group0_upgraded(_abort_source);
-        group0_log.info("leave_group0: cluster finished upgrade, continuing.");
-    }
-
-    // We're fully upgraded, we must have joined group 0.
-    if (!joined_group0()) {
-        on_internal_error(group0_log,
-            "leave_group0: we're fully upgraded to use Raft but didn't join group 0. Please report a bug.");
+    if (!(co_await raft_upgrade_complete())) {
+        on_internal_error(group0_log, "called leave_group0 before Raft upgrade finished");
     }
 
     auto my_id = load_my_id();
@@ -743,51 +681,8 @@ future<> raft_group0::leave_group0() {
 }
 
 future<> raft_group0::remove_from_group0(raft::server_id node) {
-    assert(this_shard_id() == 0);
-
-    if (!_raft_gr.is_enabled()) {
-        group0_log.info("remove_from_group0({}): local RAFT feature disabled, skipping.", node);
-        co_return;
-    }
-
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    if (upgrade_state == group0_upgrade_state::recovery) {
-        group0_log.warn("remove_from_group0({}): in Raft RECOVERY mode, skipping.", node);
-        co_return;
-    }
-
-    if (!_feat.supports_raft_cluster_mgmt) {
-        // Similar situation as in `leave_group0` (read the comment there for detailed explanations).
-        //
-        // We assume that nobody started `upgrade_to_group0` yet so it's safe to remove nodes
-        // from the cluster without `upgrade_to_group0` getting stuck due to unavailable peers.
-        group0_log.warn(
-            "remove_from_group0({}): Raft feature not enabled yet. Assuming that the cluster is partially upgraded"
-            " and skipping the step. However, if your already finished the rolling upgrade procedure,"
-            " this means we just haven't noticed it yet. The internal upgrade-to-raft procedure may get stuck"
-            " (remaining nodes may try to contact the removed node during the procedure). If that happens,"
-            " manual recovery will be required. Consult the documentation for more details.", node);
-        // TODO: link to the docs
-        co_return;
-    }
-
-    if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
-        // Similar situation as in `leave_group0`.
-        // Wait until the upgrade procedure finishes before removing the node.
-        //
-        // Note: if we enter `use_post_raft_procedures`, it's safe to remove anyone else without blocking upgrade:
-        // remaining nodes will observe that the procedure is finished by contacting us, even if they won't
-        // be able to contact the removed node.
-        group0_log.info("remove_from_group0({}): waiting until cluster fully upgrades to use Raft before proceeding...", node);
-        co_await _client.wait_until_group0_upgraded(_abort_source);
-        group0_log.info("remove_from_group0({}): cluster finished upgrade, continuing.", node);
-    }
-
-    // We're fully upgraded, we must have joined group 0.
-    if (!joined_group0()) {
-        on_internal_error(group0_log, format(
-            "remove_from_group0({}): we're fully upgraded to use Raft but not a member of group 0."
-            " Please report a bug.", node));
+    if (!(co_await raft_upgrade_complete())) {
+        on_internal_error(group0_log, "called remove_from_group0 before Raft upgrade finished");
     }
 
     group0_log.info("remove_from_group0({}): removing the server from group 0 configuration...", node);
@@ -795,6 +690,64 @@ future<> raft_group0::remove_from_group0(raft::server_id node) {
     co_await remove_from_raft_config(node);
 
     group0_log.info("remove_from_group0({}): finished removing from group 0 configuration.", node);
+}
+
+future<bool> raft_group0::wait_for_raft() {
+    assert(this_shard_id() == 0);
+
+    if (!_raft_gr.is_enabled()) {
+        group0_log.info("Local RAFT feature disabled.");
+        co_return false;
+    }
+
+    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
+    if (upgrade_state == group0_upgrade_state::recovery) {
+        group0_log.warn("In Raft RECOVERY mode.");
+        co_return false;
+    }
+
+    if (!_feat.supports_raft_cluster_mgmt) {
+        // The Raft feature is not yet enabled.
+        //
+        // In that case we assume the cluster is in a partially-upgraded state (some nodes still use a version
+        // without the raft/group 0 code enabled) and skip the reconfiguration.
+        //
+        // In theory we could be wrong: the cluster may have just upgraded but the user managed to start
+        // a topology operation before we noticed it. Removing a node at this point could cause `upgrade_to_group0`
+        // on other nodes to get stuck because it requires contacting all peers which may include the removed node.
+        //
+        // This is unlikely and shouldn't happen if rolling upgrade is performed correctly.
+        // If it does happen, there's always the possibility of performing the manual group 0 recovery procedure.
+        group0_log.warn(
+            "Raft feature not enabled yet. Assuming that the cluster is partially upgraded"
+            " and skipping group 0 reconfiguration. However, if you already finished the rolling upgrade"
+            " procedure, this means that the node just hasn't noticed it yet. The internal upgrade-to-raft procedure"
+            " may get stuck. If that happens, manual recovery will be required."
+            " Consult the documentation for more details.");
+        // TODO: link to the docs
+        co_return false;
+    }
+
+    if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
+        // The feature is enabled but `upgrade_to_group0` did not finish yet.
+        // The upgrade procedure requires everyone to participate. In order to not block the cluster
+        // from doing the upgrades, we'll wait until we finish our procedure before doing the reconfiguration.
+        //
+        // Note: in theory it could happen that a node is removed/leaves the cluster immediately after
+        // it finishes upgrade, causing others to get stuck (trying to contact the node that left).
+        // It's unlikely and can be recovered from using the manual group 0 recovery procedure.
+        group0_log.info("Waiting until cluster fully upgrades to use Raft before proceeding...");
+        co_await _client.wait_until_group0_upgraded(_abort_source);
+        group0_log.info("Cluster finished Raft upgrade procedure.");
+    }
+
+    // We're fully upgraded, we must have joined group 0.
+    if (!joined_group0()) {
+        on_internal_error(group0_log,
+            "We're fully upgraded to use Raft but didn't join group 0. Please report a bug.");
+    }
+
+    co_return true;
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
@@ -819,6 +772,11 @@ future<> raft_group0::remove_from_raft_config(raft::server_id id) {
 
 bool raft_group0::joined_group0() const {
     return std::holds_alternative<raft::group_id>(_group0);
+}
+
+future<bool> raft_group0::raft_upgrade_complete() const {
+    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
+    co_return upgrade_state == group0_upgrade_state::use_post_raft_procedures;
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {

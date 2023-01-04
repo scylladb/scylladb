@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #pragma once
+
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/group0_fwd.hh"
@@ -149,10 +150,19 @@ public:
     // which will start a procedure to create group 0 and switch administrative operations to use it.
     future<> finish_setup_after_join();
 
+    // If Raft is disabled or in RECOVERY mode, returns `false`.
+    // Otherwise:
+    // - waits for the Raft upgrade procedure to finish if it's currently in progress,
+    // - returns `true`.
+    //
+    // This is a prerequisite for performing group 0 configuration operations.
+    future<bool> wait_for_raft();
+
     // Remove ourselves from group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // Assumes to run during decommission, after the node entered LEFT status.
+    // `wait_for_raft` must've also been called earlier and returned `true`.
     //
     // FIXME: make it retryable and do nothing if we're not a member.
     // Currently if we call leave_group0 twice, it will get stuck the second time
@@ -168,6 +178,7 @@ public:
     // 2. or we're currently bootstrapping and replacing an existing node.
     //
     // In both cases, `setup_group0()` must have finished earlier.
+    // `wait_for_raft` must've also been called earlier and returned `true`
     future<> remove_from_group0(raft::server_id);
 
     // Assumes that this node's Raft server ID is already initialized and returns it.
@@ -181,6 +192,7 @@ private:
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);
 
     bool joined_group0() const;
+    future<bool> raft_upgrade_complete() const;
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);

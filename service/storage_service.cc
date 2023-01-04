@@ -741,9 +741,12 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
 
             assert(replaced_host_id);
             auto raft_id = raft::server_id{replaced_host_id.uuid()};
-            slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
             assert(_group0);
-            _group0->remove_from_group0(raft_id).get();
+            bool raft_available = _group0->wait_for_raft().get();
+            if (raft_available) {
+                slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
+                _group0->remove_from_group0(raft_id).get();
+            }
 
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens, *replacement_info);
@@ -2067,11 +2070,13 @@ future<> storage_service::decommission() {
                 throw;
             }
 
-            slogger.info("DECOMMISSIONING: leaving Raft group 0");
             assert(ss._group0);
-            ss._group0->leave_group0().get();
-
-            slogger.info("DECOMMISSIONING: left Raft group 0");
+            bool raft_available = ss._group0->wait_for_raft().get();
+            if (raft_available) {
+                slogger.info("DECOMMISSIONING: leaving Raft group 0");
+                ss._group0->leave_group0().get();
+                slogger.info("DECOMMISSIONING: left Raft group 0");
+            }
 
             ss.stop_transport().get();
             slogger.info("DECOMMISSIONING: stopped transport");
@@ -2446,9 +2451,13 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 }).get();
 
                 auto raft_id = raft::server_id{host_id.uuid()};
-                slogger.info("removenode[{}]: removing node {}/{} from group 0", uuid, endpoint, raft_id);
                 assert(ss._group0);
-                ss._group0->remove_from_group0(raft_id).get();
+                bool raft_available = ss._group0->wait_for_raft().get();
+                if (raft_available) {
+                    slogger.info("removenode[{}]: removing node {} from group 0", uuid, raft_id);
+                    ss._group0->remove_from_group0(raft_id).get();
+                    slogger.info("removenode[{}]: removed node {} from group 0", uuid, raft_id);
+                }
 
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
@@ -3373,7 +3382,10 @@ future<> storage_service::force_remove_completion() {
 
                     slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
                     assert(ss._group0);
-                    co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
+                    bool raft_available = co_await ss._group0->wait_for_raft();
+                    if (raft_available) {
+                        co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
+                    }
                 }
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");
