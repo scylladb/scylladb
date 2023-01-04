@@ -9,7 +9,8 @@
    Manages driver refresh when cluster is cycled.
 """
 
-from typing import List, Optional, Callable, NamedTuple, Any
+from typing import List, Optional, Callable, Any
+from time import time
 import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
