@@ -159,6 +159,15 @@ public:
     // This is a prerequisite for performing group 0 configuration operations.
     future<bool> wait_for_raft();
 
+    // Check whether the given Raft server is a member of group 0 configuration
+    // according to our current knowledge.
+    //
+    // If `include_voters_only` is `true`, returns `true` only if the server is a voting member.
+    //
+    // Precondition: joined_group0(). In particular, this can be called safely
+    // if wait_for_raft() was called earlier and returned `true`.
+    bool is_member(raft::server_id, bool include_voters_only);
+
     // Become a non-voter in group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).

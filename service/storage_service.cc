@@ -2367,19 +2367,54 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto uuid = node_ops_id::create_random_id();
             auto tmptr = ss.get_token_metadata_ptr();
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
-            if (!endpoint_opt) {
-                throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
+            assert(ss._group0);
+            auto raft_id = raft::server_id{host_id.uuid()};
+            bool raft_available = ss._group0->wait_for_raft().get();
+            bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
+
+            if (!endpoint_opt && !is_group0_member) {
+                throw std::runtime_error(format("removenode[{}]: Host ID {} not found in the cluster", uuid, host_id));
             }
+
+            // If endpoint_opt is engaged, the node is a member of the token ring.
+            // is_group0_member indicates whether the node is a member of Raft group 0.
+            // A node might be a member of group 0 but not a member of the token ring, e.g. due to a
+            // previously failed removenode/decommission. The code is written to handle this
+            // situation. Parts related to removing this node from the token ring are conditioned on
+            // endpoint_opt, while parts related to removing from group 0 are conditioned on
+            // is_group0_member.
+
+            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
+                const std::string message = format(
+                    "removenode[{}]: Rejected removenode operation (node={}); "
+                    "the node being removed is alive, maybe you should use decommission instead?",
+                    uuid, *endpoint_opt);
+                slogger.warn(std::string_view(message));
+                throw std::runtime_error(message);
+            }
+
+            bool removed_from_token_ring = !endpoint_opt;
+        if (endpoint_opt) {
             auto endpoint = *endpoint_opt;
             auto tokens = tmptr->get_tokens(endpoint);
-            auto leaving_nodes = std::list<gms::inet_address>{endpoint};
+
             std::list<gms::inet_address> ignore_nodes;
             for (auto& hoep : ignore_nodes_params) {
                 hoep.resolve(*tmptr);
                 ignore_nodes.push_back(hoep.endpoint);
             }
 
-            // Step 1: Decide who needs to sync data
+            // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
+            //
+            // Thanks to this, even if we fail after removing the node from the token ring
+            // but before removing it group 0, group 0's availability won't be reduced.
+            if (is_group0_member && ss._group0->is_member(raft_id, true)) {
+                slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
+                ss._group0->make_nonvoter(raft_id).get();
+                slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
+            }
+
+            // Step 2: Decide who needs to sync data
             //
             // By default, we require all nodes in the cluster to participate
             // the removenode operation and sync data if needed. We fail the
@@ -2395,34 +2430,12 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     nodes.push_back(x.first);
                 }
             }
-            slogger.info("removenode[{}]: Started removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
-
-            if (ss._gossiper.is_alive(endpoint)) {
-                const std::string message = format(
-                    "removenode[{}]: Rejected removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}; "
-                    "the node being removed is alive, maybe you should use decommission instead?",
-                    uuid, endpoint, nodes, ignore_nodes);
-                slogger.warn(std::string_view(message));
-                throw std::runtime_error(message);
-            }
-
-            // Step 2: Make the node a group 0 non-voter before removing it from the token ring.
-            //
-            // Thanks to this, even if we fail after removing the node from the token ring
-            // but before removing it group 0, group 0's availability won't be reduced.
-            assert(ss._group0);
-            auto raft_id = raft::server_id{host_id.uuid()};
-            bool raft_available = ss._group0->wait_for_raft().get();
-            if (raft_available) {
-                slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
-                ss._group0->make_nonvoter(raft_id).get();
-                slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
-            }
+            slogger.info("removenode[{}]: Started token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
 
             // Step 3: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
-            auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, leaving_nodes, {}};
+            auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, {endpoint}, {}};
             try {
                 parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2468,8 +2481,9 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                 std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                 ss.excise(std::move(tmp), endpoint).get();
+                removed_from_token_ring = true;
 
-                // Step 7: Finish
+                // Step 7: Finish token movement
                 req.cmd = node_ops_cmd::removenode_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2478,13 +2492,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     });
                 }).get();
 
-                if (raft_available) {
-                    slogger.info("removenode[{}]: removing node {} from group 0", uuid, raft_id);
-                    ss._group0->remove_from_group0(raft_id).get();
-                    slogger.info("removenode[{}]: removed node {} from group 0", uuid, raft_id);
-                }
-
-                slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                slogger.info("removenode[{}]: Finished token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 slogger.warn("removenode[{}]: removing node={}, sync_nodes={}, ignore_nodes={} failed, error {}",
                              uuid, endpoint, nodes, ignore_nodes, std::current_exception());
@@ -2502,6 +2510,28 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 throw;
             }
+        }
+
+            // Step 8: Remove the node from group 0
+            //
+            // If the node was a token ring member but we failed to remove it,
+            // don't remove it from group 0 -- hence the `removed_from_token_ring` check.
+            try {
+                if (is_group0_member && removed_from_token_ring) {
+                    slogger.info("removenode[{}]: removing node {} from Raft group 0", uuid, raft_id);
+                    ss._group0->remove_from_group0(raft_id).get();
+                    slogger.info("removenode[{}]: removed node {} from Raft group 0", uuid, raft_id);
+                }
+            } catch (...) {
+                slogger.error(
+                    "removenode[{}]: FAILED when trying to remove the node from Raft group 0: \"{}\". The node"
+                    " is no longer a member of the token ring, but it may still be a member of Raft group 0."
+                    " Please retry `removenode`. Consult the `removenode` documentation for more details.",
+                    uuid, std::current_exception());
+                throw;
+            }
+
+            slogger.info("removenode[{}]: Finished removenode operation, host id={}", uuid, host_id);
         });
     });
 }

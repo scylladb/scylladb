@@ -671,6 +671,15 @@ future<> raft_group0::finish_setup_after_join() {
     });
 }
 
+bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
+    if (!joined_group0()) {
+        on_internal_error(group0_log, "called is_member before we joined group 0");
+    }
+
+    auto cfg = _raft_gr.group0().get_configuration();
+    return cfg.contains(id) && (!include_voters_only || cfg.can_vote(id));
+}
+
 future<> raft_group0::become_nonvoter() {
     if (!(co_await raft_upgrade_complete())) {
         on_internal_error(group0_log, "called become_nonvoter before Raft upgrade finished");
