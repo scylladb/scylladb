@@ -183,6 +183,47 @@ void set_task_manager(http_context& ctx, routes& r) {
         auto s = co_await retrieve_status(task);
         co_return make_status(s);
     });
+
+    tm::get_task_status_recursively.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto& _ctx = ctx;
+        auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
+        std::queue<tasks::task_manager::foreign_task_ptr> q;
+        utils::chunked_vector<full_task_status> res;
+
+        // Get requested task.
+        auto task = co_await tasks::task_manager::invoke_on_task(_ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+            auto state = task->get_status().state;
+            if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
+                task->unregister_task();
+            }
+            co_return task;
+        }));
+
+        // Push children's statuses in BFS order.
+        q.push(co_await task.copy());   // Task cannot be moved since we need it to be alive during whole loop execution.
+        while (!q.empty()) {
+            auto& current = q.front();
+            res.push_back(co_await retrieve_status(current));
+            for (auto i = 0; i < current->get_children().size(); ++i) {
+                q.push(co_await current->get_children()[i].copy());
+            }
+            q.pop();
+        }
+
+        std::function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
+            auto s = std::move(os);
+            auto res = std::move(r);
+            co_await s.write("[");
+            std::string delim = "";
+            for (auto& status: res) {
+                co_await s.write(std::exchange(delim, ", "));
+                co_await formatter::write(s, make_status(status));
+            }
+            co_await s.write("]");
+            co_await s.close();
+        };
+        co_return f;
+    });
 }
 
 }
