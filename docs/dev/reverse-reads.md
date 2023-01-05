@@ -26,8 +26,7 @@ order is considered reverse.
 ## Legacy format
 
 The legacy format is how scylla handled reverse queries internally. We
-are in the process of migrating to the native reverse format, but for
-now coordinator-side code still uses the legacy format.
+are in the process of migrating to the native reverse format.
 
 ### Request
 

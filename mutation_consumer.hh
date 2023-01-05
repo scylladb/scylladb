@@ -13,5 +13,4 @@
 enum class consume_in_reverse {
     no = 0,
     yes,
-    legacy_half_reverse,
 };

@@ -2560,14 +2560,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
             assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
         }
     }
-    testlog.info("Legacy half reverse");
-    {
-        for (const auto& mut : muts) {
-            mutation_rebuilder_v2 rebuilder(forward_schema);
-            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::legacy_half_reverse).result;
-            assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
-        }
-    }
     testlog.info("Reverse");
     {
         for (const auto& mut : muts) {
