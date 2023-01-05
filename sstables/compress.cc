@@ -21,6 +21,7 @@
 #include "unimplemented.hh"
 #include "segmented_compress_params.hh"
 #include "utils/class_registrator.hh"
+#include "reader_permit.hh"
 
 namespace sstables {
 
@@ -338,16 +339,18 @@ class compressed_file_data_source_impl : public data_source_impl {
     sstables::compression* _compression_metadata;
     sstables::compression::segmented_offsets::accessor _offsets;
     sstables::local_compression _compression;
+    reader_permit _permit;
     uint64_t _underlying_pos;
     uint64_t _pos;
     uint64_t _beg_pos;
     uint64_t _end_pos;
 public:
     compressed_file_data_source_impl(file f, sstables::compression* cm,
-                uint64_t pos, size_t len, file_input_stream_options options)
+                uint64_t pos, size_t len, file_input_stream_options options, reader_permit permit)
             : _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_accessor())
             , _compression(*cm)
+            , _permit(std::move(permit))
     {
         _beg_pos = pos;
         if (pos > _compression_metadata->uncompressed_file_length()) {
@@ -412,7 +415,7 @@ public:
                 _pos += out.size();
                 _underlying_pos += addr.chunk_len;
 
-                return out;
+                return make_tracked_temporary_buffer(std::move(out), _permit);
         });
     }
 
@@ -444,9 +447,9 @@ requires ChecksumUtils<ChecksumType>
 class compressed_file_data_source : public data_source {
 public:
     compressed_file_data_source(file f, sstables::compression* cm,
-            uint64_t offset, size_t len, file_input_stream_options options)
+            uint64_t offset, size_t len, file_input_stream_options options, reader_permit permit)
         : data_source(std::make_unique<compressed_file_data_source_impl<ChecksumType>>(
-                std::move(f), cm, offset, len, std::move(options)))
+                std::move(f), cm, offset, len, std::move(options), std::move(permit)))
         {}
 };
 
@@ -454,10 +457,10 @@ template <typename ChecksumType>
 requires ChecksumUtils<ChecksumType>
 inline input_stream<char> make_compressed_file_input_stream(
         file f, sstables::compression *cm, uint64_t offset, size_t len,
-        file_input_stream_options options)
+        file_input_stream_options options, reader_permit permit)
 {
     return input_stream<char>(compressed_file_data_source<ChecksumType>(
-            std::move(f), cm, offset, len, std::move(options)));
+            std::move(f), cm, offset, len, std::move(options), std::move(permit)));
 }
 
 // For SSTables 2.x (formats 'ka' and 'la'), the full checksum is a combination of checksums of compressed chunks.
@@ -569,15 +572,15 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f,
         sstables::compression* cm, uint64_t offset, size_t len,
-        class file_input_stream_options options)
+        class file_input_stream_options options, reader_permit permit)
 {
-    return make_compressed_file_input_stream<adler32_utils>(std::move(f), cm, offset, len, std::move(options));
+    return make_compressed_file_input_stream<adler32_utils>(std::move(f), cm, offset, len, std::move(options), std::move(permit));
 }
 
 input_stream<char> sstables::make_compressed_file_m_format_input_stream(file f,
         sstables::compression *cm, uint64_t offset, size_t len,
-        class file_input_stream_options options) {
-    return make_compressed_file_input_stream<crc32_utils>(std::move(f), cm, offset, len, std::move(options));
+        class file_input_stream_options options, reader_permit permit) {
+    return make_compressed_file_input_stream<crc32_utils>(std::move(f), cm, offset, len, std::move(options), std::move(permit));
 }
 
 output_stream<char> sstables::make_compressed_file_m_format_output_stream(output_stream<char> out,
