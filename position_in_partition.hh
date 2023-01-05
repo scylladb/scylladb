@@ -599,22 +599,40 @@ public:
 };
 
 struct view_and_holder {
-    position_in_partition_view view;
     std::optional<position_in_partition> holder;
+    position_in_partition_view view;
+
+    view_and_holder(position_in_partition pos)
+        : holder(std::move(pos))
+        , view(*holder)
+    { }
+
+    explicit view_and_holder(position_in_partition_view pos)
+        : view(pos)
+    { }
+
+    view_and_holder(view_and_holder&& other) noexcept
+        : holder(std::move(other.holder))
+        , view(holder ? *holder : other.view)
+    { }
+
+    view_and_holder& operator=(view_and_holder&& other) noexcept {
+        holder = std::move(other.holder);
+        view = holder ? *holder: other.view;
+        return *this;
+    }
 };
 
 inline
 view_and_holder position_in_partition_view::after_key(const schema& s, position_in_partition_view pos) {
     if (!pos.is_clustering_row()) {
-        return {pos, std::nullopt};
+        return view_and_holder(pos);
     }
     if (pos.key().is_full(s)) {
-        return {position_in_partition_view::after_all_prefixed(pos.key()), std::nullopt};
+        return view_and_holder(position_in_partition_view::after_all_prefixed(pos.key()));
     }
     // FIXME: This wouldn't be needed if we had a bound weight to represent this.
-    auto res = position_in_partition::after_key(s, clustering_key(pos.key()));
-    position_in_partition_view res_view = res;
-    return {std::move(res_view), std::move(res)};
+    return view_and_holder(position_in_partition::after_key(s, clustering_key(pos.key())));
 }
 
 inline

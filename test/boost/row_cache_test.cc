@@ -4084,3 +4084,52 @@ SEASTAR_TEST_CASE(test_eviction_of_upper_bound_of_population_range) {
         read(0, 3);
     });
 }
+
+SEASTAR_TEST_CASE(test_reading_of_nonfull_keys) {
+        return seastar::async([] {
+            schema_ptr s = schema_builder("ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck1", utf8_type, column_kind::clustering_key)
+                    .with_column("ck2", utf8_type, column_kind::clustering_key)
+                    .with_column("v", utf8_type)
+                    .build();
+
+            auto pkey = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized("pk1")));
+
+            auto make_ck = [&] (sstring ck1, std::optional<sstring> ck2 = {}) {
+                if (ck2) {
+                    return clustering_key::from_exploded(*s, {serialized(ck1), serialized(*ck2)});
+                }
+                return clustering_key::from_exploded(*s, {serialized(ck1)});
+            };
+
+            auto prefix_a = make_ck("a");
+            auto full_a = prefix_a;
+            clustering_key::make_full(*s, full_a);
+            auto full_a_a = make_ck("a", "a");
+
+            tests::reader_concurrency_semaphore_wrapper semaphore;
+
+            auto pr = dht::partition_range::make_singular(pkey);
+
+            memtable_snapshot_source underlying(s);
+
+            auto t1 = tombstone(api::new_timestamp(), gc_clock::now());
+            mutation m1(s, pkey);
+            m1.partition().clustered_row(*s, prefix_a).apply(t1);
+            m1.partition().clustered_row(*s, full_a).apply(t1);
+            m1.partition().clustered_row(*s, full_a_a).apply(t1);
+            underlying.apply(m1);
+
+            cache_tracker tracker;
+            row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+            // populating read
+            assert_that(cache.make_reader(s, semaphore.make_permit(), pr))
+                    .produces(m1);
+
+            // non-populating read
+            assert_that(cache.make_reader(s, semaphore.make_permit(), pr))
+                    .produces(m1);
+        });
+}
