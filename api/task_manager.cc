@@ -86,7 +86,7 @@ tm::task_status make_status(full_task_status status) {
     return res;
 }
 
-future<json::json_return_type> retrieve_status(tasks::task_manager::foreign_task_ptr task) {
+future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task_ptr& task) {
     if (task.get() == nullptr) {
         co_return coroutine::return_exception(httpd::bad_param_exception("Task not found"));
     }
@@ -104,7 +104,7 @@ future<json::json_return_type> retrieve_status(tasks::task_manager::foreign_task
         return child->id().to_sstring();
     });
     s.children_ids = std::move(ct);
-    co_return make_status(s);
+    co_return s;
 }
 
 void set_task_manager(http_context& ctx, routes& r) {
@@ -156,7 +156,8 @@ void set_task_manager(http_context& ctx, routes& r) {
             }
             co_return std::move(task);
         }));
-        co_return co_await retrieve_status(std::move(task));
+        auto s = co_await retrieve_status(task);
+        co_return make_status(s);
     });
 
     tm::abort_task.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
@@ -179,7 +180,8 @@ void set_task_manager(http_context& ctx, routes& r) {
                 return make_foreign(task);
             });
         }));
-        co_return co_await retrieve_status(std::move(task));
+        auto s = co_await retrieve_status(task);
+        co_return make_status(s);
     });
 }
 
