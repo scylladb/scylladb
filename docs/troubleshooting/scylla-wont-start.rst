@@ -1,5 +1,5 @@
-Scylla will not Start
-=====================
+ScyllaDB will not Start
+=========================
 
 Problem
 ^^^^^^^

@@ -1,5 +1,5 @@
-Scylla Hinted Handoff
-=====================
+ScyllaDB Hinted Handoff
+========================
 
 A typical write in Scylla works according to the scenarios described in our :doc:`Fault Tolerance documentation </architecture/architecture-fault-tolerance>`.
 

@@ -1,5 +1,5 @@
-SSTable 3.0 Format in Scylla
-============================
+SSTable 3.0 Format in ScyllaDB
+===============================
 
 Scylla supports the same SSTable format as Apache Cassandra 3.0.
 You can simply place SSTables from a Cassandra data directory into a Scylla uploads directory

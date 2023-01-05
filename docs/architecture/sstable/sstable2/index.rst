@@ -1,5 +1,5 @@
-Scylla SSTable - 2.x
-====================
+ScyllaDB SSTable - 2.x
+=======================
 
 .. toctree::
    :hidden:

@@ -1,6 +1,6 @@
 
-Remove a Node from a Scylla Cluster (Down Scale)
-************************************************
+Remove a Node from a ScyllaDB Cluster (Down Scale)
+***************************************************
 
 You can remove nodes from your cluster to reduce its size.
 

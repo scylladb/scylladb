@@ -1,5 +1,5 @@
-Migrate to Scylla
-=================
+Migrate to ScyllaDB
+====================
 
 .. toctree::
    :maxdepth: 2

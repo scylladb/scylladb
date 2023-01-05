@@ -1,5 +1,5 @@
-Scylla Monitor and Manager
-==========================
+ScyllaDB Monitor and Manager
+=============================
 
 .. toctree::
    :hidden:

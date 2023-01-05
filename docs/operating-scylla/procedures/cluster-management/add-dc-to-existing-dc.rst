@@ -1,5 +1,5 @@
-Adding a New Data Center Into an Existing Scylla Cluster
-********************************************************
+Adding a New Data Center Into an Existing ScyllaDB Cluster
+***********************************************************
 
 
 The following procedure specifies how to add a Data Center (DC) to a live Scylla Cluster, in a single data center, :ref:`multi-availability zone <faq-best-scenario-node-multi-availability-zone>`, or multi-datacenter. Adding a DC out-scales the cluster and provides higher availability (HA).

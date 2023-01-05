@@ -1,6 +1,6 @@
-==============================================================
-Adding a New Node Into an Existing Scylla Cluster (Out Scale)
-==============================================================
+=================================================================
+Adding a New Node Into an Existing ScyllaDB Cluster (Out Scale)
+=================================================================
 
 When you add a new node, other nodes in the cluster stream data to the new node. This operation is called bootstrapping and may
 be time-consuming, depending on the data size and network bandwidth. If using a :ref:`multi-availability-zone <faq-best-scenario-node-multi-availability-zone>`, make sure they are balanced.

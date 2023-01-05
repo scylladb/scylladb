@@ -1,15 +1,15 @@
-==============
-Upgrade Scylla
-==============
+=================
+Upgrade ScyllaDB
+=================
 
 .. toctree::
    :titlesonly:
    :hidden:
 
-   Scylla Enterprise <upgrade-enterprise/index>
-   Scylla Open Source <upgrade-opensource/index>
-   Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/index>
-   Scylla AMI <ami-upgrade>
+   ScyllaDB Enterprise <upgrade-enterprise/index>
+   ScyllaDB Open Source <upgrade-opensource/index>
+   ScyllaDB Open Source to ScyllaDB Enterprise <upgrade-to-enterprise/index>
+   ScyllaDB AMI <ami-upgrade>
 
 .. raw:: html
 
@@ -23,13 +23,13 @@ Upgrade Scylla
 
 Procedures for upgrading Scylla.
 
-* :doc:`Upgrade Scylla Enterprise <upgrade-enterprise/index>`
+* :doc:`Upgrade ScyllaDB Enterprise <upgrade-enterprise/index>`
 
-* :doc:`Upgrade Scylla Open Source <upgrade-opensource/index>`
+* :doc:`Upgrade ScyllaDB Open Source <upgrade-opensource/index>`
 
-* :doc:`Upgrade from Scylla Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
+* :doc:`Upgrade from ScyllaDB Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
 
-* :doc:`Upgrade Scylla AMI <ami-upgrade>`
+* :doc:`Upgrade ScyllaDB AMI <ami-upgrade>`
 
 
 .. raw:: html

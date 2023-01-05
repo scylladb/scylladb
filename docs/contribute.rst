@@ -1,5 +1,5 @@
-Contribute to Scylla
-====================
+Contribute to ScyllaDB
+=======================
 
 Thank you for your interest in making Scylla better!
 We appreciate your help and look forward to welcoming you to the Scylla Community.

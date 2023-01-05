@@ -1,6 +1,6 @@
 
-Create a Scylla Cluster - Multi Data Centers (DC)
-*************************************************
+Create a ScyllaDB Cluster - Multi Data Centers (DC)
+****************************************************
 
 .. _create-cluster-multi-config-table:
 

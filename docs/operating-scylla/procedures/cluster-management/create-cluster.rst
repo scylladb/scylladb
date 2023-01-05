@@ -1,5 +1,5 @@
-Create a Scylla Cluster - Single Data Center (DC)
-*************************************************
+Create a ScyllaDB Cluster - Single Data Center (DC)
+****************************************************
 
 -------------
 Prerequisites

@@ -1,5 +1,5 @@
-Scylla Developer Mode
-=====================
+ScyllaDB Developer Mode
+========================
 
 If you want to use Scylla in developer mode you need to use the command below (using root privileges)
 

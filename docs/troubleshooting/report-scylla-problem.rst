@@ -1,5 +1,5 @@
-How to Report a Scylla Problem
-==============================
+How to Report a ScyllaDB Problem
+==================================
 
 
 In the event there is an issue you would like to report to ScyllaDB support, you need to submit logs and other files which help the support team diagnose the issue. Only the ScyllaDB support team members can read the data you share. 

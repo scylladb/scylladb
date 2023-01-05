@@ -1,6 +1,6 @@
 
-Replace a Running Node in a Scylla Cluster 
-******************************************
+Replace a Running Node in a ScyllaDB Cluster 
+*********************************************
 
 There are two methods to replace a running node in a Scylla cluster.
 

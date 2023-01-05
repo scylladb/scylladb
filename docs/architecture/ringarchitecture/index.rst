@@ -1,5 +1,5 @@
-Scylla Ring Architecture - Overview
-===================================
+ScyllaDB Ring Architecture - Overview
+======================================
 
 Scylla is a database that scales out and up. Scylla adopted much of its distributed scale-out design from the Apache Cassandra project (which adopted distribution concepts from Amazon Dynamo and data modeling concepts from Google BigTable).
 

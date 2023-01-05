@@ -1,5 +1,5 @@
-Scylla SSTable Format
-=====================
+ScyllaDB SSTable Format
+========================
 
 .. toctree::
    :hidden:

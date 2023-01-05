@@ -1,5 +1,5 @@
-Remove a Data-Center from a Scylla Cluster
-******************************************
+Remove a Data-Center from a ScyllaDB Cluster
+*********************************************
 
 Before removing (decommission) the data-center from the cluster, it is essential to verify that the data-center that is about to be
 removed does not hold any unique data.

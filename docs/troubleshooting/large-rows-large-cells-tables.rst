@@ -1,5 +1,5 @@
-Scylla Large Rows and Large Cells Tables
-========================================
+ScyllaDB Large Rows and Large Cells Tables
+===========================================
 
 .. versionadded:: Scylla Open Source 3.1
 

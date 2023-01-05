@@ -1,5 +1,5 @@
-Scylla for Developers
-=====================
+ScyllaDB for Developers
+========================
 
 .. toctree::
    :maxdepth: 2

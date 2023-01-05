@@ -1,5 +1,5 @@
-A change in EPEL broke Scylla Python Script
-===========================================
+A change in EPEL broke ScyllaDB Python Script
+===============================================
 
 Phenomena
 ^^^^^^^^^

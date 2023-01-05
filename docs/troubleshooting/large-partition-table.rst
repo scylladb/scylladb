@@ -1,5 +1,5 @@
-Scylla Large Partitions Table
-=============================
+ScyllaDB Large Partitions Table
+================================
 
 .. versionadded:: 2.3
 

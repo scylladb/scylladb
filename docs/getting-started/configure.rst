@@ -1,5 +1,5 @@
-Configure Scylla
-================
+Configure ScyllaDB
+===================
 
 .. raw:: html
 

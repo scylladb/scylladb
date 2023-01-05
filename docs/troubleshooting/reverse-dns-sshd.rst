@@ -1,5 +1,5 @@
-Scylla Manager: connection to sshd server is slow or timing out
-===============================================================
+ScyllaDB Manager: connection to sshd server is slow or timing out
+===================================================================
 
 This troubleshooting guide describes what to do if you experience slow Scylla
 Manager behavior or when connections to Scylla nodes over SSH are timing out.

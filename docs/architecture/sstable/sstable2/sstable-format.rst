@@ -1,5 +1,5 @@
-SSTable format in Scylla
-========================
+SSTable format in ScyllaDB
+===========================
 
 
 Scylla supports the same SSTable format as Apache Cassandra 2.1.8, which means

@@ -26,8 +26,8 @@ Security
   :id: "getting-started"
   :class: my-panel
    
-  * :doc:`Scylla Security Checklist </operating-scylla/security/security-checklist/>`
-  * :doc:`Scylla Auditing Guide </operating-scylla/security/auditing/>`
+  * :doc:`ScyllaDB Security Checklist </operating-scylla/security/security-checklist/>`
+  * :doc:`ScyllaDB Auditing Guide </operating-scylla/security/auditing/>`
 
 .. panel-box::
   :title: Authentication and Authorization
