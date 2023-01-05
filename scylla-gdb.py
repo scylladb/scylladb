@@ -4285,7 +4285,7 @@ class scylla_generate_object_graph(gdb.Command):
     at. The generated graph is an image, which allows the visual inspection of the
     object graph.
 
-    The graph is generated with the help of `graphwiz`. The command
+    The graph is generated with the help of `graphviz`. The command
     generates `.dot` files which can be converted to images with the help of
     the `dot` utility. The command can do this if the output file is one of
     the supported image formats (e.g. `png`), otherwise only the `.dot` file
@@ -4398,7 +4398,7 @@ class scylla_generate_object_graph(gdb.Command):
                 help="Output file. Supported extensions are: dot, png, jpg, jpeg, svg and pdf."
                 " Regardless of the extension, a `.dot` file will always be generated."
                 " If the output is one of the graphic formats the command will convert the `.dot` file using the `dot` utility."
-                " In this case the dot utility from the graphwiz suite has to be installed on the machine."
+                " In this case the dot utility from the graphviz suite has to be installed on the machine."
                 " To manually convert the `.dot` file do: `dot -Tpng graph.dot -o graph.png`.")
         parser.add_argument("-d", "--max-depth", action="store", type=int, default=5,
                 help="Maximum depth to traverse the object graph. Set to -1 for unlimited depth. Default is 5.")
