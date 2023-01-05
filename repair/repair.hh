@@ -89,22 +89,12 @@ public:
     shared_ptr<abort_source> as;
     std::list<gms::inet_address> ignore_nodes;
 
-private:
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    sharded<abort_source> _sas;
-    future<> _abort_done = make_ready_future<>();
-
 public:
     node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept;
     node_ops_info(const node_ops_info&) = delete;
     node_ops_info(node_ops_info&&) = delete;
 
-    future<> start();
-    future<> stop() noexcept;
-
     void check_abort();
-
-    abort_source* local_abort_source();
 };
 
 // NOTE: repair_start() can be run on any node, but starts a node-global

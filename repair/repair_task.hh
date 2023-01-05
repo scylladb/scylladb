@@ -53,6 +53,10 @@ public:
         , _data_centers(std::move(data_centers))
         , _ignore_nodes(std::move(ignore_nodes))
     {}
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
 protected:
     future<> run() override;
 
@@ -63,14 +67,23 @@ class data_sync_repair_task_impl : public repair_task_impl {
 private:
     dht::token_range_vector _ranges;
     std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
-    shared_ptr<node_ops_info> _ops_info;
+    optimized_optional<abort_source::subscription> _abort_subscription;
 public:
     data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
         , _ranges(std::move(ranges))
         , _neighbors(std::move(neighbors))
-        , _ops_info(ops_info) 
-    {}
+    {
+        if (ops_info && ops_info->as) {
+            _abort_subscription = ops_info->as->subscribe([this] () noexcept {
+                (void)abort();
+            });
+        }
+    }
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable(!_abort_subscription);
+    }
 protected:
     future<> run() override;
 
@@ -78,8 +91,6 @@ protected:
 };
 
 class shard_repair_task_impl : public repair_task_impl {
-private:
-    std::exception_ptr _ex;
 public:
     repair_service& rs;
     seastar::sharded<replica::database>& db;
@@ -106,13 +117,11 @@ public:
     int ranges_index = 0;
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
-    optimized_optional<abort_source::subscription> _abort_subscription;
     bool _hints_batchlog_flushed = false;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             const sstring& keyspace,
-            std::exception_ptr ex,
             repair_service& repair,
             locator::effective_replication_map_ptr erm_,
             const dht::token_range_vector& ranges_,
@@ -122,15 +131,12 @@ public:
             const std::vector<sstring>& hosts_,
             const std::unordered_set<gms::inet_address>& ignore_nodes_,
             streaming::stream_reason reason_,
-            abort_source* as,
             bool hints_batchlog_flushed);
     virtual tasks::is_internal is_internal() const noexcept override {
         return tasks::is_internal::yes;
     }
     void check_failed_ranges();
-    void abort_repair_info() noexcept;
-    void check_in_abort();
-    void check_in_shutdown();
+    void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);

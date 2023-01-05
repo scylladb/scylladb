@@ -99,6 +99,7 @@ public:
             shared_promise<> _done;
             module_ptr _module;
             abort_source _as;
+            optimized_optional<abort_source::subscription> _shutdown_subscription;
         public:
             impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept;
             virtual ~impl() = default;
