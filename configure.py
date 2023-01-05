@@ -2015,7 +2015,8 @@ with open(buildfile, 'w') as f:
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
-                    flags = '-O1'
+                    flags = '-O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
+
                     if has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
                     f.write('  obj_cxxflags = %s\n' % flags)
