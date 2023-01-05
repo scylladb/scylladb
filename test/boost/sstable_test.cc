@@ -18,6 +18,7 @@
 #include "compaction/compaction_manager.hh"
 #include "sstables/key.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
@@ -752,6 +753,8 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
 
 SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         tmpdir tmp;
         auto file_path = (tmp.path() / "test").string();
         file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get0();
@@ -787,7 +790,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         auto make_is = [&] {
             f = open_file_dma(file_path, open_flags::ro).get0();
-            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts);
+            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts, semaphore.make_permit());
         };
 
         auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
