@@ -63,6 +63,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "utils/stall_free.hh"
 #include "utils/error_injection.hh"
 #include "locator/util.hh"
@@ -1117,7 +1118,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
             // OK to discard future since _async_gate is closed on stop()
             (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
               return restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
-                slogger.info("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
+                slogger.warn("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
               });
             });
         }
@@ -2927,25 +2928,28 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-        auto ops_uuid = node_ops_id::create_random_id();
-        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, nullptr, std::list<gms::inet_address>());
-        return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
-            return send_replication_notification(notify_endpoint);
-        });
-    }
-  return seastar::async([this, endpoint, notify_endpoint] {
-    auto tmptr = get_token_metadata_ptr();
-    abort_source as;
-    auto sub = _abort_source.subscribe([&as] () noexcept {
-        if (!as.abort_requested()) {
-            as.request_abort();
+    _abort_source.check();
+    // Allocate a shared abort_source for node_ops_info
+    auto sas = make_shared<abort_source>();
+    auto sub = _abort_source.subscribe([sas] () noexcept {
+        if (!sas->abort_requested()) {
+            sas->request_abort();
         }
     });
+    if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
+        auto ops_uuid = node_ops_id::create_random_id();
+        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, sas, std::list<gms::inet_address>());
+        auto f = co_await coroutine::as_future(_repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops));
+        co_await send_replication_notification(notify_endpoint);
+        co_return co_await std::move(f);
+    }
+
+    auto tmptr = get_token_metadata_ptr();
+    auto& as = *sas;
     auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
-    auto status_checker = seastar::async([this, endpoint, &as] {
-        slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
+    auto check_status_loop = [this, endpoint, &as] () -> future<> {
+        slogger.debug("restore_replica_count: Started status checker for removing node {}", endpoint);
         while (!as.abort_requested()) {
             auto status = _gossiper.get_gossip_status(endpoint);
             // If the node to be removed is already in removed status, it has
@@ -2958,40 +2962,46 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
                 if (!as.abort_requested()) {
                     as.request_abort();
                 }
-                return;
+                co_return;
             }
             slogger.debug("restore_replica_count: Sleep and detect removing node {}, status={}", endpoint, status);
-            sleep_abortable(std::chrono::seconds(10), as).get();
+            co_await sleep_abortable(std::chrono::seconds(10), as);
         }
-    });
-    auto stop_status_checker = defer([endpoint, &status_checker, &as] () mutable {
-        try {
-            slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-            status_checker.get();
-        } catch (const seastar::sleep_aborted& ignored) {
-            slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
-        } catch (...) {
-            slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
-                    endpoint, std::current_exception());
+    };
+    auto status_checker = check_status_loop();
+    std::exception_ptr ex;
+    try {
+        co_await streamer->stream_async();
+    } catch (...) {
+        ex = std::current_exception();
+        slogger.debug("Streaming to restore replica count failed: {}.", ex);
+        // We still want to send the notification
+    }
+    try {
+        co_await this->send_replication_notification(notify_endpoint);
+    } catch (...) {
+        auto ex2 = std::current_exception();
+        slogger.debug("Sending replication notification to {} failed: {}", notify_endpoint, ex2);
+        if (!ex) {
+            ex = std::move(ex2);
         }
-        slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
-    });
-
-    streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
-        try {
-            f.get();
-            return this->send_replication_notification(notify_endpoint);
-        } catch (...) {
-            slogger.warn("Streaming to restore replica count failed: {}", std::current_exception());
-            // We still want to send the notification
-            return this->send_replication_notification(notify_endpoint);
+    }
+    try {
+        slogger.debug("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
+        if (!as.abort_requested()) {
+            as.request_abort();
         }
-        return make_ready_future<>();
-    }).get();
-  });
+        co_await std::move(status_checker);
+    } catch (const seastar::sleep_aborted& ignored) {
+        slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
+    } catch (...) {
+        slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
+                endpoint, std::current_exception());
+    }
+    slogger.debug("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
