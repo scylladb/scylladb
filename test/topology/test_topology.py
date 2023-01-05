@@ -120,9 +120,6 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     # In this test it's more convenient to start with a fresh cluster.
     # We don't need the default nodes,
     # but there is currently no way to express this in the test infrastructure
-    servers = await manager.running_servers()
-    await manager.cql.run_async(f"DROP KEYSPACE {random_tables.keyspace}")
-    await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
 
     # When the node starts it tries to communicate with others
     # by sending group0_peer_exchange message to them.
@@ -138,17 +135,22 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     # on both nodes, then it's guaranteed that the message will be
     # processed on the same shard as the calling code.
     # In the general case, we cannot assume that this same shard guarantee holds.
+    logger.info(f'Adding --smp=3 server')
     await manager.server_add(cmdline=['--smp', '3'])
+
+    # Remove the original 3 servers, the problem is easier to reproduce with --smp values
+    # that we pick, not the (currently) default --smp=2 coming from the suite.
+    logger.info(f'Decommissioning old servers')
+    servers = await manager.running_servers()
+    for s in servers[:-1]:
+        await manager.decommission_node(s.server_id)
+
+    logger.info(f'Adding --smp=4 server')
     await manager.server_add(cmdline=['--smp', '4'])
+    logger.info(f'Adding --smp=5 server')
     await manager.server_add(cmdline=['--smp', '5'])
 
-    # reconnect the driver to ignore the stopped nodes
-    manager.driver_close()
-    await manager.driver_connect()
-
-    # we just started a new, fresh cluster, so we need to recreate a keyspace
-    await manager.cql.run_async(f"CREATE KEYSPACE {random_tables.keyspace} WITH REPLICATION = "
-                                "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    logger.info(f'Creating new tables')
     await random_tables.add_tables(ntables=4, ncolumns=5)
     await random_tables.verify_schema()
 
