@@ -47,6 +47,8 @@
 #include "checksum_utils.hh"
 #include "../compress.hh"
 
+class reader_permit;
+
 class compression_parameters;
 class compressor;
 using compressor_ptr = shared_ptr<compressor>;
@@ -371,11 +373,11 @@ compressor_ptr get_sstable_compressor(const compression&);
 // sstable alive, and the compression metadata is only a part of it.
 input_stream<char> make_compressed_file_k_l_format_input_stream(file f,
                 sstables::compression* cm, uint64_t offset, size_t len,
-                class file_input_stream_options options);
+                class file_input_stream_options options, reader_permit permit);
 
 input_stream<char> make_compressed_file_m_format_input_stream(file f,
                 sstables::compression* cm, uint64_t offset, size_t len,
-                class file_input_stream_options options);
+                class file_input_stream_options options, reader_permit permit);
 
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
