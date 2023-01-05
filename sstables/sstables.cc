@@ -2311,7 +2311,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
 
-    file f = make_tracked_file(_data_file, std::move(permit));
+    file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
         f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
     }
@@ -2320,10 +2320,10 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options));
+                pos, len, std::move(options), permit);
         } else {
             return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options));
+                pos, len, std::move(options), permit);
         }
     }
 
