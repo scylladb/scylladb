@@ -9,18 +9,25 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/file.hh>
 #include "reader_concurrency_semaphore.hh"
+#include "sstables/sstables_manager.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/cql_assertions.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/tmpdir.hh"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <boost/test/unit_test.hpp>
 #include "readers/empty_v2.hh"
+#include "readers/from_mutations_v2.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
+#include "db/config.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;
@@ -1075,4 +1082,493 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
     permit3_fut.get();
+}
+
+namespace {
+
+class allocating_reader {
+    static constexpr size_t admission_cost = 1024;
+    static constexpr size_t buf_size = 1024;
+    static constexpr size_t read_iterations = 4;
+public:
+    enum class state {
+        wait_for_admission,
+        request_memory,
+        wait_for_memory,
+        release_memory,
+        done,
+    };
+    const char* to_string(state s) {
+        switch (s) {
+            case state::wait_for_admission: return "state::wait_for_admission";
+            case state::request_memory: return "state::request_memory";
+            case state::wait_for_memory: return "state::wait_for_memory";
+            case state::release_memory: return "state::release_memory";
+            case state::done: return "state::done";
+        }
+    };
+private:
+    reader_concurrency_semaphore& _sem;
+    state _state = state::wait_for_admission;
+    std::optional<future<>> _admission_fut;
+    std::optional<reader_permit> _permit;
+    std::list<reader_permit::resource_units> _current_resource_units;
+    std::list<future<reader_permit::resource_units>> _pending_resource_units;
+    unsigned _read_count = 0;
+    bool _success = true;
+public:
+    explicit allocating_reader(reader_concurrency_semaphore& sem) : _sem(sem) {
+        testlog.debug("[{}] allocating_reader created", fmt::ptr(this));
+        _admission_fut = sem.obtain_permit(nullptr, "reader", admission_cost, db::no_timeout).then_wrapped([this] (future<reader_permit>&& permit_fut) {
+            try {
+                _permit = std::move(permit_fut.get());
+                _state = state::request_memory;
+            } catch (...) {
+                _state = state::done;
+                _success = false;
+            }
+        });
+    }
+    ~allocating_reader() { }
+    void operator()() {
+        testlog.debug("[{}|p:0x{:x}] allocating_reader(): _state={}, _permit.state={}, _permit.resources={}, _sem.resources={}",
+                fmt::ptr(this),
+                _permit ? _permit->id() : 0,
+                to_string(_state),
+                _permit ? format("{}", _permit->get_state()) : "N/A",
+                _permit ? _permit->consumed_resources() : reader_resources{},
+                _sem.consumed_resources());
+        switch (_state) {
+            case state::wait_for_admission:
+                break;
+            case state::request_memory:
+            {
+                size_t n = 0;
+                if (!_read_count) {
+                    n = 1;
+                } else {
+                    n = tests::random::get_int(1, 8);
+                }
+                ++_read_count;
+                try {
+                    for (size_t i = 0; i < n; ++i) {
+                        _pending_resource_units.emplace_back(_permit->request_memory(buf_size));
+                    }
+                } catch (std::bad_alloc&) {
+                    testlog.debug("[{}|p:{}] read killed", fmt::ptr(this), _permit ? _permit->id() : 0);
+                    _read_count = read_iterations;
+                }
+                _state = state::wait_for_memory;
+                break;
+            }
+            case state::wait_for_memory:
+                for (auto it = _pending_resource_units.begin(); it != _pending_resource_units.end();) {
+                    if (it->available()) {
+                        try {
+                            _current_resource_units.push_back(it->get());
+                        } catch (std::bad_alloc&) {
+                            testlog.debug("[{}|p:{}] read killed", fmt::ptr(this), _permit ? _permit->id() : 0);
+                            _read_count = read_iterations;
+                        }
+                        it = _pending_resource_units.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                if (_pending_resource_units.empty()) {
+                    _state = state::release_memory;
+                }
+                break;
+            case state::release_memory:
+                if (_current_resource_units.empty()) {
+                    if (_read_count == read_iterations) {
+                        _state = state::done;
+                    } else if (!tests::random::get_int(0, 7)) {
+                        _state = state::done;
+                    } else {
+                        _state = state::request_memory;
+                    }
+                } else {
+                    _current_resource_units.pop_front();
+                }
+                break;
+            case state::done:
+                _permit.reset();
+                break;
+        }
+    }
+    bool done() const { return _state == state::done; }
+    bool success() const { return _success; }
+    reader_resources resources() const { return _permit ? _permit->consumed_resources() : reader_resources{}; }
+    future<> close() {
+        if (_admission_fut) {
+            co_await std::move(_admission_fut).value();
+        }
+        co_await coroutine::parallel_for_each(_pending_resource_units.begin(), _pending_resource_units.end(), [this] (future<reader_permit::resource_units>& fut) {
+            return std::move(fut).then_wrapped([] (future<reader_permit::resource_units>&& fut) {
+                try {
+                    fut.get();
+                } catch (...) {
+                }
+            });
+        });
+        _current_resource_units.clear();
+        _permit.reset();
+    }
+};
+
+
+void dump_stats(const reader_concurrency_semaphore& semaphore, log_level lvl, bool with_diag = false) {
+    const auto& stats = semaphore.get_stats();
+    testlog.log(lvl, "stats = {{\n"
+        "\t.permit_based_evictions = {}\n"
+        "\t.time_based_evictions = {}\n"
+        "\t.inactive_reads = {}\n"
+        "\t.total_successful_reads = {}\n"
+        "\t.total_failed_reads = {}\n"
+        "\t.total_reads_shed_due_to_overload = {}\n"
+        "\t.total_reads_killed_due_to_kill_limit = {}\n"
+        "\t.reads_admitted = {}\n"
+        "\t.reads_enqueued_for_admission = {}\n"
+        "\t.reads_enqueued_for_memory = {}\n"
+        "\t.total_permits = {}\n"
+        "\t.current_permits = {}\n"
+        "\t.used_permits = {}\n"
+        "\t.blocked_permits = {}\n"
+        "}}{}",
+        stats.permit_based_evictions,
+        stats.time_based_evictions,
+        stats.inactive_reads,
+        stats.total_successful_reads,
+        stats.total_failed_reads,
+        stats.total_reads_shed_due_to_overload,
+        stats.total_reads_killed_due_to_kill_limit,
+        stats.reads_admitted,
+        stats.reads_enqueued_for_admission,
+        stats.reads_enqueued_for_memory,
+        stats.total_permits,
+        stats.current_permits,
+        stats.used_permits,
+        stats.blocked_permits,
+        with_diag ? format("\n{}", semaphore.dump_diagnostics()) : "");
+};
+
+} //anonymous namespace
+
+// Check that the memory consumption limiting mechanism doesn't leak any
+// resources or cause any internal consistencies in the semaphore.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{4, 4 * 1024};
+    const auto serialize_multiplier = 2;
+    const auto kill_multiplier = 3;
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+    auto stop_sem = deferred_stop(semaphore);
+
+    const size_t reader_count_target = 6;
+    const size_t iteration_limit = 100;
+
+    std::list<allocating_reader> readers;
+
+    size_t i = 0;
+    bool done = false;
+    sstring error = "";
+    while (!done) {
+        testlog.debug("iteration {}", i);
+
+        for (auto& rd : readers) {
+            rd();
+            reader_resources all_permit_res;
+            semaphore.foreach_permit([&all_permit_res] (const reader_permit& p) { all_permit_res += p.consumed_resources(); });
+            if (semaphore.consumed_resources() != all_permit_res) {
+                testlog.error("resource mismatch: semaphore.consumed_resources() ({}) != sum of resources in permits ({})", semaphore.consumed_resources(), all_permit_res);
+            }
+        }
+
+        if (readers.size() < reader_count_target) {
+            readers.emplace_back(semaphore);
+        }
+        done = std::all_of(readers.begin(), readers.end(), std::mem_fn(&allocating_reader::done));
+
+        dump_stats(semaphore, log_level::debug, true);
+
+        reader_resources all_permit_res;
+        semaphore.foreach_permit([&all_permit_res] (const reader_permit& p) { all_permit_res += p.consumed_resources(); });
+
+        if (semaphore.consumed_resources().memory >= (semaphore.initial_resources().memory * kill_multiplier)) {
+            error = format("kill limit failed: semaphore.consumed_resources() ({}) >= kill limit ({})", semaphore.consumed_resources().memory, (semaphore.initial_resources().memory * kill_multiplier));
+        } else if (semaphore.consumed_resources() != all_permit_res) {
+            error = format("resource mismatch: semaphore.consumed_resources() ({}) != sum of resources in permits ({})", semaphore.consumed_resources(), all_permit_res);
+        } else if (i >= iteration_limit) {
+            error = format("test failed to finish in {} iterations", iteration_limit);
+        }
+
+        if (error.empty()) {
+            ++i;
+        } else {
+            testlog.error("stopping test at iteration {}: {}", i, error);
+            done = true;
+        }
+
+        seastar::thread::yield();
+    }
+    dump_stats(semaphore, log_level::info, false);
+    parallel_for_each(readers.begin(), readers.end(), [] (allocating_reader& rd) {
+        return rd.close();
+    }).get();
+    if (!error.empty()) {
+        BOOST_FAIL(error);
+    }
+    const bool all_ok = std::all_of(readers.begin(), readers.end(), std::mem_fn(&allocating_reader::success));
+    BOOST_REQUIRE(all_ok);
+}
+
+struct memory_limit_table {
+    schema_ptr schema;
+    tmpdir sst_dir;
+    int32_t pk;
+    int32_t ck;
+    sstring value;
+};
+memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_num_sstables) {
+    auto& db = env.local_db();
+
+    sstring value(256 * 1024, '0');
+
+    env.execute_cql("CREATE TABLE ks.tbl (pk int, ck int, value text, primary key (pk, ck)) WITH compaction = {'class': 'NullCompactionStrategy'};").get();
+
+    env.require_table_exists("ks", "tbl").get();
+
+    auto& tbl = db.find_column_family("ks", "tbl");
+    auto s = tbl.schema();
+    auto& sst_man = tbl.get_sstables_manager();
+    auto& semaphore = db.get_reader_concurrency_semaphore();
+
+    int32_t pk = 0;
+    dht::decorated_key dk(dht::token(), partition_key::make_empty());
+    do {
+        dk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(++pk)));
+    } while (dht::shard_of(*s, dk.token()) != this_shard_id());
+
+    const int32_t ck = 0;
+
+    mutation mut(s, std::move(dk));
+    mut.set_clustered_cell(clustering_key::from_single_value(*s, serialized(ck)), to_bytes("value"), data_value(value), 0);
+
+    auto sstables_dir = tmpdir();
+
+    const auto sstable_write_concurrency = 16;
+
+    auto num_sstables = 0;
+    parallel_for_each(boost::irange(0, sstable_write_concurrency), [&] (int i) {
+        return seastar::async([&, i] {
+            while (num_sstables != target_num_sstables) {
+                ++num_sstables;
+                auto sst = sst_man.make_sstable(s, sstables_dir.path().string(), sstables::generation_type{num_sstables}, sst_man.get_highest_supported_format(), sstables::sstable_format_types::big);
+                auto writer_cfg = sst_man.configure_writer("test");
+                sst->write_components(
+                    make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s.get(), "test", db::no_timeout), mut, s->full_slice()),
+                    1,
+                    s,
+                    writer_cfg,
+                    encoding_stats{}).get();
+                sst->load().get();
+                tbl.add_sstable_and_update_cache(std::move(sst)).get();
+            }
+        });
+    }).get();
+
+    return {s, std::move(sstables_dir), pk, ck, std::move(value)};
+}
+
+constexpr uint64_t target_memory = uint64_t(1) << 28; // 256MB
+
+// Check that the memory consumption limiting mechanism of the semaphore does
+// prevent OOM crashes.
+// The test fails by OOM crashing.
+// This test should be run with 256MB of memory.
+SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
+    if (memory::stats().total_memory() != target_memory) {
+        std::cerr << "Test " << get_name() << " should be run with 256M of memory, make sure you invoke with -m256M" << std::endl;
+        return make_ready_future<>();
+    }
+
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+
+    // Disable the cache altogether, we want all reads to go to disk.
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+    db_cfg.reader_concurrency_semaphore_serialize_limit_multiplier.set(2, utils::config_file::config_source::CommandLine);
+    db_cfg.reader_concurrency_semaphore_kill_limit_multiplier.set(4, utils::config_file::config_source::CommandLine);
+
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto tbl = create_memory_limit_table(env, 256);
+
+        auto& db = env.local_db();
+        auto& semaphore = db.get_reader_concurrency_semaphore();
+
+        const auto num_reads = 128;
+
+        auto read_id = env.prepare("SELECT value FROM ks.tbl WHERE pk = ? AND ck = ?").get0();
+
+        parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
+            return env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).then_wrapped(
+                    [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
+                if (fut.failed()) {
+                    // We expect failed, OOM-killed reads here.
+                    // No way to verify why they failed so we swallow all failures.
+                    fut.ignore_ready_future();
+                    return;
+                }
+                assert_that(fut.get()).is_rows().with_rows_ignore_order({ {serialized(tbl.value)} });
+            });
+        }).get();
+        return make_ready_future<>();
+    }, std::move(db_cfg_ptr));
+}
+
+// Check that the memory consumption limiting mechanism of the semaphore does
+// prevent reads exhausting memory to the extent that they start to fail due to
+// bad alloc (but not necessarily crash the node).
+// Instead the limiting mechanism engages and kills reads before they get to that
+// point. From the outset, a read failing due to OOM and a read killed by the
+// limiting mechanism looks the same. To differentiate, the test checks that all
+// failures were caused by the limiting mechanism.
+// This test should be run with 256M memory.
+SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
+    if (memory::stats().total_memory() != target_memory) {
+        std::cerr << "Test " << get_name() << " should be run with 256M of memory, make sure you invoke with -m256M" << std::endl;
+        return make_ready_future<>();
+    }
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+
+    // Disable the cache altogether, we want all reads to go to disk.
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+    db_cfg.reader_concurrency_semaphore_serialize_limit_multiplier.set(2, utils::config_file::config_source::CommandLine);
+    db_cfg.reader_concurrency_semaphore_kill_limit_multiplier.set(4, utils::config_file::config_source::CommandLine);
+
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto tbl = create_memory_limit_table(env, 32);
+
+        auto& db = env.local_db();
+        auto& semaphore = db.get_reader_concurrency_semaphore();
+
+        const auto num_reads = 128;
+
+        auto read_id = env.prepare("SELECT value FROM ks.tbl WHERE pk = ? AND ck = ?").get0();
+
+        // We first check that the test params are not too strict and a single
+        // read can finish successfully.
+        try {
+            auto msg = env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).get();
+            assert_that(msg).is_rows().with_rows_ignore_order({ {serialized(tbl.value)} });
+        } catch (...) {
+            BOOST_FAIL(fmt::format("canary read failed with: {}", std::current_exception()));
+        }
+
+        uint64_t successful_reads = 0;
+        uint64_t failed_reads = 0;
+
+        parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
+            return env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).then_wrapped(
+                        [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
+                if (fut.failed()) {
+                    // We expect failed, OOM-killed reads here.
+                    // No way to verify why they failed so we swallow all failures.
+                    fut.ignore_ready_future();
+                    ++failed_reads;
+                    return;
+                }
+                assert_that(fut.get()).is_rows().with_rows_ignore_order({ {serialized(tbl.value)} });
+                ++successful_reads;
+            });
+        }).get();
+
+        testlog.info("total reads: {} ({} successful, {} failed)", num_reads, successful_reads, failed_reads);
+        dump_stats(semaphore, log_level::info, false);
+
+        // There should be both successful and failed reads.
+        // If there is only one or the other, the test is not testing anything.
+        // We also check that the memory limiting mechanism of the semaphore was engaged.
+        // The test is meaningless without it.
+        // In the slow debug builds we never reach the kill limit for some reason.
+#ifndef DEBUG
+        BOOST_REQUIRE_GE(failed_reads, 1);
+#endif
+        BOOST_REQUIRE_GE(successful_reads, 1);
+
+        // Almost each failed read should have been in the memory queue at one point.
+        BOOST_REQUIRE_GE(semaphore.get_stats().reads_enqueued_for_memory, semaphore.get_stats().total_reads_killed_due_to_kill_limit);
+
+        // All failures must be caused by the kill limit triggering.
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_killed_due_to_kill_limit, failed_reads);
+
+        return make_ready_future<>();
+    }, std::move(db_cfg_ptr));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preserves_state) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    const auto serialize_multiplier = 2;
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto sponge_permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+
+    uint64_t reads_enqueued_for_memory = 0;
+
+    auto do_check = [&] (reader_permit& permit, uint64_t used, uint64_t blocked, std::source_location sl) {
+        testlog.info("do_check() {}:{}", sl.file_name(), sl.line());
+
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+
+        auto units1 = permit.request_memory(1024).get();
+
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+
+        auto sponge_units = sponge_permit.request_memory(8 * 1024).get();
+
+        // sponge permit is now the blessed one
+
+        auto units2_fut = permit.request_memory(1024);
+        BOOST_REQUIRE(!units2_fut.available());
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, ++reads_enqueued_for_memory);
+
+        sponge_units.reset();
+        auto units2 = units2_fut.get();
+
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+    };
+
+    // unused
+    {
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        do_check(permit, 0, 0, std::source_location::current());
+    }
+
+    // used
+    {
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        reader_permit::used_guard ug{permit};
+        do_check(permit, 1, 0, std::source_location::current());
+    }
+
+    // blocked
+    {
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        reader_permit::used_guard ug{permit};
+        reader_permit::blocked_guard bg{permit};
+        do_check(permit, 1, 1, std::source_location::current());
+    }
 }
