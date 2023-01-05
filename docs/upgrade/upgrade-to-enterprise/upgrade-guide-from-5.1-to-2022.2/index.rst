@@ -16,5 +16,5 @@ Upgrade - ScyllaDB 5.1 to ScyllaDB Enterprise 2022.2
   :class: my-panel
 
 
-  * :doc:`Upgrade ScyllaDB from 5.1.x to 2022.2.y <upgrade-guide-from-5.1-to-2022.1-generic>`
+  * :doc:`Upgrade ScyllaDB from 5.1.x to 2022.2.y <upgrade-guide-from-5.1-to-2022.2-generic>`
   * :doc:`ScyllaDB Metrics Update - Scylla 5.1 to 2022.2 <metric-update-5.1-to-2022.2>`
