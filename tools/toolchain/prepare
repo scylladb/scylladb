@@ -22,7 +22,7 @@ if (( ! ok )); then
     exit 1
 fi
 
-archs=(amd64 arm64 s390x)
+archs=(amd64 arm64)
 
 # docker arch has a diffrent spelling than uname arch
 declare -A arch_unames=(
