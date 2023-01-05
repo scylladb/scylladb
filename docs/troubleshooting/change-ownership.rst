@@ -1,5 +1,5 @@
-Scylla Fails to Start Due to Wrong Ownership Problems
-=====================================================
+ScyllaDB Fails to Start Due to Wrong Ownership Problems
+========================================================
 
 In cases where a Scylla node fails to start because there is improper ownership, the following steps will help.
 

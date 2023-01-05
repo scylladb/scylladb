@@ -1,5 +1,5 @@
-Scylla Read Repair
-==================
+ScyllaDB Read Repair
+=====================
 
 Read repair serves as an anti-entropy mechanism during read path.
 

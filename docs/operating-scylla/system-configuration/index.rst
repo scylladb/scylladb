@@ -6,7 +6,7 @@ System Configuration
 
    System Configuration Guide </getting-started/system-configuration/>
    scylla.yaml </operating-scylla/admin>
-   Scylla Snitches </operating-scylla/system-configuration/snitch/>
+   ScyllaDB Snitches </operating-scylla/system-configuration/snitch/>
 
 
 
@@ -24,7 +24,7 @@ System Configuration
 
 * :doc:`scylla.yaml</operating-scylla/admin>`
 
-* :doc:`Scylla Snitches</operating-scylla/system-configuration/snitch/>`
+* :doc:`ScyllaDB Snitches</operating-scylla/system-configuration/snitch/>`
 
 
 

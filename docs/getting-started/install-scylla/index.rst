@@ -1,5 +1,5 @@
-Install Scylla
-==============
+Install ScyllaDB
+=================
 
 .. toctree::
    :maxdepth: 2
@@ -14,22 +14,22 @@ Install Scylla
    config-commands
 
 .. panel-box::
-  :title: Install Scylla
+  :title: Install ScyllaDB
   :id: "getting-started"
   :class: my-panel
 
   Keep your versions up-to-date. The two latest versions are supported. Also always install the latest patches for your version. 
 
-  * Download and install Scylla Server, Drivers and Tools in `Scylla Download Center <https://www.scylladb.com/download/#server/>`_
+  * Download and install ScyllaDB Server, Drivers and Tools in `Scylla Download Center <https://www.scylladb.com/download/#server/>`_
   * :doc:`ScyllaDB Web Installer for Linux <scylla-web-installer>`
-  * :doc:`Scylla Unified Installer (relocatable executable) <unified-installer>`
+  * :doc:`ScyllaDB Unified Installer (relocatable executable) <unified-installer>`
   * :doc:`Air-gapped Server Installation <air-gapped-install>`
   * :doc:`What is in each RPM </getting-started/install-scylla/rpm-info/>`
-  * :doc:`Create a Scylla Cluster - Single Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster/>`
-  * :doc:`Create a Scylla Cluster - Multi Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster-multidc/>`
-  * :doc:`Scylla Developer Mode </getting-started/install-scylla/dev-mod>`
-  * :doc:`Scylla Configuration Command Reference </getting-started/install-scylla/config-commands>`
-  * :doc:`Scylla Housekeeping and how to disable it <disable-housekeeping>`
+  * :doc:`Create a ScyllaDB Cluster - Single Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster/>`
+  * :doc:`Create a ScyllaDB Cluster - Multi Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster-multidc/>`
+  * :doc:`ScyllaDB Developer Mode </getting-started/install-scylla/dev-mod>`
+  * :doc:`ScyllaDB Configuration Command Reference </getting-started/install-scylla/config-commands>`
+  * :doc:`ScyllaDB Housekeeping and how to disable it <disable-housekeeping>`
 
 
   

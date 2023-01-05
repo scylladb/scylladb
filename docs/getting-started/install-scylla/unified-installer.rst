@@ -1,6 +1,6 @@
-=================================================
-Scylla Unified Installer (relocatable executable)
-=================================================
+====================================================
+ScyllaDB Unified Installer (relocatable executable)
+====================================================
 
 This document covers how to install, uninstall, and upgrade using the Scylla Unified Installer. The Unified Installer is recommended to be used when you do not have root privileges to the server.
 If you have root privileges, it is recommended to download the OS specific packages (RPMs and DEBs) and install them with the package manager (dnf and apt).

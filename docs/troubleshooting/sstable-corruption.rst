@@ -1,5 +1,5 @@
-Scylla Fails to Start - SSTable Corruption Problem
-==================================================
+ScyllaDB Fails to Start - SSTable Corruption Problem
+=====================================================
 
 This troubleshooting guide describes what to do when Scylla fails to start due to a corrupted SSTables.
 Corruption can be a result of a bug, disk issue or human error, for example deleting one of the SSTable files

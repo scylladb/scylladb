@@ -1,6 +1,6 @@
-=====================
-Scylla Auditing Guide
-=====================
+========================
+ScyllaDB Auditing Guide
+========================
 
 :label-tip:`ScyllaDB Enterprise`
 

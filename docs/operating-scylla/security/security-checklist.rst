@@ -1,5 +1,5 @@
-Scylla Security Checklist
-=========================
+ScyllaDB Security Checklist
+=============================
 The Scylla Security checklist is a list of security recommendations that should be implemented to protect your Scylla cluster.
 
 

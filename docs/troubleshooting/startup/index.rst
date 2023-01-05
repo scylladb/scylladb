@@ -1,5 +1,5 @@
-Scylla Startup
-==============
+ScyllaDB Startup
+=================
 
 .. toctree::
    :hidden:

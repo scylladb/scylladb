@@ -1,6 +1,6 @@
 
-Replace More Than One Dead Node In A Scylla Cluster
-***************************************************
+Replace More Than One Dead Node In A ScyllaDB Cluster
+******************************************************
 
 Scylla is a fault-tolerant system. A cluster can be available even when more than one node is down.
 

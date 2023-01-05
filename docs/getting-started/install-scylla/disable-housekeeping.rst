@@ -1,7 +1,7 @@
 
-=========================================
-Scylla Housekeeping and how to disable it
-=========================================
+============================================
+ScyllaDB Housekeeping and how to disable it
+============================================
 
 It is always recommended to run the latest version of Scylla Open Source or Scylla Enterprise. 
 The latest stable release version is always available from the `Download Center <https://www.scylladb.com/download/>`_.
@@ -13,7 +13,7 @@ To disable these service, update file ``/etc/scylla.d/housekeeping.cfg`` as foll
 
 See also:
 
-* `Scylla privacy <https://www.scylladb.com/privacy/>`_
+* `ScyllaDB privacy <https://www.scylladb.com/privacy/>`_
 * :doc:`Getting Started </getting-started/index>`
 
 

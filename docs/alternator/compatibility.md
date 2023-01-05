@@ -1,4 +1,4 @@
-# Scylla Alternator for DynamoDB users
+# ScyllaDB Alternator for DynamoDB users
 
 Scylla supports the DynamoDB API (this feature is codenamed "Alternator").
 Our goal is to support any application written for Amazon DynamoDB.

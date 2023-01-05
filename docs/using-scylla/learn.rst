@@ -1,6 +1,6 @@
-===================
-Learn To Use Scylla
-===================
+======================
+Learn To Use ScyllaDB
+======================
 
 .. toctree::
    :maxdepth: 2 

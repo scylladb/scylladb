@@ -1,7 +1,7 @@
 
-==============================
-Scylla in a Shared Environment
-==============================
+=================================
+ScyllaDB in a Shared Environment
+=================================
 
 Scylla is designed to utilize all of the resources on the machine. It
 runs on: disk and network bandwidth, RAM, and CPU. This allows you to

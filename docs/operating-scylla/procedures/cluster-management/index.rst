@@ -35,13 +35,13 @@ Cluster Management Procedures
   Procedures for Cluster and Datacenter Management
 
 
-  * :doc:`Create a Scylla Cluster - Single Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster/>`
+  * :doc:`Create a ScyllaDB Cluster - Single Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster/>`
 
-  * :doc:`Create a Scylla Cluster - Multi Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster-multidc/>`
+  * :doc:`Create a ScyllaDB Cluster - Multi Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster-multidc/>`
 
-  * :doc:`Create a Scylla Cluster on EC2 (Single or Multi Data Center)  </operating-scylla/procedures/cluster-management/ec2-dc/>`
+  * :doc:`Create a ScyllaDB Cluster on EC2 (Single or Multi Data Center)  </operating-scylla/procedures/cluster-management/ec2-dc/>`
 
-  * :doc:`Remove a Data-Center from a Scylla Cluster </operating-scylla/procedures/cluster-management/decommissioning-data-center/>`
+  * :doc:`Remove a Data-Center from a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/decommissioning-data-center/>`
 
   * :doc:`Remove a Seed Node from Seed List </operating-scylla/procedures/cluster-management/remove-seed/>`
 
@@ -58,25 +58,25 @@ Cluster Management Procedures
 
   Procedures for Node Management
 
-  * :doc:`Adding a New Node Into an Existing Scylla Cluster - Out Scale </operating-scylla/procedures/cluster-management/add-node-to-cluster/>`
+  * :doc:`Adding a New Node Into an Existing ScyllaDB Cluster - Out Scale </operating-scylla/procedures/cluster-management/add-node-to-cluster/>`
 
-  * :doc:`Adding a New Data-Center Into an Existing Scylla Cluster - Out Scale </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`
+  * :doc:`Adding a New Data-Center Into an Existing ScyllaDB Cluster - Out Scale </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc/>`
 
-  * :doc:`Remove a Node from a Scylla Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node/>`
+  * :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node/>`
 
-  * :doc:`Replace a Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node/>`
+  * :doc:`Replace a Dead Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-dead-node/>`
 
-  * :doc:`Replace More than One Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`
+  * :doc:`Replace More than One Dead Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-dead-node-or-more/>`
 
-  * :doc:`Replace a Seed Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-seed-node/>`
+  * :doc:`Replace a Seed Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-seed-node/>`
 
-  * :doc:`Replace a Running Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-running-node/>`
+  * :doc:`Replace a Running Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-running-node/>`
 
   * :doc:`Safely Remove a Joining Node </operating-scylla/procedures/cluster-management/safely-removing-joining-node>`
 
   * :doc:`What to do if a Node Starts Automatically </operating-scylla/procedures/cluster-management/clear-data/>`
 
-  * :doc:`Add a Decommissioned Node Back to a Scylla Cluster </operating-scylla/procedures/cluster-management/revoke-decommission/>`
+  * :doc:`Add a Decommissioned Node Back to a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/revoke-decommission/>`
 
   * :doc:`Cluster Membership Change Notes </operating-scylla/procedures/cluster-management/membership-changes/>`
 

@@ -1,5 +1,5 @@
-Replace a Dead Node in a Scylla Cluster 
-***************************************
+Replace a Dead Node in a ScyllaDB Cluster 
+******************************************
 
 Replace dead node operation will cause the other nodes in the cluster to stream data to the node that was replaced. This operation can take some time (depending on the data size and network bandwidth).
 

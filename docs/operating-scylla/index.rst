@@ -1,5 +1,5 @@
-Scylla for Administrators
-=========================
+ScyllaDB for Administrators
+============================
 
 .. toctree::
    :maxdepth: 2

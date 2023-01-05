@@ -1,6 +1,6 @@
-=========================
-Scylla Materialized Views
-=========================
+============================
+ScyllaDB Materialized Views
+============================
 
 Materialized Views is available as a production ready feature in Scylla Open Source 3.0. and Scylla Enterprise 2019.1. 
 

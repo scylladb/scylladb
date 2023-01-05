@@ -1,6 +1,6 @@
-====================================
-Scylla Migration Tools: An Overview
-====================================
+=======================================
+ScyllaDB Migration Tools: An Overview
+=======================================
 
 The following migration tools are available for migrating to Scylla from Compatible databases, like Apache Cassandra or other Scylla Clusters (Open Source or Enterprise):
 
