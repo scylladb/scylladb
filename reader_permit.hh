@@ -243,6 +243,11 @@ temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf,
             make_deleter(buf.release(), [units = permit.consume_memory(buf.size())] () mutable { units.reset(); }));
 }
 
+inline temporary_buffer<char> make_new_tracked_temporary_buffer(size_t size, reader_permit& permit) {
+    auto buf = temporary_buffer<char>(size);
+    return temporary_buffer<char>(buf.get_write(), buf.size(), make_object_deleter(buf.release(), permit.consume_memory(size)));
+}
+
 file make_tracked_file(file f, reader_permit p);
 
 template <typename T>
