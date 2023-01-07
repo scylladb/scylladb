@@ -42,6 +42,9 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
     if (!seastar::thread::running_in_thread()) {
         on_internal_error(log, "User function cannot be executed in this context");
     }
+    // Possibly yield between each function execution, to avoid reactor stalls
+    // when aggregating a large input.
+    seastar::thread::maybe_yield();
     for (auto& param : parameters) {
         if (!param && !_called_on_null_input) {
             return std::nullopt;
