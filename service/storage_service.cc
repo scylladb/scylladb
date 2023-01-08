@@ -2160,31 +2160,32 @@ future<> storage_service::decommission() {
 // Runs inside seastar::async context
 void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens) {
     auto uuid = node_ops_id::create_random_id();
+    auto tmptr = get_token_metadata_ptr();
+    const auto& topo = tmptr->get_topology();
+    auto local_node = topo.local_node();
     // TODO: Specify ignore_nodes
-    std::list<gms::inet_address> ignore_nodes;
-    std::list<gms::inet_address> sync_nodes;
+    locator::node_set ignore_nodes;
+    locator::node_set sync_nodes;
 
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
         sync_nodes.clear();
         // Step 1: Decide who needs to sync data for bootstrap operation
-        for (const auto& x :_gossiper.get_endpoint_states()) {
+        for (const auto& [ep, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
             seastar::thread::maybe_yield();
-            const auto& node = x.first;
-            slogger.info("bootstrap[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));
-            if (node != get_broadcast_address() &&
-                    _gossiper.is_normal_ring_member(node) &&
-                    std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
-                sync_nodes.push_back(node);
+            auto node = topo.find_node(host_id, locator::topology::must_exist::yes);
+            slogger.info("bootstrap[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node->endpoint()));
+            if (node != local_node && !ignore_nodes.contains(node)) {
+                sync_nodes.emplace(std::move(node));
             }
         }
-        sync_nodes.push_front(get_broadcast_address());
+        sync_nodes.emplace(local_node);
 
         // Step 2: Wait until no pending node operations
-        std::unordered_map<gms::inet_address, std::list<node_ops_id>> pending_ops;
+        std::unordered_map<locator::node_ptr, std::list<node_ops_id>> pending_ops;
         auto req = node_ops_cmd_request(node_ops_cmd::query_pending_ops, uuid);
-        parallel_for_each(sync_nodes, [this, req, uuid, &pending_ops] (const gms::inet_address& node) {
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
+        parallel_for_each(sync_nodes, [this, req, uuid, &pending_ops] (const locator::node_ptr& node) {
+            return _messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
                 if (!resp.pending_ops.empty()) {
                     pending_ops.emplace(node, resp.pending_ops);
@@ -2205,19 +2206,19 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         }
     }
 
-    std::unordered_set<gms::inet_address> nodes_unknown_verb;
-    std::unordered_set<gms::inet_address> nodes_down;
-    std::unordered_set<gms::inet_address> nodes_aborted;
+    locator::node_set nodes_unknown_verb;
+    locator::node_set nodes_down;
+    locator::node_set nodes_aborted;
     auto tokens = std::list<dht::token>(bootstrap_tokens.begin(), bootstrap_tokens.end());
-    std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes = {
-        {get_broadcast_address(), tokens},
+    std::unordered_map<locator::node_ptr, std::list<dht::token>> bootstrap_nodes = {
+        {local_node, tokens},
     };
-    auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_prepare, uuid, ignore_nodes, {}, {}, bootstrap_nodes);
+    auto req = node_ops_cmd_request::make_node_ops_cmd_request(node_ops_cmd::bootstrap_prepare, uuid, ignore_nodes, {}, {}, bootstrap_nodes);
     slogger.info("bootstrap[{}]: Started bootstrap operation, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, bootstrap_nodes, sync_nodes, ignore_nodes);
     try {
         // Step 3: Prepare to sync data
-        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const locator::node_ptr& node) {
+            return _messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got node_ops_cmd::bootstrap_prepare response from node={}", uuid, node);
             }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
                 slogger.warn("bootstrap[{}]: Node {} does not support node_ops_cmd verb", uuid, node);
@@ -2251,8 +2252,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 
         // Step 6: Finish
         req.cmd = node_ops_cmd::bootstrap_done;
-        parallel_for_each(sync_nodes, [this, &req, &nodes_aborted, uuid] (const gms::inet_address& node) {
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([&nodes_aborted, uuid, node] (node_ops_cmd_response resp) {
+        parallel_for_each(sync_nodes, [this, &req, &nodes_aborted, uuid] (const locator::node_ptr& node) {
+            return _messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([&nodes_aborted, uuid, node] (node_ops_cmd_response resp) {
                 nodes_aborted.emplace(node);
                 slogger.debug("bootstrap[{}]: Got done response from node={}", uuid, node);
                 return make_ready_future<>();
@@ -2263,12 +2264,12 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
                 uuid, bootstrap_nodes, sync_nodes, ignore_nodes, std::current_exception());
         // we need to revert the effect of prepare verb the bootstrap ops is failed
         req.cmd = node_ops_cmd::bootstrap_abort;
-        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) {
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const locator::node_ptr& node) {
             if (nodes_unknown_verb.contains(node) || nodes_down.contains(node) || nodes_aborted.contains(node)) {
                 // No need to revert previous prepare cmd for those who do not apply prepare cmd.
                 return make_ready_future<>();
             }
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+            return _messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got abort response from node={}", uuid, node);
             });
         }).get();
