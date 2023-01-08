@@ -457,6 +457,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.max_networking_aio_io_control_blocks = 50000;
+    // We need to have the entire app config to run the app, but we need to
+    // run the app to read the config file with UDF specific options so that
+    // we know whether we need to reserve additional memory for UDFs.
+    app_cfg.reserve_additional_memory = 50 * 1024 * 1024;
     app_template app(std::move(app_cfg));
 
     auto ext = std::make_shared<db::extensions>();
@@ -987,7 +991,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             std::any stop_udf_cache_handlers;
             if (udf_enabled) {
                 supervisor::notify("starting wasm udf cache");
-                wasm_instance_cache.start(128*1024*1024, std::chrono::seconds(5)).get();
+                size_t max_cache_size = dbcfg.available_memory * cfg->wasm_cache_memory_fraction();
+                wasm_instance_cache.start(max_cache_size, cfg->wasm_cache_instance_size_limit(), std::chrono::milliseconds(cfg->wasm_cache_timeout_in_ms())).get();
                 stop_udf_cache_handlers = defer_verbose_shutdown("udf cache", [] {
                     wasm_instance_cache.stop().get();
                 });

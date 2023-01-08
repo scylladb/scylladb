@@ -18,9 +18,5 @@ in {
     doCheck = false;
   };
 
-  # use the ancient version 0.29 of wasmtime because Scylla does not
-  # build with newer ones
-  wasmtime = final.callPackage ./pkg/upstreamable/wasmtime { };
-
   scylla-driver = final.callPackage ./pkg/upstreamable/python-driver { };
 }

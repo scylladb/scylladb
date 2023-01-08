@@ -393,6 +393,13 @@ public:
 
     named_value<bool> consistent_cluster_management;
 
+    named_value<double> wasm_cache_memory_fraction;
+    named_value<uint32_t> wasm_cache_timeout_in_ms;
+    named_value<size_t> wasm_cache_instance_size_limit;
+    named_value<uint64_t> wasm_udf_yield_fuel;
+    named_value<uint64_t> wasm_udf_total_fuel;
+    named_value<size_t> wasm_udf_memory_limit;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;

@@ -152,7 +152,6 @@ in derive ({
     systemd
     thrift
     valgrind
-    wasmtime
     xorg.libpciaccess
     xxHash
     zlib

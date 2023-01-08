@@ -1029,9 +1029,7 @@ def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (type (;0;) (func (param i32) (result i32)))
   (func ${mem_grow_name} (type 0) (param i32) (result i32)
     local.get 0
-    memory.grow
-    drop
-    local.get 0)
+    memory.grow)
   (memory (;0;) 2)
   (global (;0;) i32 (i32.const 1024))
   (export "memory" (memory 0))
@@ -1044,7 +1042,7 @@ def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (8, 8)")
         for i in range(512):
             cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 8")
-            # We grow the memory by 10 pages, each page is 64KiB, so in total we'll grow 512*8*64*1024=256MiB
+            # We grow the memory by 8 pages, each page is 64KiB, so in total we'll grow 512*8*64*1024=256MiB
             # The default memory limit is 128MiB, so assert we're staying under that anyway
             assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') <= 128*1024*1024)
 
@@ -1053,10 +1051,15 @@ def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
         time.sleep(10)
         assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') == 0)
 
-        cql.execute(f"INSERT INTO {table} (p, i) VALUES (100, 100)")
-        cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 100")
-        # A memory of 100+ pages is too big for the cache, so assert that it's not cached
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (30, 30)")
+        cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 30")
+        # A memory of 30+ pages is too big for the cache, so assert that it's not cached
         assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') == 0)
+
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (100, 100)")
+        # A memory of 100+ pages is too big for an instance in the cache, it is rejected
+        map_res = [row for row in cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 100")]
+        assert len(map_res) == 1 and map_res[0].result == -1
 
 # Test that all wasm instance entries are removed from the cache when the correlating UDF is dropped,
 # to avoid using excessive memory for unused UDFs.
