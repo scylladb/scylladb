@@ -2419,13 +2419,13 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto uuid = node_ops_id::create_random_id();
             auto tmptr = ss.get_token_metadata_ptr();
             const auto& topo = tmptr->get_topology();
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
+            auto leaving_node = topo.find_node(host_id);
             assert(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
             bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
 
-            if (!endpoint_opt && !is_group0_member) {
+            if (!leaving_node && !is_group0_member) {
                 throw std::runtime_error(format("removenode[{}]: Host ID {} not found in the cluster", uuid, host_id));
             }
 
@@ -2437,24 +2437,23 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             // endpoint_opt, while parts related to removing from group 0 are conditioned on
             // is_group0_member.
 
-            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
+            if (leaving_node && ss._gossiper.is_alive(leaving_node->endpoint())) {
                 const std::string message = format(
                     "removenode[{}]: Rejected removenode operation (node={}); "
                     "the node being removed is alive, maybe you should use decommission instead?",
-                    uuid, *endpoint_opt);
+                    uuid, leaving_node);
                 slogger.warn(std::string_view(message));
                 throw std::runtime_error(message);
             }
 
-            bool removed_from_token_ring = !endpoint_opt;
-            if (endpoint_opt) {
-                auto endpoint = *endpoint_opt;
-                auto tokens = tmptr->get_tokens(endpoint);
+            bool removed_from_token_ring = !leaving_node;
+            if (leaving_node) {
+                auto tokens = tmptr->get_tokens(leaving_node->endpoint());
 
-                std::list<gms::inet_address> ignore_nodes;
+                locator::node_set ignore_nodes;
                 for (auto& hoep : ignore_nodes_params) {
                     auto node = hoep.resolve(topo);
-                    ignore_nodes.push_back(node->endpoint());
+                    ignore_nodes.emplace(std::move(node));
                 }
 
                 // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
@@ -2476,22 +2475,23 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 // If the user want the removenode opeartion to succeed even if some of the nodes
                 // are not available, the user has to explicitly pass a list of
                 // node that can be skipped for the operation.
-                std::list<gms::inet_address> nodes;
-                for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+                locator::node_set nodes;
+                for (const auto& [ep, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
                     seastar::thread::maybe_yield();
-                    if (x.first != endpoint && std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
-                        nodes.push_back(x.first);
+                    auto node = topo.find_node(host_id, locator::topology::must_exist::yes);
+                    if (node != leaving_node && !ignore_nodes.contains(node)) {
+                        nodes.emplace(std::move(node));
                     }
                 }
-                slogger.info("removenode[{}]: Started token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                slogger.info("removenode[{}]: Started token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, leaving_node, nodes, ignore_nodes);
 
                 // Step 3: Prepare to sync data
-                std::unordered_set<gms::inet_address> nodes_unknown_verb;
-                std::unordered_set<gms::inet_address> nodes_down;
-                auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, {endpoint}, {}};
+                locator::node_set nodes_unknown_verb;
+                locator::node_set nodes_down;
+                auto req = node_ops_cmd_request::make_node_ops_cmd_request(node_ops_cmd::removenode_prepare, uuid, ignore_nodes, leaving_node);
                 try {
-                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
-                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const locator::node_ptr& node) {
+                        return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                             slogger.debug("removenode[{}]: Got prepare response from node={}", uuid, node);
                         }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
                             slogger.warn("removenode[{}]: Node {} does not support removenode verb", uuid, node);
@@ -2522,8 +2522,8 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
                     // Step 5: Start to sync data
                     req.cmd = node_ops_cmd::removenode_sync_data;
-                    parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    parallel_for_each(nodes, [&ss, &req, uuid] (const locator::node_ptr& node) {
+                        return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                             slogger.debug("removenode[{}]: Got sync_data response from node={}", uuid, node);
                             return make_ready_future<>();
                         });
@@ -2531,36 +2531,37 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
 
                     // Step 6: Announce the node has left
-                    ss._gossiper.advertise_token_removed(endpoint, host_id).get();
+                    // FIXME: use host_id
+                    ss._gossiper.advertise_token_removed(leaving_node->endpoint(), host_id).get();
                     std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-                    ss.excise(std::move(tmp), endpoint).get();
+                    ss.excise(std::move(tmp), leaving_node->endpoint()).get();
                     removed_from_token_ring = true;
 
                     // Step 7: Finish token movement
                     req.cmd = node_ops_cmd::removenode_done;
-                    parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    parallel_for_each(nodes, [&ss, &req, uuid] (const locator::node_ptr& node) {
+                        return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                             slogger.debug("removenode[{}]: Got done response from node={}", uuid, node);
                             return make_ready_future<>();
                         });
                     }).get();
 
-                    slogger.info("removenode[{}]: Finished token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                    slogger.info("removenode[{}]: Finished token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, leaving_node, nodes, ignore_nodes);
                 } catch (...) {
                     slogger.warn("removenode[{}]: removing node={}, sync_nodes={}, ignore_nodes={} failed, error {}",
-                                 uuid, endpoint, nodes, ignore_nodes, std::current_exception());
+                                 uuid, leaving_node, nodes, ignore_nodes, std::current_exception());
                     // we need to revert the effect of prepare verb the removenode ops is failed
                     req.cmd = node_ops_cmd::removenode_abort;
-                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const locator::node_ptr& node) {
                         if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
                             // No need to revert previous prepare cmd for those who do not apply prepare cmd.
                             return make_ready_future<>();
                         }
-                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                             slogger.debug("removenode[{}]: Got abort response from node={}", uuid, node);
                         });
                     }).get();
-                    slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                    slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, leaving_node, nodes, ignore_nodes);
                     throw;
                 }
             }
