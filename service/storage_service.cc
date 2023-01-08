@@ -19,6 +19,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
 #include <seastar/core/smp.hh>
+#include "locator/topology.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
@@ -1903,6 +1904,13 @@ future<> storage_service::do_stop_ms() {
     });
 }
 
+future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, locator::node_set nodes, lw_shared_ptr<bool> heartbeat_updater_done) {
+    // FIXME: until all callers are converted to pass std::unordered_set<node_ptr>
+    auto nodes_eps = boost::copy_range<std::list<gms::inet_address>>(nodes
+            | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
+    return node_ops_cmd_heartbeat_updater(cmd, uuid, std::move(nodes_eps), std::move(heartbeat_updater_done));
+}
+
 future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done) {
     std::string ops;
     if (cmd == node_ops_cmd::decommission_heartbeat) {
@@ -1943,8 +1951,10 @@ future<> storage_service::decommission() {
         return seastar::async([&ss] {
             auto uuid = node_ops_id::create_random_id();
             auto tmptr = ss.get_token_metadata_ptr();
+            const auto& topo = tmptr->get_topology();
             auto& db = ss._db.local();
-            auto endpoint = ss.get_broadcast_address();
+            auto leaving_node = topo.local_node();
+            auto endpoint = leaving_node->endpoint();
             if (!tmptr->is_normal_token_owner(endpoint)) {
                 throw std::runtime_error("local node is not a member of the token ring yet");
             }
@@ -1979,23 +1989,23 @@ future<> storage_service::decommission() {
             }
 
             slogger.info("DECOMMISSIONING: starts");
-            auto leaving_nodes = std::list<gms::inet_address>{endpoint};
             // TODO: wire ignore_nodes provided by user
-            std::list<gms::inet_address> ignore_nodes;
+            locator::node_set ignore_nodes;
 
             // Step 1: Decide who needs to sync data
-            std::list<gms::inet_address> nodes;
-            for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+            locator::node_set nodes;
+            for (const auto& [ep, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
                 seastar::thread::maybe_yield();
-                if (std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
-                    nodes.push_back(x.first);
+                auto node = topo.find_node(host_id, locator::topology::must_exist::yes);
+                if (node != leaving_node && !ignore_nodes.contains(node)) {
+                    nodes.emplace(std::move(node));
                 }
             }
-            slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+            slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, leaving_node, nodes, ignore_nodes);
 
-            std::unordered_set<gms::inet_address> gossip_nodes_down;
+            locator::node_set gossip_nodes_down;
             for (auto& node : nodes) {
-                if (!ss._gossiper.is_alive(node)) {
+                if (!ss._gossiper.is_alive(node->endpoint())) {
                     gossip_nodes_down.emplace(node);
                 }
             }
@@ -2011,12 +2021,12 @@ future<> storage_service::decommission() {
             bool left_token_ring = false;
 
             // Step 2: Prepare to sync data
-            std::unordered_set<gms::inet_address> nodes_unknown_verb;
-            std::unordered_set<gms::inet_address> nodes_down;
-            auto req = node_ops_cmd_request{node_ops_cmd::decommission_prepare, uuid, ignore_nodes, leaving_nodes, {}};
+            locator::node_set nodes_unknown_verb;
+            locator::node_set nodes_down;
+            auto req = node_ops_cmd_request::make_node_ops_cmd_request(node_ops_cmd::decommission_prepare, uuid, ignore_nodes, leaving_node);
             try {
-                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const locator::node_ptr& node) {
+                    return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                         slogger.debug("decommission[{}]: Got prepare response from node={}", uuid, node);
                     }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
                         slogger.warn("decommission[{}]: Node {} does not support decommission verb", uuid, node);
@@ -2068,8 +2078,8 @@ future<> storage_service::decommission() {
 
                 // Step 7: Finish token movement
                 req.cmd = node_ops_cmd::decommission_done;
-                parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(nodes, [&ss, &req, uuid] (const locator::node_ptr& node) {
+                    return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                         slogger.debug("decommission[{}]: Got done response from node={}", uuid, node);
                         return make_ready_future<>();
                     });
@@ -2079,12 +2089,12 @@ future<> storage_service::decommission() {
                 slogger.warn("decommission[{}]: Abort decommission operation started, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 // we need to revert the effect of prepare verb the decommission ops is failed
                 req.cmd = node_ops_cmd::decommission_abort;
-                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const locator::node_ptr& node) {
                     if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
                         // No need to revert previous prepare cmd for those who do not apply prepare cmd.
                         return make_ready_future<>();
                     }
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    return ss._messaging.local().send_node_ops_cmd(node->msg_addr(), req).then([uuid, node] (node_ops_cmd_response resp) {
                         slogger.debug("decommission[{}]: Got abort response from node={}", uuid, node);
                     });
                 }).get();
