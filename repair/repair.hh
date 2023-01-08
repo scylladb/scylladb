@@ -290,6 +290,15 @@ struct node_ops_cmd_request {
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
+
+    node_ops_cmd_request(node_ops_cmd command,
+            node_ops_id uuid,
+            std::list<table_id> tables)
+        : cmd(command)
+        , ops_uuid(std::move(uuid))
+        , repair_tables(std::move(tables)) {
+    }
+
     node_ops_cmd_request(node_ops_cmd command,
             node_ops_id uuid,
             std::list<gms::inet_address> ignore = {},
@@ -305,6 +314,14 @@ struct node_ops_cmd_request {
         , bootstrap_nodes(std::move(bootstrap))
         , repair_tables(std::move(tables)) {
     }
+
+    static node_ops_cmd_request make_node_ops_cmd_request(node_ops_cmd cmd,
+            node_ops_id uuid,
+            locator::node_set ignore_nodes = {},
+            locator::node_ptr leaving_node = nullptr,
+            std::unordered_map<locator::node_ptr, locator::node_ptr> replace_nodes = {},
+            std::unordered_map<locator::node_ptr, std::list<dht::token>> bootstrap_nodes = {},
+            std::list<table_id> tables = {});
 };
 
 struct node_ops_cmd_response {

@@ -20,6 +20,7 @@
 
 #include "locator/types.hh"
 #include "inet_address_vectors.hh"
+#include "message/msg_addr.hh"
 
 using namespace seastar;
 
