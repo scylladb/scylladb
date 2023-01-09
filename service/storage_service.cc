@@ -628,9 +628,9 @@ future<> storage_service::mark_existing_views_as_built(sharded<db::system_distri
     });
 }
 
-std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(const token_metadata& tm) {
+locator::node_set storage_service::get_ignore_dead_nodes_for_replace(const token_metadata& tm) {
     std::vector<sstring> ignore_nodes_strs;
-    std::list<gms::inet_address> ignore_nodes;
+    locator::node_set ignore_nodes;
     boost::split(ignore_nodes_strs, _db.local().get_config().ignore_dead_nodes_for_replace(), boost::is_any_of(","));
     for (std::string n : ignore_nodes_strs) {
         try {
@@ -639,7 +639,7 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
             boost::trim_all(n);
             if (!n.empty()) {
                 auto node = tm.parse_host_id_and_endpoint(n);
-                ignore_nodes.push_back(node->endpoint());
+                ignore_nodes.emplace(std::move(node));
             }
         } catch (...) {
             throw std::runtime_error(format("Failed to parse --ignore-dead-nodes-for-replace parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
@@ -2284,7 +2284,10 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     gms::inet_address replace_address = replace_info.address;
     auto uuid = node_ops_id::create_random_id();
     auto tmptr = get_token_metadata_ptr();
-    std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace(*tmptr);
+    std::list<gms::inet_address> ignore_nodes;
+    for (const auto& node : get_ignore_dead_nodes_for_replace(*tmptr)) {
+        ignore_nodes.push_back(node->endpoint());
+    }
     // Step 1: Decide who needs to sync data for replace operation
     std::list<gms::inet_address> sync_nodes;
     for (const auto& x :_gossiper.get_endpoint_states()) {
