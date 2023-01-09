@@ -39,16 +39,23 @@ class Pool(Generic[T]):
             else:
                 await pool.put(server)
     """
-    def __init__(self, max_size: int, build: Callable[[], Awaitable[T]]):
+    def __init__(self, max_size: int, build: Callable[..., Awaitable[T]]):
         assert(max_size >= 0)
         self.max_size: Final[int] = max_size
-        self.build: Final[Callable[[], Awaitable[T]]] = build
+        self.build: Final[Callable[..., Awaitable[T]]] = build
         self.cond: Final[asyncio.Condition] = asyncio.Condition()
         self.pool: list[T] = []
         self.total: int = 0 # len(self.pool) + leased objects
 
-    async def get(self) -> T:
-        """Borrow an object from the pool."""
+    async def get(self, *args, **kwargs) -> T:
+        """Borrow an object from the pool.
+
+           If a new object must be built first, *args and **kwargs
+           will be passed to the build function and the object built
+           in this way will be returned. However, remember that there
+           is no guarantee whether a new object will be built
+           or an existing one will be borrowed.
+        """
         async with self.cond:
             await self.cond.wait_for(lambda: self.pool or self.total < self.max_size)
             if self.pool:
@@ -58,7 +65,7 @@ class Pool(Generic[T]):
             self.total += 1
 
         try:
-            obj = await self.build()
+            obj = await self.build(*args, **kwargs)
         except:
             async with self.cond:
                 self.total -= 1
@@ -80,13 +87,13 @@ class Pool(Generic[T]):
             self.pool.append(obj)
             self.cond.notify()
 
-    def instance(self) -> AsyncContextManager[T]:
+    def instance(self, *args, **kwargs) -> AsyncContextManager[T]:
         class Instance:
             def __init__(self, pool):
                 self.pool = pool
 
             async def __aenter__(self):
-                self.obj = await self.pool.get()
+                self.obj = await self.pool.get(*args, **kwargs)
                 return self.obj
 
             async def __aexit__(self, exc_type, exc, obj):
