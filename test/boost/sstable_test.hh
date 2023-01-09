@@ -50,10 +50,6 @@ public:
         return generation_value(cf.calculate_generation_for_new_table());
     }
 
-    static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
-        return replica::column_family::calculate_shard_from_sstable_generation(generation_from_value(generation));
-    }
-
     auto try_flush_memtable_to_sstable(lw_shared_ptr<replica::memtable> mt) {
         auto cg = _cf->single_compaction_group_if_available();
         assert(cg);
