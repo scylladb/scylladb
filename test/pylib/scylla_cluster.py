@@ -546,6 +546,14 @@ class ScyllaCluster:
         await asyncio.gather(*(self.host_registry.release_host(Host(ip))
                                for ip in self.leased_ips))
 
+    async def release_ips(self) -> None:
+        """Release all IPs leased from the host registry by this cluster.
+        Call this function only if the cluster is stopped and will not be started again."""
+        assert not self.running
+        while self.leased_ips:
+            ip = self.leased_ips.pop()
+            await self.host_registry.release_host(Host(ip))
+
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
         if self.is_running:
@@ -798,6 +806,7 @@ class ScyllaClusterManager:
         if self.cluster.is_dirty:
             await self.clusters.steal()
             await self.cluster.stop()
+            await self.cluster.release_ips()
             await self._get_cluster()
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
