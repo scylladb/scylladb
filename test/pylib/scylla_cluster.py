@@ -534,6 +534,7 @@ class ScyllaCluster:
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
+        self.logger.info("Created new cluster %s", self.name)
 
     async def install_and_start(self) -> None:
         """Setup initial servers and start them.
@@ -613,7 +614,9 @@ class ScyllaCluster:
         if replace_cfg and replace_cfg.reuse_ip_addr:
             ip_addr = replaced_srv.ip_addr
         else:
+            self.logger.info("Cluster %s waiting for new IP...", self.name)
             ip_addr = IPAddress(await self.host_registry.lease_host())
+            self.logger.info("Cluster %s obtained new IP: %s", self.name, ip_addr)
             self.leased_ips.add(ip_addr)
 
         seeds = self._seeds()
@@ -829,12 +832,15 @@ class ScyllaClusterManager:
         self.is_running = True
 
     async def _before_test(self, test_case_name: str) -> str:
+        self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
+        self.logger.info("Setting up %s", self.current_test_case_full_name)
         if self.cluster.is_dirty:
+            self.logger.info(f"Current cluster %s is dirty after last test, stopping...", self.cluster.name)
             await self.clusters.steal()
             await self.cluster.stop()
             await self.cluster.release_ips()
+            self.logger.info(f"Waiting for new cluster for test %s...", self.current_test_case_full_name)
             await self._get_cluster()
-        self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
