@@ -1811,32 +1811,31 @@ cql3::raw_value evaluate(const expression& e, const query_options& options) {
 // Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
 template <FragmentedView View>
 static managed_bytes reserialize_value(View value_bytes,
-                                       const abstract_type& type,
-                                       const cql_serialization_format& sf) {
+                                       const abstract_type& type) {
     if (type.is_list()) {
-        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes);
 
         const abstract_type& element_type = dynamic_cast<const list_type_impl&>(type).get_elements_type()->without_reversed();
-        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+        if (element_type.bound_value_needs_to_be_reserialized()) {
             for (managed_bytes& element : elements) {
-                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+                element = reserialize_value(managed_bytes_view(element), element_type);
             }
         }
 
         return collection_type_impl::pack_fragmented(
             elements.begin(),
             elements.end(),
-            elements.size(), cql_serialization_format::internal()
+            elements.size()
         );
     }
 
     if (type.is_set()) {
-        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes);
 
         const abstract_type& element_type = dynamic_cast<const set_type_impl&>(type).get_elements_type()->without_reversed();
-        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+        if (element_type.bound_value_needs_to_be_reserialized()) {
             for (managed_bytes& element : elements) {
-                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+                element = reserialize_value(managed_bytes_view(element), element_type);
             }
         }
 
@@ -1848,26 +1847,26 @@ static managed_bytes reserialize_value(View value_bytes,
         return collection_type_impl::pack_fragmented(
             values_set.begin(),
             values_set.end(),
-            values_set.size(), cql_serialization_format::internal()
+            values_set.size()
         );
     }
 
     if (type.is_map()) {
-        std::vector<std::pair<managed_bytes, managed_bytes>> elements = partially_deserialize_map(value_bytes, sf);
+        std::vector<std::pair<managed_bytes, managed_bytes>> elements = partially_deserialize_map(value_bytes);
 
         const map_type_impl mapt = dynamic_cast<const map_type_impl&>(type);
         const abstract_type& key_type = mapt.get_keys_type()->without_reversed();
         const abstract_type& value_type = mapt.get_values_type()->without_reversed();
 
-        if (key_type.bound_value_needs_to_be_reserialized(sf)) {
+        if (key_type.bound_value_needs_to_be_reserialized()) {
             for (std::pair<managed_bytes, managed_bytes>& element : elements) {
-                element.first = reserialize_value(managed_bytes_view(element.first), key_type, sf);
+                element.first = reserialize_value(managed_bytes_view(element.first), key_type);
             }
         }
 
-        if (value_type.bound_value_needs_to_be_reserialized(sf)) {
+        if (value_type.bound_value_needs_to_be_reserialized()) {
             for (std::pair<managed_bytes, managed_bytes>& element : elements) {
-                element.second = reserialize_value(managed_bytes_view(element.second), value_type, sf);
+                element.second = reserialize_value(managed_bytes_view(element.second), value_type);
             }
         }
 
@@ -1885,8 +1884,8 @@ static managed_bytes reserialize_value(View value_bytes,
 
         for (std::size_t i = 0; i < elements.size(); i++) {
             const abstract_type& element_type = ttype.all_types().at(i)->without_reversed();
-            if (elements[i].has_value() && element_type.bound_value_needs_to_be_reserialized(sf)) {
-                elements[i] = reserialize_value(managed_bytes_view(*elements[i]), element_type, sf);
+            if (elements[i].has_value() && element_type.bound_value_needs_to_be_reserialized()) {
+                elements[i] = reserialize_value(managed_bytes_view(*elements[i]), element_type);
             }
         }
 
@@ -1915,15 +1914,15 @@ static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_
 
     const abstract_type& value_type = bind_var.receiver->type->without_reversed();
     try {
-        value.validate(value_type, inputs.options->get_cql_serialization_format());
+        value.validate(value_type);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
                                                            bind_var.receiver->name->to_cql_string(), e.what()));
     }
 
-    if (value_type.bound_value_needs_to_be_reserialized(inputs.options->get_cql_serialization_format())) {
+    if (value_type.bound_value_needs_to_be_reserialized()) {
         managed_bytes new_value = value.with_value([&] (const FragmentedView auto& value_bytes) {
-            return reserialize_value(value_bytes, value_type, inputs.options->get_cql_serialization_format());
+            return reserialize_value(value_bytes, value_type);
         });
 
         return raw_value::make_value(std::move(new_value));
@@ -1975,8 +1974,7 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
     return collection_type_impl::pack_fragmented(
         elements.begin(),
         elements.end(),
-        elements.size(),
-        cql_serialization_format::internal()
+        elements.size()
     );
 }
 
@@ -2175,7 +2173,7 @@ static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_
         }
     }
 
-    bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
+    bytes_opt result = scalar_fun->execute(arguments);
 
     if (has_cache_id) {
         inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);
@@ -2186,7 +2184,7 @@ static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_
     }
 
     try {
-        scalar_fun->return_type()->validate(*result, cql_serialization_format::internal());
+        scalar_fun->return_type()->validate(*result);
     } catch (marshal_exception&) {
         throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
                                        *scalar_fun, to_hex(result),
@@ -2212,7 +2210,7 @@ utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value& va
     ensure_can_get_value_elements(val, "expr::get_list_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
-        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+        return partially_deserialize_listlike(value_bytes);
     });
 }
 
@@ -2220,7 +2218,7 @@ utils::chunked_vector<managed_bytes> get_set_elements(const cql3::raw_value& val
     ensure_can_get_value_elements(val, "expr::get_set_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
-        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+        return partially_deserialize_listlike(value_bytes);
     });
 }
 
@@ -2228,7 +2226,7 @@ std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cql3
     ensure_can_get_value_elements(val, "expr::get_map_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
-        return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
+        return partially_deserialize_map(value_bytes);
     });
 }
 

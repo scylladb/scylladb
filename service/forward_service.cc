@@ -14,7 +14,6 @@
 #include <seastar/core/smp.hh>
 #include <stdexcept>
 
-#include "cql_serialization_format.hh"
 #include "db/consistency_level.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
@@ -114,7 +113,7 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
         _aggrs[i]->set_accumulator(result.query_results[i]);
-        _aggrs[i]->reduce(cql_serialization_format::internal(), std::move(other.query_results[i]));
+        _aggrs[i]->reduce(std::move(other.query_results[i]));
         result.query_results[i] = _aggrs[i]->get_accumulator();
     }
 }
@@ -132,7 +131,7 @@ void forward_aggregates::finalize(query::forward_result &result) {
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
         _aggrs[i]->set_accumulator(result.query_results[i]);
-        result.query_results[i] = _aggrs[i]->compute(cql_serialization_format::internal());
+        result.query_results[i] = _aggrs[i]->compute();
     }
 }
 
@@ -398,14 +397,12 @@ future<query::forward_result> forward_service::execute_on_this_shard(
         std::optional<std::vector<sstring_view>>(), // Represents empty names.
         std::vector<cql3::raw_value>(), // Represents empty values.
         true, // Skip metadata.
-        cql3::query_options::specific_options::DEFAULT,
-        cql_serialization_format::latest()
+        cql3::query_options::specific_options::DEFAULT
     );
 
     auto rs_builder = cql3::selection::result_set_builder(
         *selection,
         now,
-        cql_serialization_format::latest(),
         std::vector<size_t>() // Represents empty GROUP BY indices.
     );
 

@@ -266,11 +266,7 @@ cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_co
 
 unsigned
 cql_server::connection::frame_size() const {
-    if (_version < 3) {
-        return 8;
-    } else {
-        return 9;
-    }
+    return 9;
 }
 
 cql_binary_frame_v3
@@ -280,17 +276,6 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
     }
     cql_binary_frame_v3 v3;
     switch (_version) {
-    case 1:
-    case 2: {
-        cql_binary_frame_v1 raw = read_unaligned<cql_binary_frame_v1>(buf.get());
-        auto cooked = net::ntoh(raw);
-        v3.version = cooked.version;
-        v3.flags = cooked.flags;
-        v3.opcode = cooked.opcode;
-        v3.stream = cooked.stream;
-        v3.length = cooked.length;
-        break;
-    }
     case 3:
     case 4: {
         cql_binary_frame_v3 raw = read_unaligned<cql_binary_frame_v3>(buf.get());
@@ -318,8 +303,7 @@ cql_server::connection::read_frame() {
                 return make_ready_future<ret_type>();
             }
             _version = buf[0];
-            init_cql_serialization_format();
-            if (_version < 1 || _version > current_version) {
+            if (_version < 3 || _version > current_version) {
                 auto client_version = _version;
                 _version = current_version;
                 throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
@@ -845,11 +829,6 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_op
     return make_ready_future<std::unique_ptr<cql_server::response>>(make_supported(stream, std::move(trace_state)));
 }
 
-void
-cql_server::connection::init_cql_serialization_format() {
-    _cql_serialization_format = cql_serialization_format(_version);
-}
-
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
         cql_protocol_version_type version, bool skip_metadata = false);
@@ -869,7 +848,7 @@ cql_server::connection::process_on_shard(::shared_ptr<messages::result_message::
                     service::client_state& client_state,
                     cql3::computed_function_values& cached_vals) mutable {
             request_reader in(is, linearization_buffer);
-            return process_fn(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
+            return process_fn(client_state, server._query_processor, in, stream, _version,
                     /* FIXME */empty_service_permit(), std::move(trace_state), false, std::move(cached_vals)).then([] (auto msg) {
                 // result here has to be foreign ptr
                 return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
@@ -893,7 +872,7 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     fragmented_temporary_buffer::istream is = in.get_stream();
 
     return process_fn(client_state, _server._query_processor, in, stream,
-            _version, _cql_serialization_format, permit, trace_state, true, {})
+            _version, permit, trace_state, true, {})
             .then([stream, &client_state, this, is, permit, process_fn, trace_state]
                    (process_fn_return_type msg) mutable {
         auto* bounce_msg = std::get_if<shared_ptr<messages::result_message::bounce_to_shard>>(&msg);
@@ -907,12 +886,12 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
 
 static future<process_fn_return_type>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
-        uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
+        uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     auto query = in.read_long_string_view();
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
-    q_state->options = in.read_options(version, serialization_format, qp.local().get_cql_config());
+    q_state->options = in.read_options(version, qp.local().get_cql_config());
     auto& options = *q_state->options;
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
@@ -979,7 +958,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 
 static future<process_fn_return_type>
 process_execute_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
-        uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
+        uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
@@ -1004,9 +983,9 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         in.read_value_view_list(version, values);
         auto consistency = in.read_consistency();
         q_state->options = std::make_unique<cql3::query_options>(qp.local().get_cql_config(), consistency, std::nullopt, values, false,
-                                                                 cql3::query_options::specific_options::DEFAULT, serialization_format);
+                                                                 cql3::query_options::specific_options::DEFAULT);
     } else {
-        q_state->options = in.read_options(version, serialization_format, qp.local().get_cql_config());
+        q_state->options = in.read_options(version, qp.local().get_cql_config());
     }
     auto& options = *q_state->options;
     if (!cached_pk_fn_calls.empty()) {
@@ -1063,7 +1042,7 @@ future<cql_server::result_with_foreign_response_ptr> cql_server::connection::pro
 
 static future<process_fn_return_type>
 process_batch_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
-        uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
+        uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     if (version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -1152,7 +1131,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version < 3 ? 1 : version, serialization_format,
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version < 3 ? 1 : version,
                                                                      qp.local().get_cql_config())), std::move(values)));
     auto& options = *q_state->options;
     if (!cached_pk_fn_calls.empty()) {

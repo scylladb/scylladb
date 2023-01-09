@@ -142,7 +142,7 @@ void validate_handler(type_variant type, std::vector<bytes> values, const bpo::v
         bytes_view value;
 
         void operator()(const data_type& type) {
-            type->validate(value, cql_serialization_format::internal());
+            type->validate(value);
         }
         void operator()(const compound_type<allow_prefixes::yes>& type) {
             type.validate(value);

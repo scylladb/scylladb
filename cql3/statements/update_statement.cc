@@ -51,7 +51,7 @@ static std::unordered_map<sstring, rjson::value> handle_case_sensitivity(rjson::
 }
 
 std::unordered_map<sstring, bytes_opt>
-parse(const sstring& json_string, const std::vector<column_definition>& expected_receivers, cql_serialization_format sf) {
+parse(const sstring& json_string, const std::vector<column_definition>& expected_receivers) {
     std::unordered_map<sstring, bytes_opt> json_map;
     auto prepared_map = handle_case_sensitivity(rjson::parse(json_string));
     for (const auto& def : expected_receivers) {
@@ -63,7 +63,7 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
             json_map.emplace(std::move(cql_name), bytes_opt{});
             prepared_map.erase(value_it);
         } else {
-            json_map.emplace(std::move(cql_name), from_json_object(*def.type, std::move(value_it->second), sf));
+            json_map.emplace(std::move(cql_name), from_json_object(*def.type, std::move(value_it->second)));
             prepared_map.erase(value_it);
         }
     }
@@ -155,7 +155,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
     cql3::raw_value c = expr::evaluate(_value, options);
     sstring json_string = utf8_type->to_string(to_bytes(c.view()));
-    return json_helpers::parse(std::move(json_string), s->all_columns(), cql_serialization_format::internal());
+    return json_helpers::parse(std::move(json_string), s->all_columns());
 }
 
 void

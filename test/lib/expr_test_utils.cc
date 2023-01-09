@@ -84,12 +84,10 @@ constant make_text_const(const sstring_view& text) {
 // Some tests require the collection to contain unset_value or an empty value,
 // which is impossible to express using the existing code.
 cql3::raw_value make_collection_raw(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
-    cql_serialization_format sf = cql_serialization_format::latest();
-
     size_t serialized_len = 0;
-    serialized_len += collection_size_len(sf);
+    serialized_len += collection_size_len();
     for (const cql3::raw_value& val : elements_to_write) {
-        serialized_len += collection_value_len(sf);
+        serialized_len += collection_value_len();
         if (val.is_value()) {
             serialized_len += val.view().with_value([](const FragmentedView auto& view) { return view.size_bytes(); });
         }
@@ -98,7 +96,7 @@ cql3::raw_value make_collection_raw(size_t size_to_write, const std::vector<cql3
     bytes b(bytes::initialized_later(), serialized_len);
     bytes::iterator out = b.begin();
 
-    write_collection_size(out, size_to_write, sf);
+    write_collection_size(out, size_to_write);
     for (const cql3::raw_value& val : elements_to_write) {
         if (val.is_null()) {
             write_int32(out, -1);
@@ -106,7 +104,7 @@ cql3::raw_value make_collection_raw(size_t size_to_write, const std::vector<cql3
             write_int32(out, -2);
         } else {
             val.view().with_value(
-                [&](const FragmentedView auto& val_view) { write_collection_value(out, sf, linearized(val_view)); });
+                [&](const FragmentedView auto& val_view) { write_collection_value(out, linearized(val_view)); });
         }
     }
 
@@ -400,7 +398,7 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     }
 
     query_options options(default_cql_config, db::consistency_level::ONE, std::nullopt, bind_marker_values, true,
-                          query_options::specific_options::DEFAULT, cql_serialization_format::internal());
+                          query_options::specific_options::DEFAULT);
 
     std::unique_ptr<evaluation_inputs_data> data = std::make_unique<evaluation_inputs_data>(
         evaluation_inputs_data{.partition_key = std::move(partition_key),

@@ -77,19 +77,6 @@ enum cql_frame_flags {
     warning     = 0x08,
 };
 
-struct [[gnu::packed]] cql_binary_frame_v1 {
-    uint8_t  version;
-    uint8_t  flags;
-    uint8_t  stream;
-    uint8_t  opcode;
-    net::packed<uint32_t> length;
-
-    template <typename Adjuster>
-    void adjust_endianness(Adjuster a) {
-        return a(length);
-    }
-};
-
 struct [[gnu::packed]] cql_binary_frame_v3 {
     uint8_t  version;
     uint8_t  flags;
@@ -189,7 +176,6 @@ private:
         fragmented_temporary_buffer::reader _buffer_reader;
         cql_protocol_version_type _version = 0;
         cql_compression _compression = cql_compression::none;
-        cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         timer<lowres_clock> _shedding_timer;
         bool _shed_incoming_requests = false;
@@ -270,8 +256,6 @@ private:
                 service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
-
-        void init_cql_serialization_format();
 
         friend event_notifier;
     };

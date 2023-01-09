@@ -365,7 +365,7 @@ public:
                 actual = c.value().linearize();
             } else {
                 actual = linearized(serialize_for_cql(*col_def->type,
-                        cell->as_collection_mutation(), cql_serialization_format::internal()));
+                        cell->as_collection_mutation()));
             }
             assert(col_def->type->equal(actual, exp));
           });

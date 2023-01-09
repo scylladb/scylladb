@@ -23,7 +23,7 @@ thread_local const query_options::specific_options query_options::specific_optio
 
 thread_local query_options query_options::DEFAULT{default_cql_config,
     db::consistency_level::ONE, std::nullopt,
-    std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
+    std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT};
 
 query_options::query_options(const cql_config& cfg,
                            db::consistency_level consistency,
@@ -31,8 +31,8 @@ query_options::query_options(const cql_config& cfg,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
-                           specific_options options,
-                           cql_serialization_format sf)
+                           specific_options options
+                           )
    : _cql_config(cfg)
    , _consistency(consistency)
    , _names(std::move(names))
@@ -40,7 +40,6 @@ query_options::query_options(const cql_config& cfg,
    , _value_views(value_views)
    , _skip_metadata(skip_metadata)
    , _options(std::move(options))
-   , _cql_serialization_format(sf)
 {
 }
 
@@ -49,8 +48,8 @@ query_options::query_options(const cql_config& cfg,
                              std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value> values,
                              bool skip_metadata,
-                             specific_options options,
-                             cql_serialization_format sf)
+                             specific_options options
+                             )
     : _cql_config(cfg)
     , _consistency(consistency)
     , _names(std::move(names))
@@ -58,7 +57,6 @@ query_options::query_options(const cql_config& cfg,
     , _value_views()
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
-    , _cql_serialization_format(sf)
 {
     fill_value_views();
 }
@@ -68,8 +66,8 @@ query_options::query_options(const cql_config& cfg,
                              std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value_view> value_views,
                              bool skip_metadata,
-                             specific_options options,
-                             cql_serialization_format sf)
+                             specific_options options
+                             )
     : _cql_config(cfg)
     , _consistency(consistency)
     , _names(std::move(names))
@@ -77,7 +75,6 @@ query_options::query_options(const cql_config& cfg,
     , _value_views(std::move(value_views))
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
-    , _cql_serialization_format(sf)
 {
 }
 
@@ -89,8 +86,7 @@ query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_val
           {},
           std::move(values),
           false,
-          std::move(options),
-          cql_serialization_format::latest()
+          std::move(options)
       )
 {
 }
@@ -102,8 +98,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
         std::move(qo->_values),
         std::move(qo->_value_views),
         qo->_skip_metadata,
-        query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp},
-        qo->_cql_serialization_format) {
+        query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
 
 }
 
@@ -114,8 +109,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
         std::move(qo->_values),
         std::move(qo->_value_views),
         qo->_skip_metadata,
-        query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp},
-        qo->_cql_serialization_format) {
+        query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
 
 }
 

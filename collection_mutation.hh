@@ -21,8 +21,6 @@ class row_tombstone;
 
 class collection_mutation;
 
-class cql_serialization_format;
-
 // An auxiliary struct used to (de)construct collection_mutations.
 // Unlike collection_mutation which is a serialized blob, this struct allows to inspect logical units of information
 // (tombstone and cells) inside the mutation easily.
@@ -131,4 +129,4 @@ collection_mutation merge(const abstract_type&, collection_mutation_view, collec
 collection_mutation difference(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
-bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view, cql_serialization_format);
+bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);

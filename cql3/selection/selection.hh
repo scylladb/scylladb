@@ -49,9 +49,9 @@ public:
     * @param rs the <code>ResultSetBuilder</code>
     * @throws InvalidRequestException
     */
-    virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) = 0;
+    virtual void add_input_row(result_set_builder& rs) = 0;
 
-    virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) = 0;
+    virtual std::vector<bytes_opt> get_output_row() = 0;
 
     virtual void reset() = 0;
 };
@@ -192,7 +192,6 @@ private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
     const gc_clock::time_point _now;
-    cql_serialization_format _cql_serialization_format;
 public:
     template<typename Func>
     auto with_thread_if_needed(Func&& func) {
@@ -246,7 +245,7 @@ public:
         bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
     };
 
-    result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf,
+    result_set_builder(const selection& s, gc_clock::time_point now,
                        std::vector<size_t> group_by_cell_indices = {});
     void add_empty();
     void add(bytes_opt value);

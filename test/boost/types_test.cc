@@ -575,7 +575,7 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
 void test_validation_fails(const shared_ptr<const abstract_type>& type, bytes_view v)
 {
     try {
-        type->validate(v, cql_serialization_format::latest());
+        type->validate(v);
         BOOST_FAIL("Validation should have failed");
     } catch (const marshal_exception& e) {
         // expected
@@ -583,28 +583,28 @@ void test_validation_fails(const shared_ptr<const abstract_type>& type, bytes_vi
 }
 
 BOOST_AUTO_TEST_CASE(test_ascii_type_validation) {
-    ascii_type->validate(bytes(), cql_serialization_format::latest());
-    ascii_type->validate(bytes("foo"), cql_serialization_format::latest());
+    ascii_type->validate(bytes());
+    ascii_type->validate(bytes("foo"));
     test_validation_fails(ascii_type, bytes("fóo"));
 }
 
 BOOST_AUTO_TEST_CASE(test_utf8_type_validation) {
-    utf8_type->validate(bytes(), cql_serialization_format::latest());
-    utf8_type->validate(bytes("foo"), cql_serialization_format::latest());
-    utf8_type->validate(bytes("fóo"), cql_serialization_format::latest());
+    utf8_type->validate(bytes());
+    utf8_type->validate(bytes("foo"));
+    utf8_type->validate(bytes("fóo"));
     test_validation_fails(utf8_type, bytes("test") + from_hex("fe"));
 }
 
 BOOST_AUTO_TEST_CASE(test_int32_type_validation) {
-    int32_type->validate(bytes(), cql_serialization_format::latest());
-    int32_type->validate(from_hex("deadbeef"), cql_serialization_format::latest());
+    int32_type->validate(bytes());
+    int32_type->validate(from_hex("deadbeef"));
     test_validation_fails(int32_type, from_hex("00"));
     test_validation_fails(int32_type, from_hex("0000000000"));
 }
 
 BOOST_AUTO_TEST_CASE(test_long_type_validation) {
-    long_type->validate(bytes(), cql_serialization_format::latest());
-    long_type->validate(from_hex("deadbeefdeadbeef"), cql_serialization_format::latest());
+    long_type->validate(bytes());
+    long_type->validate(from_hex("deadbeefdeadbeef"));
     test_validation_fails(long_type, from_hex("00"));
     test_validation_fails(long_type, from_hex("00000000"));
     test_validation_fails(long_type, from_hex("000000000000000000"));
@@ -612,7 +612,7 @@ BOOST_AUTO_TEST_CASE(test_long_type_validation) {
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
     auto now = utils::UUID_gen::get_time_UUID();
-    timeuuid_type->validate(now.serialize(), cql_serialization_format::latest());
+    timeuuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
     test_validation_fails(timeuuid_type, random.serialize());
     test_validation_fails(timeuuid_type, from_hex("00"));
@@ -620,27 +620,27 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
 
 BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
     auto now = utils::UUID_gen::get_time_UUID();
-    uuid_type->validate(now.serialize(), cql_serialization_format::latest());
+    uuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
-    uuid_type->validate(random.serialize(), cql_serialization_format::latest());
+    uuid_type->validate(random.serialize());
     test_validation_fails(uuid_type, from_hex("00"));
 }
 
 BOOST_AUTO_TEST_CASE(test_duration_type_validation) {
-    duration_type->validate(duration_type->from_string("1m23us"), cql_serialization_format::latest());
+    duration_type->validate(duration_type->from_string("1m23us"));
     using exception_predicate::message_equals;
     BOOST_REQUIRE_EXCEPTION(
-            duration_type->validate(from_hex("ff"), cql_serialization_format::latest()),
+            duration_type->validate(from_hex("ff")),
             marshal_exception,
             message_equals("marshaling error: Expected at least 3 bytes for a duration, got 1"));
 
     BOOST_REQUIRE_EXCEPTION(
-            duration_type->validate(from_hex("fffffffffffffffffe0202"), cql_serialization_format::latest()),
+            duration_type->validate(from_hex("fffffffffffffffffe0202")),
             marshal_exception,
             message_equals("marshaling error: The duration months (9223372036854775807) must be a 32 bit integer"));
 
     BOOST_REQUIRE_EXCEPTION(
-            duration_type->validate(from_hex("010201"), cql_serialization_format::latest()),
+            duration_type->validate(from_hex("010201")),
             marshal_exception,
             message_equals("marshaling error: The duration months, days, and "
                            "nanoseconds must be all of the same sign (-1, 1, -1)"));

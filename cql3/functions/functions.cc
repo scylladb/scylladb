@@ -174,7 +174,7 @@ inline
 shared_ptr<function>
 make_to_json_function(data_type t) {
     return make_native_scalar_function<true>("tojson", utf8_type, {t},
-            [t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
+            [t](const std::vector<bytes_opt>& parameters) -> bytes_opt {
         return utf8_type->decompose(to_json_string(*t, parameters[0]));
     });
 }
@@ -183,12 +183,12 @@ inline
 shared_ptr<function>
 make_from_json_function(data_dictionary::database db, const sstring& keyspace, data_type t) {
     return make_native_scalar_function<true>("fromjson", t, {utf8_type},
-            [&db, keyspace, t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
+            [&db, keyspace, t](const std::vector<bytes_opt>& parameters) -> bytes_opt {
         try {
             rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value()));
             bytes_opt parsed_json_value;
             if (!json_value.IsNull()) {
-                parsed_json_value.emplace(from_json_object(*t, json_value, sf));
+                parsed_json_value.emplace(from_json_object(*t, json_value));
             }
             return parsed_json_value;
         } catch(rjson::error& e) {

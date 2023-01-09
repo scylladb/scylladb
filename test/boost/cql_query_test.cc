@@ -5438,12 +5438,10 @@ SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
 }
 
 cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
-    cql_serialization_format sf = cql_serialization_format::latest();
-
     size_t serialized_len = 0;
-    serialized_len += collection_size_len(sf);
+    serialized_len += collection_size_len();
     for (const cql3::raw_value& val : elements_to_write) {
-        serialized_len += collection_value_len(sf);
+        serialized_len += collection_value_len();
         if (val.is_value()) {
             serialized_len += val.view().with_value([](const FragmentedView auto& view) {
                 return view.size_bytes();
@@ -5454,7 +5452,7 @@ cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vecto
     bytes b(bytes::initialized_later(), serialized_len);
     bytes::iterator out = b.begin();
 
-    write_collection_size(out, size_to_write, sf);
+    write_collection_size(out, size_to_write);
     for (const cql3::raw_value& val : elements_to_write) {
         if (val.is_null()) {
                 write_int32(out, -1);
@@ -5462,7 +5460,7 @@ cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vecto
                 write_int32(out, -2);
         } else {
             val.view().with_value([&](const FragmentedView auto& val_view) {
-                write_collection_value(out, sf, linearized(val_view));
+                write_collection_value(out, linearized(val_view));
             });
         }
     }
@@ -5532,7 +5530,6 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
             return cql3::raw_value::make_value(int32_type->decompose(val));
         };
 
-        cql_serialization_format sf = cql_serialization_format::latest();
         cql3::raw_value list_with_null = make_collection_raw_value(3, {make_int(1), null_value, make_int(2)});
         cql3::raw_value set_with_null = make_collection_raw_value(3, {make_int(1), null_value, make_int(2)});
 

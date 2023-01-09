@@ -35,7 +35,7 @@ std::unique_ptr<cql3::query_options> to_options(
     return std::make_unique<cql3::query_options>(
             cfg,
             d.get_consistency(), std::move(names), std::move(values), d.skip_metadata(),
-            d.get_specific_options(), d.get_cql_serialization_format());
+            d.get_specific_options());
 }
 
 /// Asserts that e.execute_prepared(id, values) contains expected rows, in any order.

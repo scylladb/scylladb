@@ -1265,7 +1265,7 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
-                            to_sstring(cql_serialization_format::latest_version),
+                            to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
                             local_dc_rack().dc,
                             local_dc_rack().rack,
                             sstring(cfg.partitioner()),

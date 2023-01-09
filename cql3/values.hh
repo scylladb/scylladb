@@ -129,26 +129,26 @@ public:
     }
 
     template <typename ValueType>
-    ValueType deserialize(const collection_type_impl& t, cql_serialization_format sf) const {
-        return value_cast<ValueType>(with_value([&] (const FragmentedView auto& v) { return t.deserialize(v, sf); }));
+    ValueType deserialize(const collection_type_impl& t) const {
+        return value_cast<ValueType>(with_value([&] (const FragmentedView auto& v) { return t.deserialize(v); }));
     }
 
-    void validate(const abstract_type& t, cql_serialization_format sf) const {
-        return with_value([&] (const FragmentedView auto& v) { return t.validate(v, sf); });
+    void validate(const abstract_type& t) const {
+        return with_value([&] (const FragmentedView auto& v) { return t.validate(v); });
     }
 
     template <typename ValueType>
-    ValueType validate_and_deserialize(const collection_type_impl& t, cql_serialization_format sf) const {
+    ValueType validate_and_deserialize(const collection_type_impl& t) const {
         return with_value([&] (const FragmentedView auto& v) {
-            t.validate(v, sf);
-            return value_cast<ValueType>(t.deserialize(v, sf));
+            t.validate(v);
+            return value_cast<ValueType>(t.deserialize(v));
         });
     }
 
     template <typename ValueType>
-    ValueType validate_and_deserialize(const abstract_type& t, cql_serialization_format sf) const {
+    ValueType validate_and_deserialize(const abstract_type& t) const {
         return with_value([&] (const FragmentedView auto& v) {
-            t.validate(v, sf);
+            t.validate(v);
             return value_cast<ValueType>(t.deserialize(v));
         });
     }

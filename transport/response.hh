@@ -111,11 +111,7 @@ private:
             throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", version));
         }
 
-        if (version > 0x02) {
-            return make_frame_one<cql_binary_frame_v3>(version, length);
-        } else {
-            return make_frame_one<cql_binary_frame_v1>(version, length);
-        }
+        return make_frame_one<cql_binary_frame_v3>(version, length);
     }
 };
 

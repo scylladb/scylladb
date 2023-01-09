@@ -11,13 +11,12 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <vector>
-
 #include "types.hh"
 #include "collection_mutation.hh"
 #include "utils/chunked_vector.hh"
 #include "schema_fwd.hh"
 #include "log.hh"
-#include "cql_serialization_format.hh"
+
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -47,33 +46,22 @@ public:
 
     template <typename Iterator>
     requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
-    static bytes pack(Iterator start, Iterator finish, int elements, cql_serialization_format sf);
+    static bytes pack(Iterator start, Iterator finish, int elements);
 
     template <typename Iterator>
     requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view>; }
-    static managed_bytes pack_fragmented(Iterator start, Iterator finish, int elements, cql_serialization_format sf);
+    static managed_bytes pack_fragmented(Iterator start, Iterator finish, int elements);
 
 private:
     // Explicitly instantiated in types.cc
-    template <FragmentedView View> data_value deserialize_impl(View v, cql_serialization_format sf) const;
+    template <FragmentedView View> data_value deserialize_impl(View v) const;
 public:
-    template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const {
-        if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
-            return deserialize_impl(single_fragmented_view(v.current_fragment()), sf);
-        } else {
-            return deserialize_impl(v, sf);
-        }
+    template <FragmentedView View> data_value deserialize_value(View v) const {
+        return deserialize(v);
     }
-    template <FragmentedView View> data_value deserialize_value(View v, cql_serialization_format sf) const {
-        return deserialize(v, sf);
+    data_value deserialize_value(bytes_view v) const {
+        return deserialize_impl(single_fragmented_view(v));
     }
-    data_value deserialize(bytes_view v, cql_serialization_format sf) const {
-        return deserialize_impl(single_fragmented_view(v), sf);
-    }
-    data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
-        return deserialize_impl(single_fragmented_view(v), sf);
-    }
-    managed_bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, managed_bytes_view_opt v) const;
 };
 
 // a list or a set
@@ -105,17 +93,17 @@ public:
 template <typename Iterator>
 requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
 bytes
-collection_type_impl::pack(Iterator start, Iterator finish, int elements, cql_serialization_format sf) {
-    size_t len = collection_size_len(sf);
-    size_t psz = collection_value_len(sf);
+collection_type_impl::pack(Iterator start, Iterator finish, int elements) {
+    size_t len = collection_size_len();
+    size_t psz = collection_value_len();
     for (auto j = start; j != finish; j++) {
         len += j->size() + psz;
     }
     bytes out(bytes::initialized_later(), len);
     bytes::iterator i = out.begin();
-    write_collection_size(i, elements, sf);
+    write_collection_size(i, elements);
     while (start != finish) {
-        write_collection_value(i, sf, *start++);
+        write_collection_value(i, *start++);
     }
     return out;
 }
@@ -123,17 +111,17 @@ collection_type_impl::pack(Iterator start, Iterator finish, int elements, cql_se
 template <typename Iterator>
 requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view>; }
 managed_bytes
-collection_type_impl::pack_fragmented(Iterator start, Iterator finish, int elements, cql_serialization_format sf) {
-    size_t len = collection_size_len(sf);
-    size_t psz = collection_value_len(sf);
+collection_type_impl::pack_fragmented(Iterator start, Iterator finish, int elements) {
+    size_t len = collection_size_len();
+    size_t psz = collection_value_len();
     for (auto j = start; j != finish; j++) {
         len += j->size() + psz;
     }
     managed_bytes out(managed_bytes::initialized_later(), len);
     managed_bytes_mutable_view v(out);
-    write_collection_size(v, elements, sf);
+    write_collection_size(v, elements);
     while (start != finish) {
-        write_collection_value(v, sf, *start++);
+        write_collection_value(v, *start++);
     }
     return out;
 }

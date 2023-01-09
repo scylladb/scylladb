@@ -31,7 +31,7 @@ public:
                     , _schema(s) {
     }
 
-    bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
+    bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
         if (std::any_of(parameters.cbegin(), parameters.cend(), [](const auto& param){ return !param; })) {
             return std::nullopt;
         }

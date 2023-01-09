@@ -18,7 +18,6 @@
 
 #include "bytes_ostream.hh"
 #include "types.hh"
-#include "cql_serialization_format.hh"
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 
@@ -47,7 +46,7 @@ public:
 
     virtual bool requires_thread() const override;
 
-    virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
         bytes_ostream encoded_row;
         encoded_row.write("{", 1);
         for (size_t i = 0; i < _selector_names.size(); ++i) {
