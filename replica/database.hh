@@ -571,12 +571,6 @@ private:
         // overwrite an existing table.
         return sstables::generation_from_value((*_sstable_generation)++ * smp::count + this_shard_id());
     }
-
-    // inverse of calculate_generation_for_new_table(), used to determine which
-    // shard a sstable should be opened at.
-    static seastar::shard_id calculate_shard_from_sstable_generation(sstables::generation_type sstable_generation) {
-        return sstables::generation_value(sstable_generation) % smp::count;
-    }
 private:
     void rebuild_statistics();
 

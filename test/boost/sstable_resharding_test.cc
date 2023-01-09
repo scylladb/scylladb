@@ -102,6 +102,7 @@ void run_sstable_resharding_test() {
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
     uint64_t bloom_filter_size_after = 0;
+    std::unordered_set<shard_id> processed_shards;
 
     for (auto& sstable : new_sstables) {
         auto new_sst = env.reusable_sst(s, tmp.path().string(), generation_value(sstable->generation()),
@@ -111,7 +112,7 @@ void run_sstable_resharding_test() {
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
-        BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(generation_value(new_sst->generation())) == shard);
+        BOOST_REQUIRE(processed_shards.insert(shard).second == true); // check resharding created one sstable per shard.
 
         auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
