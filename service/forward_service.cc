@@ -120,6 +120,16 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
 }
 
 void forward_aggregates::finalize(query::forward_result &result) {
+    if (result.query_results.empty()) {
+        // An empty result means that we didn't send the aggregation request
+        // to any node. I.e., it was a query that matched no partition, such
+        // as "WHERE p IN ()". We need to build a fake result with the result
+        // of empty aggregation.
+        for (size_t i = 0; i < _aggrs.size(); i++) {
+            result.query_results.push_back(_aggrs[i]->compute(cql_serialization_format::internal()));
+        }
+        return;
+    }
     if (result.query_results.size() != _aggrs.size()) {
         on_internal_error(
             flogger,
