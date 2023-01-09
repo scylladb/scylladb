@@ -638,8 +638,8 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
             std::replace(n.begin(), n.end(), '\'', ' ');
             boost::trim_all(n);
             if (!n.empty()) {
-                auto ep_and_id = tm.parse_host_id_and_endpoint(n);
-                ignore_nodes.push_back(ep_and_id.endpoint);
+                auto node = tm.parse_host_id_and_endpoint(n);
+                ignore_nodes.push_back(node->endpoint());
             }
         } catch (...) {
             throw std::runtime_error(format("Failed to parse --ignore-dead-nodes-for-replace parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
@@ -2413,6 +2413,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             auto uuid = node_ops_id::create_random_id();
             auto tmptr = ss.get_token_metadata_ptr();
+            const auto& topo = tmptr->get_topology();
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
             assert(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
@@ -2447,8 +2448,8 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
                 std::list<gms::inet_address> ignore_nodes;
                 for (auto& hoep : ignore_nodes_params) {
-                    hoep.resolve(*tmptr);
-                    ignore_nodes.push_back(hoep.endpoint);
+                    auto node = hoep.resolve(topo);
+                    ignore_nodes.push_back(node->endpoint());
                 }
 
                 // Step 1: Make the node a group 0 non-voter before removing it from the token ring.

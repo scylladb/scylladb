@@ -42,8 +42,7 @@ using token = dht::token;
 class token_metadata;
 
 struct host_id_or_endpoint {
-    host_id id;
-    gms::inet_address endpoint;
+    std::variant<host_id, gms::inet_address> data;
 
     enum class param_type {
         host_id,
@@ -54,16 +53,24 @@ struct host_id_or_endpoint {
     host_id_or_endpoint(const sstring& s, param_type restrict = param_type::auto_detect);
 
     bool has_host_id() const noexcept {
-        return bool(id);
+        return data.index() == 0;
     }
 
     bool has_endpoint() const noexcept {
-        return endpoint != gms::inet_address();
+        return data.index() == 1;
+    }
+
+    host_id id() const {
+        return std::get<host_id>(data);
+    }
+
+    gms::inet_address endpoint() const {
+        return std::get<gms::inet_address>(data);
     }
 
     // Map the host_id to endpoint based on whichever of them is set,
     // using the token_metadata
-    void resolve(const token_metadata& tm);
+    node_ptr resolve(const topology& topo);
 };
 
 class token_metadata_impl;
@@ -159,7 +166,7 @@ public:
 
     /// Parses the \c host_id_string either as a host uuid or as an ip address and returns the mapping.
     /// Throws std::invalid_argument on parse error or std::runtime_error if the host_id wasn't found.
-    host_id_or_endpoint parse_host_id_and_endpoint(const sstring& host_id_string) const;
+    node_ptr parse_host_id_and_endpoint(const sstring& host_id_string) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
