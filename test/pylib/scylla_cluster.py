@@ -17,12 +17,13 @@ import pathlib
 import shutil
 import tempfile
 import time
-from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple
+from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
+from test.pylib.util import LogPrefixAdapter
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 import aiohttp
 import aiohttp.web
@@ -183,6 +184,7 @@ class ScyllaServer:
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
     def __init__(self, exe: str, vardir: str,
+                 logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
                  config_options: Dict[str, str]) -> None:
@@ -190,6 +192,7 @@ class ScyllaServer:
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
+        self.logger = logger
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, cmdline_options)
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
@@ -218,7 +221,7 @@ class ScyllaServer:
             await self.uninstall()
             raise
 
-        logging.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
+        self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
 
         try:
             await self.start(api)
@@ -227,7 +230,7 @@ class ScyllaServer:
             raise
 
         if self.cmd:
-            logging.info("started server at host %s in %s, pid %d", self.ip_addr,
+            self.logger.info("started server at host %s in %s, pid %d", self.ip_addr,
                          self.workdir.name, self.cmd.pid)
 
     @property
@@ -246,7 +249,7 @@ class ScyllaServer:
 
         self.check_scylla_executable()
 
-        logging.info("installing Scylla server in %s...", self.workdir)
+        self.logger.info("installing Scylla server in %s...", self.workdir)
 
         # Cleanup any remains of the previously running server in this path
         shutil.rmtree(self.workdir, ignore_errors=True)
@@ -325,7 +328,7 @@ class ScyllaServer:
                     self.control_connection = self.control_cluster.connect()
                     return True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
-            logging.debug("Exception when checking if CQL is up: %s", exc)
+            self.logger.debug("Exception when checking if CQL is up: %s", exc)
             return False
         finally:
             caslog.setLevel(oldlevel)
@@ -363,11 +366,11 @@ class ScyllaServer:
         while time.time() < self.start_time + self.START_TIMEOUT:
             if self.cmd.returncode:
                 with self.log_filename.open('r') as log_file:
-                    logging.error("failed to start server at host %s in %s",
+                    self.logger.error("failed to start server at host %s in %s",
                                   self.ip_addr, self.workdir.name)
-                    logging.error("last line of %s:", self.log_filename)
+                    self.logger.error("last line of %s:", self.log_filename)
                     log_file.seek(0, 0)
-                    logging.error(log_file.readlines()[-1].rstrip())
+                    self.logger.error(log_file.readlines()[-1].rstrip())
                     log_handler = logging.getLogger().handlers[0]
                     if hasattr(log_handler, 'baseFilename'):
                         logpath = log_handler.baseFilename   # type: ignore
@@ -419,7 +422,7 @@ class ScyllaServer:
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return."""
-        logging.info("stopping %s in %s", self, self.workdir.name)
+        self.logger.info("stopping %s in %s", self, self.workdir.name)
         if not self.cmd:
             return
 
@@ -432,13 +435,13 @@ class ScyllaServer:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("stopped %s in %s", self, self.workdir.name)
+                self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
     async def stop_gracefully(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGTERM to
         stop, so it is graceful. Waits for the process to exit before return."""
-        logging.info("gracefully stopping %s", self)
+        self.logger.info("gracefully stopping %s", self)
         if not self.cmd:
             return
 
@@ -453,14 +456,14 @@ class ScyllaServer:
             await self.cmd.wait()
         finally:
             if self.cmd:
-                logging.info("gracefully stopped %s", self)
+                self.logger.info("gracefully stopped %s", self)
             self.cmd = None
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
         data files and log files."""
 
-        logging.info("Uninstalling server at %s", self.workdir)
+        self.logger.info("Uninstalling server at %s", self.workdir)
 
         try:
             shutil.rmtree(self.workdir)
@@ -473,6 +476,13 @@ class ScyllaServer:
         self.log_file.seek(0, 2)  # seek to file end
         self.log_file.write(msg.encode())
         self.log_file.flush()
+
+    def setLogger(self, logger: logging.LoggerAdapter):
+        """Change the logger used by the server.
+           Called when a cluster is reused between tests so that logs during the new test
+           are prefixed appropriately with the corresponding test's name.
+        """
+        self.logger = logger
 
     def __str__(self):
         host_id = getattr(self, 'host_id', 'undefined id')
@@ -494,14 +504,17 @@ class ScyllaCluster:
         data: dict = {}
 
     class CreateServerParams(NamedTuple):
+        logger: Union[logging.Logger, logging.LoggerAdapter]
         cluster_name: str
         ip_addr: IPAddress
         seeds: List[str]
         config_from_test: dict[str, str]
         cmdline_from_test: List[str]
 
-    def __init__(self, host_registry: HostRegistry, replicas: int,
+    def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
+                 host_registry: HostRegistry, replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+        self.logger = logger
         self.host_registry = host_registry
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
@@ -534,13 +547,13 @@ class ScyllaCluster:
             # at test time.
             self.start_exception = exc
         self.is_running = True
-        logging.info("Created cluster %s", self)
+        self.logger.info("Created cluster %s", self)
         self.is_dirty = False
 
     async def uninstall(self) -> None:
         """Stop running servers and uninstall all servers"""
         self.is_dirty = True
-        logging.info("Uninstalling cluster")
+        self.logger.info("Uninstalling cluster")
         await self.stop()
         await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
         await asyncio.gather(*(self.host_registry.release_host(Host(ip))
@@ -557,7 +570,7 @@ class ScyllaCluster:
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
         if self.is_running:
-            logging.info("Cluster %s stopping", self)
+            self.logger.info("Cluster %s stopping", self)
             self.is_dirty = True
             # If self.running is empty, no-op
             await asyncio.gather(*(server.stop() for server in self.running.values()))
@@ -568,7 +581,7 @@ class ScyllaCluster:
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
         if self.is_running:
-            logging.info("Cluster %s stopping gracefully", self)
+            self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
             # If self.running is empty, no-op
             await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
@@ -608,6 +621,7 @@ class ScyllaCluster:
             seeds = [ip_addr]
 
         params = ScyllaCluster.CreateServerParams(
+            logger = self.logger,
             cluster_name = self.name,
             ip_addr = ip_addr,
             seeds = seeds,
@@ -617,17 +631,17 @@ class ScyllaCluster:
 
         try:
             server = self.create_server(params)
-            logging.info("Cluster %s adding server...", self)
+            self.logger.info("Cluster %s adding server...", self)
             await server.install_and_start(self.api)
         except Exception as exc:
-            logging.error("Failed to start Scylla server at host %s in %s: %s",
+            self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, server.workdir.name, str(exc))
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
             raise
         self.running[server.server_id] = server
-        logging.info("Cluster %s added %s", self, server)
+        self.logger.info("Cluster %s added %s", self, server)
         return ServerInfo(server.server_id, server.ip_addr)
 
     def endpoint(self) -> str:
@@ -670,7 +684,7 @@ class ScyllaCluster:
         assert self.start_exception is None
         assert self.running, "No active nodes left"
         server = next(iter(self.running.values()))
-        logging.debug("_get_keyspace_count() using server %s", server)
+        self.logger.debug("_get_keyspace_count() using server %s", server)
         assert server.control_connection is not None
         rows = server.control_connection.execute(
                "select count(*) as c from system_schema.keyspaces")
@@ -701,7 +715,7 @@ class ScyllaCluster:
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> ActionReturn:
         """Stop a server. No-op if already stopped."""
-        logging.info("Cluster %s stopping server %s", self, server_id)
+        self.logger.info("Cluster %s stopping server %s", self, server_id)
         if server_id in self.stopped:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"Server {server_id} already stopped")
@@ -718,12 +732,12 @@ class ScyllaCluster:
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
-        logging.debug("Cluster %s marking server %s as removed", self, server_id)
+        self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
     async def server_start(self, server_id: ServerNum) -> ActionReturn:
         """Start a stopped server"""
-        logging.info("Cluster %s starting server %s", self, server_id)
+        self.logger.info("Cluster %s starting server %s", self, server_id)
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"{self.running[server_id]} already running")
@@ -738,10 +752,10 @@ class ScyllaCluster:
 
     async def server_restart(self, server_id: ServerNum) -> ActionReturn:
         """Restart a running server"""
-        logging.info("Cluster %s restarting server %s", self, server_id)
+        self.logger.info("Cluster %s restarting server %s", self, server_id)
         ret = await self.server_stop(server_id, gracefully=True)
         if not ret.success:
-            logging.error("Cluster %s failed to stop server %s", self, server_id)
+            self.logger.error("Cluster %s failed to stop server %s", self, server_id)
             return ret
         return await self.server_start(server_id)
 
@@ -763,6 +777,15 @@ class ScyllaCluster:
         self.servers[server_id].update_config(key, value)
         return ScyllaCluster.ActionReturn(success=True)
 
+    def setLogger(self, logger: logging.LoggerAdapter):
+        """Change the logger used by the cluster.
+           Called when a cluster is reused between tests so that logs during the new test
+           are prefixed appropriately with the corresponding test's name.
+        """
+        self.logger = logger
+        for srv in self.servers.values():
+            srv.setLogger(self.logger)
+
 
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
@@ -776,6 +799,8 @@ class ScyllaClusterManager:
 
     def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
         self.test_uname: str = test_uname
+        logger = logging.getLogger(self.test_uname)
+        self.logger = LogPrefixAdapter(logger, {'prefix': self.test_uname})
         # The currently running test case with self.test_uname prepended, e.g.
         # test_topology.1::test_add_server_add_column
         self.current_test_case_full_name: str = ''
@@ -794,9 +819,10 @@ class ScyllaClusterManager:
     async def start(self) -> None:
         """Get first cluster, setup API"""
         if self.is_running:
-            logging.warning("ScyllaClusterManager already running")
+            self.logger.warning("ScyllaClusterManager already running")
             return
         await self._get_cluster()
+        self.cluster.setLogger(self.logger)
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
         await self.site.start()
@@ -809,7 +835,8 @@ class ScyllaClusterManager:
             await self.cluster.release_ips()
             await self._get_cluster()
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
-        logging.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
+        self.cluster.setLogger(self.logger)
+        self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
         self.cluster.take_log_savepoint()
@@ -817,15 +844,15 @@ class ScyllaClusterManager:
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
-        logging.info("ScyllaManager stopping for test %s", self.test_uname)
+        self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
         if hasattr(self, "site"):
             await self.site.stop()
             del self.site
         if not self.cluster.is_dirty:
-            logging.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
+            self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
             await self.clusters.put(self.cluster)
         else:
-            logging.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
+            self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
             await self.clusters.steal()
             await self.cluster.stop()
@@ -835,8 +862,8 @@ class ScyllaClusterManager:
         self.is_running = False
 
     async def _get_cluster(self) -> None:
-        self.cluster = await self.clusters.get()
-        logging.info("Getting new Scylla cluster %s", self.cluster)
+        self.cluster = await self.clusters.get(self.logger)
+        self.logger.info("Got new Scylla cluster %s", self.cluster)
 
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
@@ -902,7 +929,7 @@ class ScyllaClusterManager:
     async def _after_test(self, _request) -> aiohttp.web.Response:
         assert self.cluster is not None
         assert self.current_test_case_full_name
-        logging.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
+        self.logger.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
         try:
             self.cluster.after_test(self.current_test_case_full_name)
         finally:
@@ -966,22 +993,22 @@ class ScyllaClusterManager:
         assert isinstance(data["ignore_dead"], list), "Invalid list of dead IP addresses"
         ignore_dead = [IPAddress(ip_addr) for ip_addr in data["ignore_dead"]]
         if not initiator_id in self.cluster.running:
-            logging.error("_cluster_remove_node initiator %s is not a running server",
+            self.logger.error("_cluster_remove_node initiator %s is not a running server",
                           initiator_id)
             return aiohttp.web.Response(status=500, text=f"Error removing {server_id}")
         if server_id in self.cluster.running:
-            logging.warning("_cluster_remove_node %s is a running node", server_id)
+            self.logger.warning("_cluster_remove_node %s is a running node", server_id)
         else:
             assert server_id in self.cluster.stopped, f"_cluster_remove_node: {server_id} unknown"
         to_remove = self.cluster.servers[server_id]
         initiator = self.cluster.servers[initiator_id]
-        logging.info("_cluster_remove_node %s with initiator %s", to_remove, initiator)
+        self.logger.info("_cluster_remove_node %s with initiator %s", to_remove, initiator)
 
         # initate remove
         try:
             await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead)
         except RuntimeError as exc:
-            logging.error("_cluster_remove_node failed initiator %s server %s ignore_dead %s, check log at %s",
+            self.logger.error("_cluster_remove_node failed initiator %s server %s ignore_dead %s, check log at %s",
                           initiator, to_remove, ignore_dead, initiator.log_filename)
             return aiohttp.web.Response(status=500,
                                         text=f"Error removing {to_remove}: {exc}")
@@ -992,15 +1019,15 @@ class ScyllaClusterManager:
         """Run remove node on Scylla REST API for a specified server"""
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
-        logging.info("_cluster_decommission_node %s", server_id)
+        self.logger.info("_cluster_decommission_node %s", server_id)
         assert server_id in self.cluster.running, "Can't decommission not running node"
         if len(self.cluster.running) == 1:
-            logging.warning("_cluster_decommission_node %s is only running node left", server_id)
+            self.logger.warning("_cluster_decommission_node %s is only running node left", server_id)
         server = self.cluster.running[server_id]
         try:
             await self.cluster.api.decommission_node(server.ip_addr)
         except RuntimeError as exc:
-            logging.error("_cluster_decommission_node %s, check log at %s", server,
+            self.logger.error("_cluster_decommission_node %s, check log at %s", server,
                           server.log_filename)
             return aiohttp.web.Response(status=500,
                                         text=f"Error decommissioning {server}: {exc}")

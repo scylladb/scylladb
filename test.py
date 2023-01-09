@@ -35,8 +35,9 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
+from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -344,7 +345,7 @@ class PythonTestSuite(TestSuite):
         self.create_cluster = self.get_cluster_factory(cluster_size)
         self.clusters = Pool(pool_size, self.create_cluster)
 
-    def get_cluster_factory(self, cluster_size: int) -> Callable[[], Awaitable]:
+    def get_cluster_factory(self, cluster_size: int) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
@@ -366,6 +367,7 @@ class PythonTestSuite(TestSuite):
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
+                logger=create_cfg.logger,
                 cluster_name=create_cfg.cluster_name,
                 ip_addr=create_cfg.ip_addr,
                 seeds=create_cfg.seeds,
@@ -374,8 +376,8 @@ class PythonTestSuite(TestSuite):
 
             return server
 
-        async def create_cluster() -> ScyllaCluster:
-            cluster = ScyllaCluster(self.hosts, cluster_size, create_server)
+        async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
+            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
 
             async def stop() -> None:
                 await cluster.stop()
@@ -675,17 +677,19 @@ class CQLApprovalTest(Test):
         self.success = False
         self.summary = "failed"
 
+        loggerPrefix = self.mode + '/' + self.uname
+        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
         def set_summary(summary):
             self.summary = summary
-            log_func = logging.info if self.success else logging.error
+            log_func = logger.info if self.success else logger.error
             log_func("Test %s %s", self.uname, summary)
             if self.server_log is not None:
-                logging.info("Server log:\n%s", self.server_log)
+                logger.info("Server log:\n%s", self.server_log)
 
-        async with self.suite.clusters.instance() as cluster:
+        async with self.suite.clusters.instance(logger) as cluster:
             try:
                 cluster.before_test(self.uname)
-                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
                 self.args.insert(1, "--host={}".format(cluster.endpoint()))
                 # If pre-check fails, e.g. because Scylla failed to start
                 # or crashed between two tests, fail entire test.py
@@ -709,7 +713,7 @@ Check test log at {}.""".format(self.log_filename))
                         self.unidiff = format_unidiff(str(self.result), self.tmpfile)
                         set_summary("failed: test output does not match expected result")
                         assert self.unidiff is not None
-                        logging.info("\n{}".format(palette.nocolor(self.unidiff)))
+                        logger.info("\n{}".format(palette.nocolor(self.unidiff)))
                     else:
                         self.success = True
                         set_summary("succeeded")
@@ -836,10 +840,12 @@ class PythonTest(Test):
 
         self._prepare_pytest_params(options)
 
-        async with self.suite.clusters.instance() as cluster:
+        loggerPrefix = self.mode + '/' + self.uname
+        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        async with self.suite.clusters.instance(logger) as cluster:
             try:
                 cluster.before_test(self.uname)
-                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
                 self.args.insert(0, "--host={}".format(cluster.endpoint()))
                 self.is_before_test_ok = True
                 cluster.take_log_savepoint()
@@ -855,7 +861,7 @@ class PythonTest(Test):
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
-            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+            logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
@@ -892,7 +898,7 @@ class TopologyTest(PythonTest):
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
-            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+            manager.logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
 
