@@ -423,9 +423,8 @@ $ scylla types {{action}} --help
         {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
     });
 
-    return app.run(argc, argv, [&app, found_ah] () -> future<> {
-        co_await logalloc::use_standard_allocator_segment_pool_backend(1 * 1024 * 1024);
-
+    return app.run(argc, argv, [&app, found_ah] {
+      return logalloc::use_standard_allocator_segment_pool_backend(1 * 1024 * 1024).then([&app, found_ah] {
         const action_handler& handler = *found_ah;
 
         if (!app.configuration().contains("type")) {
@@ -463,8 +462,7 @@ $ scylla types {{action}} --help
                 handler(std::move(type), app.configuration()["value"].as<std::vector<sstring>>(), app.configuration());
                 break;
         }
-
-        co_return;
+      });
     });
 }
 

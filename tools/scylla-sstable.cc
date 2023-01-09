@@ -30,15 +30,16 @@
 #include "types/user.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "tools/json_writer.hh"
+#include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
+#include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
-#include "utils/rjson.hh"
 #include "locator/host_id.hh"
 
-// has to be below the utils/rjson.hh include
-#include <rapidjson/ostreamwrapper.h>
-
 using namespace seastar;
+
+using json_writer = tools::json_writer;
 
 namespace bpo = boost::program_options;
 
@@ -159,112 +160,27 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
     return sstables;
 }
 
-// stop_iteration::no -> continue consuming sstable content
-class sstable_consumer {
-public:
-    virtual ~sstable_consumer() = default;
-    // called at the very start
-    virtual future<> on_start_of_stream() = 0;
-    // stop_iteration::yes -> on_end_of_sstable() - skip sstable content
-    // sstable parameter is nullptr when merging multiple sstables
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const) = 0;
-    // stop_iteration::yes -> consume(partition_end) - skip partition content
-    virtual future<stop_iteration> consume(partition_start&&) = 0;
-    // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
-    virtual future<stop_iteration> consume(static_row&&) = 0;
-    // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
-    virtual future<stop_iteration> consume(clustering_row&&) = 0;
-    // stop_iteration::yes -> consume(partition_end) - skip remaining partition content
-    virtual future<stop_iteration> consume(range_tombstone_change&&) = 0;
-    // stop_iteration::yes -> on_end_of_sstable() - skip remaining partitions in sstable
-    virtual future<stop_iteration> consume(partition_end&&) = 0;
-    // stop_iteration::yes -> full stop - skip remaining sstables
-    virtual future<stop_iteration> on_end_of_sstable() = 0;
-    // called at the very end
-    virtual future<> on_end_of_stream() = 0;
-};
-
 class consumer_wrapper {
 public:
     using filter_type = std::function<bool(const dht::decorated_key&)>;
 private:
+    mutation_fragment_v2::kind _last_kind = mutation_fragment_v2::kind::partition_end;
     sstable_consumer& _consumer;
     filter_type _filter;
 public:
     consumer_wrapper(sstable_consumer& consumer, filter_type filter)
         : _consumer(consumer), _filter(std::move(filter)) {
     }
+    mutation_fragment_v2::kind last_kind() const {
+        return _last_kind;
+    }
     future<stop_iteration> operator()(mutation_fragment_v2&& mf) {
         sst_log.trace("consume {}", mf.mutation_fragment_kind());
         if (mf.is_partition_start() && _filter && !_filter(mf.as_partition_start().key())) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
+        _last_kind = mf.mutation_fragment_kind();
         return std::move(mf).consume(_consumer);
-    }
-};
-
-class json_writer {
-    using stream = rapidjson::BasicOStreamWrapper<std::ostream>;
-    using writer = rapidjson::Writer<stream, rjson::encoding, rjson::encoding, rjson::allocator>;
-
-    stream _stream;
-    writer _writer;
-
-public:
-    json_writer() : _stream(std::cout), _writer(_stream)
-    { }
-
-    // following the rapidjson method names here
-    bool Null() { return _writer.Null(); }
-    bool Bool(bool b) { return _writer.Bool(b); }
-    bool Int(int i) { return _writer.Int(i); }
-    bool Uint(unsigned i) { return _writer.Uint(i); }
-    bool Int64(int64_t i) { return _writer.Int64(i); }
-    bool Uint64(uint64_t i) { return _writer.Uint64(i); }
-    bool Double(double d) { return _writer.Double(d); }
-    bool RawNumber(std::string_view str) { return _writer.RawNumber(str.data(), str.size(), false); }
-    bool String(std::string_view str) { return _writer.String(str.data(), str.size(), false); }
-    bool StartObject() { return _writer.StartObject(); }
-    bool Key(std::string_view str) { return _writer.Key(str.data(), str.size(), false); }
-    bool EndObject(rapidjson::SizeType memberCount = 0) { return _writer.EndObject(memberCount); }
-    bool StartArray() { return _writer.StartArray(); }
-    bool EndArray(rapidjson::SizeType elementCount = 0) { return _writer.EndArray(elementCount); }
-
-    // scylla-specific extensions (still following rapidjson naming scheme for consistency)
-    template <typename T>
-    void AsString(const T& obj) {
-        String(fmt::format("{}", obj));
-    }
-    void PartitionKey(const schema& schema, const partition_key& pkey, std::optional<dht::token> token = {}) {
-        StartObject();
-        if (token) {
-            Key("token");
-            AsString(*token);
-        }
-        Key("raw");
-        String(to_hex(pkey.representation()));
-        Key("value");
-        AsString(pkey.with_schema(schema));
-        EndObject();
-    }
-    void StartStream() {
-        StartObject();
-        Key("sstables");
-        StartObject();
-    }
-    void EndStream() {
-        EndObject();
-        EndObject();
-    }
-    void SstableKey(const sstables::sstable& sst) {
-        Key(sst.get_filename());
-    }
-    void SstableKey(const sstables::sstable* const sst) {
-        if (sst) {
-            SstableKey(*sst);
-        } else {
-            Key("anonymous");
-        }
     }
 };
 
@@ -286,16 +202,269 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
     return default_format;
 }
 
+} // anonymous namespace
+
+namespace tools {
+
+sstring mutation_fragment_json_writer::to_string(gc_clock::time_point tp) {
+    return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
+}
+
+void mutation_fragment_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {
+    _writer.Key("ttl");
+    _writer.AsString(ttl);
+    _writer.Key("expiry");
+    _writer.String(to_string(expiry));
+}
+
+void mutation_fragment_json_writer::write(const tombstone& t) {
+    _writer.StartObject();
+    if (t) {
+        _writer.Key("timestamp");
+        _writer.Int64(t.timestamp);
+        _writer.Key("deletion_time");
+        _writer.String(to_string(t.deletion_time));
+    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const row_marker& m) {
+    _writer.StartObject();
+    _writer.Key("timestamp");
+    _writer.Int64(m.timestamp());
+    if (m.is_live() && m.is_expiring()) {
+        write(m.ttl(), m.expiry());
+    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(counter_cell_view cv) {
+    _writer.StartArray();
+    for (const auto& shard : cv.shards()) {
+        _writer.StartObject();
+        _writer.Key("id");
+        _writer.AsString(shard.id());
+        _writer.Key("value");
+        _writer.Int64(shard.value());
+        _writer.Key("clock");
+        _writer.Int64(shard.logical_clock());
+        _writer.EndObject();
+    }
+    _writer.EndArray();
+}
+
+void mutation_fragment_json_writer::write(const atomic_cell_view& cell, data_type type) {
+    _writer.StartObject();
+    _writer.Key("is_live");
+    _writer.Bool(cell.is_live());
+    _writer.Key("type");
+    if (type->is_counter()) {
+        if (cell.is_counter_update()) {
+            _writer.String("counter-update");
+        } else {
+            _writer.String("counter-shards");
+        }
+    } else if (type->is_collection()) {
+        _writer.String("frozen-collection");
+    } else {
+        _writer.String("regular");
+    }
+    _writer.Key("timestamp");
+    _writer.Int64(cell.timestamp());
+    if (type->is_counter()) {
+        _writer.Key("value");
+        if (cell.is_counter_update()) {
+            _writer.Int64(cell.counter_update_value());
+        } else {
+            write(counter_cell_view(cell));
+        }
+    } else {
+        if (cell.is_live_and_has_ttl()) {
+            write(cell.ttl(), cell.expiry());
+        }
+        if (cell.is_live()) {
+            _writer.Key("value");
+            _writer.String(type->to_string(cell.value().linearize()));
+        } else {
+            _writer.Key("deletion_time");
+            _writer.String(to_string(cell.deletion_time()));
+        }
+    }
+    _writer.EndObject();
+}
+void mutation_fragment_json_writer::write(const collection_mutation_view_description& mv, data_type type) {
+    _writer.StartObject();
+
+    if (mv.tomb) {
+        _writer.Key("tombstone");
+        write(mv.tomb);
+    }
+
+    _writer.Key("cells");
+
+    std::function<void(size_t, bytes_view)> write_key;
+    std::function<void(size_t, atomic_cell_view)> write_value;
+    if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
+        write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
+        write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
+    } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
+        write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
+        write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
+    }
+
+    if (write_key && write_value) {
+        _writer.StartArray();
+        for (size_t i = 0; i < mv.cells.size(); ++i) {
+            _writer.StartObject();
+            _writer.Key("key");
+            write_key(i, mv.cells[i].first);
+            _writer.Key("value");
+            write_value(i, mv.cells[i].second);
+            _writer.EndObject();
+        }
+        _writer.EndArray();
+    } else {
+        _writer.Null();
+    }
+
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+    if (cdef.is_atomic()) {
+        write(cell.as_atomic_cell(cdef), cdef.type);
+    } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
+        cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
+            write(mv, cdef.type);
+        });
+    } else {
+        _writer.Null();
+    }
+}
+
+void mutation_fragment_json_writer::write(const row& r, column_kind kind) {
+    _writer.StartObject();
+    r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+        auto cdef = _schema.column_at(kind, id);
+        _writer.Key(cdef.name_as_text());
+        write(cell, cdef);
+    });
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const clustering_row& cr) {
+    _writer.StartObject();
+    _writer.Key("type");
+    _writer.String("clustering-row");
+    _writer.Key("key");
+    _writer.DataKey(_schema, cr.key());
+    if (cr.tomb()) {
+        _writer.Key("tombstone");
+        write(cr.tomb().regular());
+        _writer.Key("shadowable_tombstone");
+        write(cr.tomb().shadowable().tomb());
+    }
+    if (!cr.marker().is_missing()) {
+        _writer.Key("marker");
+        write(cr.marker());
+    }
+    _writer.Key("columns");
+    write(cr.cells(), column_kind::regular_column);
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::write(const range_tombstone_change& rtc) {
+    _writer.StartObject();
+    _writer.Key("type");
+    _writer.String("range-tombstone-change");
+    const auto pos = rtc.position();
+    if (pos.has_key()) {
+        _writer.Key("key");
+        _writer.DataKey(_schema, pos.key());
+    }
+    _writer.Key("weight");
+    _writer.Int(static_cast<int>(pos.get_bound_weight()));
+    _writer.Key("tombstone");
+    write(rtc.tombstone());
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::start_stream() {
+    _writer.StartStream();
+}
+
+void mutation_fragment_json_writer::start_sstable(const sstables::sstable* const sst) {
+    _writer.SstableKey(sst);
+    _writer.StartArray();
+}
+
+void mutation_fragment_json_writer::start_partition(const partition_start& ps) {
+    const auto& dk = ps.key();
+    _clustering_array_created = false;
+
+    _writer.StartObject();
+
+    _writer.Key("key");
+    _writer.DataKey(_schema, dk.key(), dk.token());
+
+    if (ps.partition_tombstone()) {
+        _writer.Key("tombstone");
+        write(ps.partition_tombstone());
+    }
+}
+
+void mutation_fragment_json_writer::partition_element(const static_row& sr) {
+    _writer.Key("static_row");
+    write(sr.cells(), column_kind::static_column);
+}
+
+void mutation_fragment_json_writer::partition_element(const clustering_row& cr) {
+    if (!_clustering_array_created) {
+        _writer.Key("clustering_elements");
+        _writer.StartArray();
+        _clustering_array_created = true;
+    }
+    write(cr);
+}
+
+void mutation_fragment_json_writer::partition_element(const range_tombstone_change& rtc) {
+    if (!_clustering_array_created) {
+        _writer.Key("clustering_elements");
+        _writer.StartArray();
+        _clustering_array_created = true;
+    }
+    write(rtc);
+}
+
+void mutation_fragment_json_writer::end_partition() {
+    if (_clustering_array_created) {
+        _writer.EndArray();
+    }
+    _writer.EndObject();
+}
+
+void mutation_fragment_json_writer::end_sstable() {
+    _writer.EndArray();
+}
+
+void mutation_fragment_json_writer::end_stream() {
+    _writer.EndStream();
+}
+
+} // namespace tools
+
+namespace {
+
 class dumping_consumer : public sstable_consumer {
     class text_dumper : public sstable_consumer {
         const schema& _schema;
     public:
         explicit text_dumper(const schema& s) : _schema(s) { }
-        virtual future<> on_start_of_stream() override {
+        virtual future<> consume_stream_start() override {
             fmt::print("{{stream_start}}\n");
             return make_ready_future<>();
         }
-        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+        virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
             fmt::print("{{sstable_start{}}}\n", sst ? fmt::format(": filename {}", sst->get_filename()) : "");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
@@ -319,265 +488,53 @@ class dumping_consumer : public sstable_consumer {
             fmt::print("{{partition_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<stop_iteration> on_end_of_sstable() override {
+        virtual future<stop_iteration> consume_sstable_end() override {
             fmt::print("{{sstable_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<> on_end_of_stream() override {
+        virtual future<> consume_stream_end() override {
             fmt::print("{{stream_end}}\n");
             return make_ready_future<>();
         }
     };
     class json_dumper : public sstable_consumer {
-        const schema& _schema;
-        json_writer _writer;
-        bool _clustering_array_created;
-    private:
-        sstring to_string(gc_clock::time_point tp) {
-            return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
-        }
-        void write(gc_clock::duration ttl, gc_clock::time_point expiry) {
-            _writer.Key("ttl");
-            _writer.AsString(ttl);
-            _writer.Key("expiry");
-            _writer.String(to_string(expiry));
-        }
-        template <typename Key>
-        void write_key(const Key& key) {
-            _writer.StartObject();
-            _writer.Key("raw");
-            _writer.String(to_hex(key.representation()));
-            _writer.Key("value");
-            _writer.AsString(key.with_schema(_schema));
-            _writer.EndObject();
-        }
-        void write(const tombstone& t) {
-            _writer.StartObject();
-            if (t) {
-                _writer.Key("timestamp");
-                _writer.Int64(t.timestamp);
-                _writer.Key("deletion_time");
-                _writer.String(to_string(t.deletion_time));
-            }
-            _writer.EndObject();
-        }
-        void write(const row_marker& m) {
-            _writer.StartObject();
-            _writer.Key("timestamp");
-            _writer.Int64(m.timestamp());
-            if (m.is_live() && m.is_expiring()) {
-                write(m.ttl(), m.expiry());
-            }
-            _writer.EndObject();
-        }
-        void write(counter_cell_view cv) {
-            _writer.StartArray();
-            for (const auto& shard : cv.shards()) {
-                _writer.StartObject();
-                _writer.Key("id");
-                _writer.AsString(shard.id());
-                _writer.Key("value");
-                _writer.Int64(shard.value());
-                _writer.Key("clock");
-                _writer.Int64(shard.logical_clock());
-                _writer.EndObject();
-            }
-            _writer.EndArray();
-        }
-        void write(const atomic_cell_view& cell, data_type type) {
-            _writer.StartObject();
-            _writer.Key("is_live");
-            _writer.Bool(cell.is_live());
-            _writer.Key("type");
-            if (type->is_counter()) {
-                if (cell.is_counter_update()) {
-                    _writer.String("counter-update");
-                } else {
-                    _writer.String("counter-shards");
-                }
-            } else if (type->is_collection()) {
-                _writer.String("frozen-collection");
-            } else {
-                _writer.String("regular");
-            }
-            _writer.Key("timestamp");
-            _writer.Int64(cell.timestamp());
-            if (type->is_counter()) {
-                _writer.Key("value");
-                if (cell.is_counter_update()) {
-                    _writer.Int64(cell.counter_update_value());
-                } else {
-                    write(counter_cell_view(cell));
-                }
-            } else {
-                if (cell.is_live_and_has_ttl()) {
-                    write(cell.ttl(), cell.expiry());
-                }
-                if (cell.is_live()) {
-                    _writer.Key("value");
-                    _writer.String(type->to_string(cell.value().linearize()));
-                } else {
-                    _writer.Key("deletion_time");
-                    _writer.String(to_string(cell.deletion_time()));
-                }
-            }
-            _writer.EndObject();
-        }
-        void write(const collection_mutation_view_description& mv, data_type type) {
-            _writer.StartObject();
-
-            if (mv.tomb) {
-                _writer.Key("tombstone");
-                write(mv.tomb);
-            }
-
-            _writer.Key("cells");
-
-            std::function<void(size_t, bytes_view)> write_key;
-            std::function<void(size_t, atomic_cell_view)> write_value;
-            if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-                write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
-                write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
-            } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-                write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
-                write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
-            }
-
-            if (write_key && write_value) {
-                _writer.StartArray();
-                for (size_t i = 0; i < mv.cells.size(); ++i) {
-                    _writer.StartObject();
-                    _writer.Key("key");
-                    write_key(i, mv.cells[i].first);
-                    _writer.Key("value");
-                    write_value(i, mv.cells[i].second);
-                    _writer.EndObject();
-                }
-                _writer.EndArray();
-            } else {
-                _writer.Null();
-            }
-
-            _writer.EndObject();
-        }
-        void write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
-            if (cdef.is_atomic()) {
-                write(cell.as_atomic_cell(cdef), cdef.type);
-            } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-                cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
-                    write(mv, cdef.type);
-                });
-            } else {
-                _writer.Null();
-            }
-        }
-        void write(const row& r, column_kind kind) {
-            _writer.StartObject();
-            r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
-                auto cdef = _schema.column_at(kind, id);
-                _writer.Key(cdef.name_as_text());
-                write(cell, cdef);
-            });
-            _writer.EndObject();
-        }
-        void write(const clustering_row& cr) {
-            _writer.StartObject();
-            _writer.Key("type");
-            _writer.String("clustering-row");
-            _writer.Key("key");
-            write_key(cr.key());
-            if (cr.tomb()) {
-                _writer.Key("tombstone");
-                write(cr.tomb().regular());
-                _writer.Key("shadowable_tombstone");
-                write(cr.tomb().shadowable().tomb());
-            }
-            if (!cr.marker().is_missing()) {
-                _writer.Key("marker");
-                write(cr.marker());
-            }
-            _writer.Key("columns");
-            write(cr.cells(), column_kind::regular_column);
-            _writer.EndObject();
-        }
-        void write(const range_tombstone_change& rtc) {
-            _writer.StartObject();
-            _writer.Key("type");
-            _writer.String("range-tombstone-change");
-            const auto pos = rtc.position();
-            if (pos.has_key()) {
-                _writer.Key("key");
-                write_key(pos.key());
-            }
-            _writer.Key("weight");
-            _writer.Int(static_cast<int>(pos.get_bound_weight()));
-            _writer.Key("tombstone");
-            write(rtc.tombstone());
-            _writer.EndObject();
-        }
+        tools::mutation_fragment_json_writer _writer;
     public:
-        explicit json_dumper(const schema& s) : _schema(s) {}
-        virtual future<> on_start_of_stream() override {
-            _writer.StartStream();
+        explicit json_dumper(const schema& s) : _writer(s) {}
+        virtual future<> consume_stream_start() override {
+            _writer.start_stream();
             return make_ready_future<>();
         }
-        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
-            _writer.SstableKey(sst);
-            _writer.StartArray();
+        virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
+            _writer.start_sstable(sst);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_start&& ps) override {
-            const auto& dk = ps.key();
-            _clustering_array_created = false;
-
-            _writer.StartObject();
-
-            _writer.Key("key");
-            _writer.PartitionKey(_schema, dk.key(), dk.token());
-
-            if (ps.partition_tombstone()) {
-                _writer.Key("tombstone");
-                write(ps.partition_tombstone());
-            }
-
+            _writer.start_partition(ps);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(static_row&& sr) override {
-            _writer.Key("static_row");
-            write(sr.cells(), column_kind::static_column);
+            _writer.partition_element(sr);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(clustering_row&& cr) override {
-            if (!_clustering_array_created) {
-                _writer.Key("clustering_elements");
-                _writer.StartArray();
-                _clustering_array_created = true;
-            }
-            write(cr);
+            _writer.partition_element(cr);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-            if (!_clustering_array_created) {
-                _writer.Key("clustering_elements");
-                _writer.StartArray();
-                _clustering_array_created = true;
-            }
-            write(rtc);
+            _writer.partition_element(rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
-            if (_clustering_array_created) {
-                _writer.EndArray();
-            }
-            _writer.EndObject();
+            _writer.end_partition();
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<stop_iteration> on_end_of_sstable() override {
-            _writer.EndArray();
+        virtual future<stop_iteration> consume_sstable_end() override {
+            _writer.end_sstable();
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
-        virtual future<> on_end_of_stream() override {
-            _writer.EndStream();
+        virtual future<> consume_stream_end() override {
+            _writer.end_stream();
             return make_ready_future<>();
         }
     };
@@ -598,15 +555,15 @@ public:
                 break;
         }
     }
-    virtual future<> on_start_of_stream() override { return _consumer->on_start_of_stream(); }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override { return _consumer->on_new_sstable(sst); }
+    virtual future<> consume_stream_start() override { return _consumer->consume_stream_start(); }
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override { return _consumer->consume_sstable_start(sst); }
     virtual future<stop_iteration> consume(partition_start&& ps) override { return _consumer->consume(std::move(ps)); }
     virtual future<stop_iteration> consume(static_row&& sr) override { return _consumer->consume(std::move(sr)); }
     virtual future<stop_iteration> consume(clustering_row&& cr) override { return _consumer->consume(std::move(cr)); }
     virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override { return _consumer->consume(std::move(rtc)); }
     virtual future<stop_iteration> consume(partition_end&& pe) override { return _consumer->consume(std::move(pe)); }
-    virtual future<stop_iteration> on_end_of_sstable() override { return _consumer->on_end_of_sstable(); }
-    virtual future<> on_end_of_stream() override { return _consumer->on_end_of_stream(); }
+    virtual future<stop_iteration> consume_sstable_end() override { return _consumer->consume_sstable_end(); }
+    virtual future<> consume_stream_end() override { return _consumer->consume_stream_end(); }
 };
 
 class writetime_histogram_collecting_consumer : public sstable_consumer {
@@ -716,10 +673,10 @@ public:
             }
         }
     }
-    virtual future<> on_start_of_stream() override {
+    virtual future<> consume_stream_start() override {
         return make_ready_future<>();
     }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+    virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     virtual future<stop_iteration> consume(partition_start&& ps) override {
@@ -744,10 +701,10 @@ public:
     virtual future<stop_iteration> consume(partition_end&& pe) override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<stop_iteration> on_end_of_sstable() override {
+    virtual future<stop_iteration> consume_sstable_end() override {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    virtual future<> on_end_of_stream() override {
+    virtual future<> consume_stream_end() override {
         if (_histogram.empty()) {
             sst_log.info("Histogram empty, no data to write");
             co_return;
@@ -786,47 +743,10 @@ public:
     }
 };
 
-// scribble here, then call with --operation=custom
-class custom_consumer : public sstable_consumer {
-    schema_ptr _schema;
-    reader_permit _permit;
-public:
-    explicit custom_consumer(schema_ptr s, reader_permit p, const bpo::variables_map&)
-        : _schema(std::move(s)), _permit(std::move(p))
-    { }
-    virtual future<> on_start_of_stream() override {
-        return make_ready_future<>();
-    }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_start&& ps) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(static_row&& sr) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(clustering_row&& cr) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_end&& pe) override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> on_end_of_sstable() override {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<> on_end_of_stream() override {
-        return make_ready_future<>();
-    }
-};
-
 stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
     auto close_rd = deferred_close(rd);
-    if (consumer.on_new_sstable(sst).get() == stop_iteration::yes) {
-        return consumer.on_end_of_sstable().get();
+    if (consumer.consume_sstable_start(sst).get() == stop_iteration::yes) {
+        return consumer.consume_sstable_end().get();
     }
     bool skip_partition = false;
     consumer_wrapper::filter_type filter;
@@ -838,16 +758,17 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
             return pass;
         };
     }
+    auto wrapper = consumer_wrapper(consumer, filter);
     while (!rd.is_end_of_stream()) {
         skip_partition = false;
-        rd.consume_pausable(consumer_wrapper(consumer, filter)).get();
+        rd.consume_pausable(std::ref(wrapper)).get();
         sst_log.trace("consumer paused, skip_partition={}", skip_partition);
         if (!rd.is_end_of_stream() && !skip_partition) {
-            if (auto* mfp = rd.peek().get(); mfp && !mfp->is_partition_start()) {
+            if (wrapper.last_kind() == mutation_fragment_v2::kind::partition_end) {
                 sst_log.trace("consumer returned stop_iteration::yes for partition end, stopping");
                 break;
             }
-            if (consumer.consume(partition_end{}).get() == stop_iteration::yes) {
+            if (wrapper(mutation_fragment_v2(*rd.schema(), rd.permit(), partition_end{})).get() == stop_iteration::yes) {
                 sst_log.trace("consumer returned stop_iteration::yes for synthetic partition end, stopping");
                 break;
             }
@@ -862,7 +783,7 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
             }
         }
     }
-    return consumer.on_end_of_sstable().get();
+    return consumer.consume_sstable_end().get();
 }
 
 void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstables::shared_sstable> sstables, bool merge, bool use_crawling_reader,
@@ -961,7 +882,7 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
 
             writer.StartObject();
             writer.Key("key");
-            writer.PartitionKey(*schema, pkey);
+            writer.DataKey(*schema, pkey);
             writer.Key("pos");
             writer.Uint64(pos);
             writer.EndObject();
@@ -1059,7 +980,7 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
             auto pkey = e.get_key().to_partition_key(*schema);
             writer.Key("key");
-            writer.PartitionKey(*schema, pkey, e.token);
+            writer.DataKey(*schema, pkey, e.token);
             writer.Key("position");
             writer.Uint64(e.position);
 
@@ -1069,11 +990,11 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
         auto first_key = sstables::key_view(summary.first_key.value).to_partition_key(*schema);
         writer.Key("first_key");
-        writer.PartitionKey(*schema, first_key);
+        writer.DataKey(*schema, first_key);
 
         auto last_key = sstables::key_view(summary.last_key.value).to_partition_key(*schema);
         writer.Key("last_key");
-        writer.PartitionKey(*schema, last_key);
+        writer.DataKey(*schema, last_key);
 
         writer.EndObject();
     }
@@ -2449,6 +2370,26 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
 }
 
+void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& manager, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::runtime_error("error: no sstables specified on the command line");
+    }
+    const auto merge = vm.count("merge");
+    const auto partitions = partition_set(0, {}, decorated_key_equal(*schema));
+    if (!vm.count("script-file")) {
+        throw std::invalid_argument("error: missing required option '--script-file'");
+    }
+    const auto script_file = vm["script-file"].as<std::string>();
+    auto script_params = vm["script-arg"].as<program_options::string_map>();
+    auto consumer = make_lua_sstable_consumer(schema, permit, script_file, std::move(script_params)).get();
+    consumer->consume_stream_start().get();
+    consume_sstables(schema, permit, sstables, merge, false, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
+        return consume_reader(std::move(rd), consumer, sst, partitions, false);
+    });
+    consumer->consume_stream_end().get();
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
@@ -2460,11 +2401,11 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     const auto partitions = get_partitions(schema, vm);
     const auto use_crawling_reader = no_skips || partitions.empty();
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
-    consumer->on_start_of_stream().get();
+    consumer->consume_stream_start().get();
     consume_sstables(schema, permit, sstables, merge, use_crawling_reader, [&, &consumer = *consumer] (flat_mutation_reader_v2& rd, sstables::sstable* sst) {
         return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
     });
-    consumer->on_end_of_stream().get();
+    consumer->consume_stream_end().get();
 }
 
 class basic_option {
@@ -2527,6 +2468,8 @@ const std::vector<option> all_options {
     typed_option<std::string>("output-dir", ".", "directory to place the output files to"),
     typed_option<int64_t>("generation", "generation of generated sstable"),
     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
+    typed_option<std::string>("script-file", "script file to load and execute"),
+    typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
 };
 
 const std::vector<operation> operations{
@@ -2660,15 +2603,6 @@ following example python script:
 )",
             {"bucket"},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
-/* custom */
-    {"custom",
-            "Hackable custom operation for expert users, until scripting support is implemented",
-R"(
-Poor man's scripting support. Aimed at developers as it requires editing C++
-source code and re-building the binary. Will be replaced by proper scripting
-support soon (don't quote me on that).
-)",
-            sstable_consumer_operation<custom_consumer>},
 /* validate */
     {"validate",
             "Validate the sstable(s), same as scrub in validate mode",
@@ -2734,6 +2668,17 @@ for more information on this operation, including the schema of the JSON input.
 )",
             {"input-file", "output-dir", "generation", "validation-level"},
             write_operation},
+    {"script",
+            "Run a script on content of an sstable",
+R"(
+Read the sstable(s) and pass the resulting fragment stream to the script
+specified by `--script-file`. Currently only Lua scripts are supported.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#script
+for more information on this operation, including the API documentation.
+)",
+            {"merge", "script-file", "script-arg"},
+            script_operation},
 };
 
 } // anonymous namespace

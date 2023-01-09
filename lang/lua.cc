@@ -9,6 +9,7 @@
 #include <boost/date_time/gregorian/greg_date.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include "lua.hh"
+#include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
 #include "concrete_types.hh"
 #include "utils/utf8.hh"
@@ -27,6 +28,7 @@
 #endif
 
 using namespace seastar;
+using namespace lua;
 
 static logging::logger lua_logger("lua");
 
@@ -100,7 +102,7 @@ static void* lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 
 static const luaL_Reg loadedlibs[] = {
     {"_G", luaopen_base},
-    {LUA_COLIBNAME, luaopen_string},
+    {LUA_STRLIBNAME, luaopen_string},
     {LUA_COLIBNAME, luaopen_coroutine},
     {LUA_TABLIBNAME, luaopen_table},
     {NULL, NULL},
@@ -191,20 +193,8 @@ static big_decimal* get_decimal(lua_State* l, int arg) {
     return nullptr;
 }
 
-template <typename T>
-static T* aligned_used_data(lua_State* l) {
-    constexpr size_t alignment = alignof(T);
-    // We know lua_newuserdata aligns allocations to 8, so we need a
-    // padding of at most alignment - 8 to find a sufficiently aligned
-    // address.
-    static_assert(alignment>= 8);
-    constexpr size_t pad = alignment - 8;
-    char* p = reinterpret_cast<char*>(lua_newuserdata(l, sizeof(T) + pad));
-    return reinterpret_cast<T*>(align_up(p, alignment));
-}
-
 static void push_big_decimal(lua_State* l, const big_decimal& v) {
-    auto* p = aligned_used_data<big_decimal>(l);
+    auto* p = aligned_user_data<big_decimal>(l);
     new (p) big_decimal(v);
     luaL_setmetatable(l, scylla_decimal_metatable_name);
 }
@@ -421,10 +411,7 @@ static int load_script_l(lua_State* l) {
         lua_pop(l, 1);
     }
 
-    luaL_newmetatable(l, scylla_decimal_metatable_name);
-    lua_pushvalue(l, -1);
-    lua_setfield(l, -2, "__index");
-    luaL_setfuncs(l, decimal_methods, 0);
+    lua::register_metatables(l);
 
     if (luaL_loadbufferx(l, binary.data(), binary.size(), "<internal>", "b")) {
         lua_error(l);
@@ -473,7 +460,7 @@ static sstring get_string(lua_State *l, int index) {
         }));
 }
 
-static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
+static data_value convert_from_lua(lua_State* l, const data_type& type);
 
 namespace {
 struct lua_date_table {
@@ -541,7 +528,7 @@ static lua_date_table get_lua_date_table(lua_State* l, int index) {
 }
 
 struct simple_date_return_visitor {
-    lua_slice_state& l;
+    lua_State* l;
     template <typename T>
     uint32_t operator()(const T&) {
         throw exceptions::invalid_request_exception("date must be a string, integer or date table");
@@ -559,7 +546,7 @@ struct simple_date_return_visitor {
 };
 
 struct timestamp_return_visitor {
-    lua_slice_state& l;
+    lua_State* l;
     template <typename T>
     db_clock::time_point operator()(const T&) {
         throw exceptions::invalid_request_exception("timestamp must be a string, integer or date table");
@@ -578,7 +565,7 @@ struct timestamp_return_visitor {
 };
 
 struct from_lua_visitor {
-    lua_slice_state& l;
+    lua_State* l;
 
     data_value operator()(const reversed_type_impl& t) {
         // This is unreachable since reversed_type_impl is used only
@@ -890,7 +877,7 @@ db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
 }
 }
 
-static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {
+static data_value convert_from_lua(lua_State* l, const data_type& type) {
     if (lua_isnil(l, -1)) {
         return data_value::make_null(type);
     }
@@ -910,15 +897,15 @@ static bytes_opt convert_return(lua_slice_state &l, const data_type& return_type
     return convert_from_lua(l, return_type).serialize();
 }
 
-static void push_sstring(lua_slice_state& l, const sstring& v) {
+void lua::push_sstring(lua_State* l, const sstring& v) {
     lua_pushlstring(l, v.c_str(), v.size());
 }
 
-static void push_argument(lua_slice_state& l, const data_value& arg);
+static void push_argument(lua_State* l, const data_value& arg);
 
 namespace {
 struct to_lua_visitor {
-    lua_slice_state& l;
+    lua_State* l;
 
     void operator()(const varint_type_impl& t, const emptyable<utils::multiprecision_int>* v) {
         push_cpp_int(l, *v);
@@ -1054,7 +1041,7 @@ struct to_lua_visitor {
 };
 }
 
-static void push_argument(lua_slice_state& l, const data_value& arg) {
+static void push_argument(lua_State* l, const data_value& arg) {
     if (arg.is_null()) {
         lua_pushnil(l);
         return;
@@ -1110,4 +1097,24 @@ future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<d
                                                         lua_tostring(l, -1));
         }
     });
+}
+
+namespace lua {
+
+void register_metatables(lua_State* l) {
+    luaL_newmetatable(l, scylla_decimal_metatable_name);
+    lua_pushvalue(l, -1);
+    lua_setfield(l, -2, "__index");
+    luaL_setfuncs(l, decimal_methods, 0);
+    lua_pop(l, 1);
+}
+
+void push_data_value(lua_State* l, const data_value& value) {
+    push_argument(l, value);
+}
+
+data_value pop_data_value(lua_State* l, const data_type& type) {
+    return convert_from_lua(l, type);
+}
+
 }
