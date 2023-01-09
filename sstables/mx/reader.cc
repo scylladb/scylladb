@@ -22,7 +22,12 @@ public:
     mp_row_consumer_reader_mx(schema_ptr s, reader_permit permit, shared_sstable sst)
         : mp_row_consumer_reader_base(std::move(sst))
         , impl(std::move(s), std::move(permit))
-    { }
+    {
+        _permit.on_start_sstable_read();
+    }
+    virtual ~mp_row_consumer_reader_mx() {
+        _permit.on_finish_sstable_read();
+    }
 
     void on_next_partition(dht::decorated_key, tombstone);
 };

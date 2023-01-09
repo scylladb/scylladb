@@ -157,6 +157,9 @@ public:
 
     query::max_result_size max_result_size() const;
     void set_max_result_size(query::max_result_size);
+
+    void on_start_sstable_read() noexcept;
+    void on_finish_sstable_read() noexcept;
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;

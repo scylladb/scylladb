@@ -83,6 +83,10 @@ public:
         uint64_t used_permits = 0;
         // Current number of blocked permits.
         uint64_t blocked_permits = 0;
+        // Current number of reads reading from the disk.
+        uint64_t disk_reads = 0;
+        // The number of sstables read currently.
+        uint64_t sstables_read = 0;
     };
 
     using permit_list_type = bi::list<
@@ -419,6 +423,10 @@ public:
         return _resources;
     }
 
+    const resources consumed_resources() const {
+        return _initial_resources - _resources;
+    }
+
     void consume(resources r) {
         _resources -= r;
     }
@@ -439,5 +447,9 @@ public:
 
     void set_max_queue_length(size_t size) {
         _max_queue_length = size;
+    }
+
+    uint64_t active_reads() const noexcept {
+        return _stats.current_permits - _stats.inactive_reads - waiters();
     }
 };
