@@ -12,14 +12,38 @@ import asyncio
 import random
 import time
 
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
 from cassandra.cluster import Session
 from test.pylib.random_tables import RandomTables
+from test.pylib.rest_client import inject_error
 
 logger = logging.getLogger(__name__)
+
+
+async def get_token_ring_host_ids(manager: ManagerClient, srv: ServerInfo) -> set[str]:
+    """Get the host IDs of token ring members known by `srv`."""
+    host_id_map = await manager.api.client.get_json('/storage_service/host_id', srv.ip_addr)
+    return {e['value'] for e in host_id_map}
+
+
+async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> set[tuple[str, bool]]:
+    """Get the current Raft group 0 configuration known by `srv`.
+       The first element of each tuple is the Raft ID of the node (which is equal to the Host ID),
+       the second element indicates whether the node is a voter.
+     """
+    assert(manager.cql)
+    host = (await wait_for_cql_and_get_hosts(manager.cql, [srv], time.time() + 60))[0]
+    group0_id = (await manager.cql.run_async(
+        "select value from system.scylla_local where key = 'raft_group0_id'",
+        host=host))[0].value
+    config = await manager.cql.run_async(
+        f"select server_id, can_vote from system.raft_state where group_id = {group0_id} and disposition = 'CURRENT'",
+        host=host)
+    return {(str(m.server_id), bool(m.can_vote)) for m in config}
 
 
 @pytest.mark.asyncio
@@ -169,6 +193,119 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     logger.info(f'Creating new tables')
     await random_tables.add_tables(ntables=4, ncolumns=5)
     await random_tables.verify_schema()
+
+
+@pytest.mark.asyncio
+async def test_remove_garbage_group0_members(manager: ManagerClient, random_tables):
+    """
+    Verify that failing to leave group 0 or remove a node from group 0 in removenode/decommission
+    can be handled by executing removenode (which should clear the 'garbage' group 0 member),
+    even though the node is no longer a token ring member.
+    """
+    # 4 servers, one dead
+    await manager.server_add()
+    servers = await manager.running_servers()
+    removed_host_id = await manager.get_host_id(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[0].server_id)
+
+    logging.info(f'removenode {servers[0]} using {servers[1]}')
+    # removenode will fail after removing the server from the token ring,
+    # but before removing it from group 0
+    async with inject_error(manager.api, servers[1].ip_addr,
+                            'removenode_fail_before_remove_from_group0', one_shot=True):
+        try:
+            await manager.remove_node(servers[1].server_id, servers[0].server_id)
+        except Exception:
+            # Note: the exception returned here is only '500 internal server error',
+            # need to look in test.py log for the actual message coming from Scylla.
+            logging.info(f'expected exception during injection')
+
+    # Query the storage_service/host_id endpoint to calculate a list of known token ring members' Host IDs
+    # (internally, this endpoint uses token_metadata)
+    token_ring_ids = await get_token_ring_host_ids(manager, servers[1])
+    logging.info(f'token ring members: {token_ring_ids}')
+
+    group0_members = await get_current_group0_config(manager, servers[1])
+    logging.info(f'group 0 members: {group0_members}')
+    group0_ids = {m[0] for m in group0_members}
+
+    # Token ring members should currently be a subset of group 0 members
+    assert token_ring_ids <= group0_ids
+
+    garbage_members = group0_ids - token_ring_ids
+    logging.info(f'garbage members: {garbage_members}')
+    assert len(garbage_members) == 1
+    garbage_member = next(iter(garbage_members))
+
+    # The garbage member is the one that we failed to remove
+    assert garbage_member == removed_host_id
+
+    # Verify that at least it's a non-voter.
+    assert garbage_member in {m[0] for m in group0_members if not m[1]}
+
+    logging.info(f'removenode {servers[0]} using {servers[1]} again')
+    # Retry removenode. It should skip the token ring removal step and remove the server from group 0.
+    await manager.remove_node(servers[1].server_id, servers[0].server_id)
+
+    group0_members = await get_current_group0_config(manager, servers[1])
+    logging.info(f'group 0 members: {group0_members}')
+    group0_ids = {m[0] for m in group0_members}
+
+    # Token ring members and group 0 members should now be the same.
+    assert token_ring_ids == group0_ids
+
+    # Verify that availability is not reduced.
+    # Stop one of the 3 remaining servers and try to remove it. It should succeed with only 2 servers.
+
+    logging.info(f'stop {servers[1]}')
+    await manager.server_stop_gracefully(servers[1].server_id)
+
+    logging.info(f'removenode {servers[1]} using {servers[2]}')
+    await manager.remove_node(servers[2].server_id, servers[1].server_id)
+
+    # Perform a similar scenario with decommission. One of the node fails to decommission fully,
+    # but it manages to leave the token ring. We observe the leftovers using the same APIs as above
+    # and remove the leftovers.
+    # We can do this with only 2 nodes because during decommission we become a non-voter before
+    # leaving the token ring, thus the remaining single node will become a voting majority
+    # and will be able to perform removenode alone.
+
+    decommissioned_host_id = await manager.get_host_id(servers[2].server_id)
+    await manager.api.enable_injection(
+        servers[2].ip_addr, 'decommission_fail_before_leave_group0', one_shot=True)
+    logging.info(f'decommission {servers[2]}')
+    try:
+        await manager.decommission_node(servers[2].server_id)
+    except Exception:
+        logging.info(f'expected exception during injection')
+    logging.info(f'stop {servers[2]}')
+    await manager.server_stop_gracefully(servers[2].server_id)
+
+    token_ring_ids = await get_token_ring_host_ids(manager, servers[3])
+    logging.info(f'token ring members: {token_ring_ids}')
+
+    group0_members = await get_current_group0_config(manager, servers[3])
+    logging.info(f'group 0 members: {group0_members}')
+    group0_ids = {m[0] for m in group0_members}
+
+    assert token_ring_ids <= group0_ids
+
+    garbage_members = group0_ids - token_ring_ids
+    logging.info(f'garbage members: {garbage_members}')
+    assert len(garbage_members) == 1
+    garbage_member = next(iter(garbage_members))
+
+    assert garbage_member == decommissioned_host_id
+    assert garbage_member in {m[0] for m in group0_members if not m[1]}
+
+    logging.info(f'removenode {servers[2]} using {servers[3]}')
+    await manager.remove_node(servers[3].server_id, servers[2].server_id)
+
+    group0_members = await get_current_group0_config(manager, servers[3])
+    logging.info(f'group 0 members: {group0_members}')
+    group0_ids = {m[0] for m in group0_members}
+
+    assert token_ring_ids == group0_ids
 
 
 @pytest.mark.asyncio

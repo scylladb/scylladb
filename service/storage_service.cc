@@ -2104,6 +2104,9 @@ future<> storage_service::decommission() {
             // --- hence the `left_token_ring` check.
             std::exception_ptr leave_group0_ex;
             try {
+                utils::get_local_injector().inject("decommission_fail_before_leave_group0",
+                    [] { throw std::runtime_error("decommission_fail_before_leave_group0"); });
+
                 if (raft_available && left_token_ring) {
                     slogger.info("decommission[{}]: leaving Raft group 0", uuid);
                     assert(ss._group0);
@@ -2556,6 +2559,9 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             // If the node was a token ring member but we failed to remove it,
             // don't remove it from group 0 -- hence the `removed_from_token_ring` check.
             try {
+                utils::get_local_injector().inject("removenode_fail_before_remove_from_group0",
+                    [] { throw std::runtime_error("removenode_fail_before_remove_from_group0"); });
+
                 if (is_group0_member && removed_from_token_ring) {
                     slogger.info("removenode[{}]: removing node {} from Raft group 0", uuid, raft_id);
                     ss._group0->remove_from_group0(raft_id).get();
