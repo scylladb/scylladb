@@ -25,11 +25,14 @@ thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
     .rack = locator::production_snitch_base::default_rack,
 };
 
+thread_local node::idx_type node::_last_idx;
+
 node::node(::locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, local is_local)
     : _host_id(id)
     , _endpoint(endpoint)
     , _dc_rack(std::move(dc_rack))
     , _is_local(is_local)
+    , _idx(++_last_idx)
 {}
 
 future<> topology::clear_gently() noexcept {
@@ -38,6 +41,7 @@ future<> topology::clear_gently() noexcept {
     _datacenters.clear();
     _dc_rack_nodes.clear();
     _dc_nodes.clear();
+    _nodes_by_idx.clear();
     _nodes_by_endpoint.clear();
     _nodes_by_host_id.clear();
     _local_node = {};
@@ -67,6 +71,7 @@ topology::topology(topology&& o) noexcept
     , _local_node(std::move(o._local_node))
     , _nodes_by_host_id(std::move(o._nodes_by_host_id))
     , _nodes_by_endpoint(std::move(o._nodes_by_endpoint))
+    , _nodes_by_idx(std::move(o._nodes_by_idx))
     , _dc_nodes(std::move(o._dc_nodes))
     , _dc_rack_nodes(std::move(o._dc_rack_nodes))
     , _dc_endpoints(std::move(o._dc_endpoints))
@@ -87,6 +92,7 @@ future<topology> topology::clone_gently() const {
         ret._local_node = _local_node;
         ret._nodes_by_host_id = _nodes_by_host_id;
         ret._nodes_by_endpoint = _nodes_by_endpoint;
+        ret._nodes_by_idx = _nodes_by_idx;
         ret._dc_nodes = _dc_nodes;
         ret._dc_rack_nodes = _dc_rack_nodes;
         ret._dc_endpoints = _dc_endpoints;
@@ -157,6 +163,18 @@ node_ptr topology::add_node(mutable_node_ptr node) {
                         node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack,
                         eit->second->host_id()));
             }
+        }
+        auto [iit, inserted_idx] = _nodes_by_idx.emplace(node->idx(), node.get());
+        if (!inserted_idx && iit->second != node.get()) {
+            if (node->host_id()) {
+                _nodes_by_host_id.erase(node->host_id());
+            }
+            if (node->endpoint() != inet_address{}) {
+                _nodes_by_endpoint.erase(node->endpoint());
+            }
+            on_internal_error(tlogger, format("Node idx already mapped: host_id={} endpoint={} idx={} dc={} rack={}: currently mapped to host_id={}",
+                    node->host_id(), node->endpoint(), node->idx(), node->dc_rack().dc, node->dc_rack().rack,
+                    iit->second->host_id()));
         }
 
         const auto& dc = node->dc_rack().dc;
@@ -314,6 +332,7 @@ void topology::do_remove_node(mutable_node_ptr node) {
     }
     _nodes_by_host_id.erase(node->host_id());
     _nodes_by_endpoint.erase(node->endpoint());
+    _nodes_by_idx.erase(node->idx());
     _all_nodes.erase(node);
 }
 
@@ -339,6 +358,19 @@ node_ptr topology::find_node(const inet_address& ep, must_exist must_exist) cons
     }
     if (must_exist) {
         on_internal_error(tlogger, format("Could not find node: endpoint={}", ep));
+    }
+    return nullptr;
+}
+
+// Finds a node by its index
+// Returns nullptr if not found
+node_ptr topology::find_node(node::idx_type idx, must_exist must_exist) const noexcept {
+    auto it = _nodes_by_idx.find(idx);
+    if (it != _nodes_by_idx.end()) {
+        return it->second->shared_from_this();
+    }
+    if (must_exist) {
+        on_internal_error(tlogger, format("Could not find node: idx={}", idx));
     }
     return nullptr;
 }
