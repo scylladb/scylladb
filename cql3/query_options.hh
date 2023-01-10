@@ -81,23 +81,10 @@ private:
     // evaluation sites and we only have a const reference to `query_options`.
     mutable computed_function_values _cached_pk_fn_calls;
 private:
-    /**
-     * @brief Batch query_options constructor.
-     *
-     * Requirements:
-     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
-     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
-     *
-     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
-     * @param values_ranges a vector of values ranges for each statement in the batch.
-     */
-    template<typename OneMutationDataRange>
-    requires requires (OneMutationDataRange range) {
-         std::begin(range);
-         std::end(range);
-    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-           requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-    explicit query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges);
+    // Batch constructor.
+    template <typename Value>
+    requires std::same_as<Value, raw_value> || std::same_as<Value, raw_value_view>
+    explicit query_options(query_options&& o, std::vector<std::vector<Value>> values_ranges);
 
 public:
     query_options(query_options&&) = default;
@@ -126,23 +113,9 @@ public:
                            specific_options options
                            );
 
-    /**
-     * @brief Batch query_options factory.
-     *
-     * Requirements:
-     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
-     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
-     *
-     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
-     * @param values_ranges a vector of values ranges for each statement in the batch.
-     */
-    template<typename OneMutationDataRange>
-    requires requires (OneMutationDataRange range) {
-         std::begin(range);
-         std::end(range);
-    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-           requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-    static query_options make_batch_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges) {
+    template <typename Value>
+    requires std::same_as<Value, raw_value> || std::same_as<Value, raw_value_view>
+    static query_options make_batch_options(query_options&& o, std::vector<std::vector<Value>> values_ranges) {
         return query_options(std::move(o), std::move(values_ranges));
     }
 
@@ -264,13 +237,9 @@ private:
     void fill_value_views();
 };
 
-template<typename OneMutationDataRange>
-requires requires (OneMutationDataRange range) {
-     std::begin(range);
-     std::end(range);
-} && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-       requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-query_options::query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges)
+template <typename Value>
+requires std::same_as<Value, raw_value> || std::same_as<Value, raw_value_view>
+query_options::query_options(query_options&& o, std::vector<std::vector<Value>> values_ranges)
     : query_options(std::move(o))
 {
     std::vector<query_options> tmp;
