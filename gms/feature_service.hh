@@ -113,6 +113,7 @@ public:
     gms::feature collection_indexing { *this, "COLLECTION_INDEXING"sv };
     gms::feature large_collection_detection { *this, "LARGE_COLLECTION_DETECTION"sv };
     gms::feature secondary_indexes_on_static_columns { *this, "SECONDARY_INDEXES_ON_STATIC_COLUMNS"sv };
+    gms::feature parallelized_aggregations_with_timeouts { *this, "PARALLELIZED_AGGREGATIONS_WITH_TIMEOUTS"sv };
 
 public:
 
