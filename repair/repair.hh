@@ -332,7 +332,7 @@ struct node_ops_cmd_request {
             std::unordered_map<locator::node_ptr, std::list<dht::token>> bootstrap_nodes = {},
             std::list<table_id> tables = {});
 
-    std::list<gms::inet_address> get_ignore_nodes();
+    locator::node_set get_ignore_nodes(const locator::topology& topo);
     std::list<gms::inet_address> get_leaving_nodes();
     std::unordered_map<gms::inet_address, gms::inet_address> get_replace_nodes();
     std::unordered_map<gms::inet_address, std::list<dht::token>> get_bootstrap_nodes();

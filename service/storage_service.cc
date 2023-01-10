@@ -2643,15 +2643,19 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (leaving_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "removenode[{}]: Could not removenode more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
-            auto ignore_nodes = req.get_ignore_nodes();
-            mutate_token_metadata([coordinator, &req, &leaving_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+            locator::node_set ignore_nodes;
+            mutate_token_metadata([coordinator, &req, &leaving_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+                auto& topo = tmptr->get_topology();
+                ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& node : leaving_nodes) {
                     slogger.info("removenode[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                     tmptr->add_leaving_endpoint(node);
                 }
                 return update_pending_ranges(tmptr, format("removenode {}", leaving_nodes));
             }).get();
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
+            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
+                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2693,15 +2697,19 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (leaving_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
-            auto ignore_nodes = req.get_ignore_nodes();
-            mutate_token_metadata([coordinator, &req, &leaving_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+            locator::node_set ignore_nodes;
+            mutate_token_metadata([coordinator, &req, &leaving_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+                auto& topo = tmptr->get_topology();
+                ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& node : leaving_nodes) {
                     slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                     tmptr->add_leaving_endpoint(node);
                 }
                 return update_pending_ranges(tmptr, format("decommission {}", leaving_nodes));
             }).get();
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
+            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
+                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2752,7 +2760,10 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (replace_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, replace_nodes);
             }
-            mutate_token_metadata([coordinator, &req, &replace_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+            locator::node_set ignore_nodes;
+            mutate_token_metadata([coordinator, &req, &replace_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+                auto& topo = tmptr->get_topology();
+                ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& x: replace_nodes) {
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
@@ -2762,8 +2773,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return make_ready_future<>();
             }).get();
-            auto ignore_nodes = req.get_ignore_nodes();
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] () mutable {
+            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
+                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: replace_nodes) {
                         auto existing_node = x.first;
@@ -2808,7 +2820,10 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (bootstrap_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, bootstrap_nodes);
             }
-            mutate_token_metadata([coordinator, &req, &bootstrap_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+            locator::node_set ignore_nodes;
+            mutate_token_metadata([coordinator, &req, &bootstrap_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+                auto& topo = tmptr->get_topology();
+                ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& x: bootstrap_nodes) {
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
@@ -2818,8 +2833,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", bootstrap_nodes));
             }).get();
-            auto ignore_nodes = req.get_ignore_nodes();
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] () mutable {
+            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
+                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: bootstrap_nodes) {
                         auto& endpoint = x.first;
