@@ -121,6 +121,7 @@ std::set<std::string_view> feature_service::supported_feature_set() {
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
         "LARGE_COLLECTION_DETECTION"sv,
+        "NODE_OPS_CMD_V2"
     };
 
     for (auto& [name, f_ref] : _registered_features) {
