@@ -37,7 +37,7 @@ versions used in the last successful build. Dependency modification may include:
  * adding a new dependency to a package
 
 After each such modification, a new Cargo.lock file should be submitted. Cargo.lock can be generated
-by the `cargo update` command. It will also update after each build that modifies the dependencies.
+by the `cargo update` command.
 
 ## Rust interoperability implementation
 

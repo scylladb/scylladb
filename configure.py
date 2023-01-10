@@ -1828,7 +1828,8 @@ with open(buildfile, 'w') as f:
               pool = console
               description = TEST {mode}
             rule rust_lib.{mode}
-              command = cargo build --manifest-path=rust/Cargo.toml --target-dir=build/{mode} --profile=rust-{mode}
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
+                        && touch $out
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
@@ -1990,8 +1991,8 @@ with open(buildfile, 'w') as f:
             obj = cc.replace('.cc', '.o')
             f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, gen_headers_dep))
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
-        librust = '$builddir/{}/rust-{}/librust_combined.a'.format(mode, mode)
-        f.write('build {}: rust_lib.{} | always\n'.format(librust, mode))
+        librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
+        f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
