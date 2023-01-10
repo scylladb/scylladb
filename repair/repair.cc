@@ -278,7 +278,7 @@ static std::vector<gms::inet_address> get_neighbors(
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+        const locator::node_set& ignore_nodes) {
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = erm.get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
@@ -358,7 +358,7 @@ static std::vector<gms::inet_address> get_neighbors(
         }
     } else if (!ignore_nodes.empty()) {
         auto it = std::remove_if(ret.begin(), ret.end(), [&ignore_nodes] (const gms::inet_address& node) {
-            return ignore_nodes.contains(node);
+            return locator::contains_endpoint(ignore_nodes, node);
         });
         ret.erase(it, ret.end());
     }
@@ -395,7 +395,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
         const dht::token_range_vector& ranges,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+        const locator::node_set& ignore_nodes) {
 
     std::unordered_set<gms::inet_address> participating_hosts;
 
@@ -630,7 +630,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
         repair_uniq_id parent_id_,
         const std::vector<sstring>& data_centers_,
         const std::vector<sstring>& hosts_,
-        const std::unordered_set<gms::inet_address>& ignore_nodes_,
+        locator::node_set ignore_nodes_,
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed)
     : repair_task_impl(module, id, 0, keyspace, "", "", parent_id_.uuid(), reason_)
@@ -649,7 +649,7 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
     , id(parent_id_)
     , data_centers(data_centers_)
     , hosts(hosts_)
-    , ignore_nodes(ignore_nodes_)
+    , ignore_nodes(std::move(ignore_nodes_))
     , total_rf(erm->get_replication_factor())
     , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
@@ -1066,7 +1066,8 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     auto& db = sharded_db.local();
     auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
     auto& erm = germs->get();
-    auto& topology = erm.get_token_metadata().get_topology();
+    auto& tm = erm.get_token_metadata();
+    auto& topology = tm.get_topology();
 
     repair_options options(options_map);
 
@@ -1122,11 +1123,10 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     if (!options.ignore_nodes.empty() && !options.hosts.empty()) {
         throw std::runtime_error("Cannot combine ignore_nodes and hosts options.");
     }
-    std::unordered_set<gms::inet_address> ignore_nodes;
+    locator::node_set ignore_nodes;
     for (const auto& n: options.ignore_nodes) {
         try {
-            auto node = gms::inet_address(n);
-            ignore_nodes.insert(node);
+            ignore_nodes.insert(tm.parse_host_id_and_endpoint(n));
         } catch(...) {
             throw std::runtime_error(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                 n, options.ignore_nodes, std::current_exception()));
@@ -1203,7 +1203,7 @@ future<> user_requested_repair_task_impl::run() {
         if (needs_flush_before_repair) {
             auto waiting_nodes = db.get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
-                return ignore_nodes.contains(addr);
+                return locator::contains_endpoint(ignore_nodes, addr);
             });
             auto hints_timeout = std::chrono::seconds(300);
             auto batchlog_timeout = std::chrono::seconds(300);
@@ -1277,9 +1277,18 @@ future<> user_requested_repair_task_impl::run() {
             throw std::runtime_error("aborted by user request");
         }
 
+        std::unordered_set<locator::host_id> ignore_host_ids;
+        for (const auto& node : ignore_nodes) {
+            ignore_host_ids.insert(node->host_id());
+        }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
-                    data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
+                    data_centers, hosts, &ignore_host_ids, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
+                locator::node_set ignore_nodes;
+                const auto& topo = local_repair.get_db().local().get_token_metadata().get_topology();
+                for (const auto& host_id : ignore_host_ids) {
+                    ignore_nodes.emplace(topo.find_node(host_id, locator::topology::must_exist::yes));
+                }
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto task = co_await local_repair._repair_module->make_and_start_task<shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
@@ -1385,7 +1394,7 @@ future<> data_sync_repair_task_impl::run() {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
-                auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                locator::node_set ignore_nodes;
                 bool hints_batchlog_flushed = false;
                 auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),

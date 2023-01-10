@@ -290,6 +290,9 @@ private:
     static mutable_node_ptr make_mutable(const node_ptr& node);
 };
 
+bool contains_endpoint(const node_set& nodes, gms::inet_address endpoint);
+bool contains_host_id(const node_set& nodes, host_id id);
+
 } // namespace locator
 
 namespace std {

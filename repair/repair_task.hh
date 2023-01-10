@@ -42,9 +42,9 @@ private:
     dht::token_range_vector _ranges;
     std::vector<sstring> _hosts;
     std::vector<sstring> _data_centers;
-    std::unordered_set<gms::inet_address> _ignore_nodes;
+    locator::node_set _ignore_nodes;
 public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes) noexcept
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, locator::node_set ignore_nodes) noexcept
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
         , _germs(germs)
         , _cfs(std::move(cfs))
@@ -107,7 +107,7 @@ public:
     repair_uniq_id id;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
-    std::unordered_set<gms::inet_address> ignore_nodes;
+    locator::node_set ignore_nodes;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     size_t total_rf;
     uint64_t nr_ranges_finished = 0;
@@ -129,7 +129,7 @@ public:
             repair_uniq_id parent_id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
-            const std::unordered_set<gms::inet_address>& ignore_nodes_,
+            locator::node_set ignore_nodes_,
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed);
     virtual tasks::is_internal is_internal() const noexcept override {

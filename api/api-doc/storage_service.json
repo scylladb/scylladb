@@ -1101,7 +1101,7 @@
                   },
                   {
                      "name":"ignore_nodes",
-                     "description":"Which hosts are to ignore in this repair. Multiple hosts can be listed separated by commas.",
+                     "description":"Which hosts are to ignore in this repair. Multiple hosts can be listed separated by commas. Use the same method for all nodes to ignore: either Host IDs or ip addresses.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",

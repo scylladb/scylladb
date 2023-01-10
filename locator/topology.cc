@@ -47,6 +47,24 @@ sstring node::to_sstring(node::state s) {
     __builtin_unreachable();
 }
 
+bool contains_endpoint(const node_set& nodes, gms::inet_address endpoint) {
+    for (const auto& node : nodes) {
+        if (node->endpoint() == endpoint) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool contains_host_id(const node_set& nodes, host_id id) {
+    for (const auto& node : nodes) {
+        if (node->host_id() == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
