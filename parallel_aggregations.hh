@@ -39,16 +39,19 @@ struct reductions_info {
     std::vector<aggregation_info> infos;
 };
 
-struct forward_request {
+template<typename TimePoint>
+struct parametrized_forward_request {
     std::vector<reduction_type> reduction_types;
 
     query::read_command cmd;
     dht::partition_range_vector pr;
 
     db::consistency_level cl;
-    lowres_clock::time_point timeout;
+    TimePoint timeout;
     std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
+
+using forward_request = parametrized_forward_request<lowres_clock::time_point>;
 
 struct forward_result {
     // vector storing query result for each selected column

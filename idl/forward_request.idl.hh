@@ -39,14 +39,15 @@ struct reductions_info {
     std::vector<parallel_aggregations::aggregation_info> infos;
 };
 
-struct forward_request {
+template<typename TimePoint>
+struct parametrized_forward_request {
     std::vector<parallel_aggregations::reduction_type> reduction_types;
 
     query::read_command cmd;
     dht::partition_range_vector pr;
 
     db::consistency_level cl;
-    lowres_clock::time_point timeout;
+    TimePoint timeout;
     std::optional<std::vector<parallel_aggregations::aggregation_info>> aggregation_infos [[version 5.1]];
 };
 
@@ -54,6 +55,6 @@ struct forward_result {
     std::vector<bytes_opt> query_results;
 };
 
-verb forward_request(parallel_aggregations::forward_request, std::optional<tracing::trace_info>) -> parallel_aggregations::forward_result;
+verb forward_request(parallel_aggregations::parametrized_forward_request<lowres_clock::time_point>, std::optional<tracing::trace_info>) -> parallel_aggregations::forward_result;
 
 }
