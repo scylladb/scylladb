@@ -30,6 +30,7 @@ class topology;
 class node : public enable_lw_shared_from_this<node> {
 public:
     using local = bool_class<struct local_tag>;
+    using idx_type = unsigned;
 
 private:
     host_id _host_id;
@@ -39,6 +40,9 @@ private:
     // Private state of this instance.
     // May change across topology generations
     local _is_local;
+    idx_type _idx;
+
+    static thread_local idx_type _last_idx;
 
     friend class topology;
 public:
@@ -60,6 +64,8 @@ public:
     }
 
     local is_local() const noexcept { return _is_local; }
+
+    idx_type idx() const noexcept { return _idx; }
 };
 
 using node_ptr = lw_shared_ptr<const node>;
@@ -113,6 +119,13 @@ public:
     //   the function throws internal error if must_exist is true,
     //   or returns nullptr otherwise.
     node_ptr find_node(const inet_address& ep, must_exist must_exist = must_exist::no) const noexcept;
+
+    // Finds a node by its index
+    //
+    // If idx is not found,
+    //   the function throws internal error if must_exist is true,
+    //   or returns nullptr otherwise.
+    node_ptr find_node(node::idx_type idx, must_exist must_exist = must_exist::no) const noexcept;
 
     // Returns true if a node with given host_id is found
     bool has_node(host_id id) const noexcept;
@@ -235,6 +248,7 @@ private:
     node_ptr _local_node;
     std::unordered_map<host_id, const node*> _nodes_by_host_id;
     std::unordered_map<inet_address, const node*> _nodes_by_endpoint;
+    std::unordered_map<node::idx_type, const node*> _nodes_by_idx;
 
     std::unordered_map<sstring, std::unordered_set<const node*>> _dc_nodes;
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>> _dc_rack_nodes;
