@@ -386,7 +386,7 @@ class dummy_file_impl : public file_impl {
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
-        temporary_buffer<uint8_t> buf(1024);
+        temporary_buffer<uint8_t> buf(range_size);
 
         memset(buf.get_write(), 0xff, buf.size());
 
@@ -405,23 +405,23 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
             BOOST_REQUIRE_EQUAL(4 * 1024, semaphore.available_resources().memory);
 
-            auto buf1 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            auto buf1 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(3 * 1024, semaphore.available_resources().memory);
 
-            auto buf2 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            auto buf2 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(2 * 1024, semaphore.available_resources().memory);
 
-            auto buf3 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            auto buf3 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(1 * 1024, semaphore.available_resources().memory);
 
-            auto buf4 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            auto buf4 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(0 * 1024, semaphore.available_resources().memory);
 
-            auto buf5 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            auto buf5 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(-1 * 1024, semaphore.available_resources().memory);
 
             // Reassing buf1, should still have the same amount of units.
-            buf1 = tracked_file.dma_read_bulk<char>(0, 0).get0();
+            buf1 = tracked_file.dma_read_bulk<char>(0, 1024).get0();
             BOOST_REQUIRE_EQUAL(-1 * 1024, semaphore.available_resources().memory);
 
             // Move buf1 to the heap, so that we can safely destroy it
