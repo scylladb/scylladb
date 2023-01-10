@@ -291,6 +291,9 @@ struct node_ops_cmd_request {
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
 
+    // v2
+    std::unordered_map<locator::node::idx_type, locator::host_id_and_endpoint> nodes_dict;
+
     node_ops_cmd_request(node_ops_cmd command,
             node_ops_id uuid,
             std::list<table_id> tables)
@@ -305,23 +308,34 @@ struct node_ops_cmd_request {
             std::list<gms::inet_address> leaving = {},
             std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
             std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap = {},
-            std::list<table_id> tables = {})
+            std::list<table_id> tables = {},
+            std::unordered_map<locator::node::idx_type, locator::host_id_and_endpoint> dict = {})
         : cmd(command)
         , ops_uuid(std::move(uuid))
         , ignore_nodes(std::move(ignore))
         , leaving_nodes(std::move(leaving))
         , replace_nodes(std::move(replace))
         , bootstrap_nodes(std::move(bootstrap))
-        , repair_tables(std::move(tables)) {
+        , repair_tables(std::move(tables))
+        , nodes_dict(std::move(dict))
+    {
     }
+
+    using enable_v2 = bool_class<struct enable_v2_tag>;
 
     static node_ops_cmd_request make_node_ops_cmd_request(node_ops_cmd cmd,
             node_ops_id uuid,
+            enable_v2 v2,
             locator::node_set ignore_nodes = {},
             locator::node_ptr leaving_node = nullptr,
             std::unordered_map<locator::node_ptr, locator::node_ptr> replace_nodes = {},
             std::unordered_map<locator::node_ptr, std::list<dht::token>> bootstrap_nodes = {},
             std::list<table_id> tables = {});
+
+    std::list<gms::inet_address> get_ignore_nodes();
+    std::list<gms::inet_address> get_leaving_nodes();
+    std::unordered_map<gms::inet_address, gms::inet_address> get_replace_nodes();
+    std::unordered_map<gms::inet_address, std::list<dht::token>> get_bootstrap_nodes();
 };
 
 struct node_ops_cmd_response {

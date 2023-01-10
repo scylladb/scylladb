@@ -14,6 +14,7 @@
 #include "idl/frozen_mutation.idl.hh"
 #include "idl/token.idl.hh"
 #include "repair/id.hh"
+#include "locator/token_metadata.hh"
 
 class repair_hash {
     uint64_t hash;
@@ -100,11 +101,21 @@ class node_ops_id final {
     utils::UUID uuid();
 };
 
+namespace locator {
+
+struct host_id_and_endpoint final {
+    locator::host_id host_id;
+    gms::inet_address endpoint;
+};
+
+} // namespace locator
+
 struct node_ops_cmd_request {
     // Mandatory field, set by all cmds
     node_ops_cmd cmd;
     // Mandatory field, set by all cmds
     node_ops_id ops_uuid;
+
     // Optional field, list nodes to ignore, set by all cmds
     std::list<gms::inet_address> ignore_nodes;
     // Optional field, list leaving nodes, set by decommission and removenode cmd
@@ -115,6 +126,11 @@ struct node_ops_cmd_request {
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
     std::list<table_id> repair_tables;
+
+    // v2:
+    // Optional field, maps node index to (host_id, inet_address)
+    // gms:inet_address values above will contain the node index as a raw ipv4 address
+    std::unordered_map<locator::node::idx_type, locator::host_id_and_endpoint> nodes_dict;
 };
 
 struct node_ops_cmd_response {

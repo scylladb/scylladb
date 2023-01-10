@@ -7,6 +7,7 @@
  */
 
 #include "repair.hh"
+#include "locator/token_metadata.hh"
 #include "repair/row_level.hh"
 
 #include "mutation/atomic_cell_hash.hh"
@@ -35,6 +36,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 
+#include <boost/range/iterator_range_core.hpp>
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -66,15 +68,21 @@ void node_ops_info::check_abort() {
 
 node_ops_cmd_request node_ops_cmd_request::make_node_ops_cmd_request(node_ops_cmd cmd,
         node_ops_id uuid,
+        enable_v2 v2,
         locator::node_set ignore_nodes,
         locator::node_ptr leaving_node,
         std::unordered_map<locator::node_ptr, locator::node_ptr> replace_nodes,
         std::unordered_map<locator::node_ptr, std::list<dht::token>> bootstrap_nodes,
         std::list<table_id> tables) {
     auto req = node_ops_cmd_request(cmd, uuid, std::move(tables));
+    std::unordered_map<locator::node::idx_type, locator::node_ptr> dict;
 
-    auto get_endpoint = [] (const locator::node_ptr& node) {
-        // Prep for v2
+    auto get_endpoint = [v2, &dict] (const locator::node_ptr& node) {
+        if (v2) {
+            auto idx = node->idx();
+            dict.try_emplace(idx, node);
+            return gms::inet_address(idx);
+        }
         return node->endpoint();
     };
 
@@ -89,7 +97,54 @@ node_ops_cmd_request node_ops_cmd_request::make_node_ops_cmd_request(node_ops_cm
     for (auto& [node, tokens] : bootstrap_nodes) {
         req.bootstrap_nodes.emplace(get_endpoint(node), std::move(tokens));
     }
+    if (v2) {
+        for (const auto& [idx, node] : dict) {
+            req.nodes_dict.emplace(idx, locator::host_id_and_endpoint{node->host_id(), node->endpoint()});
+        }
+    }
     return req;
+}
+
+std::list<gms::inet_address> node_ops_cmd_request::get_ignore_nodes() {
+    std::list<gms::inet_address> ret = std::move(ignore_nodes);
+    if (!nodes_dict.empty()) {
+        for (auto& ep : ret) {
+            ep = nodes_dict.at(ep.raw_addr()).endpoint;
+        }
+    }
+    return ret;
+}
+
+std::list<gms::inet_address> node_ops_cmd_request::get_leaving_nodes() {
+    std::list<gms::inet_address> ret = std::move(leaving_nodes);
+    if (!nodes_dict.empty()) {
+        for (auto& ep : ret) {
+            ep = nodes_dict.at(ep.raw_addr()).endpoint;
+        }
+    }
+    return ret;
+}
+
+std::unordered_map<gms::inet_address, gms::inet_address> node_ops_cmd_request::get_replace_nodes() {
+    if (nodes_dict.empty()) {
+        return std::move(replace_nodes);
+    }
+    std::unordered_map<gms::inet_address, gms::inet_address> ret;
+    for (auto&& [x, y] : std::move(replace_nodes)) {
+        ret.emplace(nodes_dict.at(x.raw_addr()).endpoint, nodes_dict.at(y.raw_addr()).endpoint);
+    }
+    return ret;
+}
+
+std::unordered_map<gms::inet_address, std::list<dht::token>> node_ops_cmd_request::get_bootstrap_nodes() {
+    if (nodes_dict.empty()) {
+        return std::move(bootstrap_nodes);
+    }
+    std::unordered_map<gms::inet_address, std::list<dht::token>> ret;
+    for (auto&& [x, tokens] : std::move(bootstrap_nodes)) {
+        ret.emplace(nodes_dict.at(x.raw_addr()).endpoint, std::move(tokens));
+    }
+    return ret;
 }
 
 node_ops_metrics::node_ops_metrics(shared_ptr<repair_module> module)
@@ -1171,7 +1226,7 @@ future<> user_requested_repair_task_impl::run() {
         abort_source as;
         auto off_strategy_updater = seastar::async([&rs, uuid = uuid.uuid(), &table_ids, &participants, &as] {
             auto tables = std::list<table_id>(table_ids.begin(), table_ids.end());
-            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, {}, {}, {}, {}, std::move(tables));
+            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, node_ops_id{uuid}, std::move(tables));
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();

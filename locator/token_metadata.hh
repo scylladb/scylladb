@@ -73,6 +73,11 @@ struct host_id_or_endpoint {
     node_ptr resolve(const topology& topo);
 };
 
+struct host_id_and_endpoint {
+    locator::host_id host_id;
+    gms::inet_address endpoint;
+};
+
 class token_metadata_impl;
 
 class token_metadata final {
