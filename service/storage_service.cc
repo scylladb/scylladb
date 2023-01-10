@@ -2653,9 +2653,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("removenode {}", leaving_nodes));
             }).get();
-            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
-                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2707,9 +2705,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("decommission {}", leaving_nodes));
             }).get();
-            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
-                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2773,9 +2769,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return make_ready_future<>();
             }).get();
-            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
-                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), replace_nodes = std::move(replace_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: replace_nodes) {
                         auto existing_node = x.first;
@@ -2833,9 +2827,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", bootstrap_nodes));
             }).get();
-            auto ignore_nodes_eps = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes
-                    | boost::adaptors::transformed([] (const locator::node_ptr& node) { return node->endpoint(); }));
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes_eps), [this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: bootstrap_nodes) {
                         auto& endpoint = x.first;
@@ -3097,7 +3089,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     });
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
         auto ops_uuid = node_ops_id::create_random_id();
-        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, sas, std::list<gms::inet_address>());
+        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, sas, locator::node_set{});
         auto f = co_await coroutine::as_future(_repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops));
         co_await send_replication_notification(notify_endpoint);
         co_return co_await std::move(f);
@@ -3774,7 +3766,7 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
 node_ops_meta_data::node_ops_meta_data(
         node_ops_id ops_uuid,
         gms::inet_address coordinator,
-        std::list<gms::inet_address> ignore_nodes,
+        locator::node_set ignore_nodes,
         std::function<future<> ()> abort_func,
         std::function<void ()> signal_func)
     : _ops_uuid(std::move(ops_uuid))

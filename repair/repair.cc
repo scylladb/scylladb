@@ -53,7 +53,7 @@
 
 logging::logger rlogger("repair");
 
-node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
+node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, locator::node_set&& ignore_nodes_) noexcept
     : ops_uuid(ops_uuid_)
     , as(std::move(as_))
     , ignore_nodes(std::move(ignore_nodes_))
@@ -1748,7 +1748,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 // Remove nodes in ignore_nodes
                 if (ops) {
                     for (const auto& node : ops->ignore_nodes) {
-                        neighbors_set.erase(node);
+                        neighbors_set.erase(node->endpoint());
                     }
                 }
                 auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors_set |

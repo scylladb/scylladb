@@ -104,7 +104,7 @@ public:
     explicit node_ops_meta_data(
             node_ops_id ops_uuid,
             gms::inet_address coordinator,
-            std::list<gms::inet_address> ignore_nodes,
+            locator::node_set ignore_nodes,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();
