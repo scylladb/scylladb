@@ -766,27 +766,27 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     using namespace db::schema_tables;
-    co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [&] (schema_result_value_type &v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
         co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), true /* bootstrap. do not mark populated yet */, system_keyspace::no);
-    });
-    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, [&] (schema_result_value_type &v) -> future<> {
+    }));
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
         auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
         for (auto&& type : user_types) {
             ks.add_user_type(type);
         }
         co_return;
-    });
-    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [&] (schema_result_value_type& v) -> future<> {
+    }));
+    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
         auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
         for (auto&& func : user_functions) {
             cql3::functions::functions::add_function(func);
         }
         co_return;
-    });
-    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, [&] (schema_result_value_type &v) -> future<> {
+    }));
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
             co_await this->add_column_family_and_make_directory(t.second);
@@ -799,8 +799,8 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             }
             co_return co_await db::schema_tables::store_column_mapping(proxy, s, false);
         });
-    });
-    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [&] (schema_result_value_type &v) -> future<> {
+    }));
+    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
             // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
@@ -815,7 +815,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 co_await db::schema_tables::merge_schema(sys_ks, proxy, _feat, std::move(mutations));
             }
         });
-    });
+    }));
 }
 
 future<>
