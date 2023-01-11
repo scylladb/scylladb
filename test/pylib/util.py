@@ -5,7 +5,14 @@
 #
 import time
 import asyncio
+import logging
 from typing import Callable, Awaitable, Optional, TypeVar, Generic
+
+
+class LogPrefixAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return '[%s] %s' % (self.extra['prefix'], msg), kwargs
+
 
 unique_name_prefix = 'test_'
 T = TypeVar('T')
