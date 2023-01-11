@@ -373,7 +373,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
-                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting {}", int(cqlop), _version == 1 ? "CREDENTIALS" : "SASL_RESPONSE"));
+                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting {}", int(cqlop), "SASL_RESPONSE"));
                 }
                 break;
             case auth_state::READY: default:
@@ -978,15 +978,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
 
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
-    if (version == 1) {
-        std::vector<cql3::raw_value_view> values;
-        in.read_value_view_list(version, values);
-        auto consistency = in.read_consistency();
-        q_state->options = std::make_unique<cql3::query_options>(qp.local().get_cql_config(), consistency, std::nullopt, values, false,
-                                                                 cql3::query_options::specific_options::DEFAULT);
-    } else {
-        q_state->options = in.read_options(version, qp.local().get_cql_config());
-    }
+    q_state->options = in.read_options(version, qp.local().get_cql_config());
     auto& options = *q_state->options;
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
@@ -1044,10 +1036,6 @@ static future<process_fn_return_type>
 process_batch_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
-    if (version == 1) {
-        throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
-    }
-
     const auto type = in.read_byte();
     const unsigned n = in.read_short();
 
@@ -1131,7 +1119,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version < 3 ? 1 : version,
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version,
                                                                      qp.local().get_cql_config())), std::move(values)));
     auto& options = *q_state->options;
     if (!cached_pk_fn_calls.empty()) {
@@ -1383,9 +1371,7 @@ public:
         _response.write_int(0x0004);
         _response.write_short_bytes(m.get_id());
         _response.write(m.metadata(), _version);
-        if (_version > 1) {
-            _response.write(*m.result_metadata());
-        }
+        _response.write(*m.result_metadata());
     }
 
     virtual void visit(const messages::result_message::schema_change& m) override {
@@ -1559,46 +1545,21 @@ void cql_server::response::compress_snappy()
 
 void cql_server::response::serialize(const event::schema_change& event, uint8_t version)
 {
-    if (version >= 3) {
-        write_string(to_string(event.change));
-        write_string(to_string(event.target));
-        write_string(event.keyspace);
-        switch (event.target) {
-        case event::schema_change::target_type::KEYSPACE:
-            break;
-        case event::schema_change::target_type::TYPE:
-        case event::schema_change::target_type::TABLE:
-            write_string(event.arguments[0]);
-            break;
-        case event::schema_change::target_type::FUNCTION:
-        case event::schema_change::target_type::AGGREGATE:
-            write_string(event.arguments[0]);
-            write_string_list(std::vector<sstring>(event.arguments.begin() + 1, event.arguments.end()));
-            break;
-        }
-    } else {
-        switch (event.target) {
-        // FIXME: Should we handle FUNCTION and AGGREGATE the same way as type?
-        // FIXME: How do we get here? Can a client using v2 know about UDF?
-        case event::schema_change::target_type::TYPE:
-        case event::schema_change::target_type::FUNCTION:
-        case event::schema_change::target_type::AGGREGATE:
-            // The v1/v2 protocol is unable to represent these changes. Tell the
-            // client that the keyspace was updated instead.
-            write_string(to_string(event::schema_change::change_type::UPDATED));
-            write_string(event.keyspace);
-            write_string("");
-            break;
-        case event::schema_change::target_type::TABLE:
-        case event::schema_change::target_type::KEYSPACE:
-            write_string(to_string(event.change));
-            write_string(event.keyspace);
-            if (event.target == event::schema_change::target_type::TABLE) {
-                write_string(event.arguments[0]);
-            } else {
-                write_string("");
-            }
-        }
+    write_string(to_string(event.change));
+    write_string(to_string(event.target));
+    write_string(event.keyspace);
+    switch (event.target) {
+    case event::schema_change::target_type::KEYSPACE:
+        break;
+    case event::schema_change::target_type::TYPE:
+    case event::schema_change::target_type::TABLE:
+        write_string(event.arguments[0]);
+        break;
+    case event::schema_change::target_type::FUNCTION:
+    case event::schema_change::target_type::AGGREGATE:
+        write_string(event.arguments[0]);
+        write_string_list(std::vector<sstring>(event.arguments.begin() + 1, event.arguments.end()));
+        break;
     }
 }
 
