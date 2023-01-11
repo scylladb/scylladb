@@ -204,12 +204,12 @@ private:
     future<> do_wait_admission(reader_permit permit, read_func func = {});
 
     // Check whether permit can be admitted or not.
-    // The wait list is not taken into consideration, this is the caller's
-    // responsibility.
-    // A return value of can_admit::maybe means admission might be possible if
-    // some of the inactive readers are evicted.
+    // Caller can specify whether wait list should be empty or not for admission
+    // to be possible. can_admit::maybe means admission might be possible if some
+    // of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    can_admit can_admit_read(const reader_permit& permit) const noexcept;
+    using require_empty_waitlist = bool_class<class require_empty_waitlist_tag>;
+    can_admit can_admit_read(const reader_permit& permit, require_empty_waitlist wait_list_empty) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
