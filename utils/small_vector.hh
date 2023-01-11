@@ -107,7 +107,7 @@ private:
     }
 
     [[noreturn]] [[gnu::cold]] [[gnu::noinline]]
-    void throw_out_of_range() {
+    void throw_out_of_range() const {
         throw std::out_of_range("out of range small vector access");
     }
 
