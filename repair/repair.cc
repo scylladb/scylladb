@@ -127,11 +127,24 @@ locator::node_set node_ops_cmd_request::get_ignore_nodes(const locator::topology
     return ret;
 }
 
-std::list<gms::inet_address> node_ops_cmd_request::get_leaving_nodes() {
-    std::list<gms::inet_address> ret = std::move(leaving_nodes);
+locator::node_set node_ops_cmd_request::get_leaving_nodes(const locator::topology& topo) {
+    locator::node_set ret;
     if (!nodes_dict.empty()) {
-        for (auto& ep : ret) {
-            ep = nodes_dict.at(ep.raw_addr()).endpoint;
+        for (const auto& x : leaving_nodes) {
+            auto haep = nodes_dict.at(x.raw_addr());
+            auto node = topo.find_node(haep.host_id);
+            if (!node) {
+                log_error_and_throw<std::runtime_error>(rlogger, "Leaving node {}/{} not found in topology", haep.host_id, haep.endpoint);
+            }
+            ret.emplace(std::move(node));
+        }
+    } else {
+        for (const auto& ep : leaving_nodes) {
+            auto node = topo.find_node(ep);
+            if (!node) {
+                log_error_and_throw<std::runtime_error>(rlogger, "Leaving node {} not found in topology", ep);
+            }
+            ret.emplace(std::move(node));
         }
     }
     return ret;

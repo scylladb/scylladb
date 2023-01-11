@@ -2637,7 +2637,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         node_ops_cmd_check(coordinator, req);
 
         if (req.cmd == node_ops_cmd::removenode_prepare) {
-            auto leaving_nodes = req.get_leaving_nodes();
+            auto leaving_nodes = req.get_leaving_nodes(get_token_metadata().get_topology());
             if (leaving_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "removenode[{}]: Could not removenode more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
@@ -2647,7 +2647,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& node : leaving_nodes) {
                     slogger.info("removenode[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(node);
+                    tmptr->add_leaving_endpoint(node->endpoint());
                 }
                 return update_pending_ranges(tmptr, format("removenode {}", leaving_nodes));
             }).get();
@@ -2655,7 +2655,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(node);
+                        tmptr->del_leaving_endpoint(node->endpoint());
                     }
                     return update_pending_ranges(tmptr, format("removenode {}", leaving_nodes));
                 });
@@ -2675,13 +2675,13 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             }
             auto ops = it->second.get_ops_info();
             auto as = it->second.get_abort_source();
-            for (auto& node : req.get_leaving_nodes()) {
+            for (auto& node : req.get_leaving_nodes(get_token_metadata().get_topology())) {
                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using repair, coordinator={}", req.ops_uuid, node, coordinator);
-                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
+                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), node->endpoint(), ops).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_stream(node, as).get();
+                    removenode_with_stream(node->endpoint(), as).get();
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
@@ -2689,7 +2689,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::decommission_prepare) {
             utils::get_local_injector().inject(
                 "storage_service_decommission_prepare_handler_sleep", std::chrono::milliseconds{1500}).get();
-            auto leaving_nodes = req.get_leaving_nodes();
+            auto leaving_nodes = req.get_leaving_nodes(get_token_metadata().get_topology());
             if (leaving_nodes.size() > 1) {
                 log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
@@ -2699,7 +2699,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& node : leaving_nodes) {
                     slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(node);
+                    tmptr->add_leaving_endpoint(node->endpoint());
                 }
                 return update_pending_ranges(tmptr, format("decommission {}", leaving_nodes));
             }).get();
@@ -2707,7 +2707,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return mutate_token_metadata([this, coordinator, req = std::move(req), leaving_nodes = std::move(leaving_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(node);
+                        tmptr->del_leaving_endpoint(node->endpoint());
                     }
                     return update_pending_ranges(tmptr, format("decommission {}", leaving_nodes));
                 });
