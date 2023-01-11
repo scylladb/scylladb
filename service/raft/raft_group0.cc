@@ -675,9 +675,11 @@ future<> raft_group0::leave_group0() {
 
     auto my_id = load_my_id();
 
+    group0_log.info("leaving group 0 (my id = {})...", my_id);
     // Note: if this gets stuck due to a failure, the DB admin can abort.
     // FIXME: this gets stuck without failures if we're the leader (#10833)
     co_return co_await remove_from_raft_config(my_id);
+    group0_log.info("left group 0.");
 }
 
 future<> raft_group0::remove_from_group0(raft::server_id node) {
