@@ -863,56 +863,33 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, read
 }
 
 void reader_concurrency_semaphore::evict_readers_in_background() {
-    if (_evicting) {
-        return;
-    }
-    _evicting = true;
     // Evict inactive readers in the background while wait list isn't empty
     // This is safe since stop() closes _gate;
     (void)with_gate(_close_readers_gate, [this] {
         return do_until([this] { return _wait_list.empty() || _inactive_reads.empty(); }, [this] {
             return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close();
         });
-    }).finally([this] { _evicting = false; });
-}
-
-reader_concurrency_semaphore::can_admit
-reader_concurrency_semaphore::can_admit_read(const reader_permit& permit, require_empty_waitlist wait_list_empty) const noexcept {
-    if (wait_list_empty && !_wait_list.empty()) {
-        return can_admit::no;
-    }
-
-    if (!_ready_list.empty()) {
-        return can_admit::no;
-    }
-
-    if (!all_used_permits_are_stalled()) {
-        return can_admit::no;
-    }
-
-    if (!has_available_units(permit.base_resources())) {
-        if (_inactive_reads.empty()) {
-            return can_admit::no;
-        } else {
-            return can_admit::maybe;
-        }
-    }
-
-    return can_admit::yes;
-}
+    });
+ }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, read_func func) {
     if (!_execution_loop_future) {
         _execution_loop_future.emplace(execution_loop());
     }
+    if (!_wait_list.empty() || !_ready_list.empty()) {
+        return enqueue_waiter(std::move(permit), std::move(func));
+    }
 
-    const auto admit = can_admit_read(permit, require_empty_waitlist::yes);
-    if (admit != can_admit::yes) {
+    if (!has_available_units(permit.base_resources())) {
         auto fut = enqueue_waiter(std::move(permit), std::move(func));
-        if (admit == can_admit::maybe) {
+        if (!_inactive_reads.empty()) {
             evict_readers_in_background();
         }
         return fut;
+    }
+
+    if (!all_used_permits_are_stalled()) {
+        return enqueue_waiter(std::move(permit), std::move(func));
     }
 
     permit.on_admission();
@@ -924,8 +901,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
 }
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
-    auto admit = can_admit::no;
-    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit, require_empty_waitlist::no)) == can_admit::yes) {
+    while (!_wait_list.empty() && _ready_list.empty() && has_available_units(_wait_list.front().permit.base_resources()) && all_used_permits_are_stalled()) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
@@ -939,10 +915,6 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             x.pr.set_exception(std::current_exception());
         }
         _wait_list.pop_front();
-    }
-    if (admit == can_admit::maybe) {
-        // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
-        evict_readers_in_background();
     }
 }
 
