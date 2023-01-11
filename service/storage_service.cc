@@ -1954,6 +1954,15 @@ future<> storage_service::decommission() {
             if (!tmptr->is_normal_token_owner(endpoint)) {
                 throw std::runtime_error("local node is not a member of the token ring yet");
             }
+            // We assume that we're a member of group 0 if we're in decommission()` and Raft is enabled.
+            // We have no way to check that we're not a member: attempting to perform group 0 operations
+            // would simply hang in that case, the leader would refuse to talk to us.
+            // If we aren't a member then we shouldn't be here anyway, since it means that either
+            // an earlier decommission finished (leave_group0 is the last operation in decommission)
+            // or that we were removed using `removenode`.
+            //
+            // For handling failure scenarios such as a group 0 member that is not a token ring member,
+            // there's `removenode`.
 
             auto temp = tmptr->clone_after_all_left().get0();
             auto num_tokens_after_all_left = temp.sorted_tokens().size();
@@ -2005,6 +2014,7 @@ future<> storage_service::decommission() {
 
             assert(ss._group0);
             bool raft_available = ss._group0->wait_for_raft().get();
+            bool left_token_ring = false;
 
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
@@ -2059,9 +2069,10 @@ future<> storage_service::decommission() {
                 // Step 6: Leave the token ring
                 slogger.info("decommission[{}]: leaving token ring", uuid);
                 ss.leave_ring().get();
+                left_token_ring = true;
                 slogger.info("decommission[{}]: left token ring", uuid);
 
-                // Step 7: Finish
+                // Step 7: Finish token movement
                 req.cmd = node_ops_cmd::decommission_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2069,7 +2080,7 @@ future<> storage_service::decommission() {
                         return make_ready_future<>();
                     });
                 }).get();
-                slogger.info("decommission[{}]: Finished decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                slogger.info("decommission[{}]: Finished token ring movement, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 slogger.warn("decommission[{}]: Abort decommission operation started, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 // we need to revert the effect of prepare verb the decommission ops is failed
@@ -2087,10 +2098,33 @@ future<> storage_service::decommission() {
                 throw;
             }
 
-            if (raft_available) {
-                slogger.info("DECOMMISSIONING: leaving Raft group 0");
-                ss._group0->leave_group0().get();
-                slogger.info("DECOMMISSIONING: left Raft group 0");
+            // Step 8: Leave group 0
+            //
+            // If the node failed to leave the token ring, don't remove it from group 0
+            // --- hence the `left_token_ring` check.
+            std::exception_ptr leave_group0_ex;
+            try {
+                if (raft_available && left_token_ring) {
+                    slogger.info("decommission[{}]: leaving Raft group 0", uuid);
+                    assert(ss._group0);
+                    ss._group0->leave_group0().get();
+                    slogger.info("decommission[{}]: left Raft group 0", uuid);
+                }
+            } catch (...) {
+                // Even though leave_group0 failed, we will finish decommission and shut down everything.
+                // There's nothing smarter we could do. We should not continue operating in this broken
+                // state (we're not a member of the token ring any more).
+                //
+                // If we didn't manage to leave group 0, we will stay as a non-voter
+                // (which is not too bad - non-voters at least do not reduce group 0's availability).
+                // It's possible to remove the garbage member using `removenode`.
+                slogger.error(
+                    "decommission[{}]: FAILED when trying to leave Raft group 0: \"{}\". This node"
+                    " is no longer a member of the token ring, so it will finish shutting down its services."
+                    " It may still be a member of Raft group 0. To remove it, shut it down and use `removenode`."
+                    " Consult the `decommission` and `removenode` documentation for more details.",
+                    uuid, std::current_exception());
+                leave_group0_ex = std::current_exception();
             }
 
             ss.stop_transport().get();
@@ -2105,6 +2139,11 @@ future<> storage_service::decommission() {
             ss._sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED);
+
+            if (leave_group0_ex) {
+                std::rethrow_exception(leave_group0_ex);
+            }
+
             slogger.info("DECOMMISSIONING: done");
             // let op be responsible for killing the process
         });
