@@ -1988,7 +1988,7 @@ with open(buildfile, 'w') as f:
             cc = hh.replace('.hh', '.cc')
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
-            f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+            f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, gen_headers_dep))
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
         librust = '$builddir/{}/rust-{}/librust_combined.a'.format(mode, mode)
         f.write('build {}: rust_lib.{} | always\n'.format(librust, mode))
