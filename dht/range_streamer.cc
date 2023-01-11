@@ -290,20 +290,19 @@ future<> range_streamer::stream_async() {
                 try {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
                         ranges_to_stream.push_back(*it);
-                        it = range_vec.erase(it);
+                        ++it;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;
                         } else {
                             do_streaming();
+                            it = range_vec.erase(range_vec.begin(), it);
                         }
                     }
                     if (ranges_to_stream.size() > 0) {
                         do_streaming();
+                        range_vec.clear();
                     }
                 } catch (...) {
-                    for (auto& range : ranges_to_stream) {
-                        range_vec.push_back(range);
-                    }
                     auto t = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
                     logger.warn("{} with {} for keyspace={} failed, took {} seconds: {}", description, source, keyspace, t, std::current_exception());
                     throw;
