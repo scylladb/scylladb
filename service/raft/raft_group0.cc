@@ -87,6 +87,10 @@ namespace service {
 static logging::logger group0_log("raft_group0");
 static logging::logger upgrade_log("raft_group0_upgrade");
 
+// TODO: change the links from master to stable/5.2 after 5.2 is released
+static const auto raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
+static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/architecture/raft.html#raft-manual-recovery-procedure";
+
 // {{{ group0_rpc Maintain failure detector subscription whenever
 // group 0 configuration changes.
 
@@ -405,9 +409,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
                 "The Raft discovery algorithm returned two different group IDs on subsequent runs: {} and {}."
                 " Cannot proceed due to possible inconsistency problems."
                 " If you're bootstrapping a fresh cluster, make sure that every node uses the same seeds configuration, then retry."
-                " If this is happening after upgrade, please report a bug, then try following the manual recovery procedure.",
-                group0_id, g0_info.group0_id));
-            // TODO: link to the manual recovery docs
+                " If this is happening after upgrade, please report a bug, then try following the manual recovery procedure: {}",
+                group0_id, g0_info.group0_id, raft_manual_recovery_doc));
         }
         group0_id = g0_info.group0_id;
         raft::server_address my_addr{my_id, {}};
@@ -725,8 +728,8 @@ future<bool> raft_group0::wait_for_raft() {
             " and skipping group 0 reconfiguration. However, if you already finished the rolling upgrade"
             " procedure, this means that the node just hasn't noticed it yet. The internal upgrade-to-raft procedure"
             " may get stuck. If that happens, manual recovery will be required."
-            " Consult the documentation for more details.");
-        // TODO: link to the docs
+            " Consult the documentation for more details: {}",
+            raft_upgrade_doc);
         co_return false;
     }
 
@@ -1350,8 +1353,7 @@ static auto warn_if_upgrade_takes_too_long() {
                 "Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy."
                 " If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster."
                 " If that doesn't help or some nodes are dead and irrecoverable, manual recovery may be required."
-                " Consult the relevant documentation.");
-            // TODO: link to the docs.
+                " Consult the relevant documentation: {}", raft_upgrade_doc);
         }
     }(*as);
 
@@ -1396,9 +1398,8 @@ future<> raft_group0::upgrade_to_group0() {
         } catch (...) {
             upgrade_log.error(
                 "Raft upgrade failed: {}.\nTry restarting the node to retry upgrade."
-                " If the procedure gets stuck, manual recovery may be required. Consult the relevant documentation.",
-                std::current_exception());
-                // TODO: link to the doc
+                " If the procedure gets stuck, manual recovery may be required."
+                " Consult the relevant documentation: {}", std::current_exception(), raft_upgrade_doc);
         }
     }(std::ref(*this), std::ref(_abort_source), start_state, _shutdown_gate.hold());
 }
