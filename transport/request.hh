@@ -206,13 +206,6 @@ private:
 public:
     std::unique_ptr<cql3::query_options> read_options(uint8_t version, const cql3::cql_config& cql_config) {
         auto consistency = read_consistency();
-        if (version == 1) {
-            return std::make_unique<cql3::query_options>(cql_config, consistency, std::nullopt, std::vector<cql3::raw_value_view>{},
-                false, cql3::query_options::specific_options::DEFAULT);
-        }
-
-        assert(version >= 2);
-
         auto flags = enum_set<options_flag_enum>::from_mask(read_byte());
         std::vector<cql3::raw_value_view> values;
         std::vector<sstring_view> names;
