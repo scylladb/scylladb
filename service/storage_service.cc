@@ -2003,6 +2003,9 @@ future<> storage_service::decommission() {
                 throw std::runtime_error(msg);
             }
 
+            assert(ss._group0);
+            bool raft_available = ss._group0->wait_for_raft().get();
+
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
@@ -2038,13 +2041,27 @@ future<> storage_service::decommission() {
                     heartbeat_updater.get();
                 });
 
-                // Step 5: Start to sync data
+                // Step 4: Start to sync data
                 slogger.info("DECOMMISSIONING: unbootstrap starts");
                 ss.unbootstrap().get();
-                ss.leave_ring().get();
                 slogger.info("DECOMMISSIONING: unbootstrap done");
 
-                // Step 6: Finish
+                // Step 5: Become a group 0 non-voter before leaving the token ring.
+                //
+                // Thanks to this, even if we fail after leaving the token ring but before leaving group 0,
+                // group 0's availability won't be reduced.
+                if (raft_available) {
+                    slogger.info("decommission[{}]: becoming a group 0 non-voter", uuid);
+                    ss._group0->become_nonvoter().get();
+                    slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
+                }
+
+                // Step 6: Leave the token ring
+                slogger.info("decommission[{}]: leaving token ring", uuid);
+                ss.leave_ring().get();
+                slogger.info("decommission[{}]: left token ring", uuid);
+
+                // Step 7: Finish
                 req.cmd = node_ops_cmd::decommission_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2070,8 +2087,6 @@ future<> storage_service::decommission() {
                 throw;
             }
 
-            assert(ss._group0);
-            bool raft_available = ss._group0->wait_for_raft().get();
             if (raft_available) {
                 slogger.info("DECOMMISSIONING: leaving Raft group 0");
                 ss._group0->leave_group0().get();
@@ -2391,7 +2406,20 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 throw std::runtime_error(message);
             }
 
-            // Step 2: Prepare to sync data
+            // Step 2: Make the node a group 0 non-voter before removing it from the token ring.
+            //
+            // Thanks to this, even if we fail after removing the node from the token ring
+            // but before removing it group 0, group 0's availability won't be reduced.
+            assert(ss._group0);
+            auto raft_id = raft::server_id{host_id.uuid()};
+            bool raft_available = ss._group0->wait_for_raft().get();
+            if (raft_available) {
+                slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
+                ss._group0->make_nonvoter(raft_id).get();
+                slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
+            }
+
+            // Step 3: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
             auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, leaving_nodes, {}};
@@ -2418,7 +2446,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     throw std::runtime_error(msg);
                 }
 
-                // Step 3: Start heartbeat updater
+                // Step 4: Start heartbeat updater
                 auto heartbeat_updater_done = make_lw_shared<bool>(false);
                 auto heartbeat_updater = ss.node_ops_cmd_heartbeat_updater(node_ops_cmd::removenode_heartbeat, uuid, nodes, heartbeat_updater_done);
                 auto stop_heartbeat_updater = defer([&] {
@@ -2426,7 +2454,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     heartbeat_updater.get();
                 });
 
-                // Step 4: Start to sync data
+                // Step 5: Start to sync data
                 req.cmd = node_ops_cmd::removenode_sync_data;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2436,12 +2464,12 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 }).get();
 
 
-                // Step 5: Announce the node has left
+                // Step 6: Announce the node has left
                 ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                 std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                 ss.excise(std::move(tmp), endpoint).get();
 
-                // Step 6: Finish
+                // Step 7: Finish
                 req.cmd = node_ops_cmd::removenode_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2450,9 +2478,6 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     });
                 }).get();
 
-                auto raft_id = raft::server_id{host_id.uuid()};
-                assert(ss._group0);
-                bool raft_available = ss._group0->wait_for_raft().get();
                 if (raft_available) {
                     slogger.info("removenode[{}]: removing node {} from group 0", uuid, raft_id);
                     ss._group0->remove_from_group0(raft_id).get();

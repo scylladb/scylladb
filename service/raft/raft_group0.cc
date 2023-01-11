@@ -671,6 +671,30 @@ future<> raft_group0::finish_setup_after_join() {
     });
 }
 
+future<> raft_group0::become_nonvoter() {
+    if (!(co_await raft_upgrade_complete())) {
+        on_internal_error(group0_log, "called become_nonvoter before Raft upgrade finished");
+    }
+
+    auto my_id = load_my_id();
+    group0_log.info("becoming a non-voter (my id = {})...", my_id);
+
+    co_await make_raft_config_nonvoter(my_id);
+    group0_log.info("became a non-voter.", my_id);
+}
+
+future<> raft_group0::make_nonvoter(raft::server_id node) {
+    if (!(co_await raft_upgrade_complete())) {
+        on_internal_error(group0_log, "called make_nonvoter before Raft upgrade finished");
+    }
+
+    group0_log.info("making server {} a non-voter...", node);
+
+    co_await make_raft_config_nonvoter(node);
+
+    group0_log.info("server {} is now a non-voter.", node);
+}
+
 future<> raft_group0::leave_group0() {
     if (!(co_await raft_upgrade_complete())) {
         on_internal_error(group0_log, "called leave_group0 before Raft upgrade finished");
@@ -753,6 +777,26 @@ future<bool> raft_group0::wait_for_raft() {
     }
 
     co_return true;
+}
+
+future<> raft_group0::make_raft_config_nonvoter(raft::server_id id) {
+    static constexpr auto max_retry_period = std::chrono::seconds{1};
+    auto retry_period = std::chrono::milliseconds{10};
+
+    // FIXME: cancellability/timeout
+    while (true) {
+        try {
+            co_await _raft_gr.group0().modify_config({{{id, {}}, false}}, {}, &_abort_source);
+            co_return;
+        } catch (const raft::commit_status_unknown& e) {
+            group0_log.info("make_raft_config_nonvoter({}): modify_config returned \"{}\", retrying", id, e);
+        }
+        retry_period *= 2;
+        if (retry_period > max_retry_period) {
+            retry_period = max_retry_period;
+        }
+        co_await sleep_abortable(retry_period, _abort_source);
+    }
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {

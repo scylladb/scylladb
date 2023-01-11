@@ -158,6 +158,18 @@ public:
     // This is a prerequisite for performing group 0 configuration operations.
     future<bool> wait_for_raft();
 
+    // Become a non-voter in group 0.
+    //
+    // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
+    // `wait_for_raft` must've also been called earlier and returned `true`.
+    future<> become_nonvoter();
+
+    // Make the given server, other than us, a non-voter in group 0.
+    //
+    // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
+    // `wait_for_raft` must've also been called earlier and returned `true`.
+    future<> make_nonvoter(raft::server_id);
+
     // Remove ourselves from group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
@@ -259,6 +271,10 @@ private:
     // if we want to handle crashes of the group 0 server without crashing the entire Scylla process
     // (we could then try restarting the server internally).
     future<> start_server_for_group0(raft::group_id group0_id);
+
+    // Make the given server a non-voter in Raft group 0 configuration.
+    // Retries on raft::commit_status_unknown.
+    future<> make_raft_config_nonvoter(raft::server_id);
 
     // Remove the node from raft config, retries raft::commit_status_unknown.
     future<> remove_from_raft_config(raft::server_id id);
