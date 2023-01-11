@@ -776,6 +776,10 @@ future<bool> raft_group0::wait_for_raft() {
             "We're fully upgraded to use Raft but didn't join group 0. Please report a bug.");
     }
 
+    group0_log.info("Performing a group 0 read barrier...");
+    co_await _raft_gr.group0().read_barrier(&_abort_source);
+    group0_log.info("Finished group 0 read barrier.");
+
     co_return true;
 }
 

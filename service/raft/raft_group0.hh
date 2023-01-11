@@ -153,6 +153,7 @@ public:
     // If Raft is disabled or in RECOVERY mode, returns `false`.
     // Otherwise:
     // - waits for the Raft upgrade procedure to finish if it's currently in progress,
+    // - performs a Raft read barrier,
     // - returns `true`.
     //
     // This is a prerequisite for performing group 0 configuration operations.
