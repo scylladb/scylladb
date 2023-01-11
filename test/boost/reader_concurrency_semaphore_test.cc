@@ -136,8 +136,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
         BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
         if (i % 2) {
-            const auto consumed_resources = semaphore.available_resources();
-            semaphore.consume(consumed_resources);
+            auto sponge_permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+            auto consumed_resources = sponge_permit.consume_resources(semaphore.available_resources());
 
             auto fut = make_ready_future<>();
             if (permit->needs_readmission()) {
@@ -145,7 +145,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
             }
             BOOST_REQUIRE(!fut.available());
 
-            semaphore.signal(consumed_resources);
+            consumed_resources.reset();
             fut.get();
         } else {
             if (permit->needs_readmission()) {
@@ -682,10 +682,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // forward progress -- resources
     {
-        const auto resources = reader_resources::with_memory(semaphore.available_resources().memory);
-        semaphore.consume(resources);
+        auto sponge_permit = semaphore.make_tracking_only_permit(nullptr, "sponge", db::no_timeout);
+        sponge_permit.consume_resources(reader_resources::with_memory(semaphore.available_resources().memory));
         require_can_admit(true, "semaphore with no memory but all count available");
-        semaphore.signal(resources);
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
     require_can_admit(true, "semaphore in initial state");

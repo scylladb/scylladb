@@ -674,11 +674,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
-        const auto available_resources = semaphore.available_resources();
-        semaphore.consume(available_resources);
-        auto release_resources = defer([&semaphore, available_resources] {
-            semaphore.signal(available_resources);
-        });
+        auto sponge_permit = semaphore.make_tracking_only_permit(s.get(), "sponge", db::no_timeout);
+        auto consumed_resources = sponge_permit.consume_resources(semaphore.available_resources());
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
