@@ -288,6 +288,9 @@ private:
 
     uint64_t get_serialize_limit() const;
 
+    void consume(resources r);
+    void signal(const resources& r) noexcept;
+
 public:
     struct no_limits { };
 
@@ -484,10 +487,6 @@ public:
     const resources consumed_resources() const {
         return _initial_resources - _resources;
     }
-
-    void consume(resources r);
-
-    void signal(const resources& r) noexcept;
 
     size_t waiters() const {
         return _wait_list.size();
