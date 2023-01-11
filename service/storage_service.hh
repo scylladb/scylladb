@@ -583,12 +583,12 @@ private:
      *
      * @param endpoint the node that left
      */
-    future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
-    future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
-    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
+    future<> restore_replica_count(locator::node_ptr leaving_node, locator::node_ptr notify_node);
+    future<> removenode_with_stream(locator::node_ptr leaving_node, shared_ptr<abort_source> as_ptr);
+    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, locator::node_ptr leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
-    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint);
+    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, locator::node_ptr leaving_node);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 public:

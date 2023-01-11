@@ -142,11 +142,11 @@ public:
     // all repair-based node operation entry points must be called on shard 0
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
     future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
-    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, locator::node_ptr leaving_node, shared_ptr<node_ops_info> ops);
     future<> rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc);
     future<> replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, locator::node_set ignore_nodes);
 private:
-    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::node_ptr leaving_node, shared_ptr<node_ops_info> ops);
     future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, locator::node_set ignore_nodes);
 
     // Must be called on shard 0

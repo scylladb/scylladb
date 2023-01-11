@@ -1622,21 +1622,21 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::node_ptr leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto& db = get_db().local();
-        auto myip = utils::fb_utilities::get_broadcast_address();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
+        auto local_node = topology.local_node();
         auto local_dc = topology.get_datacenter();
-        bool is_removenode = myip != leaving_node;
+        bool is_removenode = local_node != leaving_node;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node);
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node->endpoint());
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
         }
@@ -1659,7 +1659,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& strat = erm->get_replication_strategy();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node);
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node->endpoint());
             auto nr_tables = get_nr_tables(db, keyspace_name);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
@@ -1675,8 +1675,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto temp = tmptr->clone_after_all_left().get0();
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
             // command was used), it is still present in temp and must be removed.
-            if (temp.is_normal_token_owner(leaving_node)) {
-                temp.remove_endpoint(leaving_node);
+            if (temp.is_normal_token_owner(leaving_node->endpoint())) {
+                temp.remove_endpoint(leaving_node->endpoint());
             }
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             dht::token_range_vector ranges_for_removenode;
@@ -1728,7 +1728,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // range.
                         // Choose the new owner node n4 to run repair to sync
                         // with all replicas.
-                        skip_this_range = *new_owner.begin() != myip;
+                        skip_this_range = *new_owner.begin() != local_node->endpoint();
                         neighbors_set.insert(current_eps.begin(), current_eps.end());
                     } else {
                         // For decommission operation, the decommission node
@@ -1748,7 +1748,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // owner node available.
                         // Choose the primary replica node n1 to run repair to
                         // sync with all replicas.
-                        skip_this_range = new_eps.front() != myip;
+                        skip_this_range = new_eps.front() != local_node->endpoint();
                         neighbors_set.insert(current_eps.begin(), current_eps.end());
                     } else {
                         // For decommission operation, the decommission node
@@ -1765,8 +1765,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",
                             op, keyspace_name, r, current_eps, new_eps, new_owner));
                 }
-                neighbors_set.erase(myip);
-                neighbors_set.erase(leaving_node);
+                neighbors_set.erase(local_node->endpoint());
+                neighbors_set.erase(leaving_node->endpoint());
                 // Remove nodes in ignore_nodes
                 if (ops) {
                     for (const auto& node : ops->ignore_nodes) {
@@ -1817,10 +1817,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
 
 future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
     assert(this_shard_id() == 0);
-    return do_decommission_removenode_with_repair(std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
+    auto leaving_node = tmptr->get_topology().local_node();
+    return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), {});
 }
 
-future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, locator::node_ptr leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
