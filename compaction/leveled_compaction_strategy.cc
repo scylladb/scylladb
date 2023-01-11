@@ -200,10 +200,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
         auto [disjoint, overlapping_sstables] = is_disjoint(level_info[level], tolerance(level));
         if (!disjoint) {
-            auto ideal_level = ideal_level_for_input(input, max_sstable_size_in_bytes);
-            leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so compacting everything on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
-            // Unfortunately no good limit to limit input size to max_sstables for LCS major
-            compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
+            leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so the level will be entirely compacted on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
+            compaction_descriptor desc(std::move(level_info[level]), iop, level, max_sstable_size_in_bytes);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
