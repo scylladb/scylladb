@@ -174,7 +174,7 @@ To create a new materialized view with synchronous updates, use:
 ```cql
 CREATE MATERIALIZED VIEW main.mv
   AS SELECT * FROM main.t
-  wHERE v IS NOT NULL
+  WHERE v IS NOT NULL
   PRIMARY KEY (v, id)
   WITH synchronous_updates = true;
 ```
@@ -232,13 +232,46 @@ to explicitly mark them as such.
 
 ## Expressions
 
+### NULL
+
+Scylla aims for a uniform handling of NULL values in expressions, inspired
+by SQL: The overarching principle is that a NULL signifies an _unknown value_,
+so most expressions calculated based on a NULL also results in a NULL.
+For example, the results of `x + NULL`, `x = NULL` or `x < NULL` are all NULL,
+no matter what `x` is. Even the expression `NULL = NULL` evaluates to NULL,
+not TRUE.
+
+But not all expressions of NULL evaluate to NULL. An interesting example
+is boolean conjunction:`FALSE AND NULL` returns FALSE - not NULL. This is
+because no matter which unknown value the NULL represents, ANDing it with
+FALSE will always result in FALSE. So the return value is not unknown - it
+is a FALSE. In contrast, `TRUE AND NULL` does return NULL, because if we AND
+a TRUE with an unknown value the result is also unknown: `TRUE AND TRUE` is
+TRUE but `TRUE AND FALSE` is FALSE.
+
+Because `x = NULL` always evaluates to NULL, a `SELECT` filter `WHERE x = NULL`
+matches no row (_matching_ means evaluating to TRUE). It does **not** match
+rows where x is missing. If you really want to match rows with missing x,
+SQL offers a different syntax `x IS NULL` (and similarly, also `x IS NOT
+NULL`), Scylla does not yet implement this syntax.
+
+In contrast, Cassandra is less consistent in its handling of nulls.
+The example `x = NULL` is considered an error, not a valid expression
+whose result is NULL.
+
+The rules explained above apply to most expressions, in particular to `WHERE`
+filters in `SELECT`. However, the evaluation rules for LWT IF clauses
+(_conditional updates_) are _different_: a `IF x = NULL` condition succeeds
+if `x` is unset. This non-standard behavior of NULLs in IF expressions may
+be made configurable in a future version.
+
 ## REDUCEFUNC for UDA
 
 REDUCEFUNC extension adds optional reduction function to user-defined aggregate.
 This allows to speed up aggregation query execution by distributing the calculations
 to other nodes and reducing partial results into final one.
 Specification of this function is it has to be scalar function with two arguments,
-both of the same type as UDA's state, also returing the state type.
+both of the same type as UDA's state, also returning the state type.
 
 ```cql
 CREATE FUNCTION row_fct(acc tuple<bigint, int>, val int)
