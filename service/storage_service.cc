@@ -2755,20 +2755,20 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_prepare) {
             // Mark the replacing node as replacing
-            auto replace_nodes = req.get_replace_nodes();
-            if (replace_nodes.size() > 1) {
-                log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, replace_nodes);
-            }
+            std::unordered_map<locator::node_ptr, locator::node_ptr> replace_nodes;
             locator::node_set ignore_nodes;
             mutate_token_metadata([coordinator, &req, &replace_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
                 auto& topo = tmptr->get_topology();
+                replace_nodes = req.get_replace_nodes(topo, _gossiper);
+                if (replace_nodes.size() > 1) {
+                    log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, replace_nodes);
+                }
                 ignore_nodes = req.get_ignore_nodes(topo);
                 for (auto& x: replace_nodes) {
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
                     slogger.info("replace[{}]: Added replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node), locator::node::state::joining);
-                    tmptr->add_replacing_endpoint(existing_node, replacing_node);
+                    tmptr->add_replacing_endpoint(existing_node->endpoint(), replacing_node->endpoint());
                 }
                 return make_ready_future<>();
             }).get();
@@ -2778,7 +2778,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                         auto existing_node = x.first;
                         auto replacing_node = x.second;
                         slogger.info("replace[{}]: Removed replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                        tmptr->del_replacing_endpoint(existing_node);
+                        tmptr->del_replacing_endpoint(existing_node->endpoint());
                     }
                     return update_pending_ranges(tmptr, format("replace {}", replace_nodes));
                 });
@@ -2787,8 +2787,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             _node_ops.emplace(ops_uuid, std::move(meta));
         } else if (req.cmd == node_ops_cmd::replace_prepare_mark_alive) {
             // Wait for local node has marked replacing node as alive
-            auto replace_nodes = req.get_replace_nodes();
-            auto nodes = boost::copy_range<std::vector<inet_address>>(replace_nodes | boost::adaptors::map_values);
+            auto replace_nodes = req.get_replace_nodes(get_token_metadata().get_topology());
+            auto nodes = boost::copy_range<std::vector<inet_address>>(replace_nodes
+                    | boost::adaptors::transformed([] (const auto& x) { return x.second->endpoint(); }));
             try {
                 _gossiper.wait_alive(nodes, std::chrono::milliseconds(120 * 1000)).get();
             } catch (...) {
@@ -2799,8 +2800,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::replace_prepare_pending_ranges) {
             // Update the pending_ranges for the replacing node
             slogger.debug("replace[{}]: Updated pending_ranges from coordinator={}", req.ops_uuid, coordinator);
-            auto replace_nodes = req.get_replace_nodes();
+            std::unordered_map<locator::node_ptr, locator::node_ptr> replace_nodes;
             mutate_token_metadata([coordinator, &req, &replace_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
+                auto replace_nodes = req.get_replace_nodes(tmptr->get_topology());
                 return update_pending_ranges(tmptr, format("replace {}", replace_nodes));
             }).get();
         } else if (req.cmd == node_ops_cmd::replace_heartbeat) {

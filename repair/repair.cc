@@ -150,13 +150,104 @@ locator::node_set node_ops_cmd_request::get_leaving_nodes(const locator::topolog
     return ret;
 }
 
-std::unordered_map<gms::inet_address, gms::inet_address> node_ops_cmd_request::get_replace_nodes() {
-    if (nodes_dict.empty()) {
-        return std::move(replace_nodes);
-    }
-    std::unordered_map<gms::inet_address, gms::inet_address> ret;
+std::unordered_map<locator::node_ptr, locator::node_ptr> node_ops_cmd_request::get_replace_nodes(const locator::topology& topo) {
+    std::unordered_map<locator::node_ptr, locator::node_ptr> ret;
     for (auto&& [x, y] : std::move(replace_nodes)) {
-        ret.emplace(nodes_dict.at(x.raw_addr()).endpoint, nodes_dict.at(y.raw_addr()).endpoint);
+        locator::host_id_and_endpoint replaced_haep, replacing_haep;
+        locator::node_ptr replaced_node, replacing_node;
+        if (!nodes_dict.empty()) {
+            replaced_haep = nodes_dict.at(x.raw_addr());
+            replaced_node = topo.find_node(replaced_haep.host_id);
+            replacing_haep = nodes_dict.at(y.raw_addr());
+            replacing_node = topo.find_node(replacing_haep.host_id);
+        } else {
+            replaced_haep.endpoint = x;
+            replaced_node = topo.find_node(replaced_haep.endpoint);
+            replacing_haep.endpoint = y;
+            replacing_node = topo.find_node(replacing_haep.endpoint);
+        }
+        if (!replaced_node) {
+            log_error_and_throw<std::runtime_error>(rlogger, "Replaced node {}/{} not found in topology", replaced_haep.host_id, replaced_haep.endpoint);
+        }
+        if (!replaced_node) {
+            log_error_and_throw<std::runtime_error>(rlogger, "Replacing node {}/{} not found in topology", replacing_haep.host_id, replacing_haep.endpoint);
+        }
+        ret.emplace(replaced_node, replacing_node);
+    }
+    return ret;
+}
+
+static locator::node_ptr add_node(locator::topology& topo, const gms::gossiper& gossiper, const locator::host_id_and_endpoint& haep, locator::node::state state) {
+    auto* dc = gossiper.get_application_state_ptr(haep.endpoint, gms::application_state::DC);
+    auto* rack = gossiper.get_application_state_ptr(haep.endpoint, gms::application_state::RACK);
+    auto dc_rack = locator::endpoint_dc_rack{
+        .dc = dc ? dc->value : locator::endpoint_dc_rack::default_location.dc,
+        .rack = (dc && rack) ? rack->value : locator::endpoint_dc_rack::default_location.rack,
+    };
+    return topo.add_node(haep.host_id, haep.endpoint, dc_rack, state);
+}
+
+std::unordered_map<locator::node_ptr, locator::node_ptr> node_ops_cmd_request::get_replace_nodes(locator::topology& topo, const gms::gossiper& gossiper) {
+    std::unordered_map<locator::node_ptr, locator::node_ptr> ret;
+    auto local_node = topo.local_node();
+    for (auto&& [x, y] : std::move(replace_nodes)) {
+        locator::host_id_and_endpoint replaced_haep, replacing_haep;
+        if (!nodes_dict.empty()) {
+            replaced_haep = nodes_dict.at(x.raw_addr());
+            replacing_haep = nodes_dict.at(y.raw_addr());
+        } else {
+            replaced_haep.endpoint = x;
+            auto* s = gossiper.get_application_state_ptr(replaced_haep.endpoint, gms::application_state::HOST_ID);
+            if (s) {
+                replaced_haep.host_id = locator::host_id(utils::UUID(s->value));
+                if (replaced_haep.host_id == local_node->host_id()) {
+                    on_internal_error(rlogger, format("Replaced node {} has same host_id in gossip as the local node {}", replaced_haep.endpoint, local_node));
+                }
+            } else {
+                on_internal_error(rlogger, format("No Host ID found for replaced node {}", replaced_haep.endpoint));
+            }
+            replacing_haep.endpoint = y;
+            // when replacing nodes with same ip address
+            // we get to the replacing node via topo.local_node()
+            if (replacing_haep.endpoint != replaced_haep.endpoint) {
+                s = gossiper.get_application_state_ptr(replacing_haep.endpoint, gms::application_state::HOST_ID);
+                if (s) {
+                    replacing_haep.host_id = locator::host_id(utils::UUID(s->value));
+                }
+            }
+        }
+
+        locator::node_ptr replaced_node;
+        if (replaced_haep.host_id) {
+            replaced_node = topo.find_node(replaced_haep.host_id);
+        } else {
+            replaced_node = topo.find_node(replaced_haep.endpoint);
+        }
+        if (replaced_node) {
+            replaced_node = topo.update_node(replaced_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::leaving);
+        } else {
+            replaced_node = add_node(topo, gossiper, replaced_haep, locator::node::state::leaving);
+        }
+
+        locator::node_ptr replacing_node;
+        if (replacing_haep.host_id) {
+            replacing_node = topo.find_node(replacing_haep.host_id);
+        } else if (replacing_haep.endpoint == utils::fb_utilities::get_broadcast_address()) {
+            replacing_node = local_node;
+        }
+        if (!replacing_node) {
+            if (replacing_haep.endpoint != replaced_haep.endpoint) {
+                replacing_node = topo.find_node(replacing_haep.endpoint);
+                if (replacing_node && !replacing_node->host_id() && replacing_haep.host_id) {
+                    replacing_node = topo.update_node(replacing_node, replacing_haep.host_id, std::nullopt, std::nullopt, locator::node::state::joining);
+                }
+            }
+            if (!replacing_node) {
+                replacing_node = add_node(topo, gossiper, replacing_haep, locator::node::state::joining);
+            }
+        }
+
+        ret.emplace(replaced_node, replacing_node);
     }
     return ret;
 }
