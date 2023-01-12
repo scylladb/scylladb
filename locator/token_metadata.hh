@@ -178,9 +178,9 @@ public:
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
-    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    void add_bootstrap_tokens(const std::unordered_set<token>& tokens, inet_address endpoint);
 
-    void remove_bootstrap_tokens(std::unordered_set<token> tokens);
+    void remove_bootstrap_tokens(const std::unordered_set<token>& tokens);
 
     void add_leaving_endpoint(inet_address endpoint);
     void del_leaving_endpoint(inet_address endpoint);

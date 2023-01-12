@@ -153,9 +153,9 @@ public:
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
-    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    void add_bootstrap_tokens(const std::unordered_set<token>& tokens, inet_address endpoint);
 
-    void remove_bootstrap_tokens(std::unordered_set<token> tokens);
+    void remove_bootstrap_tokens(const std::unordered_set<token>& tokens);
 
     void add_leaving_endpoint(inet_address endpoint);
     void del_leaving_endpoint(inet_address endpoint);
@@ -583,7 +583,7 @@ token_metadata_impl::ring_range(const std::optional<dht::partition_range::bound>
     return r;
 }
 
-void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+void token_metadata_impl::add_bootstrap_tokens(const std::unordered_set<token>& tokens, inet_address endpoint) {
     for (auto t : tokens) {
         auto old_endpoint = _bootstrap_tokens.find(t);
         if (old_endpoint != _bootstrap_tokens.end() && (*old_endpoint).second != endpoint) {
@@ -600,12 +600,12 @@ void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens,
 
     std::erase_if(_bootstrap_tokens, [endpoint] (const std::pair<token, inet_address>& n) { return n.second == endpoint; });
 
-    for (auto t : tokens) {
+    for (const auto& t : tokens) {
         _bootstrap_tokens[t] = endpoint;
     }
 }
 
-void token_metadata_impl::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
+void token_metadata_impl::remove_bootstrap_tokens(const std::unordered_set<token>& tokens) {
     if (tokens.empty()) {
         tlogger.warn("tokens is empty in remove_bootstrap_tokens!");
         return;
@@ -1092,13 +1092,13 @@ token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
 }
 
 void
-token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
-    _impl->add_bootstrap_tokens(std::move(tokens), endpoint);
+token_metadata::add_bootstrap_tokens(const std::unordered_set<token>& tokens, inet_address endpoint) {
+    _impl->add_bootstrap_tokens(tokens, endpoint);
 }
 
 void
-token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
-    _impl->remove_bootstrap_tokens(std::move(tokens));
+token_metadata::remove_bootstrap_tokens(const std::unordered_set<token>& tokens) {
+    _impl->remove_bootstrap_tokens(tokens);
 }
 
 void
