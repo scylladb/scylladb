@@ -1037,7 +1037,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                 };
             });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
+            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
             auto stop_cm = deferred_stop(cm);
 
             supervisor::notify("starting database");

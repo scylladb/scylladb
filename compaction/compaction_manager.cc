@@ -679,6 +679,13 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
     }
 }
 
+compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
+    : compaction_manager::compaction_manager(cfg, as)
+{
+    _task_manager_module = make_shared<compaction::task_manager_module>(tm);
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
+}
+
 compaction_manager::compaction_manager()
     : _cfg(config{ .available_memory = 1 })
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
@@ -842,12 +849,15 @@ future<> compaction_manager::drain() {
 }
 
 future<> compaction_manager::stop() {
+    if (auto cm = std::exchange(_task_manager_module, nullptr)) {
+        co_await cm->stop();
+    }
     // never started
     if (_state == state::none) {
-        return make_ready_future<>();
+        co_return;
     } else {
         do_stop();
-        return std::move(*_stop_future);
+        co_return co_await std::move(*_stop_future);
     }
 }
 

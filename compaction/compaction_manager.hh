@@ -32,6 +32,7 @@
 #include "compaction.hh"
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
+#include "compaction/task_manager_module.hh"
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
@@ -244,6 +245,7 @@ public:
     class compaction_manager_test_task;
 
 private:
+    shared_ptr<compaction::task_manager_module> _task_manager_module;
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<shared_ptr<task>> _tasks;
 
@@ -380,6 +382,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager();
 public:
+    compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
     compaction_manager(config cfg, abort_source& as);
     ~compaction_manager();
     class for_testing_tag{};
