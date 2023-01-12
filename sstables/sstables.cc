@@ -142,6 +142,36 @@ future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring t
     });
 }
 
+class sstable::filesystem_storage final : public sstable::storage {
+    sstring dir;
+    std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
+
+private:
+    future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
+    future<> remove_temp_dir();
+    virtual future<> create_links(const sstable& sst, const sstring& dir) const override;
+    future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
+    future<> touch_temp_dir(const sstable& sst);
+    future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
+
+    virtual void change_dir_for_test(sstring nd) override {
+        dir = std::move(nd);
+    }
+
+public:
+    explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
+
+    virtual future<> seal(const sstable& sst) override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
+    virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
+    // runs in async context
+    virtual void open(sstable& sst, const io_priority_class& pc) override;
+    virtual future<> wipe(const sstable& sst) noexcept override;
+    virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
+
+    virtual sstring prefix() const override { return dir; }
+};
+
 future<file> sstable::filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
@@ -163,7 +193,7 @@ future<file> sstable::filesystem_storage::open_component(const sstable& sst, com
 
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
   try {
-    auto f = _storage.open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
+    auto f = _storage->open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
@@ -954,7 +984,7 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
 
 void sstable::open_sstable(const io_priority_class& pc) {
     generate_toc();
-    _storage.open(*this, pc);
+    _storage->open(*this, pc);
 }
 
 void sstable::write_toc(file_writer w) {
@@ -1783,12 +1813,12 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
 
 future<> sstable::seal_sstable(bool backup)
 {
-    return _storage.seal(*this).then([this, backup] {
+    return _storage->seal(*this).then([this, backup] {
         if (_marked_for_deletion == mark_for_deletion::implicit) {
             _marked_for_deletion = mark_for_deletion::none;
         }
         if (backup) {
-            return _storage.snapshot(*this, "backups", filesystem_storage::absolute_path::no);
+            return _storage->snapshot(*this, "backups", filesystem_storage::absolute_path::no);
         }
         return make_ready_future<>();
     });
@@ -2028,15 +2058,15 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_storage.prefix(), staging_dir);
+    return boost::algorithm::ends_with(_storage->prefix(), staging_dir);
 }
 
 bool sstable::is_quarantined() const noexcept {
-    return boost::algorithm::ends_with(_storage.prefix(), quarantine_dir);
+    return boost::algorithm::ends_with(_storage->prefix(), quarantine_dir);
 }
 
 bool sstable::is_uploaded() const noexcept {
-    return boost::algorithm::ends_with(_storage.prefix(), upload_dir);
+    return boost::algorithm::ends_with(_storage->prefix(), upload_dir);
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
@@ -2235,7 +2265,7 @@ future<> sstable::filesystem_storage::snapshot(const sstable& sst, sstring dir, 
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
-    return _storage.snapshot(*this, dir, filesystem_storage::absolute_path::yes);
+    return _storage->snapshot(*this, dir, filesystem_storage::absolute_path::yes);
 }
 
 future<> sstable::filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
@@ -2289,11 +2319,11 @@ future<> sstable::filesystem_storage::change_state(const sstable& sst, sstring t
 }
 
 future<> sstable::change_state(sstring to, delayed_commit_changes* delay_commit) {
-    co_await _storage.change_state(*this, to, _generation, delay_commit);
+    co_await _storage->change_state(*this, to, _generation, delay_commit);
 }
 
 future<> sstable::pick_up_from_upload(sstring to, generation_type new_generation) {
-    co_await _storage.change_state(*this, to, new_generation, nullptr);
+    co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
 }
 
@@ -3082,7 +3112,7 @@ future<> sstable::filesystem_storage::wipe(const sstable& sst) noexcept {
 
 future<>
 sstable::unlink() noexcept {
-    auto remove_fut = _storage.wipe(*this);
+    auto remove_fut = _storage->wipe(*this);
 
     try {
         co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
@@ -3240,7 +3270,7 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _generation(generation)
-    , _storage(std::move(dir))
+    , _storage(std::make_unique<filesystem_storage>(std::move(dir)))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(

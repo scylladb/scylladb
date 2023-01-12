@@ -443,11 +443,11 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
                 // since we know that the worst thing filesystem storage driver can
                 // do is to prepend/drop the trailing slash, it should be enough to
                 // compare prefixes of both ... prefixes
-                assert(compare_sstable_storage_prefix(first->_storage.prefix(), sst->_storage.prefix()));
+                assert(compare_sstable_storage_prefix(first->_storage->prefix(), sst->_storage->prefix()));
             }
         }
 
-        sstring pending_delete_dir = first->_storage.prefix() + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstable::pending_delete_dir_basename();
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);

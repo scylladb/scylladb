@@ -143,7 +143,7 @@ public:
     }
 
     void change_dir(sstring dir) {
-        _sst->_storage.change_dir_for_test(dir);
+        _sst->_storage->change_dir_for_test(dir);
     }
 
     void set_data_file_size(uint64_t size) {
@@ -205,7 +205,7 @@ public:
     void rewrite_toc_without_scylla_component() {
         _sst->_recognized_components.erase(component_type::Scylla);
         remove_file(_sst->filename(component_type::TOC)).get();
-        _sst->_storage.open(*_sst, default_priority_class());
+        _sst->_storage->open(*_sst, default_priority_class());
         _sst->seal_sstable(false).get();
     }
 
@@ -222,11 +222,11 @@ public:
     }
 
     static future<> create_links(const sstable& sst, const sstring& dir) {
-        return sst._storage.create_links(sst, dir);
+        return sst._storage->create_links(sst, dir);
     }
 
     future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {
-        co_await _sst->_storage.move(*_sst, std::move(new_dir), new_generation, nullptr);
+        co_await _sst->_storage->move(*_sst, std::move(new_dir), new_generation, nullptr);
         _sst->_generation = std::move(new_generation);
     }
 
@@ -235,7 +235,7 @@ public:
     }
 
     sstring storage_prefix() const {
-        return _sst->_storage.prefix();
+        return _sst->_storage->prefix();
     }
 };
 
