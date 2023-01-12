@@ -16,6 +16,19 @@
 #include "utils/chunked_vector.hh"
 #include "log.hh"
 
+namespace utils {
+
+inline size_t iovec_len(const std::vector<iovec>& iov)
+{
+    size_t ret = 0;
+    for (auto&& e : iov) {
+        ret += e.iov_len;
+    }
+    return ret;
+}
+
+}
+
 namespace s3 {
 
 static logging::logger s3l("s3");
@@ -371,6 +384,105 @@ future<> client::upload_sink::close() {
 
 data_sink client::make_upload_sink(sstring object_name) {
     return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name)));
+}
+
+class client::readable_file : public file_impl {
+    shared_ptr<client> _client;
+    http::experimental::client& _http;
+    sstring _object_name;
+
+    [[noreturn]] void unsupported() {
+        throw_with_backtrace<std::logic_error>("unsupported operation on s3 readable file");
+    }
+
+public:
+    readable_file(shared_ptr<client> cln, sstring object_name)
+        : _client(std::move(cln))
+        , _http(_client->_http)
+        , _object_name(std::move(object_name))
+    {
+    }
+
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<> truncate(uint64_t length) override { unsupported(); }
+    virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override { unsupported(); }
+
+    virtual future<> flush(void) override { return make_ready_future<>(); }
+    virtual future<> allocate(uint64_t position, uint64_t length) override { return make_ready_future<>(); }
+    virtual future<> discard(uint64_t offset, uint64_t length) override { return make_ready_future<>(); }
+
+    class readable_file_handle_impl final : public file_handle_impl {
+        socket_address _addr;
+        sstring _object_name;
+
+    public:
+        readable_file_handle_impl(socket_address addr, sstring object_name)
+                : _addr(std::move(addr))
+                , _object_name(std::move(object_name))
+        {}
+
+        virtual std::unique_ptr<file_handle_impl> clone() const override {
+            return std::make_unique<readable_file_handle_impl>(_addr, _object_name);
+        }
+
+        virtual shared_ptr<file_impl> to_file() && override {
+            return make_shared<readable_file>(client::make(std::move(_addr)), std::move(_object_name));
+        }
+    };
+
+    virtual std::unique_ptr<file_handle_impl> dup() override {
+        return std::make_unique<readable_file_handle_impl>(_client->_addr, _object_name);
+    }
+
+    virtual future<uint64_t> size(void) override {
+        return _client->get_object_size(_object_name);
+    }
+
+    virtual future<struct stat> stat(void) override {
+        auto size = co_await _client->get_object_size(_object_name);
+        struct stat ret {
+            .st_nlink = 1,
+            .st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH,
+            .st_size = size,
+            .st_blksize = 1 << 10, // huh?
+            .st_blocks = size >> 9,
+        };
+        co_return ret;
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len });
+        std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
+        co_return buf.size();
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) });
+        uint64_t off = 0;
+        for (auto& v : iov) {
+            auto sz = std::min(v.iov_len, buf.size() - off);
+            if (sz == 0) {
+                break;
+            }
+            std::copy_n(buf.get() + off, sz, reinterpret_cast<uint8_t*>(v.iov_base));
+            off += sz;
+        }
+        co_return off;
+    }
+
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size });
+        co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
+    }
+
+    virtual future<> close() override {
+        return make_ready_future<>();
+    }
+};
+
+file client::make_readable_file(sstring object_name) {
+    return file(make_shared<readable_file>(shared_from_this(), std::move(object_name)));
 }
 
 future<> client::close() {
