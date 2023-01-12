@@ -168,9 +168,20 @@ public:
     virtual void open(sstable& sst, const io_priority_class& pc) override;
     virtual future<> wipe(const sstable& sst) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
+    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
 
     virtual sstring prefix() const override { return dir; }
 };
+
+future<data_sink> sstable::filesystem_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
+    file_output_stream_options options;
+    options.io_priority_class = pc;
+    options.buffer_size = sst.sstable_buffer_size;
+    options.write_behind = 10;
+
+    assert(type == component_type::Data || type == component_type::Index);
+    return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
+}
 
 future<file> sstable::filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;

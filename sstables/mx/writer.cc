@@ -874,15 +874,10 @@ void writer::maybe_add_pi_block() {
 }
 
 void writer::init_file_writers() {
-    file_output_stream_options options;
-    options.io_priority_class = _pc;
-    options.buffer_size = _sst.sstable_buffer_size;
-    options.write_behind = 10;
-
-    auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
+    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data, _pc).get0();
 
     if (!_compression_enabled) {
-        _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), options.buffer_size, _sst.filename(component_type::Data));
+        _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.filename(component_type::Data));
     } else {
         _data_writer = std::make_unique<file_writer>(
             make_compressed_file_m_format_output_stream(
@@ -891,7 +886,7 @@ void writer::init_file_writers() {
                 _schema.get_compressor_params()), _sst.filename(component_type::Data));
     }
 
-    out = make_file_data_sink(std::move(_sst._index_file), options).get0();
+    out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index, _pc).get0();
     _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.filename(component_type::Index));
 }
 
