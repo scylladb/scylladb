@@ -102,7 +102,8 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
         tasks::task_manager tm;
         auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
+        auto s_opts = make_lw_shared<replica::storage_options>();
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, s_opts, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
         cf->mark_ready_for_writes();
         co_await func(*cf);
         co_await cf->stop();

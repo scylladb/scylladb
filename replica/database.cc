@@ -949,9 +949,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
-        cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 

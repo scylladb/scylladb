@@ -80,6 +80,10 @@ public:
     const storage_options& get_storage_options() const {
         return *_storage_options;
     }
+    lw_shared_ptr<const storage_options> get_storage_options_ptr() {
+        return _storage_options;
+    }
+
     void add_or_update_column_family(const schema_ptr& s) {
         _cf_meta_data[s->cf_name()] = s;
     }

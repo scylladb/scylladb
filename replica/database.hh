@@ -346,6 +346,8 @@ struct table_stats {
     utils::estimated_histogram estimated_coordinator_read;
 };
 
+using storage_options = data_dictionary::storage_options;
+
 class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
@@ -394,6 +396,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
+    lw_shared_ptr<const storage_options> _storage_opts;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
     mutable row_locker::stats _row_locker_stats;
@@ -622,6 +625,9 @@ public:
         return _config.datadir;
     }
 
+    const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
+    lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
+
     seastar::gate& async_gate() { return _async_gate; }
 
     uint64_t failed_counter_applies_to_memtable() const {
@@ -753,12 +759,12 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    table(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options>, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker);
 public:
-    table(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), &cl, cm, sm, cl_stats, row_cache_tracker) {}
-    table(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), nullptr, cm, sm, cl_stats, row_cache_tracker) {}
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        : table(schema, std::move(cfg), std::move(sopts), &cl, cm, sm, cl_stats, row_cache_tracker) {}
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
+        : table(schema, std::move(cfg), std::move(sopts), nullptr, cm, sm, cl_stats, row_cache_tracker) {}
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
     const schema_ptr& schema() const { return _schema; }
