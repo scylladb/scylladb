@@ -219,10 +219,6 @@ schema_ptr system_keyspace::raft_snapshots() {
         auto id = generate_legacy_id(NAME, RAFT_SNAPSHOTS);
         return schema_builder(NAME, RAFT_SNAPSHOTS, std::optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
-            // To be able to start multiple raft servers inside one raft group
-            // on the same node, we need to include the server_id in the
-            // partition key, as well.
-            .with_column("server_id", uuid_type, column_kind::partition_key)
             .with_column("snapshot_id", uuid_type)
             // Index and term of last entry in the snapshot
             .with_column("idx", long_type)
@@ -237,12 +233,11 @@ schema_ptr system_keyspace::raft_snapshots() {
     return schema;
 }
 
-schema_ptr system_keyspace::raft_config() {
+schema_ptr system_keyspace::raft_snapshot_config() {
     static thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_keyspace::NAME, RAFT_CONFIG);
-        return schema_builder(system_keyspace::NAME, RAFT_CONFIG, std::optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG);
+        return schema_builder(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG, std::optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
-            .with_column("my_server_id", uuid_type, column_kind::partition_key)
             .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
             .with_column("can_vote", boolean_type)
@@ -2692,7 +2687,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.consistent_cluster_management()) {
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
             r.insert(r.end(), {broadcast_kv_store()});

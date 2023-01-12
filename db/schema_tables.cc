@@ -2881,7 +2881,7 @@ static const std::unordered_set<sstring>& system_ks_null_shard_tables() {
         SCYLLA_TABLE_SCHEMA_HISTORY,
         db::system_keyspace::RAFT,
         db::system_keyspace::RAFT_SNAPSHOTS,
-        db::system_keyspace::RAFT_CONFIG,
+        db::system_keyspace::RAFT_SNAPSHOT_CONFIG,
         db::system_keyspace::GROUP0_HISTORY,
         db::system_keyspace::DISCOVERY,
         db::system_keyspace::BROADCAST_KV_STORE,
