@@ -909,7 +909,7 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
             BOOST_REQUIRE(it != cf_metadata.end());
             BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
 
-            it = cf_metadata.find("raft_config");
+            it = cf_metadata.find("raft_snapshot_config");
             BOOST_REQUIRE(it != cf_metadata.end());
             BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
 

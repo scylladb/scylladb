@@ -40,7 +40,7 @@ There are three such tables:
        works fine with many groups.
     - `raft_snapshots`, a supporting table storing the so-called
        snapshot descriptors,
-    - `raft_config`, a normalized part of raft
+    - `raft_snapshot_config`, a normalized part of raft
        `raft_snapshots`, storing the cluster configuration
        at the time of taking the snapshot. May be out of date with
        the real cluster configuration, e.g. when configuration
@@ -98,8 +98,8 @@ Raft group 0 has an id (UUID) just like any other group. After a
 node boots, this id is persisted in `scylla_local` system table.
 If this id is present, the node can start a Raft instance for
 the group using the last saved state in `raft`, `raft_snapshots`
-and `raft_config` system tables, which are all retrievable by
-group id.
+and `raft_snapshot_config` system tables, which are all retrievable
+by group id.
 If a persisted id is missing, it means the node is bootstrapping
 and haven't joined Raft yet.
 
