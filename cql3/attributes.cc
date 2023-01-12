@@ -20,7 +20,9 @@ std::unique_ptr<attributes> attributes::none() {
 attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
                        std::optional<cql3::expr::expression>&& time_to_live,
                        std::optional<cql3::expr::expression>&& timeout)
-    : _timestamp{std::move(timestamp)}
+    : _timestamp_unset_guard(timestamp)
+    , _timestamp{std::move(timestamp)}
+    , _time_to_live_unset_guard(time_to_live)
     , _time_to_live{std::move(time_to_live)}
     , _timeout{std::move(timeout)}
 { }
@@ -38,16 +40,13 @@ bool attributes::is_timeout_set() const {
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
-    if (!_timestamp.has_value()) {
+    if (!_timestamp.has_value() || _timestamp_unset_guard.is_unset(options)) {
         return now;
     }
 
     cql3::raw_value tval = expr::evaluate(*_timestamp, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of timestamp");
-    }
-    if (tval.is_unset_value()) {
-        return now;
     }
     try {
         return tval.view().validate_and_deserialize<int64_t>(*long_type);
@@ -57,15 +56,12 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
 }
 
 int32_t attributes::get_time_to_live(const query_options& options) {
-    if (!_time_to_live.has_value())
+    if (!_time_to_live.has_value() || _time_to_live_unset_guard.is_unset(options))
         return 0;
 
     cql3::raw_value tval = expr::evaluate(*_time_to_live, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of TTL");
-    }
-    if (tval.is_unset_value()) {
-        return 0;
     }
 
     int32_t ttl;
@@ -91,8 +87,8 @@ int32_t attributes::get_time_to_live(const query_options& options) {
 
 db::timeout_clock::duration attributes::get_timeout(const query_options& options) const {
     cql3::raw_value timeout = expr::evaluate(*_timeout, options);
-    if (timeout.is_null() || timeout.is_unset_value()) {
-        throw exceptions::invalid_request_exception("Timeout value cannot be unset/null");
+    if (timeout.is_null()) {
+        throw exceptions::invalid_request_exception("Timeout value cannot be null");
     }
     cql_duration duration = timeout.view().deserialize<cql_duration>(*duration_type);
     if (duration.months || duration.days) {

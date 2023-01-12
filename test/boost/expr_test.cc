@@ -21,10 +21,10 @@ using namespace cql3;
 using namespace cql3::expr;
 using namespace cql3::expr::test_utils;
 
-bind_variable new_bind_variable(int bind_index) {
+bind_variable new_bind_variable(int bind_index, data_type type = int32_type) {
     return bind_variable {
         .bind_index = bind_index,
-        .receiver = nullptr
+        .receiver = make_lw_shared<column_specification>("ks", "tab", make_shared<column_identifier>("?", true), std::move(type)),
     };
 }
 
@@ -383,11 +383,6 @@ BOOST_AUTO_TEST_CASE(evaluate_constant_null) {
     BOOST_REQUIRE_EQUAL(evaluate(constant_null_with_type, evaluation_inputs{}), raw_value::make_null());
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_constant_unset) {
-    expression constant_unset = constant::make_unset_value();
-    BOOST_REQUIRE_EQUAL(evaluate(constant_unset, evaluation_inputs{}), raw_value::make_unset_value());
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_constant_empty) {
     expression constant_empty_bool = constant(raw_value::make_value(bytes()), boolean_type);
     BOOST_REQUIRE(evaluate(constant_empty_bool, evaluation_inputs{}).is_empty_value());
@@ -532,6 +527,11 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
     BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
 }
 
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_vs_unset) {
+    auto qo = query_options(cql3::raw_value_vector_with_unset({raw_value::make_null()}, {true}));
+    BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0), evaluation_inputs{.options = &qo}), exceptions::invalid_request_exception);
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_empty) {
     // TODO: Empty multi-cell collections are trated as NULL in the database,
     // should the conversion happen in evaluate?
@@ -554,12 +554,6 @@ BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_null) {
     expression list_with_null =
         make_list_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type);
     BOOST_REQUIRE_THROW(evaluate(list_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_unset) {
-    expression list_with_unset = make_list_constructor(
-        {make_int_const(1), constant::make_unset_value(int32_type), make_int_const(3)}, int32_type);
-    BOOST_REQUIRE_THROW(evaluate(list_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_list_collection_constructor_with_empty_value) {
@@ -591,12 +585,6 @@ BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_null) {
     expression set_with_null =
         make_set_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type);
     BOOST_REQUIRE_THROW(evaluate(set_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_unset) {
-    expression set_with_unset = make_set_constructor(
-        {make_int_const(1), constant::make_unset_value(int32_type), make_int_const(3)}, int32_type);
-    BOOST_REQUIRE_THROW(evaluate(set_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_empty) {
@@ -662,28 +650,6 @@ BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_null_value) {
     BOOST_REQUIRE_THROW(evaluate(map_with_null_value, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_unset_key) {
-    expression map_with_unset_key = make_map_constructor(
-        {
-            {make_int_const(1), make_int_const(2)},
-            {constant::make_unset_value(int32_type), make_int_const(4)},
-            {make_int_const(5), make_int_const(6)},
-        },
-        int32_type, int32_type);
-    BOOST_REQUIRE_THROW(evaluate(map_with_unset_key, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_unset_value) {
-    expression map_with_unset_value = make_map_constructor(
-        {
-            {make_int_const(1), make_int_const(2)},
-            {make_int_const(3), constant::make_unset_value(int32_type)},
-            {make_int_const(5), make_int_const(6)},
-        },
-        int32_type, int32_type);
-    BOOST_REQUIRE_THROW(evaluate(map_with_unset_value, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty_key) {
     expression map_with_empty_key = make_map_constructor(
         {
@@ -736,12 +702,6 @@ BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_null) {
                         make_tuple_raw({make_int_raw(12), raw_value::make_null(), make_int_raw(34)}));
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_unset) {
-    expression tuple_with_unset =
-        make_tuple_constructor({make_int_const(12), constant::make_unset_value(int32_type)}, {int32_type, utf8_type});
-    BOOST_REQUIRE_THROW(evaluate(tuple_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_empty) {
     expression tuple_with_empty = make_tuple_constructor(
         {make_int_const(12), make_empty_const(int32_type), make_int_const(34)}, {int32_type, utf8_type, int32_type});
@@ -774,13 +734,6 @@ BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_null) {
                                                                {"field3", make_bool_const(true)}});
     BOOST_REQUIRE_EQUAL(evaluate(usertype_with_null, evaluation_inputs{}),
                         make_tuple_raw({make_int_raw(123), raw_value::make_null(), make_bool_raw(true)}));
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_unset) {
-    expression usertype_with_unset = make_usertype_constructor({{"field1", make_int_const(123)},
-                                                                {"field2", constant::make_unset_value(utf8_type)},
-                                                                {"field3", make_bool_const(true)}});
-    BOOST_REQUIRE_THROW(evaluate(usertype_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_empty) {
@@ -818,8 +771,6 @@ BOOST_AUTO_TEST_CASE(evalaute_subscripted_empty_list) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(std::numeric_limits<int32_t>::min())),
                         raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
-    BOOST_REQUIRE_THROW(evaluate_subscripted(list, constant::make_unset_value(int32_type)),
-                        exceptions::invalid_request_exception);
     
     // TODO: Should empty value list indexes cause an error? Why not return NULL?
     BOOST_REQUIRE_THROW(evaluate_subscripted(list, make_empty_const(int32_type)), empty_value_exception);
@@ -873,12 +824,6 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_null_index) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_unset_index) {
-    constant list = make_subscript_test_list();
-    BOOST_REQUIRE_THROW(evaluate_subscripted(list, constant::make_unset_value(int32_type)),
-                        exceptions::invalid_request_exception);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_empty_index) {
     constant list = make_subscript_test_list();
     // TODO: Should empty value list indexes cause an error? Why not return NULL?
@@ -890,9 +835,6 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_list_null_list) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_int_const(0)), raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, make_empty_const(int32_type)), raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_null(int32_type)), raw_value::make_null());
-
-    // TODO: Shouldn't this throw an error?
-    BOOST_REQUIRE_EQUAL(evaluate_subscripted(list, constant::make_unset_value(int32_type)), raw_value::make_null());
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_subscripted_empty_map) {
@@ -907,8 +849,6 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_empty_map) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(std::numeric_limits<int32_t>::max())),
                         raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
-    BOOST_REQUIRE_THROW(evaluate_subscripted(map, constant::make_unset_value(int32_type)),
-                        exceptions::invalid_request_exception);
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_empty_const(int32_type)), raw_value::make_null());
 }
 
@@ -954,12 +894,6 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_null_index) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_unset_index) {
-    constant map = make_subscript_test_map();
-    BOOST_REQUIRE_THROW(evaluate_subscripted(map, constant::make_unset_value(int32_type)),
-                        exceptions::invalid_request_exception);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_empty) {
     // Empty list values seem to not be allowed.
     constant map = make_empty_const(map_type_impl::get_instance(int32_type, int32_type, true));
@@ -971,9 +905,6 @@ BOOST_AUTO_TEST_CASE(evaluate_subscripted_map_null_map) {
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_int_const(0)), raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, make_empty_const(int32_type)), raw_value::make_null());
     BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_null(int32_type)), raw_value::make_null());
-
-    // TODO: Shouldn't this throw an error?
-    BOOST_REQUIRE_EQUAL(evaluate_subscripted(map, constant::make_unset_value(int32_type)), raw_value::make_null());
 }
 
 enum expected_invalid_or_valid { expected_valid, expected_invalid };
@@ -989,7 +920,7 @@ static void check_bind_variable_evaluate(constant check_value, expected_invalid_
     expression bind_var = bind_variable{.bind_index = 0, .receiver = make_receiver(check_value.type, "bind_var")};
 
     auto [inputs, inputs_data] = make_evaluation_inputs(
-        test_schema, {{"pk", make_int_raw(0)}, {"r", raw_value::make_null()}}, {check_value.value});
+        test_schema, {{"pk", make_int_raw(0)}, {"r", cql3::raw_value::make_null()}}, {check_value.value});
 
     switch (expected_validity) {
         case expected_valid:
@@ -1007,12 +938,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_in_list) {
     check_bind_variable_evaluate(list_with_null, expected_invalid);
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_in_list) {
-    constant list_with_unset =
-        make_list_const({make_int_const(1), constant::make_unset_value(int32_type), make_int_const(2)}, int32_type);
-    check_bind_variable_evaluate(list_with_unset, expected_invalid);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_list) {
     constant lis_with_empty =
         make_list_const({make_int_const(1), make_empty_const(int32_type), make_int_const(2)}, int32_type);
@@ -1023,12 +948,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_in_set) {
     constant set_with_null =
         make_set_const({make_int_const(1), constant::make_null(int32_type), make_int_const(2)}, int32_type);
     check_bind_variable_evaluate(set_with_null, expected_invalid);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_in_set) {
-    constant set_with_unset =
-        make_set_const({make_int_const(1), constant::make_unset_value(int32_type), make_int_const(2)}, int32_type);
-    check_bind_variable_evaluate(set_with_unset, expected_invalid);
 }
 
 // TODO: This fails, but I feel like this is a bug.
@@ -1046,14 +965,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_key_in_map) {
     check_bind_variable_evaluate(map_with_null_key, expected_invalid);
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_key_in_map) {
-    constant map_with_unset_key = make_map_const({{make_int_const(1), make_int_const(2)},
-                                                  {constant::make_unset_value(int32_type), make_int_const(4)},
-                                                  {make_int_const(5), make_int_const(6)}},
-                                                 int32_type, int32_type);
-    check_bind_variable_evaluate(map_with_unset_key, expected_invalid);
-}
-
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_key_in_map) {
     constant map_with_empty_key = make_map_const({{make_empty_const(int32_type), make_int_const(4)},
                                                   {make_int_const(1), make_int_const(2)},
@@ -1068,14 +979,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_null_value_in_map) {
                                                    {make_int_const(5), make_int_const(6)}},
                                                   int32_type, int32_type);
     check_bind_variable_evaluate(map_with_null_value, expected_invalid);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_no_unset_value_in_map) {
-    constant map_with_unset_value = make_map_const({{make_int_const(1), make_int_const(2)},
-                                                    {make_int_const(3), constant::make_unset_value(int32_type)},
-                                                    {make_int_const(5), make_int_const(6)}},
-                                                   int32_type, int32_type);
-    check_bind_variable_evaluate(map_with_unset_value, expected_invalid);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_map) {
@@ -1113,11 +1016,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_lists_recursively)
     check_bind_variable_evaluate(list_with_null, expected_invalid);
 }
 
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_in_lists_recursively) {
-    constant list_with_unset = create_nested_list_with_value(constant::make_unset_value(int32_type));
-    check_bind_variable_evaluate(list_with_unset, expected_invalid);
-}
-
 // TODO: This fails, but I feel like this is a bug.
 // BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_lists_recursively) {
 //     constant list_with_empty = create_nested_list_or_set_with_value(make_empty_const(int32_type));
@@ -1148,11 +1046,6 @@ static constant create_nested_set_with_value(constant value_in_set) {
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_in_sets_recursively) {
     constant set_with_null = create_nested_set_with_value(constant::make_null(int32_type));
     check_bind_variable_evaluate(set_with_null, expected_invalid);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_in_sets_recursively) {
-    constant set_with_unset = create_nested_set_with_value(constant::make_unset_value(int32_type));
-    check_bind_variable_evaluate(set_with_unset, expected_invalid);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_in_sets_recursively) {
@@ -1205,16 +1098,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_key_in_maps_recursive
 
     constant map_with_null_key2 = create_nested_map_with_key(make_int_const(1), constant::make_null(int32_type));
     check_bind_variable_evaluate(map_with_null_key2, expected_invalid);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_key_in_maps_recursively) {
-    constant map_with_unset_key1 =
-        create_nested_map_with_key(constant::make_unset_value(int32_type), make_int_const(13));
-    check_bind_variable_evaluate(map_with_unset_key1, expected_invalid);
-
-    constant map_with_unset_key2 =
-        create_nested_map_with_key(make_int_const(1), constant::make_unset_value(int32_type));
-    check_bind_variable_evaluate(map_with_unset_key2, expected_invalid);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_key_in_maps_recursively) {
@@ -1270,16 +1153,6 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_null_value_in_maps_recursi
 
     constant map_with_null_value2 = create_nested_map_with_value(make_int_const(1), constant::make_null(int32_type));
     check_bind_variable_evaluate(map_with_null_value2, expected_invalid);
-}
-
-BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_unset_value_in_maps_recursively) {
-    constant map_with_unset_value1 =
-        create_nested_map_with_value(constant::make_unset_value(int32_type), make_int_const(13));
-    check_bind_variable_evaluate(map_with_unset_value1, expected_invalid);
-
-    constant map_with_unset_value2 =
-        create_nested_map_with_value(make_int_const(1), constant::make_unset_value(int32_type));
-    check_bind_variable_evaluate(map_with_unset_value2, expected_invalid);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_empty_value_in_maps_recursively) {
@@ -2515,14 +2388,11 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
 
-// Test how evaluating a given binary operator behaves when null and unset are present.
+// Test how evaluating a given binary operator behaves when null is present.
 // A binary with null on either side should evaluate to null.
-// When UNSET_VALUE is present evaluating should throw an exception.
-static void test_evaluate_binop_null_unset(oper_t op, expression valid_lhs, expression valid_rhs) {
+static void test_evaluate_binop_null(oper_t op, expression valid_lhs, expression valid_rhs) {
     constant lhs_null_val = constant::make_null(type_of(valid_lhs));
     constant rhs_null_val = constant::make_null(type_of(valid_rhs));
-    constant lhs_unset_val = constant::make_unset_value(type_of(valid_lhs));
-    constant rhs_unset_val = constant::make_unset_value(type_of(valid_rhs));
 
     expression valid_binop = binary_operator(valid_lhs, op, valid_rhs);
     BOOST_REQUIRE(evaluate(valid_binop, evaluation_inputs{}).is_value());
@@ -2535,21 +2405,6 @@ static void test_evaluate_binop_null_unset(oper_t op, expression valid_lhs, expr
 
     expression binop_both_null = binary_operator(lhs_null_val, op, rhs_null_val);
     BOOST_REQUIRE_EQUAL(evaluate(binop_both_null, evaluation_inputs{}), raw_value::make_null());
-
-    expression binop_lhs_unset = binary_operator(lhs_unset_val, op, valid_rhs);
-    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression binop_rhs_unset = binary_operator(valid_lhs, op, rhs_unset_val);
-    BOOST_REQUIRE_THROW(evaluate(binop_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression binop_both_unset = binary_operator(lhs_unset_val, op, rhs_unset_val);
-    BOOST_REQUIRE_THROW(evaluate(binop_both_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression binop_lhs_null_rhs_unset = binary_operator(lhs_null_val, op, rhs_unset_val);
-    BOOST_REQUIRE_THROW(evaluate(binop_lhs_null_rhs_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression binop_lhs_unset_rhs_null = binary_operator(lhs_unset_val, op, rhs_null_val);
-    BOOST_REQUIRE_THROW(evaluate(binop_lhs_unset_rhs_null, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq) {
@@ -2565,7 +2420,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq) {
     expression empty_neq = binary_operator(make_int_const(0), oper_t::EQ, make_empty_const(int32_type));
     BOOST_REQUIRE_EQUAL(evaluate(empty_neq, evaluation_inputs{}), make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::EQ, make_int_const(123), make_int_const(456));
+    test_evaluate_binop_null(oper_t::EQ, make_int_const(123), make_int_const(456));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
@@ -2582,7 +2437,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
     expression empty_neq_0 = binary_operator(make_empty_const(int32_type), oper_t::NEQ, make_int_const(0));
     BOOST_REQUIRE_EQUAL(evaluate(empty_neq_0, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::NEQ, make_int_const(123), make_int_const(456));
+    test_evaluate_binop_null(oper_t::NEQ, make_int_const(123), make_int_const(456));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
@@ -2602,7 +2457,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
         binary_operator(make_empty_const(int32_type), oper_t::LT, make_int_const(std::numeric_limits<int32_t>::min()));
     BOOST_REQUIRE_EQUAL(evaluate(empty_lt_int_min, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::LT, make_int_const(123), make_int_const(456));
+    test_evaluate_binop_null(oper_t::LT, make_int_const(123), make_int_const(456));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lte) {
@@ -2623,7 +2478,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lte) {
         binary_operator(make_empty_const(int32_type), oper_t::LT, make_int_const(std::numeric_limits<int32_t>::min()));
     BOOST_REQUIRE_EQUAL(evaluate(empty_lte_int_min, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::LTE, make_int_const(123), make_int_const(456));
+    test_evaluate_binop_null(oper_t::LTE, make_int_const(123), make_int_const(456));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gt) {
@@ -2643,7 +2498,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gt) {
         binary_operator(make_int_const(std::numeric_limits<int32_t>::min()), oper_t::GT, make_empty_const(int32_type));
     BOOST_REQUIRE_EQUAL(evaluate(int_min_gt_empty, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::GT, make_int_const(234), make_int_const(-3434));
+    test_evaluate_binop_null(oper_t::GT, make_int_const(234), make_int_const(-3434));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
@@ -2664,7 +2519,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
         binary_operator(make_int_const(std::numeric_limits<int32_t>::min()), oper_t::GTE, make_empty_const(int32_type));
     BOOST_REQUIRE_EQUAL(evaluate(int_min_gte_empty, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::GTE, make_int_const(234), make_int_const(-3434));
+    test_evaluate_binop_null(oper_t::GTE, make_int_const(234), make_int_const(-3434));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
@@ -2691,7 +2546,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
     expression nonexisting_int_in_list_with_empty = binary_operator(make_int_const(321), oper_t::IN, list_with_empty);
     BOOST_REQUIRE_EQUAL(evaluate(nonexisting_int_in_list_with_empty, evaluation_inputs{}), make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::IN, make_int_const(5), in_list);
+    test_evaluate_binop_null(oper_t::IN, make_int_const(5), in_list);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_list_contains) {
@@ -2720,7 +2575,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_list_contains) {
         binary_operator(list_with_empty, oper_t::CONTAINS, make_int_const(321));
     BOOST_REQUIRE_EQUAL(evaluate(list_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::CONTAINS, list_val, make_int_const(5));
+    test_evaluate_binop_null(oper_t::CONTAINS, list_val, make_int_const(5));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_set_contains) {
@@ -2749,7 +2604,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_set_contains) {
         binary_operator(set_with_empty, oper_t::CONTAINS, make_int_const(321));
     BOOST_REQUIRE_EQUAL(evaluate(set_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::CONTAINS, set_val, make_int_const(5));
+    test_evaluate_binop_null(oper_t::CONTAINS, set_val, make_int_const(5));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains) {
@@ -2779,7 +2634,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains) {
         binary_operator(map_with_empty, oper_t::CONTAINS, make_int_const(3));
     BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_nonexisting_int, evaluation_inputs{}), make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::CONTAINS, map_val, make_int_const(5));
+    test_evaluate_binop_null(oper_t::CONTAINS, map_val, make_int_const(5));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains_key) {
@@ -2810,7 +2665,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_map_contains_key) {
     BOOST_REQUIRE_EQUAL(evaluate(map_with_empty_contains_key_nonexisting_int, evaluation_inputs{}),
                         make_bool_raw(false));
 
-    test_evaluate_binop_null_unset(oper_t::CONTAINS_KEY, map_val, make_int_const(5));
+    test_evaluate_binop_null(oper_t::CONTAINS_KEY, map_val, make_int_const(5));
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
@@ -2827,18 +2682,6 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_is_not) {
     expression empty_is_not_null =
         binary_operator(make_empty_const(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
     BOOST_REQUIRE_EQUAL(evaluate(empty_is_not_null, evaluation_inputs{}), make_bool_raw(true));
-
-    expression unset_is_not_null =
-        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_null(int32_type));
-    BOOST_REQUIRE_THROW(evaluate(unset_is_not_null, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression int_is_not_unset =
-        binary_operator(make_int_const(123), oper_t::IS_NOT, constant::make_unset_value(int32_type));
-    BOOST_REQUIRE_THROW(evaluate(int_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-
-    expression unset_is_not_unset =
-        binary_operator(constant::make_unset_value(int32_type), oper_t::IS_NOT, constant::make_unset_value(int32_type));
-    BOOST_REQUIRE_THROW(evaluate(unset_is_not_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
@@ -2862,7 +2705,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_like) {
         binary_operator(make_empty_const(utf8_type), oper_t::LIKE, make_empty_const(utf8_type));
     BOOST_REQUIRE_EQUAL(evaluate(empty_like_empty, evaluation_inputs{}), make_bool_raw(true));
 
-    test_evaluate_binop_null_unset(oper_t::LIKE, make_text_const("some_text"), make_text_const("some_%"));
+    test_evaluate_binop_null(oper_t::LIKE, make_text_const("some_text"), make_text_const("some_%"));
 }
 
 // An empty conjunction should evaluate to true
@@ -2990,22 +2833,6 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_null) {
     BOOST_REQUIRE_EQUAL(evaluate(conj_with_null, evaluation_inputs{}), raw_value::make_null());
 }
 
-// Evaluating a conjunction that contains a single unset value should throw an error
-BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_unset) {
-    expression conj_one_unset = conjunction{.children = {constant::make_unset_value(boolean_type)}};
-
-    BOOST_REQUIRE_THROW(evaluate(conj_one_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
-// Evaluating 'true AND true AND true AND UNSET_VALUE AND ...' should throw an erorr
-BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_unset) {
-    expression conj_with_unset = conjunction{
-        .children = {make_bool_const(true), make_bool_const(true), make_bool_const(true),
-                     constant::make_unset_value(boolean_type), make_bool_const(false), make_bool_const(true)}};
-
-    BOOST_REQUIRE_THROW(evaluate(conj_with_unset, evaluation_inputs{}), exceptions::invalid_request_exception);
-}
-
 // Evaluating a conjunction that contains a single empty value should throw an error
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_empty) {
     expression conj_one_empty = conjunction{.children = {make_empty_const(boolean_type)}};
@@ -3022,32 +2849,42 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_empty) {
     BOOST_REQUIRE_THROW(evaluate(conj_with_empty, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
+static cql3::query_options query_options_with_unset_bind_variable() {
+    return cql3::query_options(cql3::raw_value_vector_with_unset({cql3::raw_value::make_null()}, {true}));
+}
+
 // Short circuiting on false ignores all further values, even though they could make the expression invalid
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_short_circuit_on_false_does_not_detect_invalid_values) {
-    // An expression which would throw an error when evaluated
-    expression invalid_to_evaluate = conjunction{.children = {constant::make_unset_value(boolean_type)}};
+    auto qo = query_options_with_unset_bind_variable();
+    auto inputs = evaluation_inputs{.options = &qo};
 
-    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, evaluation_inputs{}), exceptions::invalid_request_exception);
+    // An expression which would throw an error when evaluated
+    expression invalid_to_evaluate = conjunction{.children = {new_bind_variable(0)}};
+
+    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, inputs), exceptions::invalid_request_exception);
 
     expression conj_with_false_then_invalid =
         conjunction{.children = {make_bool_const(true), make_bool_const(false), make_empty_const(boolean_type),
-                                 constant::make_unset_value(boolean_type), invalid_to_evaluate, make_bool_const(true)}};
+                                 new_bind_variable(0), invalid_to_evaluate, make_bool_const(true)}};
 
-    BOOST_REQUIRE_EQUAL(evaluate(conj_with_false_then_invalid, evaluation_inputs{}), make_bool_raw(false));
+    BOOST_REQUIRE_EQUAL(evaluate(conj_with_false_then_invalid, inputs), make_bool_raw(false));
 }
 
 // Null doesn't short-circuit
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_doesnt_short_circuit_on_null) {
-    // An expression which would throw an error when evaluated
-    expression invalid_to_evaluate = conjunction{.children = {constant::make_unset_value(boolean_type)}};
+    auto qo = query_options_with_unset_bind_variable();
+    auto inputs = evaluation_inputs{.options = &qo};
 
-    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, evaluation_inputs{}), exceptions::invalid_request_exception);
+    // An expression which would throw an error when evaluated
+    expression invalid_to_evaluate = conjunction{.children = {new_bind_variable(0)}};
+
+    BOOST_REQUIRE_THROW(evaluate(invalid_to_evaluate, inputs), exceptions::invalid_request_exception);
 
     expression conj_with_null_then_invalid = conjunction{
         .children = {make_bool_const(true), constant::make_null(boolean_type), make_empty_const(boolean_type),
-                     constant::make_unset_value(boolean_type), invalid_to_evaluate, make_bool_const(true)}};
+                     new_bind_variable(0), invalid_to_evaluate, make_bool_const(true)}};
 
-    BOOST_REQUIRE_THROW(evaluate(conj_with_null_then_invalid, evaluation_inputs{}),
+    BOOST_REQUIRE_THROW(evaluate(conj_with_null_then_invalid, inputs),
                         exceptions::invalid_request_exception);
 }
 
@@ -3100,9 +2937,12 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_to_null) {
 
 // Evaluating '() AND (true AND true) AND (true AND UNSET_VALUE) AND (false)' throws an error
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
+    auto qo = query_options_with_unset_bind_variable();
+    auto inputs = evaluation_inputs{.options = &qo};
+
     expression conj1 = conjunction{.children = {}};
 
-    expression conj2 = conjunction{.children = {make_bool_const(true), constant::make_unset_value(boolean_type)}};
+    expression conj2 = conjunction{.children = {make_bool_const(true), new_bind_variable(0)}};
 
     expression conj3 = conjunction{.children = {make_bool_const(true), make_bool_const(true)}};
 
@@ -3110,7 +2950,7 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
 
     expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
 
-    BOOST_REQUIRE_THROW(evaluate(conj_of_conjs, evaluation_inputs{}), exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(evaluate(conj_of_conjs, inputs), exceptions::invalid_request_exception);
 }
 
 // It should be possible to prepare an empty conjunction

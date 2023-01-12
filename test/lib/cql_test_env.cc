@@ -241,7 +241,7 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
         cql3::prepared_cache_key_type id,
-        std::vector<cql3::raw_value> values,
+        cql3::raw_value_vector_with_unset values,
         db::consistency_level cl = db::consistency_level::ONE) override {
 
         const auto& so = cql3::query_options::specific_options::DEFAULT;

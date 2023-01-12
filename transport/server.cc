@@ -1040,7 +1040,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     const unsigned n = in.read_short();
 
     std::vector<cql3::statements::batch_statement::single_statement> modifications;
-    std::vector<std::vector<cql3::raw_value_view>> values;
+    std::vector<cql3::raw_value_view_vector_with_unset> values;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
 
     modifications.reserve(n);
@@ -1106,14 +1106,15 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
         modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
 
         std::vector<cql3::raw_value_view> tmp;
-        in.read_value_view_list(version, tmp);
+        cql3::unset_bind_variable_vector unset;
+        in.read_value_view_list(version, tmp, unset);
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
             throw exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
                             stmt->get_bound_terms(), tmp.size()));
         }
-        values.emplace_back(std::move(tmp));
+        values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
     }
 
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));

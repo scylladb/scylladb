@@ -25,10 +25,6 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& ut_value) {
-    if (ut_value.is_unset_value()) {
-        return;
-    }
-
     auto& type = static_cast<const user_type_impl&>(*column.type);
     if (type.is_multi_cell()) {
         // Non-frozen user defined type.
@@ -79,9 +75,6 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     auto value = expr::evaluate(*_e, params._options);
-    if (value.is_unset_value()) {
-        return;
-    }
 
     auto& type = static_cast<const user_type_impl&>(*column.type);
 

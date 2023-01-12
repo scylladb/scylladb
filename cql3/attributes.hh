@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/unset.hh"
 #include "db/timeout_clock.hh"
 
 namespace cql3 {
@@ -24,7 +25,9 @@ class prepare_context;
  */
 class attributes final {
 private:
+    expr::unset_bind_variable_guard _timestamp_unset_guard;
     std::optional<cql3::expr::expression> _timestamp;
+    expr::unset_bind_variable_guard _time_to_live_unset_guard;
     std::optional<cql3::expr::expression> _time_to_live;
     std::optional<cql3::expr::expression> _timeout;
 public:

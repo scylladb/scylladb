@@ -33,9 +33,9 @@ public:
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
 #endif
 public:
-    class setter : public operation {
+    class setter : public operation_skip_if_unset {
     public:
-        using operation::operation;
+        using operation_skip_if_unset::operation_skip_if_unset;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = expr::evaluate(*_e, params._options);
@@ -53,30 +53,26 @@ public:
         virtual void prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update& query) const override;
     };
 
-    struct adder final : operation {
-        using operation::operation;
+    struct adder final : operation_skip_if_unset {
+        using operation_skip_if_unset::operation_skip_if_unset;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = expr::evaluate(*_e, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
-            } else if (value.is_unset_value()) {
-                return;
             }
             auto increment = value.view().deserialize<int64_t>(*long_type);
             m.set_cell(prefix, column, params.make_counter_update_cell(increment));
         }
     };
 
-    struct subtracter final : operation {
-        using operation::operation;
+    struct subtracter final : operation_skip_if_unset {
+        using operation_skip_if_unset::operation_skip_if_unset;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = expr::evaluate(*_e, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
-            } else if (value.is_unset_value()) {
-                return;
             }
             auto increment = value.view().deserialize<int64_t>(*long_type);
             if (increment == std::numeric_limits<int64_t>::min()) {
@@ -86,10 +82,10 @@ public:
         }
     };
 
-    class deleter : public operation {
+    class deleter : public operation_no_unset_support {
     public:
         deleter(const column_definition& column)
-            : operation(column, std::nullopt)
+            : operation_no_unset_support(column, std::nullopt)
         { }
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
