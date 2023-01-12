@@ -259,7 +259,7 @@ public:
 
         // Try to send this forward_request to another node.
         return do_with(id, req, [this] (netw::msg_addr& id, parallel_aggregations::forward_request& req) -> future<parallel_aggregations::forward_result> {
-            return ser::forward_request_rpc_verbs::send_forward_request(
+            return ser::forward_request_rpc_verbs::send_legacy_forward_request(
                 &_forwarder._messaging, id, req, _tr_info
             ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<parallel_aggregations::forward_result> {
                 // In case of forwarding failure, retry using super-coordinator as a coordinator
@@ -474,7 +474,7 @@ future<parallel_aggregations::forward_result> forward_service::execute_on_this_s
 }
 
 void forward_service::init_messaging_service() {
-    ser::forward_request_rpc_verbs::register_forward_request(
+    ser::forward_request_rpc_verbs::register_legacy_forward_request(
         &_messaging,
         [this](parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<parallel_aggregations::forward_result> {
             return dispatch_to_shards(req, tr_info);

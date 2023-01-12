@@ -572,7 +572,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
         return 3;
-    case messaging_verb::FORWARD_REQUEST:
+    case messaging_verb::LEGACY_FORWARD_REQUEST:
         return 4;
     case messaging_verb::LAST:
         return -1; // should never happen

@@ -55,6 +55,6 @@ struct forward_result {
     std::vector<bytes_opt> query_results;
 };
 
-verb forward_request(parallel_aggregations::parametrized_forward_request<lowres_clock::time_point>, std::optional<tracing::trace_info>) -> parallel_aggregations::forward_result;
+verb legacy_forward_request(parallel_aggregations::parametrized_forward_request<lowres_clock::time_point>, std::optional<tracing::trace_info>) -> parallel_aggregations::forward_result;
 
 }
