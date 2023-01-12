@@ -81,7 +81,7 @@ constant make_text_const(const sstring_view& text) {
 }
 
 // This function implements custom serialization of collection values.
-// Some tests require the collection to contain unset_value or an empty value,
+// Some tests require the collection to contain an empty value,
 // which is impossible to express using the existing code.
 cql3::raw_value make_collection_raw(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
     size_t serialized_len = 0;
@@ -100,8 +100,6 @@ cql3::raw_value make_collection_raw(size_t size_to_write, const std::vector<cql3
     for (const cql3::raw_value& val : elements_to_write) {
         if (val.is_null()) {
             write_int32(out, -1);
-        } else if (val.is_unset_value()) {
-            write_int32(out, -2);
         } else {
             val.view().with_value(
                 [&](const FragmentedView auto& val_view) { write_collection_value(out, linearized(val_view)); });
@@ -129,7 +127,7 @@ raw_value make_map_raw(const std::vector<std::pair<raw_value, raw_value>>& value
 }
 
 // This function implements custom serialization of tuples.
-// Some tests require the tuple to contain unset_value or an empty value,
+// Some tests require the tuple to contain an empty value,
 // which is impossible to express using the existing code.
 raw_value make_tuple_raw(const std::vector<raw_value>& values) {
     size_t serialized_len = 0;
@@ -144,8 +142,6 @@ raw_value make_tuple_raw(const std::vector<raw_value>& values) {
     for (const raw_value& val : values) {
         if (val.is_null()) {
             write<int32_t>(out, -1);
-        } else if (val.is_unset_value()) {
-            write<int32_t>(out, -2);
         } else {
             val.view().with_value([&](const FragmentedView auto& bytes_view) {
                 write<int32_t>(out, bytes_view.size_bytes());
@@ -344,10 +340,6 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
             throw_error("Passed NULL as value for {}. This is not allowed for partition key columns.",
                         pk_col.name_as_text());
         }
-        if (col_value.is_unset_value()) {
-            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed for partition key columns.",
-                        pk_col.name_as_text());
-        }
         partition_key.push_back(raw_value(col_value).to_bytes());
     }
 
@@ -357,10 +349,6 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
 
         if (col_value.is_null()) {
             throw_error("Passed NULL as value for {}. This is not allowed for clustering key columns.",
-                        ck_col.name_as_text());
-        }
-        if (col_value.is_unset_value()) {
-            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed for clustering key columns.",
                         ck_col.name_as_text());
         }
         clustering_key.push_back(raw_value(col_value).to_bytes());
@@ -381,18 +369,12 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
 
     for (const column_definition& col : table_schema->regular_columns()) {
         const raw_value& col_value = get_col_val(col);
-        if (col_value.is_unset_value()) {
-            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed.", col.name_as_text());
-        }
         int32_t index = selection->index_of(col);
         static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
     }
 
     for (const column_definition& col : table_schema->static_columns()) {
         const raw_value& col_value = get_col_val(col);
-        if (col_value.is_unset_value()) {
-            throw_error("Passed UNSET_VALUE as value for {}. This is not allowed.", col.name_as_text());
-        }
         int32_t index = selection->index_of(col);
         static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
     }

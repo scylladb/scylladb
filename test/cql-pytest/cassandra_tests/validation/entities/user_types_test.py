@@ -159,10 +159,10 @@ def testUDTWithUnsetValues(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(x int, y int)") as myType:
         with create_type(cql, test_keyspace, f"(a frozen<{myType}>)") as myOtherType:
             with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, v frozen<{myType}>, z frozen<{myOtherType}>)") as table:
-                assert_invalid_message(cql, table, "Invalid unset value for field 'y' of user defined type ",
+                assert_invalid_message(cql, table, "unset",
                     "INSERT INTO %s (k, v) VALUES (10, {x:?, y:?})", 1, UNSET_VALUE)
                 # Reproduces issue #9671:
-                assert_invalid_message(cql, table, "Invalid unset value for field 'y' of user defined type ",
+                assert_invalid_message(cql, table, "unset",
                     "INSERT INTO %s (k, v, z) VALUES (10, {x:?, y:?}, {a:{x: ?, y: ?}})", 1, 1, 1, UNSET_VALUE)
 
 def testAlteringUserTypeNestedWithinMap(cql, test_keyspace):

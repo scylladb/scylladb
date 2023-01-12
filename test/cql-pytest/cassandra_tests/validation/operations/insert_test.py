@@ -44,7 +44,7 @@ def testInsertWithUnset(cql, test_keyspace):
         # has "Invalid unset value for argument in call to function blobasint"
         # Scylla has "Invalid null or unset value for argument to
         # system.blobasint : (blob) -> int"
-        assertInvalidMessageRE(cql, table, "Invalid.*unset value for argument.*blobasint", "SELECT * FROM %s WHERE k = blobAsInt(?)", unset())
+        assertInvalidMessageRE(cql, table, "unset", "SELECT * FROM %s WHERE k = blobAsInt(?)", unset())
 
 # Both Scylla and Cassandra define MAX_TTL or max_ttl with the same formula,
 # 20 years in seconds. In both systems, it is not configurable.

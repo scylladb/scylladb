@@ -544,10 +544,8 @@ SEASTAR_TEST_CASE(test_bound_var_in_collection_literal) {
                 exceptions::invalid_request_exception
             );
 
-            // Unset value is not allowed as a collections element
-            const auto unset_value = cql3::raw_value::make_unset_value();
             BOOST_REQUIRE_THROW(
-                e.execute_prepared(stmt, {unset_value}).get(),
+                e.execute_prepared(stmt, cql3::raw_value_vector_with_unset({null_value}, {true})).get(),
                 exceptions::invalid_request_exception
             );
 
@@ -5456,8 +5454,6 @@ cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vecto
     for (const cql3::raw_value& val : elements_to_write) {
         if (val.is_null()) {
                 write_int32(out, -1);
-        } else if (val.is_unset_value()) {
-                write_int32(out, -2);
         } else {
             val.view().with_value([&](const FragmentedView auto& val_view) {
                 write_collection_value(out, linearized(val_view));
@@ -5478,7 +5474,7 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         };
 
         auto check_unset_msg = [](std::source_location loc = std::source_location::current()) {
-            return exception_predicate::message_equals("unset value is not supported inside collections", loc);
+            return exception_predicate::message_contains("unset", loc);
         };
 
         // Test null when specified inside a collection literal
@@ -5500,7 +5496,6 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         auto insert_map_with_value_marker = e.prepare("INSERT INTO null_in_col (p, m) VALUES (0, {0:1, 2:?, 4:5})").get0();
 
         cql3::raw_value null_value = cql3::raw_value::make_null();
-        cql3::raw_value unset_value = cql3::raw_value::make_unset_value();
 
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list_with_marker, {null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
@@ -5511,13 +5506,15 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_value_marker, {null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
 
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list_with_marker, {unset_value}).get(),
+        auto bind_variable_list_with_unset = cql3::raw_value_vector_with_unset({null_value}, {true});
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set_with_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_key_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_key_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_value_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map_with_value_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
 
 
@@ -5549,27 +5546,6 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
                                 exceptions::invalid_request_exception, check_null_msg());
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
-
-
-        cql3::raw_value list_with_unset = make_collection_raw_value(3, {make_int(1), unset_value, make_int(2)});
-        cql3::raw_value set_with_unset = make_collection_raw_value(3, {make_int(1), unset_value, make_int(2)});
-
-        cql3::raw_value map_with_unset_key = make_collection_raw_value(3, {make_int(0), make_int(1),
-                                                                     unset_value, make_int(3),
-                                                                     make_int(4), make_int(5)});
-
-        cql3::raw_value map_with_unset_value = make_collection_raw_value(3, {make_int(0), make_int(1),
-                                                                       make_int(2), unset_value,
-                                                                       make_int(4), make_int(5)});
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_list, {list_with_unset}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_set, {set_with_unset}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_unset_key}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(insert_map, {map_with_unset_value}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
 
 
         // Update setting to bad collection value
@@ -5617,14 +5593,13 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_value_marker, {null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
 
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list_with_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set_with_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_key_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_key_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_value_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map_with_value_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
 
         // Update adding a collection value with bad bind marker
@@ -5641,15 +5616,6 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
 
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_list, {list_with_unset}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_set, {set_with_unset}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_unset_key}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(add_map, {map_with_unset_value}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
-
         // List of IN values is also a list that can't contain nulls
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT * FROM null_in_col WHERE p IN (1, null, 2)").get(),
                                 exceptions::invalid_request_exception, check_null_msg());
@@ -5658,15 +5624,13 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
 
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, {null_value}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, {unset_value}).get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_with_marker, bind_variable_list_with_unset).get(),
                                 exceptions::invalid_request_exception, check_unset_msg());
 
         auto where_in_list_marker = e.prepare("SELECT * FROM null_in_col WHERE p IN ?").get0();
 
         BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_marker, {list_with_null}).get(),
                                 exceptions::invalid_request_exception, check_null_msg());
-        BOOST_REQUIRE_EXCEPTION(e.execute_prepared(where_in_list_marker, {list_with_unset}).get(),
-                                exceptions::invalid_request_exception, check_unset_msg());
     });
 }
 

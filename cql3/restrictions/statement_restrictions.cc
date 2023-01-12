@@ -1788,7 +1788,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             oper_t::EQ,
             // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
             // handy mechanism for doing that in query_options.
-            expr::constant::make_unset_value(token_column->type));
+            expr::constant::make_null(token_column->type));
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {

@@ -27,19 +27,19 @@ class sets {
 public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
-    class setter : public operation {
+    class setter : public operation_skip_if_unset {
     public:
         setter(const column_definition& column, expr::expression e)
-                : operation(column, std::move(e)) {
+                : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
     };
 
-    class adder : public operation {
+    class adder : public operation_skip_if_unset {
     public:
         adder(const column_definition& column, expr::expression e)
-            : operation(column, std::move(e)) {
+            : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
@@ -47,18 +47,18 @@ public:
     };
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
-    class discarder : public operation {
+    class discarder : public operation_skip_if_unset {
     public:
         discarder(const column_definition& column, expr::expression e)
-            : operation(column, std::move(e)) {
+            : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
-    class element_discarder : public operation {
+    class element_discarder : public operation_no_unset_support {
     public:
         element_discarder(const column_definition& column, expr::expression e)
-            : operation(column, std::move(e)) { }
+            : operation_no_unset_support(column, std::move(e)) { }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 };

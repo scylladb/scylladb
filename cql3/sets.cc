@@ -21,9 +21,6 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 
 void
 sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
-    if (value.is_unset_value()) {
-        return;
-    }
     if (column.type->is_multi_cell()) {
         // Delete all cells first, then add new ones
         collection_mutation_description mut;
@@ -36,9 +33,6 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 void
 sets::adder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
-    if (value.is_unset_value()) {
-        return;
-    }
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
     do_add(m, row_key, params, value, column);
 }
@@ -79,7 +73,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
     assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
     cql3::raw_value svalue = expr::evaluate(*_e, params._options);
-    if (svalue.is_null_or_unset()) {
+    if (svalue.is_null()) {
         return;
     }
 

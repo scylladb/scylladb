@@ -25,6 +25,7 @@
 namespace cql3{
 class query_options;
 struct raw_value_view;
+struct raw_value_view_vector_with_unset;
 
 namespace statements {
 class prepared_statement;
@@ -319,7 +320,7 @@ private:
      * @param t type object corresponding to the given raw value.
      * @return the string with the representation of the given raw value.
      */
-    sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
+    sstring raw_value_to_sstring(const cql3::raw_value_view& v, bool is_unset, const data_type& t);
 
     /**
      * Stores a page size of a query being traced.
@@ -420,7 +421,7 @@ private:
      */
     void build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
             std::optional<std::vector<sstring_view>>& names_opt,
-            std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix);
+            cql3::raw_value_view_vector_with_unset& values, const sstring& param_name_prefix);
 
     /**
      * The actual trace message storing method.

@@ -474,9 +474,9 @@ def testFunctionCallWithUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s text, i int)") as table:
         # The error messages in Scylla and Cassandra here are slightly
         # different.
-        assert_invalid_message(cql, table, "unset value for argument",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE token(k) >= token(?)", UNSET_VALUE)
-        assert_invalid_message(cql, table, "unset value for argument",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE k = blobAsInt(?)", UNSET_VALUE)
 
 def testLimitWithUnset(cql, test_keyspace):

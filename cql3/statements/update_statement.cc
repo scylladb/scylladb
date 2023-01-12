@@ -96,6 +96,9 @@ bool update_statement::allow_clustering_key_slices() const {
 
 void update_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
     for (auto&& update : _column_operations) {
+        if (update->should_skip_operation(params._options)) {
+            continue;
+        }
         update->execute(m, prefix, params);
     }
 }

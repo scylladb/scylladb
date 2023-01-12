@@ -27,7 +27,7 @@ struct trace_state::params_values {
     struct prepared_statement_info {
         prepared_checked_weak_ptr statement;
         std::optional<std::vector<sstring_view>> query_option_names;
-        std::vector<cql3::raw_value_view> query_option_values;
+        cql3::raw_value_view_vector_with_unset query_option_values;
         explicit prepared_statement_info(prepared_checked_weak_ptr statement) : statement(std::move(statement)) {}
     };
 
@@ -194,7 +194,7 @@ void trace_state::build_parameters_map() {
 
 void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
         std::optional<std::vector<sstring_view>>& names_opt,
-        std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix) {
+        cql3::raw_value_view_vector_with_unset& values, const sstring& param_name_prefix) {
     auto& params_map = _records->session_rec.parameters;
     size_t i = 0;
 
@@ -202,17 +202,17 @@ void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_w
     // Such an eviction is a very unlikely event, however if it happens, since we are unable to recover their types, trace raw representations of the values.
 
     if (names_opt) {
-        if (names_opt->size() != values.size()) {
-            throw std::logic_error(format("Number of \"names\" ({}) doesn't match the number of positional variables ({})", names_opt->size(), values.size()).c_str());
+        if (names_opt->size() != values.values.size()) {
+            throw std::logic_error(format("Number of \"names\" ({}) doesn't match the number of positional variables ({})", names_opt->size(), values.values.size()).c_str());
         }
 
         auto& names = names_opt.value();
-        for (; i < values.size(); ++i) {
-            params_map.emplace(format("{}[{:d}]({})", param_name_prefix, i, names[i]), raw_value_to_sstring(values[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
+        for (; i < values.values.size(); ++i) {
+            params_map.emplace(format("{}[{:d}]({})", param_name_prefix, i, names[i]), raw_value_to_sstring(values.values[i], values.unset[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
         }
     } else {
-        for (; i < values.size(); ++i) {
-            params_map.emplace(format("{}[{:d}]", param_name_prefix, i), raw_value_to_sstring(values[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
+        for (; i < values.values.size(); ++i) {
+            params_map.emplace(format("{}[{:d}]", param_name_prefix, i), raw_value_to_sstring(values.values[i], values.unset[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
         }
     }
 }
@@ -281,13 +281,15 @@ void trace_state::stop_foreground_and_write() noexcept {
     }
 }
 
-sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t) {
+sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, bool is_unset, const data_type& t) {
     static constexpr int max_val_bytes = 64;
+
+    if (is_unset) {
+        return "unset value";
+    }
 
     if (v.is_null()) {
         return "null";
-    } else if (v.is_unset_value()) {
-        return "unset value";
     } else {
       return v.with_linearized([&] (bytes_view val) {
         sstring str_rep;
