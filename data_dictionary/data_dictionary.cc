@@ -231,7 +231,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     , _strategy_options{std::move(strategy_options)}
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
-    , _storage_options{std::move(storage_opts)}
+    , _storage_options(make_lw_shared<storage_options>(std::move(storage_opts)))
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);
