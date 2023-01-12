@@ -27,7 +27,7 @@ and the quorum is lost, the cluster is unavailable for schema updates. See :ref:
 for information on how to handle failures.
 
 
-Upgrade Considerations for SyllaDB 5.0 and Later
+Upgrade Considerations for ScyllaDB 5.0 and Later
 ==================================================
 
 Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one
