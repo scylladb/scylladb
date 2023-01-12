@@ -220,7 +220,7 @@ def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
         # the scan brings up several rows, it may exercise different code
         # paths.
         assert list(cql.execute(f"select p from {table} where m1[null] = 2 ALLOW FILTERING")) == []
-        with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
+        with pytest.raises(InvalidRequest, match='unset'):
             cql.execute(stmt, [UNSET_VALUE])
 
         # check subscripted list filtering

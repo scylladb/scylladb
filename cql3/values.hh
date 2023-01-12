@@ -26,16 +26,12 @@ struct null_value {
     friend bool operator==(const null_value&, const null_value) { return true; }
 };
 
-struct unset_value {
-    friend bool operator==(const unset_value&, const unset_value) { return true; }
-};
-
 class raw_value;
 /// \brief View to a raw CQL protocol value.
 ///
 /// \see raw_value
 class raw_value_view {
-    std::variant<fragmented_temporary_buffer::view, managed_bytes_view, null_value, unset_value> _data;
+    std::variant<fragmented_temporary_buffer::view, managed_bytes_view, null_value> _data;
     // Temporary storage is only useful if a raw_value_view needs to be instantiated
     // with a value which lifetime is bounded only to the view itself.
     // This hack is introduced in order to avoid storing temporary storage
@@ -48,9 +44,6 @@ class raw_value_view {
     lw_shared_ptr<managed_bytes> _temporary_storage = nullptr;
 
     raw_value_view(null_value data)
-        : _data{std::move(data)}
-    {}
-    raw_value_view(unset_value data)
         : _data{std::move(data)}
     {}
     raw_value_view(fragmented_temporary_buffer::view data)
@@ -66,9 +59,6 @@ public:
     static raw_value_view make_null() {
         return raw_value_view{null_value{}};
     }
-    static raw_value_view make_unset_value() {
-        return raw_value_view{unset_value{}};
-    }
     static raw_value_view make_value(fragmented_temporary_buffer::view view) {
         return raw_value_view{view};
     }
@@ -82,8 +72,13 @@ public:
     bool is_null() const {
         return std::holds_alternative<null_value>(_data);
     }
-    bool is_unset_value() const {
-        return std::holds_alternative<unset_value>(_data);
+    // An empty value is not null, but it has 0 bytes of data.
+    // An empty int value can be created in CQL using blobasint(0x).
+    bool is_empty_value() const {
+        if (is_null()) {
+            return false;
+        }
+        return size_bytes() == 0;
     }
     bool is_value() const {
         return _data.index() <= 1;
@@ -166,15 +161,12 @@ public:
 /// \brief Raw CQL protocol value.
 ///
 /// The `raw_value` type represents an uninterpreted value from the CQL wire
-/// protocol. A raw value can hold either a null value, an unset value, or a byte
+/// protocol. A raw value can hold either a null value, or a byte
 /// blob that represents the value.
 class raw_value {
-    std::variant<bytes, managed_bytes, null_value, unset_value> _data;
+    std::variant<bytes, managed_bytes, null_value> _data;
 
     raw_value(null_value&& data)
-        : _data{std::move(data)}
-    {}
-    raw_value(unset_value&& data)
         : _data{std::move(data)}
     {}
     raw_value(bytes&& data)
@@ -192,9 +184,6 @@ class raw_value {
 public:
     static raw_value make_null() {
         return raw_value{null_value{}};
-    }
-    static raw_value make_unset_value() {
-        return raw_value{unset_value{}};
     }
     static raw_value make_value(const raw_value_view& view);
     static raw_value make_value(managed_bytes&& mb) {
@@ -227,11 +216,13 @@ public:
     bool is_null() const {
         return std::holds_alternative<null_value>(_data);
     }
-    bool is_unset_value() const {
-        return std::holds_alternative<unset_value>(_data);
-    }
-    bool is_null_or_unset() const {
-        return !is_value();
+    // An empty value is not null, but it has 0 bytes of data.
+    // An empty int value can be created in CQL using blobasint(0x).
+    bool is_empty_value() const {
+        if (is_null()) {
+            return false;
+        }
+        return view().size_bytes() == 0;
     }
     bool is_value() const {
         return _data.index() <= 1;
@@ -240,10 +231,22 @@ public:
         return is_value();
     }
     bytes to_bytes() && {
-        switch (_data.index()) {
-        case 0:  return std::move(std::get<bytes>(_data));
-        default: return ::to_bytes(std::get<managed_bytes>(_data));
-        }
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return std::move(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return ::to_bytes(managed_bytes_val); },
+            [](null_value&&) -> bytes {
+                throw std::runtime_error("to_bytes() called on raw value that is null");
+            },
+        }, std::move(_data));
+    }
+    bytes_opt to_bytes_opt() && {
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return bytes_opt(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return bytes_opt(::to_bytes(managed_bytes_val)); },
+            [](null_value&&) -> bytes_opt {
+                return std::nullopt;
+            },
+        }, std::move(_data));
     }
     managed_bytes to_managed_bytes() && {
         return std::visit(overloaded_functor{
@@ -252,9 +255,6 @@ public:
             [](null_value&&) -> managed_bytes {
                 throw std::runtime_error("to_managed_bytes() called on raw value that is null");
             },
-            [](unset_value&&) -> managed_bytes {
-                throw std::runtime_error("to_managed_bytes() called on raw value that is unset_value");
-            }
         }, std::move(_data));
     }
     managed_bytes_opt to_managed_bytes_opt() && {
@@ -264,9 +264,6 @@ public:
             [](null_value&&) -> managed_bytes_opt {
                 return std::nullopt;
             },
-            [](unset_value&&) -> managed_bytes_opt {
-                return std::nullopt;
-            }
         }, std::move(_data));
     }
     raw_value_view view() const;

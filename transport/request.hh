@@ -15,6 +15,16 @@
 
 namespace cql_transport {
 
+struct unset_tag {};
+
+struct value_view_and_unset {
+    cql3::raw_value_view value;
+    bool unset = false;
+
+    value_view_and_unset(cql3::raw_value_view value) : value(std::move(value)) {}
+    value_view_and_unset(unset_tag) : value(cql3::raw_value_view::make_null()), unset(true) {}
+};
+
 class request_reader {
     fragmented_temporary_buffer::istream _in;
     bytes_ostream* _linearization_buffer;
@@ -123,7 +133,7 @@ public:
         return b;
     }
 
-    cql3::raw_value_view read_value_view(uint8_t version) {
+    value_view_and_unset read_value_view(uint8_t version) {
         auto len = read_int();
         if (len < 0) {
             if (version < 4) {
@@ -132,7 +142,7 @@ public:
             if (len == -1) {
                 return cql3::raw_value_view::make_null();
             } else if (len == -2) {
-                return cql3::raw_value_view::make_unset_value();
+                return value_view_and_unset(unset_tag());
             } else {
                 throw exceptions::protocol_exception(format("invalid value length: {:d}", len));
             }
@@ -140,13 +150,17 @@ public:
         return cql3::raw_value_view::make_value(_in.read_view(len, exception_thrower()));
     }
 
-    void read_name_and_value_list(uint8_t version, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values) {
+    void read_name_and_value_list(uint8_t version, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values,
+            cql3::unset_bind_variable_vector& unset) {
         uint16_t size = read_short();
         names.reserve(size);
+        unset.reserve(size);
         values.reserve(size);
         for (uint16_t i = 0; i < size; i++) {
             names.emplace_back(read_string_view());
-            values.emplace_back(read_value_view(version));
+            auto&& [value, is_unset] = read_value_view(version);
+            values.emplace_back(std::move(value));
+            unset.emplace_back(is_unset);
         }
     }
 
@@ -158,11 +172,14 @@ public:
         }
     }
 
-    void read_value_view_list(uint8_t version, std::vector<cql3::raw_value_view>& values) {
+    void read_value_view_list(uint8_t version, std::vector<cql3::raw_value_view>& values, cql3::unset_bind_variable_vector& unset) {
         uint16_t size = read_short();
         values.reserve(size);
+        unset.reserve(size);
         for (uint16_t i = 0; i < size; i++) {
-            values.emplace_back(read_value_view(version));
+            auto&& [value, is_unset] = read_value_view(version);
+            values.emplace_back(std::move(value));
+            unset.emplace_back(is_unset);
         }
     }
 
@@ -215,13 +232,14 @@ public:
 
         auto flags = enum_set<options_flag_enum>::from_mask(read_byte());
         std::vector<cql3::raw_value_view> values;
+        cql3::unset_bind_variable_vector unset;
         std::vector<sstring_view> names;
 
         if (flags.contains<options_flag::VALUES>()) {
             if (flags.contains<options_flag::NAMES_FOR_VALUES>()) {
-                read_name_and_value_list(version, names, values);
+                read_name_and_value_list(version, names, values, unset);
             } else {
-                read_value_view_list(version, values);
+                read_value_view_list(version, values, unset);
             }
         }
 
@@ -255,11 +273,12 @@ public:
             if (!names.empty()) {
                 onames = std::move(names);
             }
-            options = std::make_unique<cql3::query_options>(cql_config, consistency, std::move(onames), std::move(values), skip_metadata,
-                cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts},
-                cql_ser_format);
+            options = std::make_unique<cql3::query_options>(cql_config, consistency, std::move(onames),
+                cql3::raw_value_view_vector_with_unset(std::move(values), std::move(unset)), skip_metadata,
+                cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts}, cql_ser_format);
         } else {
-            options = std::make_unique<cql3::query_options>(cql_config, consistency, std::nullopt, std::move(values), skip_metadata,
+            options = std::make_unique<cql3::query_options>(cql_config, consistency, std::nullopt,
+                cql3::raw_value_view_vector_with_unset(std::move(values), std::move(unset)), skip_metadata,
                 cql3::query_options::specific_options::DEFAULT, cql_ser_format);
         }
 

@@ -30,6 +30,7 @@ query_options::query_options(const cql_config& cfg,
                            std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
+                           cql3::unset_bind_variable_vector unset,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf)
@@ -38,6 +39,7 @@ query_options::query_options(const cql_config& cfg,
    , _names(std::move(names))
    , _values(std::move(values))
    , _value_views(value_views)
+   , _unset(unset)
    , _skip_metadata(skip_metadata)
    , _options(std::move(options))
    , _cql_serialization_format(sf)
@@ -47,15 +49,16 @@ query_options::query_options(const cql_config& cfg,
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
                              std::optional<std::vector<sstring_view>> names,
-                             std::vector<cql3::raw_value> values,
+                             cql3::raw_value_vector_with_unset values,
                              bool skip_metadata,
                              specific_options options,
                              cql_serialization_format sf)
     : _cql_config(cfg)
     , _consistency(consistency)
     , _names(std::move(names))
-    , _values(std::move(values))
+    , _values(std::move(values.values))
     , _value_views()
+    , _unset(std::move(values.unset))
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
     , _cql_serialization_format(sf)
@@ -66,7 +69,7 @@ query_options::query_options(const cql_config& cfg,
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
                              std::optional<std::vector<sstring_view>> names,
-                             std::vector<cql3::raw_value_view> value_views,
+                             cql3::raw_value_view_vector_with_unset value_views,
                              bool skip_metadata,
                              specific_options options,
                              cql_serialization_format sf)
@@ -74,14 +77,15 @@ query_options::query_options(const cql_config& cfg,
     , _consistency(consistency)
     , _names(std::move(names))
     , _values()
-    , _value_views(std::move(value_views))
+    , _value_views(std::move(value_views.values))
+    , _unset(std::move(value_views.unset))
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
     , _cql_serialization_format(sf)
 {
 }
 
-query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values,
+query_options::query_options(db::consistency_level cl, cql3::raw_value_vector_with_unset values,
         specific_options options)
     : query_options(
           default_cql_config,
@@ -101,6 +105,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
         std::move(qo->_names),
         std::move(qo->_values),
         std::move(qo->_value_views),
+        std::move(qo->_unset),
         qo->_skip_metadata,
         query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp},
         qo->_cql_serialization_format) {
@@ -113,13 +118,14 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
         std::move(qo->_names),
         std::move(qo->_values),
         std::move(qo->_value_views),
+        std::move(qo->_unset),
         qo->_skip_metadata,
         query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp},
         qo->_cql_serialization_format) {
 
 }
 
-query_options::query_options(std::vector<cql3::raw_value> values)
+query_options::query_options(cql3::raw_value_vector_with_unset values)
     : query_options(
           db::consistency_level::ONE, std::move(values))
 {}

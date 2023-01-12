@@ -92,7 +92,7 @@ def testInvalidQueries(cql, test_keyspace):
 def testTupleWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t tuple<int, text, double>)") as table:
         # invalid positional field substitution
-        assert_invalid_message(cql, table, "Invalid unset value for tuple field number 1",
+        assert_invalid_message(cql, table, "unset",
                              "INSERT INTO %s (k, t) VALUES(0, (3, ?, 2.1))", UNSET_VALUE)
 
         #FIXME: The Python driver doesn't agree to send such a command to the server,

@@ -37,9 +37,6 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
 
 void
 lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
-    if (value.is_unset_value()) {
-        return;
-    }
     if (column.type->is_multi_cell()) {
         // Delete all cells first, then append new ones
         collection_mutation_view_description mut;
@@ -70,13 +67,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
-    if (index.is_unset_value()) {
-        throw exceptions::invalid_request_exception("Invalid unset value for list index");
-    }
     auto value = expr::evaluate(*_e, params._options);
-    if (value.is_unset_value()) {
-        return;
-    }
 
     auto idx = index.view().deserialize<int32_t>(*int32_type);
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
@@ -122,10 +113,6 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
 
-    if (index.is_unset_value()) {
-        throw exceptions::invalid_request_exception("Invalid unset value for list index");
-    }
-
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
 
     collection_mutation_description mut;
@@ -145,9 +132,6 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 void
 lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
-    if (value.is_unset_value()) {
-        return;
-    }
     assert(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
     do_append(value, m, prefix, column, params);
 }
@@ -161,7 +145,7 @@ lists::do_append(const cql3::raw_value& list_value,
     if (column.type->is_multi_cell()) {
         // If we append null, do nothing. Note that for Setter, we've
         // already removed the previous value so we're good here too
-        if (list_value.is_null_or_unset()) {
+        if (list_value.is_null()) {
             return;
         }
 
@@ -199,7 +183,7 @@ void
 lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
     cql3::raw_value lvalue = expr::evaluate(*_e, params._options);
-    if (lvalue.is_null_or_unset()) {
+    if (lvalue.is_null()) {
         return;
     }
 
@@ -265,7 +249,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
         return;
     }
 
-    if (lvalue.is_null_or_unset()) {
+    if (lvalue.is_null()) {
         return;
     }
 
@@ -303,9 +287,6 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     cql3::raw_value index = expr::evaluate(*_e, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
-    }
-    if (index.is_unset_value()) {
-        return;
     }
 
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);

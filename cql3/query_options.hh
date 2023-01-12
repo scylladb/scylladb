@@ -11,6 +11,7 @@
 #pragma once
 
 #include <concepts>
+#include <initializer_list>
 #include "timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level_type.hh"
@@ -18,6 +19,7 @@
 #include "service/pager/paging_state.hh"
 #include "cql3/values.hh"
 #include "cql_serialization_format.hh"
+#include "utils/small_vector.hh"
 
 namespace cql3 {
 
@@ -27,6 +29,38 @@ extern const cql_config default_cql_config;
 class column_specification;
 
 using computed_function_values = std::unordered_map<uint8_t, bytes_opt>;
+
+using unset_bind_variable_vector = utils::small_vector<bool, 16>;
+
+// Matches a raw_value_view with an unset vector to support CQL binary protocol
+// "unset" values.
+struct raw_value_view_vector_with_unset {
+    std::vector<raw_value_view> values;
+    unset_bind_variable_vector unset;
+
+    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    // Constructor with no unset support, for tests and internal queries
+    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_) : values(std::move(values_)) {
+        unset.resize(values.size());
+    }
+    raw_value_view_vector_with_unset() = default;
+};
+
+// Matches a raw_value with an unset vector to support CQL binary protocol
+// "unset" values.
+struct raw_value_vector_with_unset {
+    std::vector<raw_value> values;
+    unset_bind_variable_vector unset;
+
+    raw_value_vector_with_unset(std::vector<raw_value> values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    // Constructor with no unset support, for tests and internal queries
+    raw_value_vector_with_unset(std::vector<raw_value> values_) : values(std::move(values_)) {
+        unset.resize(values.size());
+    }
+    // Mostly for testing.
+    raw_value_vector_with_unset(std::initializer_list<raw_value> values_) : raw_value_vector_with_unset(std::vector(values_)) {}
+    raw_value_vector_with_unset() = default;
+};
 
 /**
  * Options for a query.
@@ -48,6 +82,7 @@ private:
     const std::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
+    unset_bind_variable_vector _unset;
     const bool _skip_metadata;
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
@@ -83,23 +118,10 @@ private:
     // evaluation sites and we only have a const reference to `query_options`.
     mutable computed_function_values _cached_pk_fn_calls;
 private:
-    /**
-     * @brief Batch query_options constructor.
-     *
-     * Requirements:
-     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
-     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
-     *
-     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
-     * @param values_ranges a vector of values ranges for each statement in the batch.
-     */
-    template<typename OneMutationDataRange>
-    requires requires (OneMutationDataRange range) {
-         std::begin(range);
-         std::end(range);
-    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-           requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-    explicit query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges);
+    // Batch constructor.
+    template <typename Values>
+    requires std::same_as<Values, raw_value_vector_with_unset> || std::same_as<Values, raw_value_view_vector_with_unset>
+    explicit query_options(query_options&& o, std::vector<Values> values_ranges);
 
 public:
     query_options(query_options&&) = default;
@@ -108,7 +130,7 @@ public:
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
                            std::optional<std::vector<sstring_view>> names,
-                           std::vector<cql3::raw_value> values,
+                           raw_value_vector_with_unset values,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
@@ -117,34 +139,21 @@ public:
                            std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
+                           unset_bind_variable_vector unset,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
                            std::optional<std::vector<sstring_view>> names,
-                           std::vector<cql3::raw_value_view> value_views,
+                           raw_value_view_vector_with_unset value_views,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
 
-    /**
-     * @brief Batch query_options factory.
-     *
-     * Requirements:
-     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
-     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
-     *
-     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
-     * @param values_ranges a vector of values ranges for each statement in the batch.
-     */
-    template<typename OneMutationDataRange>
-    requires requires (OneMutationDataRange range) {
-         std::begin(range);
-         std::end(range);
-    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-           requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-    static query_options make_batch_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges) {
+    template <typename Values>
+    requires std::same_as<Values, raw_value_vector_with_unset> || std::same_as<Values, raw_value_view_vector_with_unset>
+    static query_options make_batch_options(query_options&& o, std::vector<Values> values_ranges) {
         return query_options(std::move(o), std::move(values_ranges));
     }
 
@@ -152,8 +161,8 @@ public:
     static thread_local query_options DEFAULT;
 
     // forInternalUse
-    explicit query_options(std::vector<cql3::raw_value> values);
-    explicit query_options(db::consistency_level, std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
+    explicit query_options(raw_value_vector_with_unset values);
+    explicit query_options(db::consistency_level, raw_value_vector_with_unset values, specific_options options = specific_options::DEFAULT);
     explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state);
     explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size);
 
@@ -162,7 +171,14 @@ public:
     }
 
     cql3::raw_value_view get_value_at(size_t idx) const {
-        return _value_views.at(idx);
+        if (_unset.at(idx)) {
+            throw exceptions::invalid_request_exception(fmt::format("Unexpected unset value for bind variable {}", idx));
+        }
+        return _value_views[idx];
+    }
+
+    bool is_unset(size_t idx) const {
+        return _unset.at(idx);
     }
 
     size_t get_values_count() const {
@@ -278,13 +294,9 @@ private:
     void fill_value_views();
 };
 
-template<typename OneMutationDataRange>
-requires requires (OneMutationDataRange range) {
-     std::begin(range);
-     std::end(range);
-} && ( requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value_view>; } ||
-       requires (OneMutationDataRange range) { { *range.begin() } -> std::convertible_to<raw_value>; } )
-query_options::query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges)
+template <typename Values>
+requires std::same_as<Values, raw_value_vector_with_unset> || std::same_as<Values, raw_value_view_vector_with_unset>
+query_options::query_options(query_options&& o, std::vector<Values> values_ranges)
     : query_options(std::move(o))
 {
     std::vector<query_options> tmp;

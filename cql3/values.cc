@@ -19,8 +19,6 @@ std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
         os << " }";
     }, [&] (null_value) {
         os << "{ null }";
-    }, [&] (unset_value) {
-        os << "{ unset }";
     });
     return os;
 }
@@ -30,7 +28,7 @@ raw_value_view raw_value::view() const {
     case 0:  return raw_value_view::make_value(managed_bytes_view(bytes_view(std::get<bytes>(_data))));
     case 1:  return raw_value_view::make_value(managed_bytes_view(std::get<managed_bytes>(_data)));
     case 2:  return raw_value_view::make_null();
-    default: return raw_value_view::make_unset_value();
+    default: throw std::runtime_error(fmt::format("raw_value_view::view bad index: {}", _data.index()));
     }
 }
 
@@ -39,7 +37,7 @@ raw_value raw_value::make_value(const raw_value_view& view) {
     case 0:  return raw_value::make_value(managed_bytes(std::get<fragmented_temporary_buffer::view>(view._data)));
     case 1:  return raw_value::make_value(managed_bytes(std::get<managed_bytes_view>(view._data)));
     case 2:  return raw_value::make_null();
-    default: return raw_value::make_unset_value();
+    default: throw std::runtime_error(fmt::format("raw_value_view::make_value bad index: {}", view._data.index()));
     }
 }
 
@@ -48,7 +46,6 @@ raw_value_view raw_value_view::make_temporary(raw_value&& value) {
     case 0:  return raw_value_view(managed_bytes(std::get<bytes>(value._data)));
     case 1:  return raw_value_view(std::move(std::get<managed_bytes>(value._data)));
     case 2:  return raw_value_view::make_null();
-    case 3: return raw_value_view::make_unset_value();
     default: throw std::runtime_error(fmt::format("raw_value_view::make_temporary bad index: {}", value._data.index()));
     }
 }
@@ -59,10 +56,6 @@ raw_value_view::raw_value_view(managed_bytes&& tmp) {
 }
 
 bool operator==(const raw_value& v1, const raw_value& v2) {
-    if (v1.is_unset_value() && v2.is_unset_value()) {
-        return true;
-    }
-
     if (v1.is_null() && v2.is_null()) {
         return true; // note: this is not CQL comparison which would return NULL here
     }

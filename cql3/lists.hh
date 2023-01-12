@@ -27,21 +27,21 @@ public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification&);
     static lw_shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
 public:
-    class setter : public operation {
+    class setter : public operation_skip_if_unset {
     public:
         setter(const column_definition& column, expr::expression e)
-                : operation(column, std::move(e)) {
+                : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
     };
 
-    class setter_by_index : public operation {
+    class setter_by_index : public operation_skip_if_unset {
     protected:
         expr::expression _idx;
     public:
         setter_by_index(const column_definition& column, expr::expression idx, expr::expression e)
-            : operation(column, std::move(e)), _idx(std::move(idx)) {
+            : operation_skip_if_unset(column, std::move(e)), _idx(std::move(idx)) {
         }
         virtual bool requires_read() const override;
         virtual void fill_prepare_context(prepare_context& ctx) override;
@@ -57,9 +57,9 @@ public:
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    class appender : public operation {
+    class appender : public operation_skip_if_unset {
     public:
-        using operation::operation;
+        using operation_skip_if_unset::operation_skip_if_unset;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
@@ -69,25 +69,25 @@ public:
             const column_definition& column,
             const update_parameters& params);
 
-    class prepender : public operation {
+    class prepender : public operation_skip_if_unset {
     public:
-        using operation::operation;
+        using operation_skip_if_unset::operation_skip_if_unset;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    class discarder : public operation {
+    class discarder : public operation_skip_if_unset {
     public:
         discarder(const column_definition& column, expr::expression e)
-                : operation(column, std::move(e)) {
+                : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    class discarder_by_index : public operation {
+    class discarder_by_index : public operation_skip_if_unset {
     public:
         discarder_by_index(const column_definition& column, expr::expression idx)
-                : operation(column, std::move(idx)) {
+                : operation_skip_if_unset(column, std::move(idx)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;

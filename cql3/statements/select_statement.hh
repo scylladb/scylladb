@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/expr/unset.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/stats.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -60,7 +61,9 @@ protected:
     const bool _restrictions_need_filtering;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
+    expr::unset_bind_variable_guard _limit_unset_guard;
     std::optional<expr::expression> _limit;
+    expr::unset_bind_variable_guard _per_partition_limit_unset_guard;
     std::optional<expr::expression> _per_partition_limit;
 
     template<typename T>
@@ -138,12 +141,12 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
-    uint64_t do_get_limit(const query_options& options, const std::optional<expr::expression>& limit, uint64_t default_limit) const;
+    uint64_t do_get_limit(const query_options& options, const std::optional<expr::expression>& limit, const expr::unset_bind_variable_guard& unset_guard, uint64_t default_limit) const;
     uint64_t get_limit(const query_options& options) const {
-        return do_get_limit(options, _limit, query::max_rows);
+        return do_get_limit(options, _limit, _limit_unset_guard, query::max_rows);
     }
     uint64_t get_per_partition_limit(const query_options& options) const {
-        return do_get_limit(options, _per_partition_limit, query::partition_max_rows);
+        return do_get_limit(options, _per_partition_limit, _per_partition_limit_unset_guard, query::partition_max_rows);
     }
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {

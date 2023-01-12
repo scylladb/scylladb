@@ -206,7 +206,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
     // fragmented storage for log_entries data
     std::vector<fragmented_temporary_buffer> stmt_data_views;
     // statement value views -- required for `query_options` to consume `fragmented_temporary_buffer::view`
-    std::vector<std::vector<cql3::raw_value_view>> stmt_value_views;
+    std::vector<cql3::raw_value_view_vector_with_unset> stmt_value_views;
     const size_t entries_size = entries.size();
     batch_stmts.reserve(entries_size);
     stmt_values.reserve(entries_size);

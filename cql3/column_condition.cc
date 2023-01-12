@@ -139,10 +139,6 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
         cql3::raw_value key_constant = expr::evaluate(*_collection_element, options);
         cql3::raw_value_view key = key_constant.view();
-        if (key.is_unset_value()) {
-            throw exceptions::invalid_request_exception(
-                    format("Invalid 'unset' value in {} element access", cell_type.cql3_type_name()));
-        }
         if (key.is_null()) {
             throw exceptions::invalid_request_exception(
                     format("Invalid null value for {} element access", cell_type.cql3_type_name()));
@@ -196,9 +192,6 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         // <, >, >=, <=, !=
         cql3::raw_value param = expr::evaluate(*_value, options);
 
-        if (param.is_unset_value()) {
-            throw exceptions::invalid_request_exception("Invalid 'unset' value in condition");
-        }
         if (param.is_null()) {
             if (_op == expr::oper_t::EQ) {
                 return cell_value == nullptr;
@@ -224,9 +217,6 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             return (*_matcher)(bytes_view(cell_value->serialize_nonnull()));
         } else {
             auto param = expr::evaluate(*_value, options);  // LIKE pattern
-            if (param.is_unset_value()) {
-                throw exceptions::invalid_request_exception("Invalid 'unset' value in LIKE pattern");
-            }
             if (param.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid NULL value in LIKE pattern");
             }

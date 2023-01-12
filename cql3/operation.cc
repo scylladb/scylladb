@@ -267,9 +267,9 @@ operation::set_counter_value_from_tuple_list::prepare(data_dictionary::database 
     auto v = prepare_expression(_value, db, keyspace, nullptr, spec);
 
     // Will not be used elsewhere, so make it local.
-    class counter_setter : public operation {
+    class counter_setter : public operation_no_unset_support {
     public:
-        using operation::operation;
+        using operation_no_unset_support::operation_no_unset_support;
 
         bool is_raw_counter_shard_write() const override {
             return true;

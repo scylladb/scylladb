@@ -168,7 +168,9 @@ select_statement::select_statement(schema_ptr schema,
     , _restrictions_need_filtering(_restrictions->need_filtering())
     , _group_by_cell_indices(group_by_cell_indices)
     , _is_reversed(is_reversed)
+    , _limit_unset_guard(limit)
     , _limit(std::move(limit))
+    , _per_partition_limit_unset_guard(per_partition_limit)
     , _per_partition_limit(std::move(per_partition_limit))
     , _ordering_comparator(std::move(ordering_comparator))
     , _stats(stats)
@@ -265,17 +267,15 @@ select_statement::make_partition_slice(const query_options& options) const
 
 uint64_t select_statement::do_get_limit(const query_options& options,
                                         const std::optional<expr::expression>& limit,
+                                        const expr::unset_bind_variable_guard& limit_unset_guard,
                                         uint64_t default_limit) const {
-    if (!limit.has_value() || _selection->is_aggregate()) {
+    if (!limit.has_value() || limit_unset_guard.is_unset(options) || _selection->is_aggregate()) {
         return default_limit;
     }
 
     auto val = expr::evaluate(*limit, options);
     if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
-    }
-    if (val.is_unset_value()) {
-        return default_limit;
     }
     try {
         auto l = val.view().validate_and_deserialize<int32_t>(*int32_type, cql_serialization_format::internal());

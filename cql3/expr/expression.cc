@@ -180,18 +180,6 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
         // not an error.
         return std::nullopt;
     }
-    if (key.is_unset_value()) {
-        // An m[?] with ? bound to UNSET_VALUE is a invalid query.
-        // We could have detected it earlier while binding, but since
-        // we currently don't, we must protect the following code
-        // which can't work with an UNSET_VALUE. Note that the
-        // placement of this check here means that in an empty table,
-        // where we never need to evaluate the filter expression, this
-        // error will not be detected.
-        throw exceptions::invalid_request_exception(
-            format("Unsupported unset map key for column {}",
-                cdef->name_as_text()));
-    }
     if (col_type->is_map()) {
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
         const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
@@ -692,9 +680,6 @@ value_list get_IN_values(
         const expression& e, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
     const cql3::raw_value in_list = evaluate(e, options);
-    if (in_list.is_unset_value()) {
-        throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
-    }
     statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
     utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
@@ -1106,8 +1091,6 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 } else {
                     if (v.value.is_null()) {
                         os << "null";
-                    } else if (v.value.is_unset_value()) {
-                        os << "unset";
                     } else {
                         v.value.view().with_value([&](const FragmentedView auto& bytes_view) {
                             data_value deser_val = v.type->deserialize(bytes_view);
@@ -1622,10 +1605,6 @@ constant constant::make_null(data_type val_type) {
     return constant(cql3::raw_value::make_null(), std::move(val_type));
 }
 
-constant constant::make_unset_value(data_type val_type) {
-    return constant(cql3::raw_value::make_unset_value(), std::move(val_type));
-}
-
 constant constant::make_bool(bool bool_val) {
     return constant(raw_value::make_value(boolean_type->decompose(bool_val)), boolean_type);
 }
@@ -1634,20 +1613,12 @@ bool constant::is_null() const {
     return value.is_null();
 }
 
-bool constant::is_unset_value() const {
-    return value.is_unset_value();
-}
-
 bool constant::has_empty_value_bytes() const {
-    if (is_null_or_unset()) {
+    if (is_null()) {
         return false;
     }
 
     return value.view().size_bytes() == 0;
-}
-
-bool constant::is_null_or_unset() const {
-    return is_null() || is_unset_value();
 }
 
 cql3::raw_value_view constant::view() const {
@@ -1659,7 +1630,7 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
         return std::nullopt;
     }
 
-    if (constant_val.is_null_or_unset()) {
+    if (constant_val.is_null()) {
         return std::nullopt;
     }
 
@@ -1824,10 +1795,6 @@ static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_
         return cql3::raw_value::make_null();
     }
 
-    if (value.is_unset_value()) {
-        return cql3::raw_value::make_unset_value();
-    }
-
     const abstract_type& value_type = bind_var.receiver->type->without_reversed();
     try {
         value.validate(value_type, inputs.options->get_cql_serialization_format());
@@ -1858,10 +1825,6 @@ static cql3::raw_value evaluate(const tuple_constructor& tuple, const evaluation
 
     for (size_t i = 0; i < tuple.elements.size(); i++) {
         cql3::raw_value elem_val = evaluate(tuple.elements[i], inputs);
-        if (elem_val.is_unset_value()) {
-            throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
-        }
-
         tuple_elements.emplace_back(std::move(elem_val).to_managed_bytes_opt());
     }
 
@@ -1904,10 +1867,6 @@ static cql3::raw_value evaluate_list(const collection_constructor& collection,
     for (const expression& element : collection.elements) {
         cql3::raw_value evaluated_element = evaluate(element, inputs);
 
-        if (evaluated_element.is_unset_value()) {
-            throw exceptions::invalid_request_exception("unset value is not supported inside collections");
-        }
-
         if (evaluated_element.is_null()) {
             if (skip_null) {
                 continue;
@@ -1932,10 +1891,6 @@ static cql3::raw_value evaluate_set(const collection_constructor& collection, co
 
         if (evaluated_element.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
-        }
-
-        if (evaluated_element.is_unset_value()) {
-            throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
 
         if (evaluated_element.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
@@ -1966,10 +1921,6 @@ static cql3::raw_value evaluate_map(const collection_constructor& collection, co
 
             if (key.is_null() || value.is_null()) {
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
-            }
-
-            if (key.is_unset_value() || value.is_unset_value()) {
-                throw exceptions::invalid_request_exception("unset value is not supported inside collections");
             }
 
             if (key.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
@@ -2045,10 +1996,6 @@ static cql3::raw_value evaluate(const usertype_constructor& user_val, const eval
         }
 
         cql3::raw_value field_val = evaluate(cur_field->second, inputs);
-        if (field_val.is_unset_value()) {
-            throw exceptions::invalid_request_exception(format(
-                "Invalid unset value for field '{}' of user defined type ", utype.field_name_as_string(i)));
-        }
 
         field_values.emplace_back(std::move(field_val).to_managed_bytes_opt());
     }
@@ -2074,8 +2021,8 @@ static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_
 
     for (const expression& arg : fun_call.args) {
         cql3::raw_value arg_val = evaluate(arg, inputs);
-        if (arg_val.is_null_or_unset()) {
-            throw exceptions::invalid_request_exception(format("Invalid null or unset value for argument to {}", *scalar_fun));
+        if (arg_val.is_null()) {
+            throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *scalar_fun));
         }
 
         arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
@@ -2116,10 +2063,6 @@ static void ensure_can_get_value_elements(const cql3::raw_value& val,
                                           const char* caller_name) {
     if (val.is_null()) {
         on_internal_error(expr_logger, fmt::format("{} called with null value", caller_name));
-    }
-
-    if (val.is_unset_value()) {
-        on_internal_error(expr_logger, fmt::format("{} called with unset value", caller_name));
     }
 }
 
@@ -2519,5 +2462,29 @@ bool has_only_eq_binops(const expression& e) {
 
     return non_eq_binop == nullptr;
 }
+
+unset_bind_variable_guard::unset_bind_variable_guard(const expr::expression& e) {
+    if (auto bv = expr::as_if<expr::bind_variable>(&e)) {
+        _var = *bv;
+    }
+}
+
+unset_bind_variable_guard::unset_bind_variable_guard(const std::optional<expr::expression>& e) {
+    if (!e) {
+        return;
+    }
+    if (auto bv = expr::as_if<expr::bind_variable>(&*e)) {
+        _var = *bv;
+    }
+}
+
+bool
+unset_bind_variable_guard::is_unset(const query_options& qo) const {
+    if (!_var) {
+        return false;
+    }
+    return qo.is_unset(_var->bind_index);
+}
+
 } // namespace expr
 } // namespace cql3

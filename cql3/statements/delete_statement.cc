@@ -48,6 +48,9 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
     }
 
     for (auto&& op : _column_operations) {
+        if (op->should_skip_operation(params._options)) {
+            continue;
+        }
         op->execute(m, range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty(), params);
     }
 }

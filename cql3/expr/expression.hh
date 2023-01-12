@@ -383,7 +383,6 @@ struct constant {
 
     constant(cql3::raw_value value, data_type type);
     static constant make_null(data_type val_type = empty_type);
-    static constant make_unset_value(data_type val_type = empty_type);
     static constant make_bool(bool bool_val);
 
     bool is_null() const;

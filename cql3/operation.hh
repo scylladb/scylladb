@@ -16,6 +16,7 @@
 #include "update_parameters.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/unset.hh"
 
 #include <optional>
 
@@ -49,10 +50,13 @@ protected:
     // may require none of more than one expression, but most need 1 so it simplify things a bit.
     std::optional<expr::expression> _e;
 
+    // A guard to check if the operation should be skipped due to unset operand.
+    expr::unset_bind_variable_guard _unset_guard;
 public:
-    operation(const column_definition& column_, std::optional<expr::expression> e)
+    operation(const column_definition& column_, std::optional<expr::expression> e, expr::unset_bind_variable_guard ubvg)
         : column{column_}
         , _e(std::move(e))
+        , _unset_guard(std::move(ubvg))
     { }
 
     virtual ~operation() {}
@@ -82,9 +86,13 @@ public:
     }
 
     /**
-     * Execute the operation.
+     * Execute the operation. Check should_skip_operation() first.
      */
     virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
+
+    bool should_skip_operation(const query_options& qo) const {
+        return _unset_guard.is_unset(qo);
+    }
 
     /**
      * A parsed raw UPDATE operation.
@@ -256,6 +264,20 @@ public:
         virtual const column_identifier::raw& affected_column() const override;
         virtual shared_ptr<operation> prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const override;
     };
+};
+
+class operation_skip_if_unset : public operation {
+public:
+    operation_skip_if_unset(const column_definition& column, expr::expression e)
+            : operation(column, e, expr::unset_bind_variable_guard(e)) {
+    }
+};
+
+class operation_no_unset_support : public operation {
+public:
+    operation_no_unset_support(const column_definition& column, std::optional<expr::expression> e)
+            : operation(column, std::move(e), expr::unset_bind_variable_guard(std::nullopt)) {
+    }
 };
 
 }

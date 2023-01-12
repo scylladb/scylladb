@@ -273,10 +273,10 @@ def testMapWithUnsetValues(cql, test_keyspace):
         # test unset variables in a map update operation, should not delete the contents
         execute(cql, table, "UPDATE %s SET m['k'] = ? WHERE k = 10", UNSET_VALUE)
         assert_rows(execute(cql, table, "SELECT m FROM %s WHERE k = 10"), [m])
-        assert_invalid_message(cql, table, "Invalid unset map key", "UPDATE %s SET m[?] = 'foo' WHERE k = 10", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset", "UPDATE %s SET m[?] = 'foo' WHERE k = 10", UNSET_VALUE)
 
         # test unset value for map key
-        assert_invalid_message(cql, table, "Invalid unset map key", "DELETE m[?] FROM %s WHERE k = 10", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset", "DELETE m[?] FROM %s WHERE k = 10", UNSET_VALUE)
 
 def testListWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l list<text>)") as table:
@@ -294,7 +294,7 @@ def testListWithUnsetValues(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT l FROM %s WHERE k = 10"), [l])
 
         # set in index
-        assert_invalid_message(cql, table, "Invalid unset value for list index", "UPDATE %s SET l[?] = 'foo' WHERE k = 10", UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value", "UPDATE %s SET l[?] = 'foo' WHERE k = 10", UNSET_VALUE)
 
         # remove element by index
         execute(cql, table, "DELETE l[?] FROM %s WHERE k = 10", UNSET_VALUE)

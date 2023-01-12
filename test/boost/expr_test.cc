@@ -19,10 +19,10 @@
 using namespace cql3;
 using namespace cql3::expr;
 
-bind_variable new_bind_variable(int bind_index) {
+bind_variable new_bind_variable(int bind_index, data_type type = int32_type) {
     return bind_variable {
         .bind_index = bind_index,
-        .receiver = nullptr
+        .receiver = make_lw_shared<column_specification>("ks", "tab", make_shared<column_identifier>("?", true), std::move(type)),
     };
 }
 
