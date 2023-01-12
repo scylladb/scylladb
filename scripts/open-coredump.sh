@@ -235,8 +235,13 @@ else
 fi
 
 COMMIT_HASH=$(cut -f3 -d. <<< $RELEASE)
-BASE_VERSION=$(grep -o "^[0-9]\+\.[0-9]\+" <<< $VERSION)
-BRANCH=branch-${BASE_VERSION}
+if [ "$(grep -o ~dev <<< $VERSION)" == "~dev" ]
+then
+    BRANCH=master
+else
+    BASE_VERSION=$(grep -o "^[0-9]\+\.[0-9]\+" <<< $VERSION)
+    BRANCH=branch-${BASE_VERSION}
+fi
 
 if ! [[ -d ${SCYLLA_REPO_PATH} ]]
 then
