@@ -1,6 +1,7 @@
 # Recommended .gdbinit for debugging scylla
 # See docs/dev/debugging.md for more information
 handle SIG34 pass noprint
+handle SIG35 pass noprint
 handle SIGUSR1 pass noprint
 set print pretty
 set python print-stack full
