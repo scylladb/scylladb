@@ -337,7 +337,8 @@ struct node_ops_cmd_request {
     std::unordered_map<locator::node_ptr, locator::node_ptr> get_replace_nodes(const locator::topology& topo);
     // May update topology for replacing nodes
     std::unordered_map<locator::node_ptr, locator::node_ptr> get_replace_nodes(locator::topology& topo, const gms::gossiper& gossiper);
-    std::unordered_map<gms::inet_address, std::list<dht::token>> get_bootstrap_nodes();
+    // May update topology for bootstrap nodes
+    std::unordered_map<locator::node_ptr, std::unordered_set<dht::token>> get_bootstrap_nodes(locator::topology& topo, const gms::gossiper& gossiper);
 };
 
 struct node_ops_cmd_response {

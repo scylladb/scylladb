@@ -252,13 +252,42 @@ std::unordered_map<locator::node_ptr, locator::node_ptr> node_ops_cmd_request::g
     return ret;
 }
 
-std::unordered_map<gms::inet_address, std::list<dht::token>> node_ops_cmd_request::get_bootstrap_nodes() {
-    if (nodes_dict.empty()) {
-        return std::move(bootstrap_nodes);
-    }
-    std::unordered_map<gms::inet_address, std::list<dht::token>> ret;
-    for (auto&& [x, tokens] : std::move(bootstrap_nodes)) {
-        ret.emplace(nodes_dict.at(x.raw_addr()).endpoint, std::move(tokens));
+std::unordered_map<locator::node_ptr, std::unordered_set<dht::token>> node_ops_cmd_request::get_bootstrap_nodes(locator::topology& topo, const gms::gossiper& gossiper) {
+    std::unordered_map<locator::node_ptr, std::unordered_set<dht::token>> ret;
+    for (auto&& [x, tokens_list] : std::move(bootstrap_nodes)) {
+        locator::host_id_and_endpoint haep;
+        locator::node_ptr node;
+        if (!nodes_dict.empty()) {
+            haep = nodes_dict.at(x.raw_addr());
+        } else {
+            haep.endpoint = x;
+            auto *s = gossiper.get_application_state_ptr(haep.endpoint, gms::application_state::HOST_ID);
+            if (s) {
+                haep.host_id = locator::host_id(utils::UUID(s->value));
+            }
+        }
+        if (haep.host_id) {
+            node = topo.find_node(haep.host_id);
+        }
+        if (!node) {
+            node = topo.find_node(haep.endpoint);
+            if (node) {
+                if (node->host_id() != haep.host_id) {
+                    if (!node->host_id()) {
+                        node = topo.update_node(node, haep.host_id, std::nullopt, std::nullopt, locator::node::state::joining);
+                    } else {
+                        on_internal_error(rlogger, format("Bootstrap node {}/{}: found mismatching node {}", haep.host_id, haep.endpoint, node));
+                    }
+                }
+            } else {
+                node = add_node(topo, gossiper, haep, locator::node::state::joining);
+            }
+        }
+        std::unordered_set<dht::token> tokens;
+        for (auto&& t : std::move(tokens_list)) {
+            tokens.emplace(std::move(t));
+        }
+        ret.emplace(std::move(node), std::move(tokens));
     }
     return ret;
 }

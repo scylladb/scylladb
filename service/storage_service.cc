@@ -2815,29 +2815,25 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::bootstrap_prepare) {
             // Mark the bootstrap node as bootstrapping
-            auto bootstrap_nodes = req.get_bootstrap_nodes();
-            if (bootstrap_nodes.size() > 1) {
-                log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, bootstrap_nodes);
-            }
+            std::unordered_map<locator::node_ptr, std::unordered_set<dht::token>> bootstrap_nodes;
             locator::node_set ignore_nodes;
             mutate_token_metadata([coordinator, &req, &bootstrap_nodes, &ignore_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
                 auto& topo = tmptr->get_topology();
+                bootstrap_nodes = req.get_bootstrap_nodes(topo, _gossiper);
+                if (bootstrap_nodes.size() > 1) {
+                    log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, bootstrap_nodes);
+                }
                 ignore_nodes = req.get_ignore_nodes(topo);
-                for (auto& x: bootstrap_nodes) {
-                    auto& endpoint = x.first;
-                    auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
-                    slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
-                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::joining);
-                    tmptr->add_bootstrap_tokens(tokens, endpoint);
+                for (const auto& [node, tokens] : bootstrap_nodes) {
+                    slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, node, coordinator);
+                    tmptr->add_bootstrap_tokens(tokens, node->endpoint());
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", bootstrap_nodes));
             }).get();
             auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req), bootstrap_nodes = std::move(bootstrap_nodes)] (mutable_token_metadata_ptr tmptr) mutable {
-                    for (auto& x: bootstrap_nodes) {
-                        auto& endpoint = x.first;
-                        auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
-                        slogger.info("bootstrap[{}]: Removed node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
+                    for (const auto& [node, tokens] : bootstrap_nodes) {
+                        slogger.info("bootstrap[{}]: Removed node={} as bootstrap, coordinator={}", req.ops_uuid, node, coordinator);
                         tmptr->remove_bootstrap_tokens(tokens);
                     }
                     return update_pending_ranges(tmptr, format("bootstrap {}", bootstrap_nodes));
