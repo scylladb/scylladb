@@ -15,6 +15,7 @@ ScyllaDB for Administrators
    Upgrade Procedures </upgrade/index>
    System Configuration <system-configuration/index>
    benchmarking-scylla
+   diagnostics
 
 .. panel-box::
   :title: Scylla Administration
@@ -44,6 +45,13 @@ ScyllaDB for Administrators
   :class: my-panel
 
   * :doc:`Benchmark Testing for Scylla </operating-scylla/benchmarking-scylla/>` - Information on benchmark tests you can conduct on Scylla
+
+.. panel-box::
+  :title: Diagnostics
+  :id: "getting-started"
+  :class: my-panel
+
+  * :doc:`Diagnostics tools </operating-scylla/diagnostics/>` - What tools are available for diagnosing problems with ScyllaDB
 
 .. panel-box::
   :title: Learn More About Scylla
