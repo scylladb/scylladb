@@ -1365,7 +1365,7 @@ warnings = [w
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
-def clang_inline_threshold():
+def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
         return args.clang_inline_threshold
     elif platform.machine() == 'aarch64':
@@ -1386,7 +1386,7 @@ for mode in modes:
 
 optimization_flags = [
     '--param inline-unit-growth=300', # gcc
-    f'-mllvm -inline-threshold={clang_inline_threshold()}',  # clang
+    f'-mllvm -inline-threshold={get_clang_inline_threshold()}',  # clang
     # clang generates 16-byte loads that break store-to-load forwarding
     # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
     '-fno-slp-vectorize',
@@ -1566,11 +1566,14 @@ args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 args.user_cflags += f" -ffile-prefix-map={curdir}=."
 
-seastar_cflags = args.user_cflags
-
 if args.target != '':
-    seastar_cflags += ' -march=' + args.target
-seastar_ldflags = args.user_ldflags
+    args.user_cflags += ' -march=' + args.target
+
+for mode in modes:
+    # Those flags are passed not only to Scylla objects, but also to libraries
+    # that we compile ourselves.
+    modes[mode]['lib_cflags'] = args.user_cflags
+    modes[mode]['lib_ldflags'] = args.user_ldflags + linker_flags
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -1590,8 +1593,8 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags).replace(' ', ';')),
-        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(seastar_ldflags, modes[mode]['cxx_ld_flags'])),
+        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
+        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], mode_config['cxx_ld_flags'])),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
@@ -1652,6 +1655,7 @@ for mode in build_modes:
     seastar_pc_cflags, seastar_pc_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
     modes[mode]['seastar_cflags'] = seastar_pc_cflags
     modes[mode]['seastar_libs'] = seastar_pc_libs
+    modes[mode]['seastar_testing_libs'] = pkg_config(pc[mode].replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
 
 abseil_pkgs = [
     'absl_raw_hash_set',
@@ -1661,7 +1665,6 @@ abseil_pkgs = [
 pkgs += abseil_pkgs
 
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
-args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
@@ -1775,10 +1778,11 @@ with open(buildfile, 'w') as f:
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
-            ld_flags_{mode} = $cxx_ld_flags_{mode}
-            cxxflags_{mode} = $cxx_ld_flags_{mode} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
+            ld_flags_{mode} = $cxx_ld_flags_{mode} {lib_ldflags}
+            cxxflags_{mode} = $cxx_ld_flags_{mode} {lib_cflags} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
+            seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
               description = CXX $out
@@ -1873,36 +1877,31 @@ with open(buildfile, 'w') as f:
                     idx = dep.rindex('/src/')
                     obj = dep[:idx].replace('rust/','') + '.o'
                     objs.append('$builddir/' + mode + '/gen/rust/' + obj)
-            if binary.endswith('.a'):
-                f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+            if has_rust:
+                objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
+            local_libs = '$seastar_libs_{} $libs'.format(mode)
+            if has_thrift:
+                local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
+            if binary in tests:
+                if binary in pure_boost_tests:
+                    local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
+                if binary not in tests_not_using_seastar_test_framework:
+                    local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
+                # Our code's debugging information is huge, and multiplied
+                # by many tests yields ridiculous amounts of disk space.
+                # So we strip the tests by default; The user can very
+                # quickly re-link the test unstripped by adding a "_g"
+                # to the test name, e.g., "ninja build/release/testname_g"
+                link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('   libs = {}\n'.format(local_libs))
+                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
+                f.write('   libs = {}\n'.format(local_libs))
             else:
-                if has_rust:
-                    objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
-                if binary in tests:
-                    local_libs = '$seastar_libs_{} $libs'.format(mode)
-                    if binary in pure_boost_tests:
-                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
-                    if binary not in tests_not_using_seastar_test_framework:
-                        pc_path = pc[mode].replace('seastar.pc', 'seastar-testing.pc')
-                        local_libs += ' ' + pkg_config(pc_path, '--libs', '--static')
-                    if has_thrift:
-                        local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
-                    # Our code's debugging information is huge, and multiplied
-                    # by many tests yields ridiculous amounts of disk space.
-                    # So we strip the tests by default; The user can very
-                    # quickly re-link the test unstripped by adding a "_g"
-                    # to the test name, e.g., "ninja build/release/testname_g"
-                    link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
-                    f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
-                    f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
-                    f.write('   libs = {}\n'.format(local_libs))
-                else:
-                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
-                    if has_thrift:
-                        f.write('   libs =  {} {} $seastar_libs_{} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system'), mode))
-                    f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
-                    f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
+                f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                f.write('   libs = {}\n'.format(local_libs))
+                f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
+                f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
