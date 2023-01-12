@@ -51,7 +51,8 @@ struct parametrized_forward_request {
     std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
 
-using forward_request = parametrized_forward_request<lowres_clock::time_point>;
+using legacy_forward_request = parametrized_forward_request<lowres_clock::time_point>;
+using forward_request = parametrized_forward_request<lowres_system_clock::time_point>;
 
 struct forward_result {
     // vector storing query result for each selected column

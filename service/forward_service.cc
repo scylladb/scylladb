@@ -18,6 +18,7 @@
 #include "db/consistency_level.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "idl/forward_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -259,8 +260,8 @@ public:
 
         // Try to send this forward_request to another node.
         return do_with(id, req, [this] (netw::msg_addr& id, parallel_aggregations::forward_request& req) -> future<parallel_aggregations::forward_result> {
-            return ser::forward_request_rpc_verbs::send_legacy_forward_request(
-                &_forwarder._messaging, id, req, _tr_info
+            return _forwarder.send_forward_request(
+                id, req, _tr_info
             ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<parallel_aggregations::forward_result> {
                 // In case of forwarding failure, retry using super-coordinator as a coordinator
                 flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
@@ -274,6 +275,41 @@ public:
 
 locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
+}
+
+future<parallel_aggregations::forward_result> forward_service::send_forward_request(
+    netw::msg_addr id,
+    parallel_aggregations::forward_request req,
+    std::optional<tracing::trace_info> tr_info
+) {
+    if (_db.local().features().parallelized_aggregations_with_timeouts) {
+        return ser::forward_request_rpc_verbs::send_forward_request(
+            &_messaging, id, req, tr_info
+        );
+    } else {
+        using namespace std::chrono_literals;
+
+        // This line effectively disables timeouts for legacy requests.
+        // Providing any other value may lead to random timeouts.
+        //
+        // This codepath can be triggered only during upgrades - when a coordinator node
+        // is already upgraded but the cluster does not have
+        // PARALLELIZED_AGGREGATIONS_WITH_TIMEOUTS feature available yet.
+        auto timeout = lowres_clock::time_point::max();
+
+        parallel_aggregations::legacy_forward_request converted {
+            .reduction_types = std::move(req.reduction_types),
+            .cmd = std::move(req.cmd),
+            .pr = std::move(req.pr),
+            .cl = std::move(req.cl),
+            .timeout = timeout,
+            .aggregation_infos = std::move(req.aggregation_infos),
+        };
+
+        return ser::forward_request_rpc_verbs::send_legacy_forward_request(
+            &_messaging, id, converted, tr_info
+        );
+    }
 }
 
 future<> forward_service::stop() {
@@ -365,6 +401,13 @@ future<parallel_aggregations::forward_result> forward_service::dispatch_to_shard
     });
 }
 
+static lowres_clock::time_point compute_timeout(const parallel_aggregations::forward_request& req) {
+    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
+    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
+
+    return timeout_point;
+}
+
 // This function executes forward_request on a shard.
 // It retains partition ranges owned by this shard from requested partition
 // ranges vector, so that only owned ones are queried.
@@ -383,7 +426,7 @@ future<parallel_aggregations::forward_result> forward_service::execute_on_this_s
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
 
-    auto timeout = req.timeout;
+    auto timeout = compute_timeout(req);
     auto now = gc_clock::now();
 
     auto selection = mock_selection(req, schema, _db.local());
@@ -473,8 +516,38 @@ future<parallel_aggregations::forward_result> forward_service::execute_on_this_s
     });
 }
 
+future<parallel_aggregations::forward_result> forward_service::legacy_dispatch_to_shards(
+    parallel_aggregations::legacy_forward_request req,
+    std::optional<tracing::trace_info> tr_info
+) {
+    using namespace std::chrono_literals;
+
+    // TODO(havaker) Use a default timeout duration for this type of query?
+    //
+    // This codepath can be triggered only during upgrades - when a cluster does not have
+    // PARALLELIZED_AGGREGATIONS_WITH_TIMEOUTS feature available yet.
+    auto timeout = lowres_system_clock::now() + lowres_system_clock::duration(1h);
+
+    parallel_aggregations::forward_request converted {
+        .reduction_types = std::move(req.reduction_types),
+        .cmd = std::move(req.cmd),
+        .pr = std::move(req.pr),
+        .cl = std::move(req.cl),
+        .timeout = timeout,
+        .aggregation_infos = std::move(req.aggregation_infos),
+    };
+
+    return dispatch_to_shards(converted, tr_info);
+}
+
 void forward_service::init_messaging_service() {
     ser::forward_request_rpc_verbs::register_legacy_forward_request(
+        &_messaging,
+        [this](parallel_aggregations::legacy_forward_request req, std::optional<tracing::trace_info> tr_info) -> future<parallel_aggregations::forward_result> {
+            return legacy_dispatch_to_shards(req, tr_info);
+        }
+    );
+    ser::forward_request_rpc_verbs::register_forward_request(
         &_messaging,
         [this](parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<parallel_aggregations::forward_result> {
             return dispatch_to_shards(req, tr_info);

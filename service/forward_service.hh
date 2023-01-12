@@ -147,10 +147,19 @@ public:
 private:
     // Used to distribute given `forward_request` across shards.
     future<parallel_aggregations::forward_result> dispatch_to_shards(parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info);
+    future<parallel_aggregations::forward_result> legacy_dispatch_to_shards(parallel_aggregations::legacy_forward_request req, std::optional<tracing::trace_info> tr_info);
+
     // Used to execute a `forward_request` on a shard.
     future<parallel_aggregations::forward_result> execute_on_this_shard(parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info);
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
+
+    // Sends a `forward_request` to a node that can be identified by the `id` parameter.
+    // If a `PARALLELIZED_AGGREGATIONS_WITH_TIMEOUTS` feature is set, `forward_request` rpc verb
+    // is used. Otherwise, `legacy_forward_request` verb is used (in this case
+    // `parallel_aggregations::forward_request` parameter is converted into
+    // `parallel_aggregations::legacy_forward_request`)
+    future<parallel_aggregations::forward_result> send_forward_request(netw::msg_addr id, parallel_aggregations::forward_request, std::optional<tracing::trace_info>);
 
     void register_metrics();
     void init_messaging_service();
