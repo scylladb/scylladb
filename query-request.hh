@@ -12,9 +12,6 @@
 #include <memory>
 #include <optional>
 
-#include "db/functions/function_name.hh"
-#include "db/functions/function.hh"
-#include "db/functions/aggregate_function.hh"
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
@@ -380,45 +377,4 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
-
-struct forward_request {
-    enum class reduction_type {
-        count,
-        aggregate
-    };
-    struct aggregation_info {
-        db::functions::function_name name;
-        std::vector<sstring> column_names;
-    };
-    struct reductions_info { 
-        // Used by selector_factries to prepare reductions information
-        std::vector<reduction_type> types;
-        std::vector<aggregation_info> infos;
-    };
-
-    std::vector<reduction_type> reduction_types;
-
-    query::read_command cmd;
-    dht::partition_range_vector pr;
-
-    db::consistency_level cl;
-    lowres_clock::time_point timeout;
-    std::optional<std::vector<aggregation_info>> aggregation_infos;
-};
-
-std::ostream& operator<<(std::ostream& out, const forward_request& r);
-std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r);
-std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a);
-
-struct forward_result {
-    // vector storing query result for each selected column
-    std::vector<bytes_opt> query_results;
-
-    struct printer {
-        const std::vector<::shared_ptr<db::functions::aggregate_function>> functions;
-        const query::forward_result& res;
-    };
-};
-
-std::ostream& operator<<(std::ostream& out, const query::forward_result::printer&);
 }

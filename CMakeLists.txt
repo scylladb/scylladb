@@ -523,6 +523,7 @@ set(scylla_sources
     partition_version.cc
     querier.cc
     query.cc
+    parallel_aggregations.cc
     query_ranges_to_vnodes.cc
     query-result-set.cc
     raft/fsm.cc

@@ -90,15 +90,15 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
             return p->is_reducible();
         }
 
-        virtual std::optional<std::pair<query::forward_request::reduction_type, query::forward_request::aggregation_info>> 
+        virtual std::optional<std::pair<parallel_aggregations::reduction_type, parallel_aggregations::aggregation_info>> 
         get_reduction() const override {
             auto p = dynamic_cast<functions::aggregate_function*>(_fun.get());
             if (!p) {
                 return std::nullopt;
             }
 
-            auto type = (p->name().name == "countRows") ? query::forward_request::reduction_type::count : query::forward_request::reduction_type::aggregate;
-            auto info = query::forward_request::aggregation_info {
+            auto type = (p->name().name == "countRows") ? parallel_aggregations::reduction_type::count : parallel_aggregations::reduction_type::aggregate;
+            auto info = parallel_aggregations::aggregation_info {
                 .name = p->name(),
                 .column_names = _factories->get_column_names()
             };

@@ -185,7 +185,7 @@ public:
         return _factories->does_reduction();
     }
 
-    virtual query::forward_request::reductions_info get_reductions() const override {
+    virtual parallel_aggregations::reductions_info get_reductions() const override {
         return _factories->get_reductions();
     }
 

@@ -12,7 +12,7 @@
 
 #include <vector>
 #include "cql3/assignment_testable.hh"
-#include "query-request.hh"
+#include "parallel_aggregations.hh"
 #include "types.hh"
 #include "schema_fwd.hh"
 #include "counters.hh"
@@ -155,7 +155,7 @@ public:
         return false;
     }
 
-    virtual std::optional<std::pair<query::forward_request::reduction_type, query::forward_request::aggregation_info>> 
+    virtual std::optional<std::pair<parallel_aggregations::reduction_type, parallel_aggregations::aggregation_info>> 
     get_reduction() const {return std::nullopt;}
 
     /**

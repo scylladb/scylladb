@@ -55,7 +55,7 @@ namespace service {
 static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = 10000;
 static logging::logger flogger("forward_service");
 
-static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request);
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const parallel_aggregations::forward_request& request);
 
 class forward_aggregates {
 private:
@@ -63,9 +63,9 @@ private:
     std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> _aggrs;
 
 public:
-    forward_aggregates(const query::forward_request& request);
-    void merge(query::forward_result& result, query::forward_result&& other);
-    void finalize(query::forward_result& result);
+    forward_aggregates(const parallel_aggregations::forward_request& request);
+    void merge(parallel_aggregations::forward_result& result, parallel_aggregations::forward_result&& other);
+    void finalize(parallel_aggregations::forward_result& result);
 
     template<typename Func>
     auto with_thread_if_needed(Func&& func) const {
@@ -83,7 +83,7 @@ public:
     }
 };
 
-forward_aggregates::forward_aggregates(const query::forward_request& request) {
+forward_aggregates::forward_aggregates(const parallel_aggregations::forward_request& request) {
     _funcs = get_functions(request);
     std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> aggrs;
 
@@ -93,7 +93,7 @@ forward_aggregates::forward_aggregates(const query::forward_request& request) {
     _aggrs = std::move(aggrs);
 }
 
-void forward_aggregates::merge(query::forward_result &result, query::forward_result&& other) {
+void forward_aggregates::merge(parallel_aggregations::forward_result &result, parallel_aggregations::forward_result&& other) {
     if (result.query_results.empty()) {
         result.query_results = std::move(other.query_results);
         return;
@@ -119,7 +119,7 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
     }
 }
 
-void forward_aggregates::finalize(query::forward_result &result) {
+void forward_aggregates::finalize(parallel_aggregations::forward_result &result) {
     if (result.query_results.size() != _aggrs.size()) {
         on_internal_error(
             flogger,
@@ -136,7 +136,7 @@ void forward_aggregates::finalize(query::forward_result &result) {
     }
 }
 
-static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const query::forward_request& request) {
+static std::vector<::shared_ptr<db::functions::aggregate_function>> get_functions(const parallel_aggregations::forward_request& request) {
     
     schema_ptr schema = local_schema_registry().get(request.cmd.schema_version);
     std::vector<::shared_ptr<db::functions::aggregate_function>> aggrs;
@@ -149,7 +149,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
         ::shared_ptr<db::functions::aggregate_function> aggr;
 
         if (!request.aggregation_infos) {
-            if (request.reduction_types[i] == query::forward_request::reduction_type::aggregate) {
+            if (request.reduction_types[i] == parallel_aggregations::reduction_type::aggregate) {
                 throw std::runtime_error("No aggregation info for reduction type aggregation.");
             }
 
@@ -250,7 +250,7 @@ public:
         _tr_info(tracing::make_trace_info(tr_state))
     {}
 
-    future<query::forward_result> dispatch_to_node(netw::msg_addr id, query::forward_request req) {
+    future<parallel_aggregations::forward_result> dispatch_to_node(netw::msg_addr id, parallel_aggregations::forward_request req) {
         if (utils::fb_utilities::is_me(id.addr)) {
             return _forwarder.dispatch_to_shards(req, _tr_info);
         }
@@ -258,10 +258,10 @@ public:
         _forwarder._stats.requests_dispatched_to_other_nodes += 1;
 
         // Try to send this forward_request to another node.
-        return do_with(id, req, [this] (netw::msg_addr& id, query::forward_request& req) -> future<query::forward_result> {
+        return do_with(id, req, [this] (netw::msg_addr& id, parallel_aggregations::forward_request& req) -> future<parallel_aggregations::forward_result> {
             return ser::forward_request_rpc_verbs::send_forward_request(
                 &_forwarder._messaging, id, req, _tr_info
-            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::forward_result> {
+            ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<parallel_aggregations::forward_result> {
                 // In case of forwarding failure, retry using super-coordinator as a coordinator
                 flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
                 tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
@@ -284,7 +284,7 @@ future<> forward_service::stop() {
 // stored in `forward_request`. It has to mocked on the receiving node,
 // based on requested reduction types.
 static shared_ptr<cql3::selection::selection> mock_selection(
-    query::forward_request& request,
+    parallel_aggregations::forward_request& request,
     schema_ptr schema,
     replica::database& db
 ) {
@@ -294,8 +294,8 @@ static shared_ptr<cql3::selection::selection> mock_selection(
 
     auto mock_singular_selection = [&] (
         const ::shared_ptr<db::functions::aggregate_function>& aggr_function,
-        const query::forward_request::reduction_type& reduction, 
-        const std::optional<query::forward_request::aggregation_info>& info
+        const parallel_aggregations::reduction_type& reduction, 
+        const std::optional<parallel_aggregations::aggregation_info>& info
     ) {
         auto name_as_expression = [] (const sstring& name) -> cql3::expr::expression {
             return cql3::expr::unresolved_identifier {
@@ -303,7 +303,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
             };
         };
 
-        if (reduction == query::forward_request::reduction_type::count) {
+        if (reduction == parallel_aggregations::reduction_type::count) {
             auto selectable = cql3::selection::make_count_rows_function_expression();
             auto column_identifier = make_shared<cql3::column_identifier>("count", false);
             return make_shared<cql3::selection::raw_selector>(selectable, column_identifier);
@@ -328,13 +328,13 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, std::move(raw_selectors));
 }
 
-future<query::forward_result> forward_service::dispatch_to_shards(
-    query::forward_request req,
+future<parallel_aggregations::forward_result> forward_service::dispatch_to_shards(
+    parallel_aggregations::forward_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
     _stats.requests_dispatched_to_own_shards += 1;
-    std::optional<query::forward_result> result;
-    std::vector<future<query::forward_result>> futures;
+    std::optional<parallel_aggregations::forward_result> result;
+    std::vector<future<parallel_aggregations::forward_result>> futures;
 
     for (const auto& s : smp::all_cpus()) {
         futures.push_back(container().invoke_on(s, [req, tr_info] (auto& fs) {
@@ -355,7 +355,7 @@ future<query::forward_result> forward_service::dispatch_to_shards(
         }
 
         flogger.debug("on node execution result is {}", seastar::value_of([&req, &result] {
-            return query::forward_result::printer {
+            return parallel_aggregations::forward_result::printer {
                 .functions = get_functions(req),
                 .res = *result
             };})
@@ -368,8 +368,8 @@ future<query::forward_result> forward_service::dispatch_to_shards(
 // This function executes forward_request on a shard.
 // It retains partition ranges owned by this shard from requested partition
 // ranges vector, so that only owned ones are queried.
-future<query::forward_result> forward_service::execute_on_this_shard(
-    query::forward_request req,
+future<parallel_aggregations::forward_result> forward_service::execute_on_this_shard(
+    parallel_aggregations::forward_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
     tracing::trace_state_ptr tr_state;
@@ -458,10 +458,10 @@ future<query::forward_result> forward_service::execute_on_this_shard(
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
-        query::forward_result res = { .query_results = rows[0] };
+        parallel_aggregations::forward_result res = { .query_results = rows[0] };
 
         auto printer = seastar::value_of([&req, &res] {
-            return query::forward_result::printer {
+            return parallel_aggregations::forward_result::printer {
                 .functions = get_functions(req),
                 .res = res
             };
@@ -476,7 +476,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
 void forward_service::init_messaging_service() {
     ser::forward_request_rpc_verbs::register_forward_request(
         &_messaging,
-        [this](query::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<query::forward_result> {
+        [this](parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<parallel_aggregations::forward_result> {
             return dispatch_to_shards(req, tr_info);
         }
     );
@@ -486,7 +486,7 @@ future<> forward_service::uninit_messaging_service() {
     return ser::forward_request_rpc_verbs::unregister(&_messaging);
 }
 
-future<query::forward_result> forward_service::dispatch(query::forward_request req, tracing::trace_state_ptr tr_state) {
+future<parallel_aggregations::forward_result> forward_service::dispatch(parallel_aggregations::forward_request req, tracing::trace_state_ptr tr_state) {
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     // next_vnode is used to iterate through all vnodes produced by
@@ -523,26 +523,26 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     flogger.debug("dispatching forward_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
-    query::forward_result result;
+    parallel_aggregations::forward_result result;
     
     return do_with(std::move(dispatcher), std::move(result), std::move(vnodes_per_addr), std::move(req), std::move(tr_state),
         [] (
             retrying_dispatcher& dispatcher,
-            query::forward_result& result,
+            parallel_aggregations::forward_result& result,
             std::map<netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
-            query::forward_request& req,
+            parallel_aggregations::forward_request& req,
             tracing::trace_state_ptr& tr_state
-        )-> future<query::forward_result> {
+        )-> future<parallel_aggregations::forward_result> {
             return parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
                 [&req, &result, &tr_state, &dispatcher] (
                     std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
                 ) {
                     netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
-                    query::forward_result& result_ = result;
+                    parallel_aggregations::forward_result& result_ = result;
                     tracing::trace_state_ptr& tr_state_ = tr_state;
                     retrying_dispatcher& dispatcher_ = dispatcher;
 
-                    query::forward_request req_with_modified_pr = req;
+                    parallel_aggregations::forward_request req_with_modified_pr = req;
                     req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
 
                     tracing::trace(tr_state_, "Sending forward_request to {}", addr);
@@ -550,11 +550,11 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
 
                     return dispatcher_.dispatch_to_node(addr, req_with_modified_pr).then(
                         [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
-                            query::forward_result partial_result
+                            parallel_aggregations::forward_result partial_result
                         ) mutable {
                             forward_aggregates aggrs(req);
                             auto partial_printer = seastar::value_of([&req, &partial_result] { 
-                                return query::forward_result::printer {
+                                return parallel_aggregations::forward_result::printer {
                                     .functions = get_functions(req),
                                     .res = partial_result
                                 };
@@ -568,13 +568,13 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     });       
                 }
             ).then(
-                [&result, &req, &tr_state] () -> future<query::forward_result> {
+                [&result, &req, &tr_state] () -> future<parallel_aggregations::forward_result> {
                     forward_aggregates aggrs(req);
                     const bool requires_thread = aggrs.requires_thread();
 
                     auto merge_result = [&result, &req, &tr_state, aggrs = std::move(aggrs)] () mutable {
                         auto printer = seastar::value_of([&req, &result] {
-                            return query::forward_result::printer {
+                            return parallel_aggregations::forward_result::printer {
                                 .functions = get_functions(req),
                                 .res = result
                             };
@@ -588,7 +588,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                     if (requires_thread) {
                         return seastar::async(std::move(merge_result));
                     } else {
-                        return make_ready_future<query::forward_result>(merge_result());
+                        return make_ready_future<parallel_aggregations::forward_result>(merge_result());
                     }
                 }
             );

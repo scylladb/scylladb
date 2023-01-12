@@ -14,7 +14,7 @@
 
 #include "locator/token_metadata.hh"
 #include "message/messaging_service_fwd.hh"
-#include "query-request.hh"
+#include "parallel_aggregations.hh"
 #include "replica/database_fwd.hh"
 #include "tracing/trace_state.hh"
 
@@ -26,7 +26,7 @@ class storage_proxy;
 // executing aggregation requests across a cluster.
 //
 // To use this service, one needs to express its aggregation query using
-// `query::forward_request` struct, and call the `dispatch` method with the
+// `parallel_aggregations::forward_request` struct, and call the `dispatch` method with the
 // previously mentioned struct acting as an argument. What will happen after
 // calling it, is as follows:
 //   1. `dispatch` splits aggregation query into sub-queries. The caller of
@@ -142,13 +142,13 @@ public:
 
     // Splits given `forward_request` and distributes execution of resulting
     // subrequests across a cluster.
-    future<query::forward_result> dispatch(query::forward_request req, tracing::trace_state_ptr tr_state);
+    future<parallel_aggregations::forward_result> dispatch(parallel_aggregations::forward_request req, tracing::trace_state_ptr tr_state);
 
 private:
     // Used to distribute given `forward_request` across shards.
-    future<query::forward_result> dispatch_to_shards(query::forward_request req, std::optional<tracing::trace_info> tr_info);
+    future<parallel_aggregations::forward_result> dispatch_to_shards(parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info);
     // Used to execute a `forward_request` on a shard.
-    future<query::forward_result> execute_on_this_shard(query::forward_request req, std::optional<tracing::trace_info> tr_info);
+    future<parallel_aggregations::forward_result> execute_on_this_shard(parallel_aggregations::forward_request req, std::optional<tracing::trace_info> tr_info);
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 

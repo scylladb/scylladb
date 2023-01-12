@@ -45,6 +45,7 @@
 #include "utils/result.hh"
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
+#include "parallel_aggregations.hh"
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
@@ -1553,7 +1554,7 @@ parallelized_select_statement::do_execute(
     auto timeout = db::timeout_clock::now() + timeout_duration;
     auto reductions = _selection->get_reductions();
 
-    query::forward_request req = {
+    parallel_aggregations::forward_request req = {
         .reduction_types = reductions.types,
         .cmd = *command,
         .pr = std::move(key_ranges),
@@ -1563,7 +1564,7 @@ parallelized_select_statement::do_execute(
     };
 
     // dispatch execution of this statement to other nodes
-    return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (query::forward_result res) {
+    return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (parallel_aggregations::forward_result res) {
         auto meta = make_shared<metadata>(*_selection->get_result_metadata());
         auto rs = std::make_unique<result_set>(std::move(meta));
         rs->add_row(res.query_results);

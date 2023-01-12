@@ -15,7 +15,7 @@
 #include <vector>
 #include "cql3/selection/selector.hh"
 #include "schema.hh"
-#include "query-request.hh"
+#include "parallel_aggregations.hh"
 
 namespace cql3 {
 
@@ -130,9 +130,9 @@ public:
         });
     }
 
-    query::forward_request::reductions_info get_reductions() const {
-        std::vector<query::forward_request::reduction_type> types;
-        std::vector<query::forward_request::aggregation_info> infos;
+    parallel_aggregations::reductions_info get_reductions() const {
+        std::vector<parallel_aggregations::reduction_type> types;
+        std::vector<parallel_aggregations::aggregation_info> infos;
         for (const auto& factory: _factories) {
             auto r = factory->get_reduction();
             if (!r) {

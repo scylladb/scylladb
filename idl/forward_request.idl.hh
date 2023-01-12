@@ -7,6 +7,7 @@
  */
 
 #include "dht/i_partitioner.hh"
+#include "parallel_aggregations.hh"
 
 #include "idl/read_command.idl.hh"
 #include "idl/consistency_level.idl.hh"
@@ -19,31 +20,40 @@ class function_name {
 };
 }
 }
-namespace query {
-struct forward_request {
-    struct aggregation_info {
-        db::functions::function_name name;
-        std::vector<sstring> column_names;
-    };
-    enum class reduction_type : uint8_t {
-        count,
-        aggregate
-    };
 
-    std::vector<query::forward_request::reduction_type> reduction_types;
+namespace parallel_aggregations {
+
+enum class reduction_type : uint8_t {
+    count,
+    aggregate
+};
+
+struct aggregation_info {
+    db::functions::function_name name;
+    std::vector<sstring> column_names;
+};
+
+struct reductions_info {
+    // Used by selector_factries to prepare reductions information
+    std::vector<parallel_aggregations::reduction_type> types;
+    std::vector<parallel_aggregations::aggregation_info> infos;
+};
+
+struct forward_request {
+    std::vector<parallel_aggregations::reduction_type> reduction_types;
 
     query::read_command cmd;
     dht::partition_range_vector pr;
 
     db::consistency_level cl;
     lowres_clock::time_point timeout;
-
-    std::optional<std::vector<query::forward_request::aggregation_info>> aggregation_infos [[version 5.1]];
+    std::optional<std::vector<parallel_aggregations::aggregation_info>> aggregation_infos [[version 5.1]];
 };
 
 struct forward_result {
     std::vector<bytes_opt> query_results;
 };
 
-verb forward_request(query::forward_request, std::optional<tracing::trace_info>) -> query::forward_result;
+verb forward_request(parallel_aggregations::forward_request, std::optional<tracing::trace_info>) -> parallel_aggregations::forward_result;
+
 }
