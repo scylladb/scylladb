@@ -757,6 +757,12 @@ future<> gossiper::update_live_endpoints_version() {
     });
 }
 
+future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
+    auto live_members = gossiper::get_live_members();
+    co_await replicate_live_endpoints_on_change();
+    co_return live_members;
+}
+
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);

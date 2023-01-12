@@ -19,9 +19,11 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
         return container_to_vec(res);
     });
 
-    httpd::gossiper_json::get_live_endpoint.set(r, [&g] (const_req req) {
-        auto res = g.get_live_members();
-        return container_to_vec(res);
+
+    httpd::gossiper_json::get_live_endpoint.set(r, [&g] (std::unique_ptr<request> req) {
+        return g.get_live_members_synchronized().then([] (auto res) {
+            return make_ready_future<json::json_return_type>(container_to_vec(res));
+        });
     });
 
     httpd::gossiper_json::get_endpoint_downtime.set(r, [&g] (const_req req) {
