@@ -33,6 +33,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
 #include "m_format_read_helpers.hh"
@@ -3285,7 +3286,20 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+std::unique_ptr<sstable::storage> make_storage(const data_dictionary::storage_options& s_opts, sstring dir) {
+    return std::visit(overloaded_functor {
+        [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable::storage> {
+            return std::make_unique<sstable::filesystem_storage>(std::move(dir));
+        },
+        [dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable::storage> {
+            throw std::runtime_error("S3 storage not implemented yet");
+            return nullptr;
+        }
+    }, s_opts.value);
+}
+
 sstable::sstable(schema_ptr schema,
+        const data_dictionary::storage_options& storage,
         sstring dir,
         generation_type generation,
         version_types v,
@@ -3298,7 +3312,7 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _generation(generation)
-    , _storage(std::make_unique<filesystem_storage>(std::move(dir)))
+    , _storage(make_storage(storage, std::move(dir)))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(

@@ -150,7 +150,8 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         const auto sst_filename = sst_path.filename();
 
         auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
-        auto sst = sst_man.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
+        data_dictionary::storage_options local;
+        auto sst = sst_man.make_sstable(schema, local, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
         co_await sst->load(default_priority_class(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
 
@@ -2364,7 +2365,8 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto reader = make_generating_reader_v2(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
-    auto sst = manager.make_sstable(schema, output_dir, generation, version, format);
+    data_dictionary::storage_options local;
+    auto sst = manager.make_sstable(schema, local, output_dir, generation, version, format);
 
     sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
 }

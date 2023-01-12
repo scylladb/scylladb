@@ -43,6 +43,7 @@ const locator::host_id& sstables_manager::get_local_host_id() const {
 }
 
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
+        const data_dictionary::storage_options& storage,
         sstring dir,
         generation_type generation,
         sstable_version_types v,
@@ -50,7 +51,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+    return make_lw_shared<sstable>(std::move(schema), storage, std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {

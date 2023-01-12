@@ -43,6 +43,10 @@
 class sstable_assertions;
 class cached_file;
 
+namespace data_dictionary {
+class storage_options;
+}
+
 namespace db {
 class large_data_handler;
 }
@@ -144,6 +148,7 @@ public:
     using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
+            const data_dictionary::storage_options& storage,
             sstring dir,
             generation_type generation,
             version_types v,

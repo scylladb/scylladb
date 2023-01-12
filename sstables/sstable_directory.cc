@@ -113,7 +113,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 }
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc) const {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(_io_priority);
     co_return sst;
 }
@@ -143,7 +143,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
 }
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_io_priority);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();
@@ -306,7 +306,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }

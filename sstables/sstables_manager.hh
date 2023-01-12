@@ -77,6 +77,7 @@ public:
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
+            const data_dictionary::storage_options& storage, // FIXME -- move dir on options
             sstring dir,
             generation_type generation,
             sstable_version_types v = get_highest_sstable_version(),
