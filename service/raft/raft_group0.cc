@@ -949,7 +949,11 @@ with_timeout(abort_source& as, db::timeout_clock::duration d, F&& fun) {
     // FIXME: using lambda as workaround for clang bug #50345 (miscompiling coroutine templates).
     auto impl = [] (abort_source& as, db::timeout_clock::duration d, F&& fun) -> future_t {
         abort_source timeout_src;
-        auto sub = as.subscribe([&timeout_src] () noexcept { timeout_src.request_abort(); });
+        auto sub = as.subscribe([&timeout_src] () noexcept {
+            if (!timeout_src.abort_requested()) {
+                timeout_src.request_abort();
+            }
+        });
         if (!sub) {
             throw abort_requested_exception{};
         }
