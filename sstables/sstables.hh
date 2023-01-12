@@ -486,6 +486,10 @@ public:
         future<> touch_temp_dir(const sstable& sst);
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
 
+        void change_dir_for_test(sstring nd) {
+            dir = std::move(nd);
+        }
+
     public:
         explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
 
