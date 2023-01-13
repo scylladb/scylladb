@@ -1090,6 +1090,7 @@ future<std::vector<mutation>> generate_random_mutations(
         const auto clustering_row_count = ckeys.size();
         for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
             random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
+            co_await coroutine::maybe_yield();
         }
 
         for (size_t i = 0; i < 4; ++i) {
@@ -1101,6 +1102,7 @@ future<std::vector<mutation>> generate_random_mutations(
                     nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
                     ts_gen,
                     exp_gen);
+            co_await coroutine::maybe_yield();
         }
         muts.emplace_back(mut.build(random_schema.schema()));
     }
