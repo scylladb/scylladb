@@ -1065,13 +1065,14 @@ void random_schema::delete_range(
 }
 
 future<std::vector<mutation>> generate_random_mutations(
+        uint32_t seed,
         tests::random_schema& random_schema,
         timestamp_generator ts_gen,
         expiry_generator exp_gen,
         std::uniform_int_distribution<size_t> partition_count_dist,
         std::uniform_int_distribution<size_t> clustering_row_count_dist,
         std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
-    auto engine = std::mt19937(tests::random::get_int<uint32_t>());
+    auto engine = std::mt19937(seed);
     const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
     const auto partition_count = partition_count_dist(engine);
     std::vector<mutation> muts;
@@ -1116,6 +1117,17 @@ future<std::vector<mutation>> generate_random_mutations(
             });
     muts.erase(range.end(), muts.end());
     co_return std::move(muts);
+}
+
+future<std::vector<mutation>> generate_random_mutations(
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen,
+        expiry_generator exp_gen,
+        std::uniform_int_distribution<size_t> partition_count_dist,
+        std::uniform_int_distribution<size_t> clustering_row_count_dist,
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
+    return generate_random_mutations(tests::random::get_int<uint32_t>(), random_schema, std::move(ts_gen), std::move(exp_gen), partition_count_dist,
+            clustering_row_count_dist, range_tombstone_count_dist);
 }
 
 future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
