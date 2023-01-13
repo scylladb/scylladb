@@ -17,7 +17,7 @@ from cassandra.pool import Host                         # type: ignore # pylint:
 from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
@@ -49,40 +49,6 @@ async def enable_raft(manager: ManagerClient, server: ServerInfo) -> None:
 async def enable_raft_and_restart(manager: ManagerClient, server: ServerInfo) -> None:
     await enable_raft(manager, server)
     await restart(manager, server)
-
-
-async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
-    async def cql_ready():
-        try:
-            await cql.run_async("select * from system.local", host=host)
-        except NoHostAvailable:
-            logging.info(f"Driver not connected to {host} yet")
-            return None
-        return True
-    await wait_for(cql_ready, deadline)
-
-
-async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], deadline: float) \
-        -> list[Host]:
-    """Wait until every server in `servers` is available through `cql`
-       and translate `servers` to a list of Cassandra `Host`s.
-    """
-    ip_set = set(str(srv.ip_addr) for srv in servers)
-    async def get_hosts() -> Optional[list[Host]]:
-        hosts = cql.cluster.metadata.all_hosts()
-        remaining = ip_set - {h.address for h in hosts}
-        if not remaining:
-            return hosts
-
-        logging.info(f"Driver hasn't yet learned about hosts: {remaining}")
-        return None
-    hosts = await wait_for(get_hosts, deadline)
-
-    # Take only hosts from `ip_set` (there may be more)
-    hosts = [h for h in hosts if h.address in ip_set]
-    await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
-
-    return hosts
 
 
 async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
