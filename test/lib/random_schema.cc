@@ -1076,42 +1076,42 @@ future<std::vector<mutation>> generate_random_mutations(
     const auto partition_count = partition_count_dist(engine);
     std::vector<mutation> muts;
     muts.reserve(partition_count);
-        for (size_t pk = 0; pk != partition_count; ++pk) {
-            auto mut = random_schema.new_mutation(pk);
-            random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
-            random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
+    for (size_t pk = 0; pk != partition_count; ++pk) {
+        auto mut = random_schema.new_mutation(pk);
+        random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
+        random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
 
-            if (!schema_has_clustering_columns) {
-                muts.emplace_back(mut.build(random_schema.schema()));
-                continue;
-            }
-
-            auto ckeys = random_schema.make_ckeys(clustering_row_count_dist(engine));
-            const auto clustering_row_count = ckeys.size();
-            for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
-                random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
-            }
-
-            for (size_t i = 0; i < 4; ++i) {
-                const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-                const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-                random_schema.delete_range(
-                        engine,
-                        mut,
-                        nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
-                        ts_gen,
-                        exp_gen);
-            }
+        if (!schema_has_clustering_columns) {
             muts.emplace_back(mut.build(random_schema.schema()));
+            continue;
         }
-            boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-                return a.decorated_key().less_compare(*s, b.decorated_key());
+
+        auto ckeys = random_schema.make_ckeys(clustering_row_count_dist(engine));
+        const auto clustering_row_count = ckeys.size();
+        for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
+            random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
+        }
+
+        for (size_t i = 0; i < 4; ++i) {
+            const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            random_schema.delete_range(
+                    engine,
+                    mut,
+                    nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                    ts_gen,
+                    exp_gen);
+        }
+        muts.emplace_back(mut.build(random_schema.schema()));
+    }
+    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*s, b.decorated_key());
             });
-            auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-                return a.decorated_key().equal(*s, b.decorated_key());
+    auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+            return a.decorated_key().equal(*s, b.decorated_key());
             });
-            muts.erase(range.end(), muts.end());
-            co_return std::move(muts);
+    muts.erase(range.end(), muts.end());
+    co_return std::move(muts);
 }
 
 future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
