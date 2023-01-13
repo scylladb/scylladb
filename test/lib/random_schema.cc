@@ -103,7 +103,17 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
 
 data_type type_generator::operator()(std::mt19937& engine, is_multi_cell multi_cell) {
     auto dist = std::uniform_int_distribution<size_t>(0, _generators.size() - 1);
-    return _generators.at(dist(engine))(engine, multi_cell);
+    auto type = _generators.at(dist(engine))(engine, multi_cell);
+    // duration type is not allowed in:
+    // * primary key components
+    // * as member types of collections
+    //
+    // To cover all this, we simply disallow it altogether when multi_cell is
+    // no, which will be the case in all the above cases.
+    while (!multi_cell && type == duration_type) {
+        type = (*this)(engine, multi_cell);
+    }
+    return type;
 }
 
 namespace {
