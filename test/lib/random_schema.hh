@@ -236,6 +236,7 @@ public:
 /// `clustering_row_count_dist` and `range_tombstone_count_dist` will be used to
 /// generate the respective counts for *each* partition. These params are
 /// ignored if the schema has no clustering columns.
+/// Mutations are returned in ring order. Does not contain duplicate partitions.
 /// Futurized to avoid stalls.
 future<std::vector<mutation>> generate_random_mutations(
         tests::random_schema& random_schema,
