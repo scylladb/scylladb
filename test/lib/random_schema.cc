@@ -1076,17 +1076,14 @@ future<std::vector<mutation>> generate_random_mutations(
     const auto partition_count = partition_count_dist(engine);
     std::vector<mutation> muts;
     muts.reserve(partition_count);
-    return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
-            std::vector<mutation>& muts) mutable {
-        auto r = boost::irange(size_t{0}, partition_count);
-        return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
+        for (size_t pk = 0; pk != partition_count; ++pk) {
             auto mut = random_schema.new_mutation(pk);
             random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
             random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
 
             if (!schema_has_clustering_columns) {
                 muts.emplace_back(mut.build(random_schema.schema()));
-                return;
+                continue;
             }
 
             auto ckeys = random_schema.make_ckeys(clustering_row_count_dist(engine));
@@ -1106,7 +1103,7 @@ future<std::vector<mutation>> generate_random_mutations(
                         exp_gen);
             }
             muts.emplace_back(mut.build(random_schema.schema()));
-        }).then([&random_schema, &muts] () mutable {
+        }
             boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
                 return a.decorated_key().less_compare(*s, b.decorated_key());
             });
@@ -1114,9 +1111,7 @@ future<std::vector<mutation>> generate_random_mutations(
                 return a.decorated_key().equal(*s, b.decorated_key());
             });
             muts.erase(range.end(), muts.end());
-            return std::move(muts);
-        });
-    });
+            co_return std::move(muts);
 }
 
 future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
