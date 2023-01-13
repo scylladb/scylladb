@@ -238,10 +238,9 @@ schema_ptr system_keyspace::raft_snapshot_config() {
         auto id = generate_legacy_id(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG);
         return schema_builder(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG, std::optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
-            .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+            .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("can_vote", boolean_type)
-            .with_column("ip_addr", inet_addr_type)
 
             .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_version(generate_schema_version(id))
