@@ -36,18 +36,27 @@ public:
     using this_node = bool_class<struct this_node_tag>;
     using idx_type = int;
 
+    enum class state {
+        none = 0,
+        joining,    // while bootstrapping, replacing
+        normal,
+        leaving,    // while decommissioned, removed, replaced
+        left        // after decommissioned, removed, replaced
+    };
+
 private:
     const topology* _topology;
     host_id _host_id;
     inet_address _endpoint;
     endpoint_dc_rack _dc_rack;
+    state _state;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
     idx_type _idx = -1;
 
 public:
-    node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, this_node is_this_node = this_node::no, idx_type idx = -1);
+    node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, this_node is_this_node = this_node::no, idx_type idx = -1);
 
     node(const node&) = delete;
     node(node&&) = delete;
@@ -74,12 +83,17 @@ public:
     // idx < 0 means "unassigned"
     idx_type idx() const noexcept { return _idx; }
 
+    state get_state() const noexcept { return _state; }
+
+    static std::string to_string(state);
+
 private:
-    static node_holder make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, node::this_node is_this_node = this_node::no, idx_type idx = -1);
+    static node_holder make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, node::this_node is_this_node = this_node::no, idx_type idx = -1);
     node_holder clone() const;
 
     void set_topology(const locator::topology* topology) noexcept { _topology = topology; }
     void set_idx(idx_type idx) noexcept { _idx = idx; }
+    void set_state(state state) noexcept { _state = state; }
 
     friend class topology;
 };
@@ -106,12 +120,12 @@ public:
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
-    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr);
+    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state);
 
     // Optionally updates node's current host_id, endpoint, or DC/rack.
     // Note: the host_id may be updated from null to non-null after a new node gets a new, random host_id,
     // or a peer node host_id may be updated when the node is replaced with another node using the same ip address.
-    const node* update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr);
+    const node* update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
 
     // Removes a node using its host_id
     // Returns true iff the node was found and removed.
@@ -138,14 +152,14 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr);
+    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
 
     // Legacy entry point from token_metadata::update_topology
-    const node* add_or_update_endpoint(inet_address ep, endpoint_dc_rack dr) {
-        return add_or_update_endpoint(ep, std::nullopt, std::move(dr));
+    const node* add_or_update_endpoint(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+        return add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st));
     }
     const node* add_or_update_endpoint(inet_address ep, host_id id) {
-        return add_or_update_endpoint(ep, id, std::nullopt);
+        return add_or_update_endpoint(ep, id, std::nullopt, std::nullopt);
     }
 
     /**
@@ -298,7 +312,8 @@ public:
 
 namespace std {
 
-std::ostream& operator<<(std::ostream& out, const locator::node* node);
+std::ostream& operator<<(std::ostream& out, const locator::node& node);
+std::ostream& operator<<(std::ostream& out, const locator::node::state& state);
 
 } // namespace std
 
@@ -307,5 +322,13 @@ struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const locator::node& node, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}/{}", node.host_id(), node.endpoint());
+    }
+};
+
+template <>
+struct fmt::formatter<locator::node::state> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const locator::node::state& state, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", locator::node::to_string(state));
     }
 };

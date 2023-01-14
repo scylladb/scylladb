@@ -102,8 +102,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.add_or_update_endpoint(ep, std::move(dr));
+    void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+        _topology.add_or_update_endpoint(ep, std::move(dr), std::move(opt_st));
     }
 
     /**
@@ -852,7 +852,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     for (auto& x : tmp) {
         auto& endpoint = x.first;
         auto& tokens = x.second;
-        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint));
+        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint), node::state::joining);
         all_left_metadata->update_normal_tokens(tokens, endpoint).get();
         auto address_ranges = strategy.get_ranges(endpoint, *all_left_metadata).get0();
         for (const dht::token_range& x : address_ranges) {
@@ -1025,8 +1025,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
-    _impl->update_topology(ep, std::move(dr));
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+    _impl->update_topology(ep, std::move(dr), std::move(opt_st));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>

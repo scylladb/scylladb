@@ -224,7 +224,7 @@ void simple_test() {
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint));
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(std::move(tokens), endpoint);
         }
     }).get();
@@ -328,7 +328,7 @@ void heavy_origin_test() {
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint));
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(std::move(tokens[endpoint]), endpoint);
         }
     }).get();
@@ -559,7 +559,7 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(host_id::create_random_id(), node, {dc, to_sstring(r)});
+        topo.add_node(host_id::create_random_id(), node, {dc, to_sstring(r)}, locator::node::state::normal);
     }
 }
 
