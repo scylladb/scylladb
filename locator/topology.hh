@@ -32,13 +32,20 @@ public:
     using local = bool_class<struct local_tag>;
     using idx_type = unsigned;
 
+    enum class state {
+        none = 0,
+        joining,    // while bootstrapping, replacing
+        normal,
+        leaving,    // while decommissioned, removed, replaced
+        left        // after decommissioned, removed, replaced
+    };
+
 private:
     host_id _host_id;
     inet_address _endpoint;
     endpoint_dc_rack _dc_rack;
 
-    // Private state of this instance.
-    // May change across topology generations
+    state _state;
     local _is_local;
     idx_type _idx;
 
@@ -46,7 +53,7 @@ private:
 
     friend class topology;
 public:
-    node(host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, local is_local);
+    node(host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, local is_local);
 
     node(const node&) = default;
     node(node&&) = delete;
@@ -63,9 +70,14 @@ public:
         return _dc_rack;
     }
 
+    state get_state() const noexcept { return _state; }
+    void set_state(state state) noexcept { _state = state; }
+
     local is_local() const noexcept { return _is_local; }
 
     idx_type idx() const noexcept { return _idx; }
+
+    static sstring to_sstring(state);
 };
 
 using node_ptr = lw_shared_ptr<const node>;
@@ -93,10 +105,10 @@ public:
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
-    node_ptr add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr);
+    node_ptr add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state = node::state::normal);
 
     // Optionally updates node's current host_id, endpoint, or DC/rack.
-    node_ptr update_node(node_ptr node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr);
+    node_ptr update_node(node_ptr node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
 
     using must_exist = bool_class<struct must_exist_tag>;
 
@@ -136,14 +148,14 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    node_ptr update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr);
+    node_ptr update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
 
     // Legacy entry point from token_metadata::update_topology
-    node_ptr update_endpoint(inet_address ep, endpoint_dc_rack dr) {
-        return update_endpoint(ep, std::nullopt, std::move(dr));
+    node_ptr update_endpoint(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+        return update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st));
     }
     node_ptr update_endpoint(inet_address ep, host_id id) {
-        return update_endpoint(ep, id, std::nullopt);
+        return update_endpoint(ep, id, std::nullopt, std::nullopt);
     }
 
     /**
@@ -277,6 +289,7 @@ private:
 
 namespace std {
 
+std::ostream& operator<<(std::ostream& out, const locator::node::state& state);
 std::ostream& operator<<(std::ostream& out, const locator::node_ptr& node);
 
 } // namespace std
