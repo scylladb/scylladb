@@ -27,13 +27,25 @@ thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
 
 thread_local node::idx_type node::_last_idx;
 
-node::node(::locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, local is_local)
+node::node(::locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, local is_local)
     : _host_id(id)
     , _endpoint(endpoint)
     , _dc_rack(std::move(dc_rack))
+    , _state(state)
     , _is_local(is_local)
     , _idx(++_last_idx)
 {}
+
+sstring node::to_sstring(node::state s) {
+    switch (s) {
+    case state::none:       return "none";
+    case state::joining:    return "joining";
+    case state::normal:     return "normal";
+    case state::leaving:    return "leaving";
+    case state::left:       return "left";
+    }
+    __builtin_unreachable();
+}
 
 future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_dc_endpoints);
@@ -61,7 +73,7 @@ topology::topology(config cfg)
     tlogger.trace("topology[{}]: constructing using config: host_id={} endpoint={} dc={} rack={}", fmt::ptr(this),
             cfg.local_host_id, cfg.local_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
     if (cfg.local_host_id || cfg.local_endpoint != inet_address{}) {
-        add_node(make_lw_shared<node>(cfg.local_host_id, cfg.local_endpoint, cfg.local_dc_rack, node::local::yes));
+        add_node(make_lw_shared<node>(cfg.local_host_id, cfg.local_endpoint, cfg.local_dc_rack, node::state::joining, node::local::yes));
     }
 }
 
@@ -115,31 +127,31 @@ future<topology> topology::clone_gently() const {
     co_return ret;
 }
 
-node_ptr topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr) {
+node_ptr topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state) {
     if (dr.dc.empty() || dr.rack.empty()) {
         on_internal_error(tlogger, "Node must have valid dc and rack");
     }
     auto is_local = node::local(ep == utils::fb_utilities::get_broadcast_address());
     if (is_local && _local_node) {
         if (_local_node->host_id() == id) {
-            on_internal_error_noexcept(tlogger, format("Local node already set: host_id={} endpoint={} dc={} rack={}: currently mapped to host_id={} endpoint={}",
-                    id, ep, dr.dc, dr.rack,
-                    _local_node->host_id(), _local_node->endpoint()));
+            on_internal_error_noexcept(tlogger, format("Local node already set: host_id={} endpoint={} dc={} rack={} state={}: currently mapped to host_id={} endpoint={} state={}",
+                    id, ep, dr.dc, dr.rack, state,
+                    _local_node->host_id(), _local_node->endpoint(), _local_node->get_state()));
             return _local_node;
         }
         // Replacing node with the same ip address
         is_local = node::local::no;
     }
-    return add_node(make_lw_shared<node>(id, ep, dr, is_local));
+    return add_node(make_lw_shared<node>(id, ep, dr, state, is_local));
 }
 
 node_ptr topology::add_node(mutable_node_ptr node) {
-    tlogger.debug("topology[{}]: add_node: node={} host_id={} endpoint={} dc={} rack={} local={}, at {}", fmt::ptr(this), fmt::ptr(node.get()),
-            node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node->is_local(), current_backtrace());
+    tlogger.debug("topology[{}]: add_node: node={} host_id={} endpoint={} dc={} rack={} state={} local={}, at {}", fmt::ptr(this), fmt::ptr(node.get()),
+            node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node->get_state(), node->is_local(), current_backtrace());
     if (node->is_local() && _local_node && _local_node != node) {
-        on_internal_error(tlogger, format("Local node already set: host_id={} endpoint={} dc={} rack={}: currently mapped to host_id={} endpoint={}",
-                node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack,
-                _local_node->host_id(), _local_node->endpoint()));
+        on_internal_error(tlogger, format("Local node already set: host_id={} endpoint={} dc={} rack={} state={}: currently mapped to host_id={} endpoint={} state={}",
+                node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node->get_state(),
+                _local_node->host_id(), _local_node->endpoint(), _local_node->get_state()));
     }
     if (_all_nodes.contains(node)) {
         return node;
@@ -149,19 +161,26 @@ node_ptr topology::add_node(mutable_node_ptr node) {
         if (node->host_id()) {
             auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node->host_id(), node.get());
             if (!inserted_host_id) {
-                on_internal_error(tlogger, format("Node already exists: host_id={} endpoint={} dc={} rack={}",
-                        node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack));
+                on_internal_error(tlogger, format("Node already exists: host_id={} endpoint={} dc={} rack={} state={}",
+                        node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node->get_state()));
             }
         }
         if (node->endpoint() != inet_address{}) {
-            auto [eit, inserted_endpoint] = _nodes_by_endpoint.emplace(node->endpoint(), node.get());
-            if (!inserted_endpoint) {
-                if (node->host_id()) {
-                    _nodes_by_host_id.erase(node->host_id());
+            auto eit = _nodes_by_endpoint.find(node->endpoint());
+            if (eit != _nodes_by_endpoint.end()) {
+                if (eit->second->get_state() == node::state::leaving || eit->second->get_state() == node::state::left) {
+                    _nodes_by_endpoint.erase(node->endpoint());
+                } else if (node->get_state() != node::state::leaving && node->get_state() != node::state::left) {
+                    if (node->host_id()) {
+                        _nodes_by_host_id.erase(node->host_id());
+                    }
+                    on_internal_error(tlogger, format("Node endpoint already mapped: host_id={} endpoint={} dc={} rack={} state={}: currently mapped to host_id={} state={}",
+                            node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack, node->get_state(),
+                            eit->second->host_id(), eit->second->get_state()));
                 }
-                on_internal_error(tlogger, format("Node endpoint already mapped: host_id={} endpoint={} dc={} rack={}: currently mapped to host_id={}",
-                        node->host_id(), node->endpoint(), node->dc_rack().dc, node->dc_rack().rack,
-                        eit->second->host_id()));
+            }
+            if (node->get_state() != node::state::left) {
+                _nodes_by_endpoint.try_emplace(node->endpoint(), node.get());
             }
         }
         auto [iit, inserted_idx] = _nodes_by_idx.emplace(node->idx(), node.get());
@@ -172,9 +191,9 @@ node_ptr topology::add_node(mutable_node_ptr node) {
             if (node->endpoint() != inet_address{}) {
                 _nodes_by_endpoint.erase(node->endpoint());
             }
-            on_internal_error(tlogger, format("Node idx already mapped: host_id={} endpoint={} idx={} dc={} rack={}: currently mapped to host_id={}",
-                    node->host_id(), node->endpoint(), node->idx(), node->dc_rack().dc, node->dc_rack().rack,
-                    iit->second->host_id()));
+            on_internal_error(tlogger, format("Node idx already mapped: host_id={} endpoint={} idx={} dc={} rack={} state={}: currently mapped to host_id={} state={}",
+                    node->host_id(), node->endpoint(), node->idx(), node->dc_rack().dc, node->dc_rack().rack, node->get_state(),
+                    iit->second->host_id(), iit->second->get_state()));
         }
 
         const auto& dc = node->dc_rack().dc;
@@ -201,9 +220,9 @@ topology::mutable_node_ptr topology::make_mutable(const node_ptr& nptr) {
     return const_cast<class node*>(nptr.get())->shared_from_this();
 }
 
-node_ptr topology::update_node(node_ptr node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr) {
-    tlogger.debug("topology[{}]: update_node: node={} host_id={} endpoint={} dc={} rack={}, at {}", fmt::ptr(this), fmt::ptr(node.get()),
-            opt_id.value_or(host_id::create_null_id()), opt_ep.value_or(inet_address{}), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack,
+node_ptr topology::update_node(node_ptr node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st) {
+    tlogger.debug("topology[{}]: update_node: node={} host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), fmt::ptr(node.get()),
+            opt_id.value_or(host_id::create_null_id()), opt_ep.value_or(inet_address{}), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none),
             current_backtrace());
     bool changed = false;
     if (opt_id) {
@@ -228,10 +247,6 @@ node_ptr topology::update_node(node_ptr node, std::optional<host_id> opt_id, std
     }
     if (opt_ep) {
         if (*opt_ep != node->endpoint()) {
-            if (*opt_ep == inet_address{}) {
-                on_internal_error(tlogger, format("Updating node endpoint to null is disallowed: host_id={} endpoint={}: new endpoint={}",
-                        node->host_id(), node->endpoint(), *opt_ep));
-            }
             changed = true;
         } else {
             opt_ep.reset();
@@ -250,6 +265,9 @@ node_ptr topology::update_node(node_ptr node, std::optional<host_id> opt_id, std
             opt_dr.reset();
         }
     }
+    if (opt_st) {
+        changed = node->get_state() != *opt_st;
+    }
 
     if (!changed) {
         return node;
@@ -265,6 +283,9 @@ node_ptr topology::update_node(node_ptr node, std::optional<host_id> opt_id, std
     }
     if (opt_dr) {
         mutable_node->_dc_rack = std::move(*opt_dr);
+    }
+    if (opt_st) {
+        mutable_node->set_state(*opt_st);
     }
     return add_node(mutable_node);
 }
@@ -375,18 +396,18 @@ node_ptr topology::find_node(node::idx_type idx, must_exist must_exist) const no
     return nullptr;
 }
 
-node_ptr topology::update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr)
+node_ptr topology::update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st)
 {
-    tlogger.trace("topology[{}]: update_endpoint: ep={} host_id={} dc={} rack={}, at {}", fmt::ptr(this),
-            ep, opt_id.value_or(host_id::create_null_id()), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack,
+    tlogger.trace("topology[{}]: update_endpoint: ep={} host_id={} dc={} rack={} state={}, at {}", fmt::ptr(this),
+            ep, opt_id.value_or(host_id::create_null_id()), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none),
             current_backtrace());
     node_ptr n = find_node(ep);
     if (n) {
-        return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr));
+        return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st));
     } else if (opt_id && (n = find_node(*opt_id))) {
-        return update_node(make_mutable(n), std::nullopt, ep, std::move(opt_dr));
+        return update_node(make_mutable(n), std::nullopt, ep, std::move(opt_dr), std::move(opt_st));
     } else {
-        return add_node(opt_id.value_or(host_id::create_null_id()), ep, opt_dr.value_or(endpoint_dc_rack::default_location));
+        return add_node(opt_id.value_or(host_id::create_null_id()), ep, opt_dr.value_or(endpoint_dc_rack::default_location), opt_st.value_or(node::state::normal));
     }
 }
 
@@ -487,6 +508,10 @@ int topology::compare_endpoints(const inet_address& address, const inet_address&
 } // namespace locator
 
 namespace std {
+
+std::ostream& operator<<(std::ostream& out, const locator::node::state& state) {
+    return out << locator::node::to_sstring(state);
+}
 
 std::ostream& operator<<(std::ostream& out, const locator::node_ptr& node) {
     return out << node->host_id() << '/' << node->endpoint();
