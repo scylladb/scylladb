@@ -34,22 +34,19 @@ future<> ec2_snitch::load_config(bool prefer_local) {
             split(splits, az, is_any_of("-"));
             assert(splits.size() > 1);
 
-            _my_rack = splits[splits.size() - 1];
+            sstring my_rack = splits[splits.size() - 1];
 
             // hack for CASSANDRA-4026
-            _my_dc = az.substr(0, az.size() - 1);
-            if (_my_dc[_my_dc.size() - 1] == '1') {
-                _my_dc = az.substr(0, az.size() - 3);
+            sstring my_dc = az.substr(0, az.size() - 1);
+            if (my_dc[my_dc.size() - 1] == '1') {
+                my_dc = az.substr(0, az.size() - 3);
             }
 
-            _prefer_local = prefer_local;
-
-            return read_property_file().then([this, prefer_local] (sstring datacenter_suffix) {
-                _my_dc += datacenter_suffix;
-                logger().info("Ec2Snitch using region: {}, zone: {}.", _my_dc, _my_rack);
-
-                return container().invoke_on_others([this, prefer_local] (snitch_ptr& local_s) {
-                    local_s->set_my_dc_and_rack(_my_dc, _my_rack);
+            return read_property_file().then([this, prefer_local, my_dc, my_rack] (sstring datacenter_suffix) mutable {
+                my_dc += datacenter_suffix;
+                logger().info("Ec2Snitch using region: {}, zone: {}.", my_dc, my_rack);
+                return container().invoke_on_all([prefer_local, my_dc, my_rack] (snitch_ptr& local_s) {
+                    local_s->set_my_dc_and_rack(my_dc, my_rack);
                     local_s->set_prefer_local(prefer_local);
                 });
             });
