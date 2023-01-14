@@ -52,15 +52,14 @@ future<> gce_snitch::load_config() {
                 return make_exception_future(std::runtime_error(format("Bad GCE zone format: {}", az)));
             }
 
-            _my_rack = splits[splits.size() - 1];
-            _my_dc = az.substr(0, az.size() - 1 - _my_rack.size());
+            sstring my_rack = splits[splits.size() - 1];
+            sstring my_dc = az.substr(0, az.size() - 1 - my_rack.size());
 
-            return read_property_file().then([this] (sstring datacenter_suffix) {
-                _my_dc += datacenter_suffix;
-                logger().info("GCESnitch using region: {}, zone: {}.", _my_dc, _my_rack);
-
-                return container().invoke_on_others([this] (snitch_ptr& local_s) {
-                    local_s->set_my_dc_and_rack(_my_dc, _my_rack);
+            return read_property_file().then([this, my_dc, my_rack] (sstring datacenter_suffix) mutable {
+                my_dc += datacenter_suffix;
+                logger().info("GCESnitch using region: {}, zone: {}.", my_dc, my_rack);
+                return container().invoke_on_all([my_dc, my_rack] (snitch_ptr& local_s) {
+                    local_s->set_my_dc_and_rack(my_dc, my_rack);
                 });
             });
         });
