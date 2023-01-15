@@ -362,6 +362,13 @@ future<query::forward_result> forward_service::dispatch_to_shards(
     });
 }
 
+static lowres_clock::time_point compute_timeout(const query::forward_request& req) {
+    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
+    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
+
+    return timeout_point;
+}
+
 // This function executes forward_request on a shard.
 // It retains partition ranges owned by this shard from requested partition
 // ranges vector, so that only owned ones are queried.
@@ -380,7 +387,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
 
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
 
-    auto timeout = req.timeout;
+    auto timeout = compute_timeout(req);
     auto now = gc_clock::now();
 
     auto selection = mock_selection(req, schema, _db.local());
