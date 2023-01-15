@@ -401,7 +401,7 @@ struct forward_request {
     dht::partition_range_vector pr;
 
     db::consistency_level cl;
-    lowres_clock::time_point timeout;
+    lowres_system_clock::time_point timeout;
     std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
 
