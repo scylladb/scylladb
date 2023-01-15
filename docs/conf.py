@@ -103,9 +103,9 @@ html_theme_options = {
     "github_repository": "scylladb/scylladb",
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
-    'banner_button_text': 'Say Hello',
-    'banner_button_url': 'https://forum.scylladb.com/t/say-hello-how-are-you-using-scylladb/35/4',
-    'banner_title_text': 'Check out our new community forum!',
+    'banner_button_text': 'Register for Free',
+    'banner_button_url': 'https://www.scylladb.com/scylladb-summit-2023/',
+    'banner_title_text': 'ScyllaDB Summit 2023 Online Conference | February 15-16.',
     'hide_banner': 'false',
     "collapse_navigation": 'true',
 }
