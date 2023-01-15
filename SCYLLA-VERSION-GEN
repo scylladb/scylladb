@@ -34,7 +34,7 @@ END
 
 DATE=""
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
 	opt="$1"
 	case $opt in
 		-h|--help)
