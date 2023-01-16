@@ -549,7 +549,6 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                         [&req, addr = std::move(addr), &result_, tr_state_ = std::move(tr_state_)] (
                             query::forward_result partial_result
                         ) mutable {
-                            forward_aggregates aggrs(req);
                             query::forward_result::printer partial_result_printer{
                                 .functions = get_functions(req),
                                 .res = partial_result
@@ -557,8 +556,10 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
                             tracing::trace(tr_state_, "Received forward_result={} from {}", partial_result_printer, addr);
                             flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
                             
-                            return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-                                aggrs.merge(result_, std::move(partial_result));
+                            return do_with(forward_aggregates(req), [&result_, partial_result = std::move(partial_result)] (forward_aggregates& aggrs) mutable {
+                                return aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+                                    aggrs.merge(result_, std::move(partial_result));
+                                });
                             });
                     });       
                 }
