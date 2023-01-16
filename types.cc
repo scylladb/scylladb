@@ -1099,6 +1099,7 @@ map_type_impl::deserialize(View in) const {
     }
     return make_value(std::move(m));
 }
+template data_value map_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 template <FragmentedView View>
 static void validate_aux(const map_type_impl& t, View v) {
@@ -1277,6 +1278,7 @@ set_type_impl::deserialize(View in) const {
     }
     return make_value(std::move(s));
 }
+template data_value set_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
@@ -1417,6 +1419,7 @@ list_type_impl::deserialize(View in) const {
     }
     return make_value(std::move(s));
 }
+template data_value list_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {
     return join(sstring(sep),
