@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
 #include <functional>
 
 #include <seastar/util/closeable.hh>
@@ -1769,10 +1770,8 @@ int main(int ac, char** av) {
 
     if (recognized) {
         // shift args to consume the recognized tool name
+        std::shift_left(av + 1, av + ac, 1);
         --ac;
-        for (int i = 1; i < ac; ++i) {
-            std::swap(av[i], av[i + 1]);
-        }
     }
 
     // Even on the environment which causes error during initalize Scylla,
