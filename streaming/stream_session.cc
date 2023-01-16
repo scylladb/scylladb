@@ -309,14 +309,15 @@ void stream_session::on_error() {
 // Only follower calls this function upon receiving of prepare_message from initiator
 future<prepare_message> stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     auto plan_id = this->plan_id();
-    sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, requests.size(), summaries.size());
+    auto nr_requests = requests.size();
+    sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, nr_requests, summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     auto& db = manager().db();
     for (auto& request : requests) {
         // always flush on stream request
         sslog.debug("[Stream #{}] prepare stream_request={}", plan_id, request);
-        auto ks = request.keyspace;
+        const auto& ks = request.keyspace;
         // Make sure cf requested by peer node exists
         for (auto& cf : request.column_families) {
             try {
@@ -327,7 +328,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
                 throw std::runtime_error(err);
             }
         }
-        add_transfer_ranges(request.keyspace, request.ranges, request.column_families);
+        add_transfer_ranges(std::move(request.keyspace), std::move(request.ranges), std::move(request.column_families));
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
@@ -345,7 +346,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
 
     // Always send a prepare_message back to follower
     prepare_message prepare;
-    if (!requests.empty()) {
+    if (nr_requests) {
         for (auto& x: _transfers) {
             auto& task = x.second;
             prepare.summaries.emplace_back(task.get_summary());
