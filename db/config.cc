@@ -903,6 +903,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::TRUE, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
     , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
+    , restrict_future_timestamp(this, "restrict_future_timestamp",liveness::LiveUpdate, value_status::Used, true, "Controls whether to detect and forbid unreasonable USING TIMESTAMP, more than 3 days into the future.")
     , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
         "Ignore truncation record stored in system tables as if tables were never truncated.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,

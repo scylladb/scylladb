@@ -246,7 +246,7 @@ modification_statement::execute(query_processor& qp, service::query_state& qs, c
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    cql3::util::validate_timestamp(options, attrs);
+    cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 

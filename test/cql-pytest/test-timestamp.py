@@ -13,6 +13,7 @@
 from util import unique_name, new_test_table, unique_key_int
 from cassandra.protocol import FunctionFailure, InvalidRequest
 import pytest
+import time
 
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
@@ -44,3 +45,36 @@ def test_negative_timestamp(cql, table1):
     # in the deletion time of cells.
     with pytest.raises(InvalidRequest, match='bound'):
         cql.execute(write, [p, 1, -2**63])
+
+# As explained above, after issue #5619 Scylla can forbid timestamps higher
+# than the current time in microseconds plus three days. This test will
+# check that it actually does. Starting with #12527 this restriction can
+# be turned on or off, so this test checks which mode we're in that this
+# mode does the right thing. On Cassandra, this checking is always disabled.
+def test_futuristic_timestamp(cql, table1):
+    # The USING TIMESTAMP checking assumes the timestamp is in *microseconds*
+    # since the UNIX epoch. If we take the number of *nanoseconds* since the
+    # epoch, this will be thousands of years into the future, and if USING
+    # TIMESTAMP rejects overly-futuristic timestamps, it should surely reject
+    # this one.
+    futuristic_ts = int(time.time()*1e9)
+    p = unique_key_int()
+    # In Cassandra and in Scylla with restrict_future_timestamp=false,
+    # futuristic_ts can be successfully written and then read as-is. In
+    # Scylla with restrict_future_timestamp=true, it can't be written.
+    def restrict_future_timestamp():
+        # If not running on Scylla, futuristic timestamp is not restricted
+        names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+        if not any('scylla' in name for name in names):
+            return False
+        # In Scylla, we check the configuration via CQL.
+        v = list(cql.execute("SELECT value FROM system.config WHERE name = 'restrict_future_timestamp'"))
+        return v[0].value == "true"
+    if restrict_future_timestamp():
+        print('checking with restrict_future_timestamp=true')
+        with pytest.raises(InvalidRequest, match='into the future'):
+            cql.execute(f'INSERT INTO {table1} (k, v) VALUES ({p}, 1) USING TIMESTAMP {futuristic_ts}')
+    else:
+        print('checking with restrict_future_timestamp=false')
+        cql.execute(f'INSERT INTO {table1} (k, v) VALUES ({p}, 1) USING TIMESTAMP {futuristic_ts}')
+        assert [(futuristic_ts,)] == cql.execute(f'SELECT writetime(v) FROM {table1} where k = {p}')
