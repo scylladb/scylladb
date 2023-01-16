@@ -38,7 +38,7 @@ static logging::logger mlogger("migration_manager");
 using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
-static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
             service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
@@ -269,7 +269,7 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
         mlogger.warn("{}", msg);
         return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
     }
-    netw::messaging_service::msg_addr id{endpoint, 0};
+    netw::msg_addr id{endpoint, 0};
     return merge_schema_from(id).handle_exception([](std::exception_ptr e) {
         try {
             std::rethrow_exception(e);
@@ -280,7 +280,7 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
     });
 }
 
-future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
+future<> migration_manager::do_merge_schema_from(netw::msg_addr id)
 {
     mlogger.info("Pulling schema from {}", id);
     return _messaging.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
@@ -299,7 +299,7 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
     });
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
+future<> migration_manager::merge_schema_from(netw::msg_addr id)
 {
     if (_as.abort_requested()) {
         return make_exception_future<>(abort_requested_exception());
@@ -310,7 +310,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     if (i == _schema_pulls.end()) {
         // FIXME: Drop entries for removed nodes (or earlier).
         i = _schema_pulls.emplace(std::piecewise_construct,
-                std::tuple<netw::messaging_service::msg_addr>(id),
+                std::tuple<netw::msg_addr>(id),
                 std::tuple<std::function<future<>()>>([id, this] {
                     return do_merge_schema_from(id);
                 })).first;
@@ -318,7 +318,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return i->second.trigger();
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
+future<> migration_manager::merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
     mlogger.debug("Applying schema mutations from {}", src);
     auto& proxy = _storage_proxy;
     const auto& db = proxy.get_db().local();
@@ -343,7 +343,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
+future<> migration_manager::merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
     if (_as.abort_requested()) {
         return make_exception_future<>(abort_requested_exception());
@@ -872,7 +872,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
-    netw::messaging_service::msg_addr id{endpoint, 0};
+    netw::msg_addr id{endpoint, 0};
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
@@ -1021,7 +1021,7 @@ public static class MigrationsSerializer implements IVersionedSerializer<Collect
 //
 // The endpoint is the node from which 's' originated.
 //
-future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_service::msg_addr endpoint) {
+future<> migration_manager::maybe_sync(const schema_ptr& s, netw::msg_addr endpoint) {
     if (s->is_synced()) {
         return make_ready_future<>();
     }
@@ -1044,7 +1044,7 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
 
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // Doesn't affect current node's schema in any way.
-static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& storage_proxy) {
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& storage_proxy) {
     return local_schema_registry().get_or_load(v, [&ms, &storage_proxy, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
         return ms.send_get_schema_version(dst, v).then([&storage_proxy] (frozen_schema s) {
@@ -1086,11 +1086,11 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
     });
 }
 
-future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::msg_addr dst, netw::messaging_service& ms) {
     return get_schema_for_write(v, dst, ms);
 }
 
-future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::msg_addr dst, netw::messaging_service& ms) {
     if (_as.abort_requested()) {
         return make_exception_future<schema_ptr>(abort_requested_exception());
     }

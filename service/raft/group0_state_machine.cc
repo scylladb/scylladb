@@ -98,7 +98,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 
         co_await std::visit(make_visitor(
         [&] (schema_change& chng) -> future<> {
-            return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+            return _mm.merge_schema_from(netw::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         },
         [&] (broadcast_table_query& query) -> future<> {
             auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -128,7 +128,7 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
     // machine is idempotent it is not a problem.
 
     slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
-    netw::messaging_service::msg_addr addr{from, 0};
+    netw::msg_addr addr{from, 0};
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
     auto [_, cm] = co_await _mm._messaging.send_migration_request(addr, netw::schema_pull_options { .group0_snapshot_transfer = true });
     if (!cm) {

@@ -515,7 +515,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     };
 
     // Group vnodes by assigned endpoint.
-    std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
+    std::map<netw::msg_addr, dht::partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
         auto erm = ks.get_effective_replication_map();
@@ -529,7 +529,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             throw std::runtime_error("No live endpoint available");
         }
 
-        auto endpoint_addr = netw::messaging_service::msg_addr{*live_endpoints.begin(), 0};
+        auto endpoint_addr = netw::msg_addr{*live_endpoints.begin(), 0};
         vnodes_per_addr[endpoint_addr].push_back(*vnode);
     }
 
@@ -543,15 +543,15 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         [] (
             retrying_dispatcher& dispatcher,
             query::forward_result& result,
-            std::map<netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
+            std::map<netw::msg_addr, dht::partition_range_vector>& vnodes_per_addr,
             query::forward_request& req,
             tracing::trace_state_ptr& tr_state
         )-> future<query::forward_result> {
             return parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
                 [&req, &result, &tr_state, &dispatcher] (
-                    std::pair<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_with_addr
+                    std::pair<netw::msg_addr, dht::partition_range_vector> vnodes_with_addr
                 ) {
-                    netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
+                    netw::msg_addr addr = vnodes_with_addr.first;
                     query::forward_result& result_ = result;
                     tracing::trace_state_ptr& tr_state_ = tr_state;
                     retrying_dispatcher& dispatcher_ = dispatcher;

@@ -30,11 +30,10 @@ private:
     uint32_t _cpuid;
 public:
     tester(netw::messaging_service& ms_) : ms(ms_) {}
-    using msg_addr = netw::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
-    msg_addr get_msg_addr() {
-        return msg_addr{_server, _cpuid};
+    netw::msg_addr get_msg_addr() {
+        return netw::msg_addr{_server, _cpuid};
     }
     void set_server_ip(sstring ip) {
         _server = inet_address(ip);

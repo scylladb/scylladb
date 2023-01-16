@@ -103,7 +103,7 @@ struct repair_node_state {
 template<class SinkType, class SourceType>
 class sink_source_for_repair {
     uint32_t _repair_meta_id;
-    using get_sink_source_fn_type = std::function<future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>> (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr)>;
+    using get_sink_source_fn_type = std::function<future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>> (uint32_t repair_meta_id, netw::msg_addr addr)>;
     using sink_type  = std::reference_wrapper<rpc::sink<SinkType>>;
     using source_type = std::reference_wrapper<rpc::source<SourceType>>;
     // The vectors below store sink and source object for peer nodes.
@@ -130,7 +130,7 @@ public:
         if (_sinks[node_idx] || _sources[node_idx]) {
             return make_exception_future<value_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
         }
-        return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
+        return _fn(_repair_meta_id, netw::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
             _sinks[node_idx].emplace(std::move(sink));
             _sources[node_idx].emplace(std::move(source));
             return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
@@ -212,7 +212,7 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
 static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const inet_address_vector_replica_set& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
     parallel_for_each(boost::irange(size_t(0), nodes.size()), [&ms, &nodes_algorithms, &nodes] (size_t idx) {
-        return ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
+        return ms.send_repair_get_diff_algorithms(netw::msg_addr(nodes[idx])).then(
                 [&nodes_algorithms, &nodes, idx] (std::vector<row_level_diff_detect_algorithm> algorithms) {
             std::sort(algorithms.begin(), algorithms.end());
             nodes_algorithms[idx] = std::move(algorithms);
@@ -715,7 +715,7 @@ public:
     using update_working_row_buf = bool_class<class update_working_row_buf_tag>;
     using update_peer_row_hash_sets = bool_class<class update_peer_row_hash_sets_tag>;
     using needs_all_rows_t = bool_class<class needs_all_rows_tag>;
-    using msg_addr = netw::messaging_service::msg_addr;
+    using msg_addr = netw::msg_addr;
     using tracker_link_type = boost::intrusive::list_member_hook<bi::link_mode<boost::intrusive::auto_unlink>>;
 private:
     repair_service& _rs;
@@ -863,15 +863,15 @@ public:
               )
             , _repair_writer(make_repair_writer(_schema, _permit, _estimated_partitions, _reason, _db, _sys_dist_ks, _view_update_generator))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
-                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                    [&rs] (uint32_t repair_meta_id, netw::msg_addr addr) {
                         return rs.get_messaging().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_get_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                    [&rs] (uint32_t repair_meta_id, netw::msg_addr addr) {
                         return rs.get_messaging().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_put_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                    [&rs] (uint32_t repair_meta_id, netw::msg_addr addr) {
                         return rs.get_messaging().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _row_level_repair_ptr(row_level_repair_ptr)
@@ -2743,7 +2743,7 @@ private:
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
             try {
                 auto& ms = _shard_task.messaging.local();
-                repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
+                repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::msg_addr(node), req);
                 (void)resp;  // nothing to do with the response yet
                 rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _shard_task.id.uuid(), node);
             } catch (...) {

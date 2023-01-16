@@ -48,7 +48,7 @@ struct send_info {
     netw::messaging_service& ms;
     streaming::plan_id plan_id;
     table_id cf_id;
-    netw::messaging_service::msg_addr id;
+    netw::msg_addr id;
     uint32_t dst_cpu_id;
     stream_reason reason;
     size_t mutations_nr{0};
@@ -60,7 +60,7 @@ struct send_info {
     mutation_fragment_v1_stream reader;
     noncopyable_function<void(size_t)> update;
     send_info(netw::messaging_service& ms_, streaming::plan_id plan_id_, replica::table& tbl_, reader_permit permit_,
-              dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
+              dht::token_range_vector ranges_, netw::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_, noncopyable_function<void(size_t)> update_fn)
         : ms(ms_)
         , plan_id(plan_id_)
@@ -190,7 +190,7 @@ future<> stream_transfer_task::execute() {
     auto plan_id = session->plan_id();
     auto cf_id = this->cf_id;
     auto dst_cpu_id = session->dst_cpu_id;
-    auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
+    auto id = netw::msg_addr{session->peer, session->dst_cpu_id};
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     auto reason = session->get_reason();
