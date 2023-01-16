@@ -169,3 +169,30 @@ def test_task_manager_sequence_number(rest_api):
                             check_sequence_number(rest_api, task2, 1)
                             check_sequence_number(rest_api, task3, 2)
                             check_sequence_number(rest_api, task4, 1)
+
+def test_task_manager_recursive_status(rest_api):
+    with new_test_module(rest_api):
+        args0 = {"keyspace": "keyspace0"}
+        with new_test_task(rest_api, args0) as task0:                           # parent
+            print(f"created test task {task0}")
+
+            args1 = {"keyspace": "keyspace0", "parent_id": f"{task0}"}
+            with new_test_task(rest_api, args1) as task1:                       # child1
+                print(f"created test task {task1}")
+
+                args2 = {"keyspace": "keyspace0", "parent_id": f"{task1}"}
+                with new_test_task(rest_api, args2) as task2:                   # child1 of child1
+                    print(f"created test task {task2}")
+
+                    with new_test_task(rest_api, args1) as task3:               # child2
+                        print(f"created test task {task3}")
+
+                    resp = rest_api.send("GET", f"task_manager/task_status_recursive/{task0}")
+                    resp.raise_for_status()
+
+                    tasks = resp.json()
+                    print(tasks)
+                    check_field_correctness("id", tasks[0], { "id" : f"{task0}" })
+                    check_field_correctness("id", tasks[1], { "id" : f"{task1}" })
+                    check_field_correctness("id", tasks[2], { "id" : f"{task3}" })
+                    check_field_correctness("id", tasks[3], { "id" : f"{task2}" })

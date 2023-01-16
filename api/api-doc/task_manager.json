@@ -148,7 +148,34 @@
               ]
            }
         ]
-     }
+     },
+     {
+      "path":"/task_manager/task_status_recursive/{task_id}",
+      "operations":[
+         {
+            "method":"GET",
+            "summary":"Get statuses of the task and all its descendants",
+            "type":"array",
+            "items":{
+               "type":"task_status"
+            },
+            "nickname":"get_task_status_recursively",
+            "produces":[
+               "application/json"
+            ],
+            "parameters":[
+                {
+                    "name":"task_id",
+                    "description":"The uuid of a task to query about",
+                    "required":true,
+                    "allowMultiple":false,
+                    "type":"string",
+                    "paramType":"path"
+                }
+            ]
+         }
+      ]
+    }
     ],
     "models":{
        "task_stats" :{
