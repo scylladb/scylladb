@@ -1609,6 +1609,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
 
             size_t fail_offset = 0;
             while (true) {
+                logalloc::reclaim_lock rl(r);
                 mutation_partition m2 = mutation_partition(*second.schema(), second.partition());
                 auto e = partition_entry(mutation_partition_v2(*target.schema(), target.partition()));
                 //auto snap1 = e.read(r, gen.schema());
