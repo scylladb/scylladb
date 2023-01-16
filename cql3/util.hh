@@ -90,7 +90,7 @@ sstring single_quote(const sstring& s);
 
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).
-void validate_timestamp(const query_options& options, const std::unique_ptr<attributes>& attrs);
+void validate_timestamp(const db::config& config, const query_options& options, const std::unique_ptr<attributes>& attrs);
 
 } // namespace util
 

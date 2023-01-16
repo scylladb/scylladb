@@ -241,7 +241,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_without_checking_exception_message(
         query_processor& qp, service::query_state& state, const query_options& options) const {
-    cql3::util::validate_timestamp(options, _attrs);
+    cql3::util::validate_timestamp(qp.db().get_config(), options, _attrs);
     return batch_stage(this, seastar::ref(qp), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
