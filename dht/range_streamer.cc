@@ -276,9 +276,9 @@ future<> range_streamer::stream_async() {
                             nr_ranges_streamed, nr_ranges_streamed + ranges_to_stream.size(), nr_ranges_total);
                     auto ranges_streamed = ranges_to_stream.size();
                     if (_nr_rx_added) {
-                        sp.request_ranges(source, keyspace, ranges_to_stream);
+                        sp.request_ranges(source, keyspace, std::move(ranges_to_stream));
                     } else if (_nr_tx_added) {
-                        sp.transfer_ranges(source, keyspace, ranges_to_stream);
+                        sp.transfer_ranges(source, keyspace, std::move(ranges_to_stream));
                     }
                     sp.execute().discard_result().get();
                     ranges_to_stream.clear();
