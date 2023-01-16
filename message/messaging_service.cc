@@ -371,19 +371,23 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
         _connection_index_for_tenant.push_back({_scheduling_config.statement_tenants[i].sched_group, i});
     }
 
-    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size) {
+    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<locator::host_id> host_id) {
         ci.attach_auxiliary("baddr", broadcast_address);
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
         ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
+        ci.attach_auxiliary("host_id", host_id.value_or(locator::host_id::create_null_id()));
         return rpc::no_wait;
     });
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
-    return msg_addr{
-        cinfo.retrieve_auxiliary<gms::inet_address>("baddr"),
-        cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id")
-    };
+    auto&& addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+    auto&& cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+    if (auto* host_id_ptr = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id")) {
+        return msg_addr(std::move(addr), std::move(cpu_id), *host_id_ptr);
+    } else {
+        return msg_addr(std::move(addr), std::move(cpu_id));
+    }
 }
 
 messaging_service::~messaging_service() = default;
@@ -820,8 +824,8 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     it = res.first;
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
-    (void)_rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
-                                                                                                           query::result_memory_limiter::maximum_result_size).handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
+    (void)_rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
+                                                                                                           query::result_memory_limiter::maximum_result_size, utils::fb_utilities::get_host_id().uuid()).handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
     return it->second.rpc_client;
