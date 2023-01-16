@@ -1610,7 +1610,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
             size_t fail_offset = 0;
             while (true) {
                 logalloc::reclaim_lock rl(r);
-                mutation_partition m2 = mutation_partition(*second.schema(), second.partition());
+                mutation_partition_v2 m2 = mutation_partition_v2(*second.schema(), second.partition());
                 auto e = partition_entry(mutation_partition_v2(*target.schema(), target.partition()));
                 //auto snap1 = e.read(r, gen.schema());
 
@@ -1625,6 +1625,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema(), is_evictable::no)))
                         .is_equal_to_compacted(target)
                         .has_same_continuity(target);
+                    mutation_partition_v2 m2 = mutation_partition_v2(*second.schema(), second.partition());
                     e.apply(r, cleaner, *target.schema(), std::move(m2), *second.schema(), app_stats);
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema(), is_evictable::no)))
                         .is_equal_to_compacted(expected)
