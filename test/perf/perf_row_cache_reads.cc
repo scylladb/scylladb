@@ -118,11 +118,11 @@ void test_scans_with_dummy_entries() {
         });
         slm.stop();
 
-        std::cout << format("read: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB]\n",
-                            d.count() * 1000,
-                            slm,
-                            tracker.region().occupancy().used_space() / MB,
-                            tracker.region().occupancy().total_space() / MB);
+        fmt::print(std::cout, "read: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB]\n",
+                   d.count() * 1000,
+                   slm,
+                   tracker.region().occupancy().used_space() / MB,
+                   tracker.region().occupancy().total_space() / MB);
     };
 
     // The first scan populates the cache with continuity
@@ -201,11 +201,11 @@ void test_scan_with_range_delete_over_rows() {
 
         slm.stop();
 
-        std::cout << format("read: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB]\n",
-                            d.count() * 1000,
-                            slm,
-                            tracker.region().occupancy().used_space() / MB,
-                            tracker.region().occupancy().total_space() / MB);
+        fmt::print(std::cout, "read: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB]\n",
+                   d.count() * 1000,
+                   slm,
+                   tracker.region().occupancy().used_space() / MB,
+                   tracker.region().occupancy().total_space() / MB);
     };
 
     // The first scan populates the cache with continuity
