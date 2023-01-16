@@ -1159,6 +1159,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return sys_ks.start(snitch.local());
             }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+            utils::fb_utilities::set_host_id(cfg->host_id);
             shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
                 tm.get_topology().add_or_update_endpoint(endpoint, hostid);
                 return make_ready_future<>();

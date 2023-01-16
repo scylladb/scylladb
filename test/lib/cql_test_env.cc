@@ -522,6 +522,7 @@ public:
             if (!cfg->host_id) {
                 cfg->host_id = locator::host_id::create_random_id();
             }
+            utils::fb_utilities::set_host_id(cfg->host_id);
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->schema_commitlog_directory().c_str());
