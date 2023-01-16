@@ -10,16 +10,21 @@
 
 #include "gms/inet_address.hh"
 #include <cstdint>
+#include "locator/host_id.hh"
 
 namespace netw {
 
 struct msg_addr {
     gms::inet_address addr;
     uint32_t cpu_id;
+    locator::host_id host_id;
     friend bool operator==(const msg_addr& x, const msg_addr& y) noexcept;
     friend bool operator<(const msg_addr& x, const msg_addr& y) noexcept;
-    explicit msg_addr(gms::inet_address ip) noexcept : addr(ip), cpu_id(0) { }
-    msg_addr(gms::inet_address ip, uint32_t cpu) noexcept : addr(ip), cpu_id(cpu) { }
+    msg_addr(gms::inet_address ip, uint32_t cpu = 0, std::optional<locator::host_id> opt_id = std::nullopt) noexcept
+        : addr(ip)
+        , cpu_id(cpu)
+        , host_id(opt_id.value_or(locator::host_id::create_null_id()))
+    { }
 };
 
 } // namespace netw
@@ -34,7 +39,7 @@ struct hash<netw::msg_addr> {
 };
 
 inline std::ostream& operator<<(std::ostream& os, const netw::msg_addr& id) {
-    return os << id.addr << ':' << id.cpu_id;
+    return os << id.host_id << '/' << id.addr << ':' << id.cpu_id;
 }
 
 } // namespace std

@@ -113,6 +113,7 @@
 #include "idl/partition_checksum.dist.impl.hh"
 #include "idl/forward_request.dist.hh"
 #include "idl/forward_request.dist.impl.hh"
+#include "utils/UUID_gen.hh"
 
 namespace netw {
 
@@ -147,7 +148,7 @@ const size_t PER_TENANT_CONNECTION_COUNT = 3;
 
 bool operator==(const netw::msg_addr& x, const netw::msg_addr& y) noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
-    return x.addr == y.addr;
+    return x.addr == y.addr && (x.host_id == y.host_id || !x.host_id || !y.host_id);
 }
 
 bool operator<(const netw::msg_addr& x, const netw::msg_addr& y) noexcept {
