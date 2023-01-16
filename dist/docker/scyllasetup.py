@@ -29,6 +29,7 @@ class ScyllaSetup:
         self._clusterName = arguments.clusterName
         self._endpointSnitch = arguments.endpointSnitch
         self._replaceAddressFirstBoot = arguments.replaceAddressFirstBoot
+        self._replaceNodeFirstBoot = arguments.replaceNodeFirstBoot
         self._io_setup = arguments.io_setup
         self._extra_args = extra_arguments
 
@@ -153,7 +154,9 @@ class ScyllaSetup:
         if self._endpointSnitch is not None:
             args += ["--endpoint-snitch %s" % self._endpointSnitch]
 
-        if self._replaceAddressFirstBoot is not None:
+        if self._replaceNodeFirstBoot is not None:
+            args += ["--replace-node-first-boot %s" % self._replaceNodeFirstBoot]
+        elif self._replaceAddressFirstBoot is not None:
             args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
 
         args += ["--blocked-reactor-notify-ms 999999999"]

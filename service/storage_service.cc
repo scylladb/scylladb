@@ -171,29 +171,28 @@ void storage_service::register_metrics() {
     });
 }
 
-std::optional<gms::inet_address> storage_service::get_replace_address() {
-    auto& cfg = _db.local().get_config();
-    sstring replace_address = cfg.replace_address();
-    sstring replace_address_first_boot = cfg.replace_address_first_boot();
-    try {
-        if (!replace_address.empty()) {
-            return gms::inet_address(replace_address);
-        } else if (!replace_address_first_boot.empty()) {
-            return gms::inet_address(replace_address_first_boot);
-        }
-        return std::nullopt;
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
 bool storage_service::is_replacing() {
-    sstring replace_address_first_boot = _db.local().get_config().replace_address_first_boot();
-    if (!replace_address_first_boot.empty() && _sys_ks.local().bootstrap_complete()) {
+    const auto& cfg = _db.local().get_config();
+    if (!cfg.replace_node_first_boot().empty()) {
+        if (_sys_ks.local().bootstrap_complete()) {
+            slogger.info("Replace node on first boot requested; this node is already bootstrapped");
+            return false;
+        }
+        return true;
+    }
+    if (!cfg.replace_address_first_boot().empty()) {
+      if (_sys_ks.local().bootstrap_complete()) {
         slogger.info("Replace address on first boot requested; this node is already bootstrapped");
         return false;
+      }
+      return true;
     }
-    return bool(get_replace_address());
+    // Returning true if cfg.replace_address is provided
+    // will trigger an exception down the road if bootstrap_complete(),
+    // as it is an error to use this option post bootstrap.
+    // That said, we should just stop supporting it and force users
+    // to move to the new, replace_node_first_boot config option.
+    return !cfg.replace_address().empty();
 }
 
 bool storage_service::is_first_node() {
@@ -315,6 +314,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
+    std::optional<replacement_info> ri;
+    std::optional<gms::inet_address> replace_address;
     std::optional<locator::host_id> replaced_host_id;
     std::optional<raft_group0::replace_info> raft_replace_info;
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
@@ -323,21 +324,21 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        auto ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
-        bootstrap_tokens = std::move(ri.tokens);
-        auto replace_address = get_replace_address();
+        ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        bootstrap_tokens = std::move(ri->tokens);
+        replace_address = ri->address;
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
+        tmptr->update_topology(*replace_address, std::move(ri->dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
-        replaced_host_id = ri.host_id;
+        replaced_host_id = ri->host_id;
         raft_replace_info = raft_group0::replace_info {
             .ip_addr = *replace_address,
-            .raft_id = raft::server_id{ri.host_id.uuid()},
+            .raft_id = raft::server_id{ri->host_id.uuid()},
         };
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -481,7 +482,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
         co_await wait_for_ring_to_settle(delay);
 
-        if (!is_replacing()) {
+        if (!replace_address) {
             auto tmptr = get_token_metadata_ptr();
 
             if (tmptr->is_normal_token_owner(get_broadcast_address())) {
@@ -499,12 +500,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                 bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
-            auto replace_addr = get_replace_address();
-            assert(replace_addr);
-            if (*replace_addr != get_broadcast_address()) {
+            if (*replace_address != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
-                slogger.info("Sleeping before replacing {}...", *replace_addr);
+                slogger.info("Sleeping before replacing {}...", *replace_address);
                 co_await sleep_abortable(2 * get_ring_delay(), _abort_source);
 
                 // check for operator errors...
@@ -521,7 +520,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                     }
                 }
             } else {
-                slogger.info("Sleeping before replacing {}...", *replace_addr);
+                slogger.info("Sleeping before replacing {}...", *replace_address);
                 co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
@@ -530,7 +529,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         co_await mark_existing_views_as_built(sys_dist_ks);
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id, replaced_host_id);
+        co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -652,8 +651,8 @@ std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace(
 }
 
 // Runs inside seastar::async context
-future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<locator::host_id>& replaced_host_id) {
-    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replaced_host_id] {
+future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
+    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replacement_info] {
         auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
         set_mode(mode::BOOTSTRAP);
@@ -669,7 +668,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             }
         }).get();
 
-        if (!is_replacing()) {
+        if (!replacement_info) {
             int retry = 0;
             while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
                 if (retry++ < 500) {
@@ -734,20 +733,20 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 run_bootstrap_ops(bootstrap_tokens);
             }
         } else {
-            auto replace_addr = get_replace_address();
-            assert(replace_addr);
+            auto replace_addr = replacement_info->address;
+            auto replaced_host_id = replacement_info->host_id;
 
-            slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
-            _sys_ks.local().remove_endpoint(*replace_addr).get();
+            slogger.debug("Removing replaced endpoint {} from system.peers", replace_addr);
+            _sys_ks.local().remove_endpoint(replace_addr).get();
 
             assert(replaced_host_id);
-            auto raft_id = raft::server_id{replaced_host_id->uuid()};
-            slogger.info("Replace: removing {}/{} from group 0...", *replace_addr, raft_id);
+            auto raft_id = raft::server_id{replaced_host_id.uuid()};
+            slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
             assert(_group0);
             _group0->remove_from_group0(raft_id).get();
 
             slogger.info("Starting to bootstrap...");
-            run_replace_ops(bootstrap_tokens);
+            run_replace_ops(bootstrap_tokens, *replacement_info);
         }
 
         _db.invoke_on_all([this] (replica::database& db) {
@@ -1612,14 +1611,24 @@ future<> storage_service::remove_endpoint(inet_address endpoint) {
 
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
-    if (!get_replace_address()) {
-        throw std::runtime_error(format("replace_address is empty"));
-    }
-    auto replace_address = get_replace_address().value();
-    slogger.info("Gathering node replacement information for {}", replace_address);
+    locator::host_id replace_host_id;
+    gms::inet_address replace_address;
 
-    // if (!MessagingService.instance().isListening())
-    //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
+    auto& cfg = _db.local().get_config();
+    if (!cfg.replace_node_first_boot().empty()) {
+        replace_host_id = locator::host_id(utils::UUID(cfg.replace_node_first_boot()));
+    } else if (!cfg.replace_address_first_boot().empty()) {
+        replace_address = gms::inet_address(cfg.replace_address_first_boot());
+        slogger.warn("The replace_address_first_boot={} option is deprecated. Please use the replace_node_first_boot option", replace_address);
+    } else if (!cfg.replace_address().empty()) {
+        replace_address = gms::inet_address(cfg.replace_address());
+        slogger.warn("The replace_address={} option is deprecated. Please use the replace_node_first_boot option", replace_address);
+    } else {
+        on_internal_error(slogger, "No replace_node or replace_address configuration options found");
+    }
+
+    slogger.info("Gathering node replacement information for {}/{}", replace_host_id, replace_address);
+
     auto seeds = _gossiper.get_seeds();
     if (seeds.size() == 1 && seeds.contains(replace_address)) {
         throw std::runtime_error(format("Cannot replace_address {} because no seed node is up", replace_address));
@@ -1632,6 +1641,17 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
+    if (replace_host_id) {
+        auto nodes = _gossiper.get_nodes_with_host_id(replace_host_id);
+        if (nodes.empty()) {
+            throw std::runtime_error(format("Replaced node with Host ID {} not found", replace_host_id));
+        }
+        if (nodes.size() > 1) {
+            throw std::runtime_error(format("Found multiple nodes with Host ID {}: {}", replace_host_id, nodes));
+        }
+        replace_address = *nodes.begin();
+    }
+
     auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
     if (!state) {
         throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
@@ -1650,7 +1670,9 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     auto dc_rack = get_dc_rack_for(replace_address);
 
-    auto replace_host_id = _gossiper.get_host_id(replace_address);
+    if (!replace_host_id) {
+        replace_host_id = _gossiper.get_host_id(replace_address);
+    }
     slogger.info("Host {}/{} is replacing {}/{}", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
@@ -1658,6 +1680,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         .tokens = std::move(tokens),
         .dc_rack = std::move(dc_rack),
         .host_id = std::move(replace_host_id),
+        .address = replace_address,
     };
 }
 
@@ -2190,8 +2213,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 }
 
 // Runs inside seastar::async context
-void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens) {
-    auto replace_address = get_replace_address().value();
+void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info) {
+    gms::inet_address replace_address = replace_info.address;
     auto uuid = node_ops_id::create_random_id();
     auto tmptr = get_token_metadata_ptr();
     std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace(*tmptr);

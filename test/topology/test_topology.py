@@ -101,7 +101,15 @@ async def test_decommission_node_add_column(manager, random_tables):
 async def test_replace_different_ip(manager: ManagerClient, random_tables) -> None:
     servers = await manager.running_servers()
     await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
+    await manager.server_add(replace_cfg)
+    # TODO: check that group 0 no longer contains the replaced node (#12153)
+
+@pytest.mark.asyncio
+async def test_replace_different_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
+    servers = await manager.running_servers()
+    await manager.server_stop(servers[0].server_id)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     await manager.server_add(replace_cfg)
     # TODO: check that group 0 no longer contains the replaced node (#12153)
 
@@ -109,7 +117,15 @@ async def test_replace_different_ip(manager: ManagerClient, random_tables) -> No
 async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
     servers = await manager.running_servers()
     await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
+    await manager.server_add(replace_cfg)
+    # TODO: check that group 0 no longer contains the replaced node (#12153)
+
+@pytest.mark.asyncio
+async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
+    servers = await manager.running_servers()
+    await manager.server_stop(servers[0].server_id)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
     await manager.server_add(replace_cfg)
     # TODO: check that group 0 no longer contains the replaced node (#12153)
 

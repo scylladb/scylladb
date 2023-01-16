@@ -296,6 +296,7 @@ public:
     named_value<bool> consistent_rangemovement;
     named_value<bool> join_ring;
     named_value<bool> load_ring_state;
+    named_value<sstring> replace_node_first_boot;
     named_value<sstring> replace_address;
     named_value<sstring> replace_address_first_boot;
     named_value<sstring> ignore_dead_nodes_for_replace;

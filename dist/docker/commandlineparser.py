@@ -27,5 +27,6 @@ def parse():
     parser.add_argument('--authorizer', default=None, dest='authorizer', help="Set authorizer class")
     parser.add_argument('--cluster-name', default=None, dest='clusterName', help="Set cluster name")
     parser.add_argument('--endpoint-snitch', default=None, dest='endpointSnitch', help="Set endpoint snitch")
-    parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="IP address of a dead node to replace.")
+    parser.add_argument('--replace-node-first-boot', default=None, dest='replaceNodeFirstBoot', help="Host ID of a dead node to replace.")
+    parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="[[deprecated]] IP address of a dead node to replace.")
     return parser.parse_known_args()

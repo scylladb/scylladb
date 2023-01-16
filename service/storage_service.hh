@@ -293,11 +293,12 @@ private:
         std::unordered_set<token> tokens;
         locator::endpoint_dc_rack dc_rack;
         locator::host_id host_id;
+        gms::inet_address address;
     };
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens);
+    void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
     std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
@@ -345,7 +346,6 @@ public:
 
 private:
     bool should_bootstrap();
-    std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
     bool is_first_node();
     future<> join_token_ring(cdc::generation_service& cdc_gen_service,
@@ -367,7 +367,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<locator::host_id>& replaced_host_id);
+    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info);
 
 public:
     /**

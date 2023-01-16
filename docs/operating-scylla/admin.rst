@@ -80,8 +80,8 @@ The following addresses can be configured in scylla.yaml:
      - Address for REST API requests. See api_port in the :ref:`Networking <cqlsh-networking>` parameters.
    * - prometheus_address
      - Address for Prometheus queries. See prometheus_port in the :ref:`Networking <cqlsh-networking>` parameters and `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ for more details.
-   * - replace_address_first_boot
-     - Address of the node this Scylla instance is meant to replace. Refer to :doc:`Replace a Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node>` for more details.
+   * - replace_node_first_boot
+     - Host ID of a dead node this Scylla node is replacing. Refer to :doc:`Replace a Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node>` for more details.
 
 .. note:: When the listen_address, rpc_address, broadcast_address, and broadcast_rpc_address parameters are not set correctly, Scylla does not work as expected.
 
