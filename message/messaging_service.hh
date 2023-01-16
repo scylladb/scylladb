@@ -215,9 +215,8 @@ public:
     struct rpc_protocol_server_wrapper;
     struct shard_info;
 
-    using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
-    using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
+    using clients_map = std::unordered_map<netw::msg_addr, shard_info>;
 
     // This should change only if serialization format changes
     static constexpr int32_t current_version = 0;
@@ -229,7 +228,7 @@ public:
         rpc::stats get_stats() const;
     };
 
-    void foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const;
+    void foreach_client(std::function<void(const netw::msg_addr& id, const shard_info& info)> f) const;
 
     void increment_dropped_messages(messaging_verb verb);
 
@@ -341,13 +340,13 @@ public:
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
             streaming::prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<streaming::stream_reason> reason)>&& func);
-    future<streaming::prepare_message> send_prepare_message(msg_addr id, streaming::prepare_message msg, streaming::plan_id plan_id,
+    future<streaming::prepare_message> send_prepare_message(netw::msg_addr id, streaming::prepare_message msg, streaming::plan_id plan_id,
             sstring description, streaming::stream_reason);
     future<> unregister_prepare_message();
 
     // Wrapper for PREPARE_DONE_MESSAGE verb
     void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id)>&& func);
-    future<> send_prepare_done_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id);
+    future<> send_prepare_done_message(netw::msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id);
     future<> unregister_prepare_done_message();
 
     // Wrapper for STREAM_MUTATION_FRAGMENTS
@@ -355,154 +354,154 @@ public:
     void register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source)>&& func);
     future<> unregister_stream_mutation_fragments();
     rpc::sink<int32_t> make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>>& source);
-    future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>> make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, streaming::plan_id plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id);
+    future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>> make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, streaming::plan_id plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, netw::msg_addr id);
 
     // Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM
-    future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>> make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id);
+    future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>> make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, netw::msg_addr id);
     rpc::sink<repair_row_on_wire_with_cmd> make_sink_for_repair_get_row_diff_with_rpc_stream(rpc::source<repair_hash_with_cmd>& source);
     void register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd> source)>&& func);
     future<> unregister_repair_get_row_diff_with_rpc_stream();
 
     // Wrapper for REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM
-    future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>> make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id);
+    future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>> make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(uint32_t repair_meta_id, netw::msg_addr id);
     rpc::sink<repair_stream_cmd> make_sink_for_repair_put_row_diff_with_rpc_stream(rpc::source<repair_row_on_wire_with_cmd>& source);
     void register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source)>&& func);
     future<> unregister_repair_put_row_diff_with_rpc_stream();
 
     // Wrapper for REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM
-    future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>> make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(uint32_t repair_meta_id, msg_addr id);
+    future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>> make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(uint32_t repair_meta_id, netw::msg_addr id);
     rpc::sink<repair_hash_with_cmd> make_sink_for_repair_get_full_row_hashes_with_rpc_stream(rpc::source<repair_stream_cmd>& source);
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
 
     void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(msg_addr id, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id);
+    future<> send_stream_mutation_done(netw::msg_addr id, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id);
     future<> unregister_stream_mutation_done();
 
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func);
-    future<> send_complete_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed = false);
+    future<> send_complete_message(netw::msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed = false);
     future<> unregister_complete_message();
 
     // Wrapper for REPAIR_GET_FULL_ROW_HASHES
     void register_repair_get_full_row_hashes(std::function<future<repair_hash_set> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
     future<> unregister_repair_get_full_row_hashes();
-    future<repair_hash_set> send_repair_get_full_row_hashes(msg_addr id, uint32_t repair_meta_id);
+    future<repair_hash_set> send_repair_get_full_row_hashes(netw::msg_addr id, uint32_t repair_meta_id);
 
     // Wrapper for REPAIR_GET_COMBINED_ROW_HASH
     void register_repair_get_combined_row_hash(std::function<future<get_combined_row_hash_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary)>&& func);
     future<> unregister_repair_get_combined_row_hash();
-    future<get_combined_row_hash_response> send_repair_get_combined_row_hash(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary);
+    future<get_combined_row_hash_response> send_repair_get_combined_row_hash(netw::msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary);
 
     // Wrapper for REPAIR_GET_SYNC_BOUNDARY
     void register_repair_get_sync_boundary(std::function<future<get_sync_boundary_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary)>&& func);
     future<> unregister_repair_get_sync_boundary();
-    future<get_sync_boundary_response> send_repair_get_sync_boundary(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary);
+    future<get_sync_boundary_response> send_repair_get_sync_boundary(netw::msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary);
 
     // Wrapper for REPAIR_GET_ROW_DIFF
     void register_repair_get_row_diff(std::function<future<repair_rows_on_wire> (const rpc::client_info& cinfo, uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows)>&& func);
     future<> unregister_repair_get_row_diff();
-    future<repair_rows_on_wire> send_repair_get_row_diff(msg_addr id, uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows);
+    future<repair_rows_on_wire> send_repair_get_row_diff(netw::msg_addr id, uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows);
 
     // Wrapper for REPAIR_PUT_ROW_DIFF
     void register_repair_put_row_diff(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, repair_rows_on_wire row_diff)>&& func);
     future<> unregister_repair_put_row_diff();
-    future<> send_repair_put_row_diff(msg_addr id, uint32_t repair_meta_id, repair_rows_on_wire row_diff);
+    future<> send_repair_put_row_diff(netw::msg_addr id, uint32_t repair_meta_id, repair_rows_on_wire row_diff);
 
     // Wrapper for REPAIR_ROW_LEVEL_START
     void register_repair_row_level_start(std::function<future<repair_row_level_start_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, rpc::optional<streaming::stream_reason> reason)>&& func);
     future<> unregister_repair_row_level_start();
-    future<rpc::optional<repair_row_level_start_response>> send_repair_row_level_start(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason);
+    future<rpc::optional<repair_row_level_start_response>> send_repair_row_level_start(netw::msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason);
 
     // Wrapper for REPAIR_ROW_LEVEL_STOP
     void register_repair_row_level_stop(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range)>&& func);
     future<> unregister_repair_row_level_stop();
-    future<> send_repair_row_level_stop(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range);
+    future<> send_repair_row_level_stop(netw::msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range);
 
     // Wrapper for REPAIR_GET_ESTIMATED_PARTITIONS
     void register_repair_get_estimated_partitions(std::function<future<uint64_t> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
     future<> unregister_repair_get_estimated_partitions();
-    future<uint64_t> send_repair_get_estimated_partitions(msg_addr id, uint32_t repair_meta_id);
+    future<uint64_t> send_repair_get_estimated_partitions(netw::msg_addr id, uint32_t repair_meta_id);
 
     // Wrapper for REPAIR_SET_ESTIMATED_PARTITIONS
     void register_repair_set_estimated_partitions(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, uint64_t estimated_partitions)>&& func);
     future<> unregister_repair_set_estimated_partitions();
-    future<> send_repair_set_estimated_partitions(msg_addr id, uint32_t repair_meta_id, uint64_t estimated_partitions);
+    future<> send_repair_set_estimated_partitions(netw::msg_addr id, uint32_t repair_meta_id, uint64_t estimated_partitions);
 
     // Wrapper for REPAIR_GET_DIFF_ALGORITHMS
     void register_repair_get_diff_algorithms(std::function<future<std::vector<row_level_diff_detect_algorithm>> (const rpc::client_info& cinfo)>&& func);
     future<> unregister_repair_get_diff_algorithms();
-    future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(msg_addr id);
+    future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(netw::msg_addr id);
 
     // Wrapper for NODE_OPS_CMD
     void register_node_ops_cmd(std::function<future<node_ops_cmd_response> (const rpc::client_info& cinfo, node_ops_cmd_request)>&& func);
     future<> unregister_node_ops_cmd();
-    future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
+    future<node_ops_cmd_response> send_node_ops_cmd(netw::msg_addr id, node_ops_cmd_request);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number)>&& func);
     future<> unregister_gossip_echo();
-    future<> send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout);
-    future<> send_gossip_echo(msg_addr id, int64_t generation_number, abort_source&);
+    future<> send_gossip_echo(netw::msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout);
+    future<> send_gossip_echo(netw::msg_addr id, int64_t generation_number, abort_source&);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func);
     future<> unregister_gossip_shutdown();
-    future<> send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number);
+    future<> send_gossip_shutdown(netw::msg_addr id, inet_address from, int64_t generation_number);
 
     // Wrapper for GOSSIP_DIGEST_SYN
     void register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_syn)>&& func);
     future<> unregister_gossip_digest_syn();
-    future<> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
+    future<> send_gossip_digest_syn(netw::msg_addr id, gms::gossip_digest_syn msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK
     void register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack)>&& func);
     future<> unregister_gossip_digest_ack();
-    future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg);
+    future<> send_gossip_digest_ack(netw::msg_addr id, gms::gossip_digest_ack msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack2)>&& func);
     future<> unregister_gossip_digest_ack2();
-    future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
+    future<> send_gossip_digest_ack2(netw::msg_addr id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for GOSSIP_GET_ENDPOINT_STATES
     void register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request)>&& func);
     future<> unregister_gossip_get_endpoint_states();
-    future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request);
+    future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(netw::msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request);
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
                 rpc::optional<std::vector<canonical_mutation>> cm)>&& func);
     future<> unregister_definitions_update();
-    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
+    future<> send_definitions_update(netw::msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
 
     // Wrapper for MIGRATION_REQUEST
     void register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> (
                 const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
     future<> unregister_migration_request();
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
+    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(netw::msg_addr id,
             schema_pull_options options);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
     future<> unregister_get_schema_version();
-    future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
+    future<frozen_schema> send_get_schema_version(netw::msg_addr, table_schema_version);
 
     // Wrapper for SCHEMA_CHECK
     void register_schema_check(std::function<future<table_schema_version>()>&& func);
     future<> unregister_schema_check();
-    future<table_schema_version> send_schema_check(msg_addr);
-    future<table_schema_version> send_schema_check(msg_addr, abort_source&);
+    future<table_schema_version> send_schema_check(netw::msg_addr);
+    future<table_schema_version> send_schema_check(netw::msg_addr, abort_source&);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     future<> unregister_replication_finished();
-    future<> send_replication_finished(msg_addr id, inet_address from);
+    future<> send_replication_finished(netw::msg_addr id, inet_address from);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
     template <typename Fn>
     requires std::is_invocable_r_v<bool, Fn, const shard_info&>
-    void find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter);
+    void find_and_remove_client(clients_map& clients, netw::msg_addr id, Fn&& filter);
     void do_start_listen();
 
     bool topology_known_for(inet_address) const;
@@ -511,15 +510,15 @@ private:
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
-    void remove_error_rpc_client(messaging_verb verb, msg_addr id);
-    void remove_rpc_client_with_ignored_topology(msg_addr id);
-    void remove_rpc_client(msg_addr id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, netw::msg_addr id);
+    void remove_error_rpc_client(messaging_verb verb, netw::msg_addr id);
+    void remove_rpc_client_with_ignored_topology(netw::msg_addr id);
+    void remove_rpc_client(netw::msg_addr id);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);
     }
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
-    static msg_addr get_source(const rpc::client_info& client);
+    static netw::msg_addr get_source(const rpc::client_info& client);
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
     scheduling_group scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
     std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;

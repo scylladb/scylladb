@@ -19,7 +19,6 @@ using namespace netw;
 namespace api {
 
 using shard_info = messaging_service::shard_info;
-using msg_addr = messaging_service::msg_addr;
 
 static const int32_t num_verb = static_cast<int32_t>(messaging_verb::LAST);
 
@@ -45,7 +44,7 @@ future_json_function get_client_getter(sharded<netw::messaging_service>& ms, std
         using map_type = std::unordered_map<gms::inet_address, uint64_t>;
         auto get_shard_map = [f](messaging_service& ms) {
             std::unordered_map<gms::inet_address, unsigned long> map;
-            ms.foreach_client([&map, f] (const msg_addr& id, const shard_info& info) {
+            ms.foreach_client([&map, f] (const netw::msg_addr& id, const shard_info& info) {
                 map[id.addr] = f(info);
             });
             return map;
