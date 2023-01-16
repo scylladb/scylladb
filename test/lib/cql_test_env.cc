@@ -630,6 +630,7 @@ private:
                 host_id = linfo.host_id;
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location()).get();
             }
+            utils::fb_utilities::set_host_id(host_id);
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
                 tm.get_topology().set_host_id_cfg(hostid);
                 return make_ready_future<>();

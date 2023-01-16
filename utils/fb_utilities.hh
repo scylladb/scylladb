@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 
 namespace utils {
 
@@ -29,6 +30,11 @@ private:
 
         return _broadcast_rpc_address;
     }
+    static locator::host_id& host_id() noexcept {
+        static locator::host_id _host_id;
+
+        return _host_id;
+    }
 public:
    static constexpr int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
 
@@ -39,6 +45,10 @@ public:
    static void set_broadcast_rpc_address(inet_address addr) noexcept {
        broadcast_rpc_address() = addr;
    }
+
+    static void set_host_id(const locator::host_id& id) noexcept {
+        host_id() = id;
+    }
 
 
    static const inet_address get_broadcast_address() noexcept {
@@ -51,8 +61,16 @@ public:
        return *broadcast_rpc_address();
    }
 
+    static const locator::host_id& get_host_id() noexcept {
+        return host_id();
+    }
+
     static bool is_me(gms::inet_address addr) noexcept {
         return addr == get_broadcast_address();
+    }
+
+    static bool is_me(const locator::host_id id) noexcept {
+        return id == get_host_id();
     }
 };
 }

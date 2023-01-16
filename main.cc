@@ -545,6 +545,7 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
 
     linfo.listen_address = listen_address;
     sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location()).get();
+    utils::fb_utilities::set_host_id(linfo.host_id);
     return linfo.host_id;
 }
 

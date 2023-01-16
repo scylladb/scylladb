@@ -34,6 +34,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
 
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_host_id(locator::host_id::create_random_id());
 
     engine().set_strict_dma(false);
 

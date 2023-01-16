@@ -227,6 +227,7 @@ locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
 void simple_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_host_id(locator::host_id::create_random_id());
 
     // Create the RackInferringSnitch
     snitch_config cfg;
@@ -237,6 +238,7 @@ void simple_test() {
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_host_id = utils::fb_utilities::get_host_id();
     tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
@@ -309,6 +311,7 @@ void simple_test() {
 void heavy_origin_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_host_id(locator::host_id::create_random_id());
 
     // Create the RackInferringSnitch
     snitch_config cfg;
@@ -696,13 +699,15 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(host_id::create_random_id(), node, {dc, to_sstring(r)}, locator::node::state::normal);
+        auto host_id = node == gms::inet_address("localhost") ? utils::fb_utilities::get_host_id() : host_id::create_random_id();
+        topo.add_node(host_id, node, {dc, to_sstring(r)}, locator::node::state::normal);
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_host_id(locator::host_id::create_random_id());
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;

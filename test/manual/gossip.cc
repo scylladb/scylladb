@@ -57,6 +57,7 @@ int main(int ac, char ** av) {
             const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
             utils::fb_utilities::set_broadcast_address(listen);
             utils::fb_utilities::set_broadcast_rpc_address(listen);
+            utils::fb_utilities::set_host_id(locator::host_id::create_random_id());
             auto cfg = std::make_unique<db::config>();
 
             sharded<abort_source> abort_sources;
