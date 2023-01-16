@@ -59,7 +59,7 @@ class migration_manager : public seastar::async_sharded_service<migration_manage
 private:
     migration_notifier& _notifier;
 
-    std::unordered_map<netw::msg_addr, serialized_action> _schema_pulls;
+    std::unordered_map<netw::msg_addr, serialized_action, std::hash<netw::msg_addr>, netw::msg_addr::legacy_equal_to> _schema_pulls;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;

@@ -148,18 +148,9 @@ const size_t PER_SHARD_CONNECTION_COUNT = 2;
 // Counts per tenant connection types
 const size_t PER_TENANT_CONNECTION_COUNT = 3;
 
-bool operator==(const msg_addr& x, const msg_addr& y) noexcept {
+bool msg_addr::legacy_equal_to::operator()(const msg_addr& x, const msg_addr& y) const noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
-    return x.addr == y.addr;
-}
-
-bool operator<(const msg_addr& x, const msg_addr& y) noexcept {
-    // Ignore cpu id for now since we do not really support shard to shard connections
-    if (x.addr < y.addr) {
-        return true;
-    } else {
-        return false;
-    }
+    return x.addr == y.addr && x.host_id == y.host_id;
 }
 
 std::ostream& operator<<(std::ostream& os, const msg_addr& x) {

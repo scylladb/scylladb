@@ -33,6 +33,7 @@
 #include "test/lib/random_utils.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
+#include "message/msg_addr.hh"
 
 using namespace locator;
 
@@ -715,4 +716,52 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         topo.test_compare_endpoints(address, bogus_address, a2);
         return make_ready_future<>();
     }).get();
+}
+
+// although not strictly related to network_topology_strategy
+// the use of msg_addr is related to topology changes
+SEASTAR_THREAD_TEST_CASE(test_msg_addr) {
+    auto ip1 = gms::inet_address("127.0.0.1");
+    auto host_id1 = locator::host_id::create_random_id();
+    auto ip2 = gms::inet_address("127.0.0.2");
+    auto host_id2 = locator::host_id::create_random_id();
+
+    auto a1 = netw::msg_addr(ip1);
+    auto a1_with_id1 = netw::msg_addr(ip1, host_id1);
+    BOOST_REQUIRE_LT(a1, a1_with_id1);
+    BOOST_REQUIRE_LE(a1, a1_with_id1);
+    BOOST_REQUIRE_NE(a1, a1_with_id1);
+    BOOST_REQUIRE_GE(a1_with_id1, a1);
+    BOOST_REQUIRE_GT(a1_with_id1, a1);
+    BOOST_REQUIRE((a1 <=> a1_with_id1) < 0);
+    BOOST_REQUIRE((a1_with_id1 <=> a1) > 0);
+
+    auto a1_with_id2 = netw::msg_addr(ip1, host_id2);
+    BOOST_REQUIRE_NE(a1_with_id1, a1_with_id2);
+    BOOST_REQUIRE((a1_with_id1 <=> a1_with_id2) != 0);
+    BOOST_REQUIRE((a1_with_id1 <=> a1_with_id2) == (host_id1 <=> host_id2));
+
+    auto a2 = netw::msg_addr(ip2);
+    BOOST_REQUIRE_NE(a1, a2);
+    BOOST_REQUIRE((a1 <=> a2) != 0);
+    auto a2_with_id2 = netw::msg_addr(ip2, host_id2);
+    BOOST_REQUIRE_NE(a2, a2_with_id2);
+    BOOST_REQUIRE((a2 <=> a2_with_id2) != 0);
+    BOOST_REQUIRE_NE(a1, a2_with_id2);
+    BOOST_REQUIRE_NE(a1_with_id1, a2_with_id2);
+    BOOST_REQUIRE((a1_with_id1 <=> a2_with_id2) != 0);
+    BOOST_REQUIRE((a1 <=> a2) == (a1_with_id1 <=> a2_with_id2));
+
+    std::vector<netw::msg_addr> addrs_vector = {
+        a1, a1_with_id1, a1_with_id2,
+        a2, a2_with_id2,
+    };
+    std::unordered_set<netw::msg_addr> addrs_set(addrs_vector.cbegin(), addrs_vector.cend());
+
+    BOOST_REQUIRE_EQUAL(addrs_vector.size(), addrs_set.size());
+    for (const auto& x : addrs_vector) {
+        BOOST_REQUIRE(addrs_set.contains(x));
+        BOOST_REQUIRE(addrs_set.erase(x));
+    }
+    BOOST_REQUIRE(addrs_set.empty());
 }
