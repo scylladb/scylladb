@@ -79,6 +79,10 @@ public:
     idx_type idx() const noexcept { return _idx; }
 
     static sstring to_sstring(state);
+
+    netw::msg_addr msg_addr() const noexcept {
+        return netw::msg_addr(_endpoint, 0, _host_id);
+    }
 };
 
 using node_ptr = lw_shared_ptr<const node>;
