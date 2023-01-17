@@ -239,7 +239,7 @@ table::make_reader_v2(schema_ptr s,
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
-        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)) {
+        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, &_compaction_manager.get_tombstone_gc_state(), pc, std::move(trace_state), fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
     } else {
@@ -1470,7 +1470,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
-                [](const dht::decorated_key&) { return api::min_timestamp; },
+                [](const dht::decorated_key&) { return api::max_timestamp; },
                 _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {

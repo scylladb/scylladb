@@ -726,13 +726,14 @@ row_cache::make_reader_opt(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
+                       const tombstone_gc_state* gc_state,
                        const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
     auto make_context = [&] {
-        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
+        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, gc_state, pc, trace_state, fwd_mr);
     };
 
     if (query::is_single_partition(range) && !fwd_mr) {

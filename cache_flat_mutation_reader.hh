@@ -155,6 +155,9 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     flat_mutation_reader_v2* _underlying = nullptr;
     flat_mutation_reader_v2_opt _underlying_holder;
 
+    gc_clock::time_point _read_time;
+    gc_clock::time_point _gc_before;
+
     future<> do_fill_buffer();
     future<> ensure_underlying();
     void copy_from_cache_to_buffer();
@@ -226,6 +229,16 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     const schema& table_schema() {
         return *_snp->schema();
     }
+
+    gc_clock::time_point get_gc_before(const schema& schema, dht::decorated_key dk, const gc_clock::time_point query_time) {
+        auto tombstone_gc_state = _read_context.tombstone_gc_state();
+        if (tombstone_gc_state) {
+            return tombstone_gc_state->get_gc_before_for_key(schema.shared_from_this(), dk, query_time );
+        }
+
+        return gc_clock::time_point::min();
+    }
+
 public:
     cache_flat_mutation_reader(schema_ptr s,
                                dht::decorated_key dk,
@@ -246,6 +259,8 @@ public:
         , _next_row(*_schema, *_snp, false, _read_context.is_reversed())
         , _rt_gen(*_schema)
         , _rt_merger(*_schema)
+        , _read_time(gc_clock::now())
+        , _gc_before(get_gc_before(*_schema, dk, _read_time))
     {
         clogger.trace("csm {}: table={}.{}, reversed={}, snap={}", fmt::ptr(this), _schema->ks_name(), _schema->cf_name(), _read_context.is_reversed(),
                       fmt::ptr(&*_snp));
@@ -642,10 +657,38 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     }, _read_context.is_reversed()) == stop_iteration::no) {
         return;
     }
-    // We add the row to the buffer even when it's full.
-    // This simplifies the code. For more info see #3139.
+
     if (_next_row_in_range) {
-        add_to_buffer(_next_row);
+        bool remove_row = false;
+
+        if (_state == state::reading_from_cache && !_next_row.dummy()) { // maybe we'd better use at_a_row() instead of dummy() here?
+            deletable_row& row = _next_row.latest_row();
+            tombstone base_tombstone = _snp->version()->partition().range_tombstone_for_row(*_schema, _next_row.key());
+
+            if (!row.is_live(*_schema, column_kind::regular_column, base_tombstone, _read_time) && // should we really call is_live here?
+                row.deleted_at().max_deletion_time() < _gc_before) {
+                remove_row = true;
+            }
+        }
+
+        if (remove_row) {
+            with_allocator(_snp->region().allocator(), [&] {
+                partition_snapshot_row_weakref row_ref(_next_row);
+
+                cache_tracker& tracker = _read_context.cache()._tracker;
+                if (row_ref->is_linked()) {
+                    tracker.get_lru().remove(*row_ref);
+                }
+                row_ref->on_evicted(tracker);
+            });
+
+            _snp->region().allocator().invalidate_references();
+            _next_row.maybe_refresh();
+        } else {
+            // We add the row to the buffer even when it's full.
+            // This simplifies the code. For more info see #3139.
+            add_to_buffer(_next_row);
+        }
         move_to_next_entry();
     } else {
         move_to_next_range();
