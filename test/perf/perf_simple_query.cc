@@ -499,7 +499,9 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     out << results;
 }
 
-int main(int argc, char** argv) {
+namespace perf {
+
+int scylla_simple_query_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
@@ -591,3 +593,5 @@ int main(int argc, char** argv) {
         });
     });
 }
+
+} // namespace perf
