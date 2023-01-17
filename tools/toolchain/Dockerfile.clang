@@ -1,0 +1,5 @@
+FROM scylladb/scylla-toolchain:fedora-37-20230111
+
+ADD ./tools/toolchain/clang_lto_pgo.sh .
+RUN chmod +x ./clang_lto_pgo.sh && ./clang_lto_pgo.sh && rm -rf /optimized_clang
+CMD /bin/bash
