@@ -2201,6 +2201,13 @@ def write_build_file(f,
         gen_headers.append('$builddir/{}/gen/rust/cxx.h'.format(mode))
         gen_headers_dep = ' '.join(gen_headers)
 
+        for hh in rust_headers:
+            src = rust_headers[hh]
+            f.write('build {}: rust_header {}\n'.format(hh, src))
+            cc = hh.replace('.hh', '.cc')
+            f.write('build {}: rust_source {}\n'.format(cc, src))
+            obj = cc.replace('.cc', '.o')
+            compiles[obj] = cc
         for obj in compiles:
             src = compiles[obj]
             f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, gen_headers_dep))
@@ -2219,13 +2226,6 @@ def write_build_file(f,
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
-        for hh in rust_headers:
-            src = rust_headers[hh]
-            f.write('build {}: rust_header {}\n'.format(hh, src))
-            cc = hh.replace('.hh', '.cc')
-            f.write('build {}: rust_source {}\n'.format(cc, src))
-            obj = cc.replace('.cc', '.o')
-            f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, gen_headers_dep))
         f.write('build {}: cxxbridge_header\n'.format('$builddir/{}/gen/rust/cxx.h'.format(mode)))
         librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
         f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
