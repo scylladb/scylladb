@@ -123,6 +123,13 @@ public:
     // there is no such group.
     raft::server& get_server(raft::group_id gid);
 
+    // Find server for the given group.
+    // Returns `nullptr` if there is no such group.
+    raft::server* find_server(raft::group_id);
+
+    // Returns the list of all Raft groups on this shard by their IDs.
+    std::vector<raft::group_id> all_groups() const;
+
     // Return an instance of group 0. Valid only on shard 0,
     // after boot/upgrade is complete
     raft::server& group0();

@@ -32,6 +32,7 @@ namespace service {
 
 class storage_proxy;
 class storage_service;
+class raft_group_registry;
 
 namespace paxos {
     class paxos_state;
@@ -256,6 +257,7 @@ public:
     future<> make(distributed<replica::database>& db,
                          distributed<service::storage_service>& ss,
                          sharded<gms::gossiper>& g,
+                         sharded<service::raft_group_registry>& raft_gr,
                          db::config& cfg,
                          table_selector& = table_selector::all());
 

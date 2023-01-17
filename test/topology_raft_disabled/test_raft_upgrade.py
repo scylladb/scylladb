@@ -17,7 +17,7 @@ from cassandra.pool import Host                         # type: ignore # pylint:
 from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
@@ -49,40 +49,6 @@ async def enable_raft(manager: ManagerClient, server: ServerInfo) -> None:
 async def enable_raft_and_restart(manager: ManagerClient, server: ServerInfo) -> None:
     await enable_raft(manager, server)
     await restart(manager, server)
-
-
-async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
-    async def cql_ready():
-        try:
-            await cql.run_async("select * from system.local", host=host)
-        except NoHostAvailable:
-            logging.info(f"Driver not connected to {host} yet")
-            return None
-        return True
-    await wait_for(cql_ready, deadline)
-
-
-async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], deadline: float) \
-        -> list[Host]:
-    """Wait until every server in `servers` is available through `cql`
-       and translate `servers` to a list of Cassandra `Host`s.
-    """
-    ip_set = set(str(srv.ip_addr) for srv in servers)
-    async def get_hosts() -> Optional[list[Host]]:
-        hosts = cql.cluster.metadata.all_hosts()
-        remaining = ip_set - {h.address for h in hosts}
-        if not remaining:
-            return hosts
-
-        logging.info(f"Driver hasn't yet learned about hosts: {remaining}")
-        return None
-    hosts = await wait_for(get_hosts, deadline)
-
-    # Take only hosts from `ip_set` (there may be more)
-    hosts = [h for h in hosts if h.address in ip_set]
-    await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
-
-    return hosts
 
 
 async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
@@ -174,49 +140,6 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
     assert(rs)
     logging.info(f"group0_history entry description: '{rs[0].description}'")
     assert(table.full_name in rs[0].description)
-
-
-@pytest.mark.asyncio
-@log_run_time
-async def test_raft_upgrade_with_node_remove(manager: ManagerClient, random_tables: RandomTables):
-    """
-    We enable Raft on every server but stop one server in the meantime.
-    The others will start Raft upgrade procedure but get stuck - all servers must be available to proceed.
-    We remove the stopped server and check that the procedure unblocks.
-
-    kbr-: the test takes about 19 seconds in dev mode on my laptop.
-    """
-    servers = await manager.running_servers()
-    srv1, *others = servers
-
-    srv1_gen = await manager.api.get_gossip_generation_number(others[0].ip_addr, srv1.ip_addr)
-    logging.info(f"Gossip generation number of {srv1} seen from {others[0]}: {srv1_gen}")
-
-    logging.info(f"Enabling Raft on {srv1} and restarting")
-    await enable_raft_and_restart(manager, srv1)
-
-    # Before continuing, ensure that another node has gossiped with srv1
-    # after srv1 has restarted. Then we know that the other node learned about srv1's
-    # supported features, including SUPPORTS_RAFT.
-    logging.info(f"Waiting until {others[0]} gossips with {srv1}")
-    await wait_for_gossip_gen_increase(manager.api, srv1_gen, others[0].ip_addr, srv1.ip_addr, time.time() + 60)
-
-    logging.info(f"Stopping {srv1}")
-    await manager.server_stop_gracefully(srv1.server_id)
-
-    logging.info(f"Enabling Raft on {others} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
-    cql = await reconnect_driver(manager)
-
-    logging.info(f"Cluster restarted, waiting until driver reconnects to every server except {srv1}")
-    hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
-    logging.info(f"Driver reconnected, hosts: {hosts}")
-
-    logging.info(f"Removing {srv1} using {others[0]}")
-    await manager.remove_node(others[0].server_id, srv1.server_id)
-
-    logging.info("Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
 
 
 @pytest.mark.asyncio

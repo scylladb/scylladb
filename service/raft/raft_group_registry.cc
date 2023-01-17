@@ -370,6 +370,23 @@ raft::server& raft_group_registry::get_server(raft::group_id gid) {
     return *ptr;
 }
 
+raft::server* raft_group_registry::find_server(raft::group_id gid) {
+    auto it = _servers.find(gid);
+    if (it == _servers.end()) {
+        return nullptr;
+    }
+    return it->second.server.get();
+}
+
+std::vector<raft::group_id> raft_group_registry::all_groups() const {
+    std::vector<raft::group_id> result;
+    result.reserve(_servers.size());
+    for (auto& [gid, _]: _servers) {
+        result.push_back(gid);
+    }
+    return result;
+}
+
 raft::server& raft_group_registry::group0() {
     if (!_group0_id) {
         on_internal_error(rslog, "group0(): _group0_id not present");

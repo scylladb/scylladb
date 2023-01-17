@@ -741,9 +741,12 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
 
             assert(replaced_host_id);
             auto raft_id = raft::server_id{replaced_host_id.uuid()};
-            slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
             assert(_group0);
-            _group0->remove_from_group0(raft_id).get();
+            bool raft_available = _group0->wait_for_raft().get();
+            if (raft_available) {
+                slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
+                _group0->remove_from_group0(raft_id).get();
+            }
 
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens, *replacement_info);
@@ -1951,6 +1954,15 @@ future<> storage_service::decommission() {
             if (!tmptr->is_normal_token_owner(endpoint)) {
                 throw std::runtime_error("local node is not a member of the token ring yet");
             }
+            // We assume that we're a member of group 0 if we're in decommission()` and Raft is enabled.
+            // We have no way to check that we're not a member: attempting to perform group 0 operations
+            // would simply hang in that case, the leader would refuse to talk to us.
+            // If we aren't a member then we shouldn't be here anyway, since it means that either
+            // an earlier decommission finished (leave_group0 is the last operation in decommission)
+            // or that we were removed using `removenode`.
+            //
+            // For handling failure scenarios such as a group 0 member that is not a token ring member,
+            // there's `removenode`.
 
             auto temp = tmptr->clone_after_all_left().get0();
             auto num_tokens_after_all_left = temp.sorted_tokens().size();
@@ -2000,6 +2012,10 @@ future<> storage_service::decommission() {
                 throw std::runtime_error(msg);
             }
 
+            assert(ss._group0);
+            bool raft_available = ss._group0->wait_for_raft().get();
+            bool left_token_ring = false;
+
             // Step 2: Prepare to sync data
             std::unordered_set<gms::inet_address> nodes_unknown_verb;
             std::unordered_set<gms::inet_address> nodes_down;
@@ -2035,13 +2051,28 @@ future<> storage_service::decommission() {
                     heartbeat_updater.get();
                 });
 
-                // Step 5: Start to sync data
+                // Step 4: Start to sync data
                 slogger.info("DECOMMISSIONING: unbootstrap starts");
                 ss.unbootstrap().get();
-                ss.leave_ring().get();
                 slogger.info("DECOMMISSIONING: unbootstrap done");
 
-                // Step 6: Finish
+                // Step 5: Become a group 0 non-voter before leaving the token ring.
+                //
+                // Thanks to this, even if we fail after leaving the token ring but before leaving group 0,
+                // group 0's availability won't be reduced.
+                if (raft_available) {
+                    slogger.info("decommission[{}]: becoming a group 0 non-voter", uuid);
+                    ss._group0->become_nonvoter().get();
+                    slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
+                }
+
+                // Step 6: Leave the token ring
+                slogger.info("decommission[{}]: leaving token ring", uuid);
+                ss.leave_ring().get();
+                left_token_ring = true;
+                slogger.info("decommission[{}]: left token ring", uuid);
+
+                // Step 7: Finish token movement
                 req.cmd = node_ops_cmd::decommission_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2049,7 +2080,7 @@ future<> storage_service::decommission() {
                         return make_ready_future<>();
                     });
                 }).get();
-                slogger.info("decommission[{}]: Finished decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                slogger.info("decommission[{}]: Finished token ring movement, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 slogger.warn("decommission[{}]: Abort decommission operation started, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 // we need to revert the effect of prepare verb the decommission ops is failed
@@ -2067,11 +2098,37 @@ future<> storage_service::decommission() {
                 throw;
             }
 
-            slogger.info("DECOMMISSIONING: leaving Raft group 0");
-            assert(ss._group0);
-            ss._group0->leave_group0().get();
+            // Step 8: Leave group 0
+            //
+            // If the node failed to leave the token ring, don't remove it from group 0
+            // --- hence the `left_token_ring` check.
+            std::exception_ptr leave_group0_ex;
+            try {
+                utils::get_local_injector().inject("decommission_fail_before_leave_group0",
+                    [] { throw std::runtime_error("decommission_fail_before_leave_group0"); });
 
-            slogger.info("DECOMMISSIONING: left Raft group 0");
+                if (raft_available && left_token_ring) {
+                    slogger.info("decommission[{}]: leaving Raft group 0", uuid);
+                    assert(ss._group0);
+                    ss._group0->leave_group0().get();
+                    slogger.info("decommission[{}]: left Raft group 0", uuid);
+                }
+            } catch (...) {
+                // Even though leave_group0 failed, we will finish decommission and shut down everything.
+                // There's nothing smarter we could do. We should not continue operating in this broken
+                // state (we're not a member of the token ring any more).
+                //
+                // If we didn't manage to leave group 0, we will stay as a non-voter
+                // (which is not too bad - non-voters at least do not reduce group 0's availability).
+                // It's possible to remove the garbage member using `removenode`.
+                slogger.error(
+                    "decommission[{}]: FAILED when trying to leave Raft group 0: \"{}\". This node"
+                    " is no longer a member of the token ring, so it will finish shutting down its services."
+                    " It may still be a member of Raft group 0. To remove it, shut it down and use `removenode`."
+                    " Consult the `decommission` and `removenode` documentation for more details.",
+                    uuid, std::current_exception());
+                leave_group0_ex = std::current_exception();
+            }
 
             ss.stop_transport().get();
             slogger.info("DECOMMISSIONING: stopped transport");
@@ -2085,6 +2142,11 @@ future<> storage_service::decommission() {
             ss._sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED);
+
+            if (leave_group0_ex) {
+                std::rethrow_exception(leave_group0_ex);
+            }
+
             slogger.info("DECOMMISSIONING: done");
             // let op be responsible for killing the process
         });
@@ -2347,127 +2409,174 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto uuid = node_ops_id::create_random_id();
             auto tmptr = ss.get_token_metadata_ptr();
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
-            if (!endpoint_opt) {
-                throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
-            }
-            auto endpoint = *endpoint_opt;
-            auto tokens = tmptr->get_tokens(endpoint);
-            auto leaving_nodes = std::list<gms::inet_address>{endpoint};
-            std::list<gms::inet_address> ignore_nodes;
-            for (auto& hoep : ignore_nodes_params) {
-                hoep.resolve(*tmptr);
-                ignore_nodes.push_back(hoep.endpoint);
+            assert(ss._group0);
+            auto raft_id = raft::server_id{host_id.uuid()};
+            bool raft_available = ss._group0->wait_for_raft().get();
+            bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
+
+            if (!endpoint_opt && !is_group0_member) {
+                throw std::runtime_error(format("removenode[{}]: Host ID {} not found in the cluster", uuid, host_id));
             }
 
-            // Step 1: Decide who needs to sync data
-            //
-            // By default, we require all nodes in the cluster to participate
-            // the removenode operation and sync data if needed. We fail the
-            // removenode operation if any of them is down or fails.
-            //
-            // If the user want the removenode opeartion to succeed even if some of the nodes
-            // are not available, the user has to explicitly pass a list of
-            // node that can be skipped for the operation.
-            std::list<gms::inet_address> nodes;
-            for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
-                seastar::thread::maybe_yield();
-                if (x.first != endpoint && std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
-                    nodes.push_back(x.first);
-                }
-            }
-            slogger.info("removenode[{}]: Started removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+            // If endpoint_opt is engaged, the node is a member of the token ring.
+            // is_group0_member indicates whether the node is a member of Raft group 0.
+            // A node might be a member of group 0 but not a member of the token ring, e.g. due to a
+            // previously failed removenode/decommission. The code is written to handle this
+            // situation. Parts related to removing this node from the token ring are conditioned on
+            // endpoint_opt, while parts related to removing from group 0 are conditioned on
+            // is_group0_member.
 
-            if (ss._gossiper.is_alive(endpoint)) {
+            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
                 const std::string message = format(
-                    "removenode[{}]: Rejected removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}; "
+                    "removenode[{}]: Rejected removenode operation (node={}); "
                     "the node being removed is alive, maybe you should use decommission instead?",
-                    uuid, endpoint, nodes, ignore_nodes);
+                    uuid, *endpoint_opt);
                 slogger.warn(std::string_view(message));
                 throw std::runtime_error(message);
             }
 
-            // Step 2: Prepare to sync data
-            std::unordered_set<gms::inet_address> nodes_unknown_verb;
-            std::unordered_set<gms::inet_address> nodes_down;
-            auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, leaving_nodes, {}};
-            try {
-                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("removenode[{}]: Got prepare response from node={}", uuid, node);
-                    }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
-                        slogger.warn("removenode[{}]: Node {} does not support removenode verb", uuid, node);
-                        nodes_unknown_verb.emplace(node);
-                    }).handle_exception_type([&nodes_down, node, uuid] (seastar::rpc::closed_error&) {
-                        slogger.warn("removenode[{}]: Node {} is down for node_ops_cmd verb", uuid, node);
-                        nodes_down.emplace(node);
-                    });
-                }).get();
-                if (!nodes_unknown_verb.empty()) {
-                    auto msg = format("removenode[{}]: Nodes={} do not support removenode verb. Please upgrade your cluster and run removenode again.", uuid, nodes_unknown_verb);
-                    slogger.warn("{}", msg);
-                    throw std::runtime_error(msg);
-                }
-                if (!nodes_down.empty()) {
-                    auto msg = format("removenode[{}]: Nodes={} needed for removenode operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool removenode --ignore-dead-nodes <list_of_dead_nodes> <host_id>. E.g., nodetool removenode --ignore-dead-nodes 127.0.0.1,127.0.0.2 817e9515-316f-4fe3-aaab-b00d6f12dddd", uuid, nodes_down);
-                    slogger.warn("{}", msg);
-                    throw std::runtime_error(msg);
+            bool removed_from_token_ring = !endpoint_opt;
+            if (endpoint_opt) {
+                auto endpoint = *endpoint_opt;
+                auto tokens = tmptr->get_tokens(endpoint);
+
+                std::list<gms::inet_address> ignore_nodes;
+                for (auto& hoep : ignore_nodes_params) {
+                    hoep.resolve(*tmptr);
+                    ignore_nodes.push_back(hoep.endpoint);
                 }
 
-                // Step 3: Start heartbeat updater
-                auto heartbeat_updater_done = make_lw_shared<bool>(false);
-                auto heartbeat_updater = ss.node_ops_cmd_heartbeat_updater(node_ops_cmd::removenode_heartbeat, uuid, nodes, heartbeat_updater_done);
-                auto stop_heartbeat_updater = defer([&] {
-                    *heartbeat_updater_done = true;
-                    heartbeat_updater.get();
-                });
+                // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
+                //
+                // Thanks to this, even if we fail after removing the node from the token ring
+                // but before removing it group 0, group 0's availability won't be reduced.
+                if (is_group0_member && ss._group0->is_member(raft_id, true)) {
+                    slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
+                    ss._group0->make_nonvoter(raft_id).get();
+                    slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
+                }
 
-                // Step 4: Start to sync data
-                req.cmd = node_ops_cmd::removenode_sync_data;
-                parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("removenode[{}]: Got sync_data response from node={}", uuid, node);
-                        return make_ready_future<>();
-                    });
-                }).get();
-
-
-                // Step 5: Announce the node has left
-                ss._gossiper.advertise_token_removed(endpoint, host_id).get();
-                std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-                ss.excise(std::move(tmp), endpoint).get();
-
-                // Step 6: Finish
-                req.cmd = node_ops_cmd::removenode_done;
-                parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("removenode[{}]: Got done response from node={}", uuid, node);
-                        return make_ready_future<>();
-                    });
-                }).get();
-
-                auto raft_id = raft::server_id{host_id.uuid()};
-                slogger.info("removenode[{}]: removing node {}/{} from group 0", uuid, endpoint, raft_id);
-                assert(ss._group0);
-                ss._group0->remove_from_group0(raft_id).get();
-
-                slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
-            } catch (...) {
-                slogger.warn("removenode[{}]: removing node={}, sync_nodes={}, ignore_nodes={} failed, error {}",
-                             uuid, endpoint, nodes, ignore_nodes, std::current_exception());
-                // we need to revert the effect of prepare verb the removenode ops is failed
-                req.cmd = node_ops_cmd::removenode_abort;
-                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
-                    if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
-                        // No need to revert previous prepare cmd for those who do not apply prepare cmd.
-                        return make_ready_future<>();
+                // Step 2: Decide who needs to sync data
+                //
+                // By default, we require all nodes in the cluster to participate
+                // the removenode operation and sync data if needed. We fail the
+                // removenode operation if any of them is down or fails.
+                //
+                // If the user want the removenode opeartion to succeed even if some of the nodes
+                // are not available, the user has to explicitly pass a list of
+                // node that can be skipped for the operation.
+                std::list<gms::inet_address> nodes;
+                for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+                    seastar::thread::maybe_yield();
+                    if (x.first != endpoint && std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
+                        nodes.push_back(x.first);
                     }
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("removenode[{}]: Got abort response from node={}", uuid, node);
+                }
+                slogger.info("removenode[{}]: Started token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+
+                // Step 3: Prepare to sync data
+                std::unordered_set<gms::inet_address> nodes_unknown_verb;
+                std::unordered_set<gms::inet_address> nodes_down;
+                auto req = node_ops_cmd_request{node_ops_cmd::removenode_prepare, uuid, ignore_nodes, {endpoint}, {}};
+                try {
+                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                            slogger.debug("removenode[{}]: Got prepare response from node={}", uuid, node);
+                        }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
+                            slogger.warn("removenode[{}]: Node {} does not support removenode verb", uuid, node);
+                            nodes_unknown_verb.emplace(node);
+                        }).handle_exception_type([&nodes_down, node, uuid] (seastar::rpc::closed_error&) {
+                            slogger.warn("removenode[{}]: Node {} is down for node_ops_cmd verb", uuid, node);
+                            nodes_down.emplace(node);
+                        });
+                    }).get();
+                    if (!nodes_unknown_verb.empty()) {
+                        auto msg = format("removenode[{}]: Nodes={} do not support removenode verb. Please upgrade your cluster and run removenode again.", uuid, nodes_unknown_verb);
+                        slogger.warn("{}", msg);
+                        throw std::runtime_error(msg);
+                    }
+                    if (!nodes_down.empty()) {
+                        auto msg = format("removenode[{}]: Nodes={} needed for removenode operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool removenode --ignore-dead-nodes <list_of_dead_nodes> <host_id>. E.g., nodetool removenode --ignore-dead-nodes 127.0.0.1,127.0.0.2 817e9515-316f-4fe3-aaab-b00d6f12dddd", uuid, nodes_down);
+                        slogger.warn("{}", msg);
+                        throw std::runtime_error(msg);
+                    }
+
+                    // Step 4: Start heartbeat updater
+                    auto heartbeat_updater_done = make_lw_shared<bool>(false);
+                    auto heartbeat_updater = ss.node_ops_cmd_heartbeat_updater(node_ops_cmd::removenode_heartbeat, uuid, nodes, heartbeat_updater_done);
+                    auto stop_heartbeat_updater = defer([&] {
+                        *heartbeat_updater_done = true;
+                        heartbeat_updater.get();
                     });
-                }).get();
-                slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+
+                    // Step 5: Start to sync data
+                    req.cmd = node_ops_cmd::removenode_sync_data;
+                    parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
+                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                            slogger.debug("removenode[{}]: Got sync_data response from node={}", uuid, node);
+                            return make_ready_future<>();
+                        });
+                    }).get();
+
+
+                    // Step 6: Announce the node has left
+                    ss._gossiper.advertise_token_removed(endpoint, host_id).get();
+                    std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+                    ss.excise(std::move(tmp), endpoint).get();
+                    removed_from_token_ring = true;
+
+                    // Step 7: Finish token movement
+                    req.cmd = node_ops_cmd::removenode_done;
+                    parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
+                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                            slogger.debug("removenode[{}]: Got done response from node={}", uuid, node);
+                            return make_ready_future<>();
+                        });
+                    }).get();
+
+                    slogger.info("removenode[{}]: Finished token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                } catch (...) {
+                    slogger.warn("removenode[{}]: removing node={}, sync_nodes={}, ignore_nodes={} failed, error {}",
+                                 uuid, endpoint, nodes, ignore_nodes, std::current_exception());
+                    // we need to revert the effect of prepare verb the removenode ops is failed
+                    req.cmd = node_ops_cmd::removenode_abort;
+                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                        if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
+                            // No need to revert previous prepare cmd for those who do not apply prepare cmd.
+                            return make_ready_future<>();
+                        }
+                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                            slogger.debug("removenode[{}]: Got abort response from node={}", uuid, node);
+                        });
+                    }).get();
+                    slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                    throw;
+                }
+            }
+
+            // Step 8: Remove the node from group 0
+            //
+            // If the node was a token ring member but we failed to remove it,
+            // don't remove it from group 0 -- hence the `removed_from_token_ring` check.
+            try {
+                utils::get_local_injector().inject("removenode_fail_before_remove_from_group0",
+                    [] { throw std::runtime_error("removenode_fail_before_remove_from_group0"); });
+
+                if (is_group0_member && removed_from_token_ring) {
+                    slogger.info("removenode[{}]: removing node {} from Raft group 0", uuid, raft_id);
+                    ss._group0->remove_from_group0(raft_id).get();
+                    slogger.info("removenode[{}]: removed node {} from Raft group 0", uuid, raft_id);
+                }
+            } catch (...) {
+                slogger.error(
+                    "removenode[{}]: FAILED when trying to remove the node from Raft group 0: \"{}\". The node"
+                    " is no longer a member of the token ring, but it may still be a member of Raft group 0."
+                    " Please retry `removenode`. Consult the `removenode` documentation for more details.",
+                    uuid, std::current_exception());
                 throw;
             }
+
+            slogger.info("removenode[{}]: Finished removenode operation, host id={}", uuid, host_id);
         });
     });
 }
@@ -3373,7 +3482,10 @@ future<> storage_service::force_remove_completion() {
 
                     slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
                     assert(ss._group0);
-                    co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
+                    bool raft_available = co_await ss._group0->wait_for_raft();
+                    if (raft_available) {
+                        co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
+                    }
                 }
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");

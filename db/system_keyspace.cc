@@ -56,6 +56,7 @@
 #include "service/storage_service.hh"
 #include "gms/gossiper.hh"
 #include "service/paxos/paxos_state.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "utils/build_id.hh"
 #include "query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
@@ -238,10 +239,9 @@ schema_ptr system_keyspace::raft_snapshot_config() {
         auto id = generate_legacy_id(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG);
         return schema_builder(system_keyspace::NAME, RAFT_SNAPSHOT_CONFIG, std::optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
-            .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+            .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("can_vote", boolean_type)
-            .with_column("ip_addr", inet_addr_type)
 
             .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_version(generate_schema_version(id))
@@ -2648,10 +2648,123 @@ public:
     }
 };
 
+// Shows the current state of each Raft group.
+// Currently it shows only the configuration.
+// In the future we plan to add additional columns with more information.
+class raft_state_table : public streaming_virtual_table {
+private:
+    sharded<service::raft_group_registry>& _raft_gr;
+
+public:
+    raft_state_table(sharded<service::raft_group_registry>& raft_gr)
+        : streaming_virtual_table(build_schema())
+        , _raft_gr(raft_gr) {
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        struct decorated_gid {
+            raft::group_id gid;
+            dht::decorated_key key;
+            unsigned shard;
+        };
+
+        auto groups_and_shards = co_await _raft_gr.map([] (service::raft_group_registry& raft_gr) {
+            return std::pair{raft_gr.all_groups(), this_shard_id()};
+        });
+
+        std::vector<decorated_gid> decorated_gids;
+        for (auto& [groups, shard]: groups_and_shards) {
+            for (auto& gid: groups) {
+                decorated_gids.push_back(decorated_gid{gid, make_partition_key(gid), shard});
+            }
+        }
+
+        // Must return partitions in token order.
+        std::sort(decorated_gids.begin(), decorated_gids.end(), [less = dht::ring_position_less_comparator(*_s)]
+                (const decorated_gid& l, const decorated_gid& r) { return less(l.key, r.key); });
+
+        for (auto& [gid, dk, shard]: decorated_gids) {
+            if (!contains_key(qr.partition_range(), dk)) {
+                continue;
+            }
+
+            auto cfg_opt = co_await _raft_gr.invoke_on(shard,
+                    [gid=gid] (service::raft_group_registry& raft_gr) -> std::optional<raft::configuration> {
+                // Be ready for a group to disappear while we're querying.
+                auto* srv = raft_gr.find_server(gid);
+                if (!srv) {
+                    return std::nullopt;
+                }
+                // FIXME: the configuration returned here is obtained from raft::fsm, it may not be
+                // persisted yet, so this is not 100% correct. It may happen that we crash after
+                // a config entry is appended in-memory in fsm but before it's persisted. It would be
+                // incorrect to return the configuration observed during this window - after restart
+                // the configuration would revert to the previous one.  Perhaps this is unlikely to
+                // happen in practice, but for correctness we should add a way of querying the
+                // latest persisted configuration.
+                return srv->get_configuration();
+            });
+
+            if (!cfg_opt) {
+                continue;
+            }
+
+            co_await result.emit_partition_start(dk);
+
+            // List current config first, because 'C' < 'P' and the disposition
+            // (ascii_type, 'CURRENT' vs 'PREVIOUS') is the first column in the clustering key.
+            co_await emit_member_set(result, "CURRENT", cfg_opt->current);
+            co_await emit_member_set(result, "PREVIOUS", cfg_opt->previous);
+
+            co_await result.emit_partition_end();
+        }
+    }
+
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "raft_state");
+        return schema_builder(system_keyspace::NAME, "raft_state", std::make_optional(id))
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+            .with_column("server_id", uuid_type, column_kind::clustering_key)
+            .with_column("can_vote", boolean_type)
+            .set_comment("Currently operating RAFT configuration")
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(raft::group_id gid) {
+        // Make sure to use timeuuid_native_type so comparisons are done correctly
+        // (we must emit partitions in the correct token order).
+        return dht::decorate_key(*_s, partition_key::from_single_value(
+                *_s, data_value(timeuuid_native_type{gid.uuid()}).serialize_nonnull()));
+    }
+
+    clustering_key make_clustering_key(std::string_view disposition, raft::server_id id) {
+        return clustering_key::from_exploded(*_s, {
+            data_value(disposition).serialize_nonnull(),
+            data_value(id.uuid()).serialize_nonnull()
+        });
+    }
+
+    future<> emit_member_set(result_collector& result, std::string_view disposition,
+                             const raft::config_member_set& set) {
+        // Must sort servers in clustering order (i.e. according to their IDs).
+        // This is how `config_member::operator<` works so no need for custom comparator.
+        std::vector<raft::config_member> members{set.begin(), set.end()};
+        std::sort(members.begin(), members.end());
+        for (auto& member: members) {
+            clustering_row cr{make_clustering_key(disposition, member.addr.id)};
+            set_cell(cr.cells(), "can_vote", member.can_vote);
+            co_await result.emit_row(std::move(cr));
+        }
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<table_id, std::unique_ptr<virtual_table>> virtual_tables;
 
-void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg) {
+void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr, db::config& cfg) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
     };
@@ -2669,6 +2782,7 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     add_table(std::make_unique<versions_table>());
     add_table(std::make_unique<db_config_table>(cfg));
     add_table(std::make_unique<clients_table>(ss));
+    add_table(std::make_unique<raft_state_table>(dist_raft_gr));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
@@ -2726,9 +2840,9 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg, table_selector& tables) {
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, table_selector& tables) {
     if (tables.contains_keyspace(system_keyspace::NAME)) {
-        register_virtual_tables(dist_db, dist_ss, dist_gossiper, cfg);
+        register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
     }
 
     auto& db = dist_db.local();
@@ -2764,8 +2878,8 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
     }
 }
 
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, table_selector& tables) {
-    return system_keyspace_make(*this, db, ss, g, cfg, tables);
+future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, table_selector& tables) {
+    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, tables);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {
