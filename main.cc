@@ -1767,23 +1767,18 @@ int main(int ac, char** av) {
         exec_name = av[1];
     }
 
-    bool recognized = true;
     std::function<int(int, char**)> main_func;
     if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
-        recognized = false;
     } else {
         main_func = lookup_main_func(exec_name);
+        // shift args to consume the recognized tool name
+        std::shift_left(av + 1, av + ac, 1);
+        --ac;
     }
     if (!main_func) {
         fmt::print("error: unrecognized first argument: expected it to be \"server\", a regular command-line argument or a valid tool name (see `scylla --list-tools`), but got {}\n", exec_name);
         return 1;
-    }
-
-    if (recognized) {
-        // shift args to consume the recognized tool name
-        std::shift_left(av + 1, av + ac, 1);
-        --ac;
     }
 
     // Even on the environment which causes error during initalize Scylla,
