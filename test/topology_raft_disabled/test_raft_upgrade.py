@@ -338,7 +338,7 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     srv1, *others = servers
 
     logging.info(f"Killing all nodes except {srv1}")
-    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in others))
+    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in others))
 
     logging.info(f"Entering recovery state on {srv1}")
     host1 = next(h for h in hosts if h.address == srv1.ip_addr)
