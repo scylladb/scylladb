@@ -63,11 +63,11 @@ bear in mind:
   part containing Raft log, thousands and hundreds of thousands of entries,
   and a small register-like memory are to contain Raft
   term, vote and the most recent snapshot descriptor.
-- Raft library calls `state_machine::apply_entry()` for entries
+- Raft library calls `state_machine::apply()` for entries
   reliably committed to the replication log on the majority of
-  servers. While `apply_entry()` is called in the order
+  servers. While `apply()` is called in the order
   the entries were serialized in the distributed log, there is
-  no guarantee that `apply_entry()` is called exactly once.
+  no guarantee that `apply()` is called exactly once.
   E.g. when a server restarts from the persistent state,
   it may re-apply some already applied log entries.
 
@@ -88,7 +88,7 @@ In a nutshell:
 - call server::start() to start the server
 - repeat the above for every node in the cluster
 - use `server::add_entry()` to submit new entries
-  `state_machine::apply_entries()` is called after the added
+  `state_machine::apply()` is called after the added
   entry is committed by the cluster.
 
 ### Subsequent usages
