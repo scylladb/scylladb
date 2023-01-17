@@ -77,7 +77,7 @@ class ManagerClient():
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
         try:
-            cluster_str = await self.client.get_text(f"/cluster/before-test/{test_case_name}")
+            cluster_str = await self.client.get_text(f"/cluster/before-test/{test_case_name}", timeout=600)
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
         except aiohttp.ClientError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
