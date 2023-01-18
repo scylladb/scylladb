@@ -435,7 +435,6 @@ sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
-sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
@@ -1747,7 +1746,7 @@ static main_func_type lookup_main_func(std::string_view name) {
         {"types", tools::scylla_types_main},
         {"sstable", tools::scylla_sstable_main},
     };
-    auto found = std::ranges::find_if(funcs, [name](auto& name_and_func) {
+    auto found = std::ranges::find_if(funcs, [name] (auto& name_and_func) {
         return name_and_func.first == name;
     });
     if (found == std::end(funcs)) {

@@ -973,9 +973,3 @@ cql_test_config raft_cql_test_config() {
     c.db_config->consistent_cluster_management(true);
     return c;
 }
-
-namespace debug {
-
-seastar::sharded<replica::database>* the_database;
-
-}
