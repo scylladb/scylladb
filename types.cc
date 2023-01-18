@@ -735,6 +735,7 @@ bool abstract_type::is_collection() const {
 bool abstract_type::is_tuple() const {
     struct visitor {
         bool operator()(const abstract_type&) { return false; }
+        bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_tuple(); }
         bool operator()(const tuple_type_impl&) { return true; }
     };
     return visit(*this, visitor{});
