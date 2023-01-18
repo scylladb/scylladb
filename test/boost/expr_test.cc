@@ -3873,3 +3873,25 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_like) {
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_not_null) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare =
+            binary_operator(unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)},
+                            oper_t::IS_NOT, make_null_untyped(), comp_order);
+
+        expression expected = binary_operator(column_value(table_schema->get_column_definition("float_col")),
+                                              oper_t::IS_NOT, constant::make_null(float_type), comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::is_not_null_rhs, db,
+                                                        table_schema);
+    }
+}
