@@ -3895,3 +3895,32 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_not_null) {
                                                         table_schema);
     }
 }
+
+// `float_col = NULL`, `float_col < NULL`, ...
+// The RHS should be prepared as a NULL constant with float type.
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_with_null_rhs) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    std::vector<oper_t> possible_operations = {oper_t::EQ,  oper_t::NEQ, oper_t::LT,
+                                               oper_t::LTE, oper_t::GT,  oper_t::GTE};
+
+    for (const oper_t& op : possible_operations) {
+        for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+            expression to_prepare = binary_operator(
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, op,
+                make_null_untyped(), comp_order);
+
+            expression expected = binary_operator(column_value(table_schema->get_column_definition("float_col")), op,
+                                                  constant::make_null(float_type), comp_order);
+
+            test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+            test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_type, db,
+                                                            table_schema);
+        }
+    }
+}
