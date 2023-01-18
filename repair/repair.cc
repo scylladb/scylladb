@@ -26,6 +26,7 @@
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
 #include "gms/feature_service.hh"
+#include "log.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -60,9 +61,7 @@ node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_
 
 void node_ops_info::check_abort() {
     if (as && as->abort_requested()) {
-        auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
-        rlogger.warn("{}", msg);
-        throw std::runtime_error(msg);
+        log_warning_and_throw<std::runtime_error>(rlogger, "Node operation with ops_uuid={} is aborted", ops_uuid);
     }
 }
 

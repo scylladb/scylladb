@@ -306,10 +306,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             slogger.warn("This node was decommissioned, but overriding by operator request.");
             co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         } else {
-            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
+            log_error_and_throw<std::runtime_error>(slogger, "This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
-            slogger.error("{}", msg);
-            throw std::runtime_error(msg);
         }
     }
 
@@ -2010,10 +2008,8 @@ future<> storage_service::decommission() {
                 }
             }
             if (!gossip_nodes_down.empty()) {
-                auto msg = format("decommission[{}]: Rejected decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}, nodes_down={}",
+                log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Rejected decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}, nodes_down={}",
                         uuid, endpoint, nodes, ignore_nodes, gossip_nodes_down);
-                slogger.warn("{}", msg);
-                throw std::runtime_error(msg);
             }
 
             assert(ss._group0);
@@ -2038,14 +2034,10 @@ future<> storage_service::decommission() {
                     });
                 }).get();
                 if (!nodes_unknown_verb.empty()) {
-                    auto msg = format("decommission[{}]: Nodes={} do not support decommission verb. Please upgrade your cluster and run decommission again.", uuid, nodes_unknown_verb);
-                    slogger.warn("{}", msg);
-                    throw std::runtime_error(msg);
+                    log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Nodes={} do not support decommission verb. Please upgrade your cluster and run decommission again.", uuid, nodes_unknown_verb);
                 }
                 if (!nodes_down.empty()) {
-                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
-                    slogger.warn("{}", msg);
-                    throw std::runtime_error(msg);
+                    log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
                 }
 
                 // Step 3: Start heartbeat updater
@@ -2231,14 +2223,10 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
             });
         }).get();
         if (!nodes_unknown_verb.empty()) {
-            auto msg = format("bootstrap[{}]: Nodes={} do not support bootstrap verb. Please upgrade your cluster and run bootstrap again.", uuid, nodes_unknown_verb);
-            slogger.warn("{}", msg);
-            throw std::runtime_error(msg);
+            log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Nodes={} do not support bootstrap verb. Please upgrade your cluster and run bootstrap again.", uuid, nodes_unknown_verb);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
-            slogger.warn("{}", msg);
-            throw std::runtime_error(msg);
+            log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
         }
 
         // Step 4: Start heartbeat updater
@@ -2329,14 +2317,10 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             });
         }).get();
         if (!nodes_unknown_verb.empty()) {
-            auto msg = format("replace[{}]: Nodes={} do not support replace verb. Please upgrade your cluster and run replace again.", uuid, nodes_unknown_verb);
-            slogger.warn("{}", msg);
-            throw std::runtime_error(msg);
+            log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Nodes={} do not support replace verb. Please upgrade your cluster and run replace again.", uuid, nodes_unknown_verb);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes-for-replace <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e", uuid, nodes_down);
-            slogger.warn("{}", msg);
-            throw std::runtime_error(msg);
+            log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes-for-replace <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e", uuid, nodes_down);
         }
 
         // Step 3: Start heartbeat updater
@@ -2506,14 +2490,10 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                         });
                     }).get();
                     if (!nodes_unknown_verb.empty()) {
-                        auto msg = format("removenode[{}]: Nodes={} do not support removenode verb. Please upgrade your cluster and run removenode again.", uuid, nodes_unknown_verb);
-                        slogger.warn("{}", msg);
-                        throw std::runtime_error(msg);
+                        log_warning_and_throw<std::runtime_error>(slogger, "removenode[{}]: Nodes={} do not support removenode verb. Please upgrade your cluster and run removenode again.", uuid, nodes_unknown_verb);
                     }
                     if (!nodes_down.empty()) {
-                        auto msg = format("removenode[{}]: Nodes={} needed for removenode operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool removenode --ignore-dead-nodes <list_of_dead_nodes> <host_id>. E.g., nodetool removenode --ignore-dead-nodes 127.0.0.1,127.0.0.2 817e9515-316f-4fe3-aaab-b00d6f12dddd", uuid, nodes_down);
-                        slogger.warn("{}", msg);
-                        throw std::runtime_error(msg);
+                        log_warning_and_throw<std::runtime_error>(slogger, "removenode[{}]: Nodes={} needed for removenode operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool removenode --ignore-dead-nodes <list_of_dead_nodes> <host_id>. E.g., nodetool removenode --ignore-dead-nodes 127.0.0.1,127.0.0.2 817e9515-316f-4fe3-aaab-b00d6f12dddd", uuid, nodes_down);
                     }
 
                     // Step 4: Start heartbeat updater
@@ -2621,8 +2601,7 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
         }
     }
     if (!msg.empty()) {
-        slogger.warn("{}", msg);
-        throw std::runtime_error(msg);
+        log_warning_and_throw<std::runtime_error>(slogger, "{}", msg);
     }
 }
 
@@ -2662,9 +2641,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         if (req.cmd == node_ops_cmd::removenode_prepare) {
             auto leaving_nodes = req.get_leaving_nodes();
             if (leaving_nodes.size() > 1) {
-                auto msg = format("removenode[{}]: Could not removenode more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
-                slogger.warn("{}", msg);
-                throw std::runtime_error(msg);
+                log_warning_and_throw<std::runtime_error>(slogger, "removenode[{}]: Could not removenode more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
             auto ignore_nodes = req.get_ignore_nodes();
             mutate_token_metadata([coordinator, &req, &leaving_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
@@ -2714,9 +2691,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 "storage_service_decommission_prepare_handler_sleep", std::chrono::milliseconds{1500}).get();
             auto leaving_nodes = req.get_leaving_nodes();
             if (leaving_nodes.size() > 1) {
-                auto msg = format("decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
-                slogger.warn("{}", msg);
-                throw std::runtime_error(msg);
+                log_warning_and_throw<std::runtime_error>(slogger, "decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, leaving_nodes);
             }
             auto ignore_nodes = req.get_ignore_nodes();
             mutate_token_metadata([coordinator, &req, &leaving_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
@@ -2775,9 +2750,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             // Mark the replacing node as replacing
             auto replace_nodes = req.get_replace_nodes();
             if (replace_nodes.size() > 1) {
-                auto msg = format("replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, replace_nodes);
-                slogger.warn("{}", msg);
-                throw std::runtime_error(msg);
+                log_warning_and_throw<std::runtime_error>(slogger, "replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, replace_nodes);
             }
             mutate_token_metadata([coordinator, &req, &replace_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: replace_nodes) {
@@ -2833,9 +2806,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             // Mark the bootstrap node as bootstrapping
             auto bootstrap_nodes = req.get_bootstrap_nodes();
             if (bootstrap_nodes.size() > 1) {
-                auto msg = format("bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, bootstrap_nodes);
-                slogger.warn("{}", msg);
-                throw std::runtime_error(msg);
+                log_warning_and_throw<std::runtime_error>(slogger, "bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, bootstrap_nodes);
             }
             mutate_token_metadata([coordinator, &req, &bootstrap_nodes, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: bootstrap_nodes) {
@@ -2870,9 +2841,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::bootstrap_abort) {
             node_ops_abort(ops_uuid).get();
         } else {
-            auto msg = format("node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, req.cmd);
-            slogger.warn("{}", msg);
-            throw std::runtime_error(msg);
+            log_warning_and_throw<std::runtime_error>(slogger, "node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, req.cmd);
         }
         bool ok = true;
         node_ops_cmd_response resp(ok);

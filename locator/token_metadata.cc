@@ -477,9 +477,7 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
 
 size_t token_metadata_impl::first_token_index(const token& start) const {
     if (_sorted_tokens.empty()) {
-        auto msg = format("sorted_tokens is empty in first_token_index!");
-        tlogger.error("{}", msg);
-        throw std::runtime_error(msg);
+        log_error_and_throw<std::runtime_error>(tlogger, "sorted_tokens is empty in first_token_index!");
     }
     auto it = std::lower_bound(_sorted_tokens.begin(), _sorted_tokens.end(), start);
     if (it == _sorted_tokens.end()) {
@@ -644,9 +642,7 @@ token token_metadata_impl::get_predecessor(token t) const {
     auto& tokens = sorted_tokens();
     auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
     if (it == tokens.end() || *it != t) {
-        auto msg = format("token error in get_predecessor!");
-        tlogger.error("{}", msg);
-        throw std::runtime_error(msg);
+        log_error_and_throw<std::runtime_error>(tlogger, "token error in get_predecessor!");
     }
     if (it == tokens.begin()) {
         // If the token is the first element, its preprocessor is the last element
