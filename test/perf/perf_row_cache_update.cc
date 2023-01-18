@@ -264,7 +264,9 @@ static void test_partition_with_lots_of_range_tombstones_with_residuals() {
     });
 }
 
-int main(int argc, char** argv) {
+namespace perf {
+
+int scylla_row_cache_update_main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [&app] {
         return seastar::async([&] {
@@ -281,3 +283,5 @@ int main(int argc, char** argv) {
         });
     });
 }
+
+} // namespace perf

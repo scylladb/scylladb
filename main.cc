@@ -1747,6 +1747,7 @@ static main_func_type lookup_main_func(std::string_view name) {
         {"types", tools::scylla_types_main},
         {"sstable", tools::scylla_sstable_main},
         {"perf-fast-forward", perf::scylla_fast_forward_main},
+        {"perf-row-cache-update", perf::scylla_row_cache_update_main},
         {"perf-simple-query", perf::scylla_simple_query_main},
     };
     auto found = std::ranges::find_if(funcs, [name] (auto& name_and_func) {
