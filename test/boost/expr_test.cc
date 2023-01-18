@@ -3755,3 +3755,51 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
                                                         table_schema);
     }
 }
+
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("float_list", list_type_impl::get_instance(float_type, true), column_kind::regular_column)
+            .with_column("frozen_float_list", list_type_impl::get_instance(float_type, false),
+                         column_kind::regular_column)
+            .with_column("float_set", set_type_impl::get_instance(float_type, true), column_kind::regular_column)
+            .with_column("frozen_float_set", set_type_impl::get_instance(float_type, false),
+                         column_kind::regular_column)
+            .with_column("double_float_map", map_type_impl::get_instance(double_type, float_type, true),
+                         column_kind::regular_column)
+            .with_column("frozen_double_float_map", map_type_impl::get_instance(double_type, float_type, false),
+                         column_kind::regular_column)
+            .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    std::vector<const char*> possible_lhs_col_names = {"float_list",       "frozen_float_list",
+                                                       "float_set",        "frozen_float_set",
+                                                       "double_float_map", "frozen_double_float_map"};
+
+    std::vector<std::pair<untyped_constant, constant>> possible_rhs_vals = {
+        {make_int_untyped("123"), make_float_const(123)},
+        {
+            make_float_untyped("123.45"),
+            make_float_const(123.45),
+        }};
+
+    for (const char* lhs_col_name : possible_lhs_col_names) {
+        for (auto& [unprepared_rhs, prepared_rhs] : possible_rhs_vals) {
+            for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+                expression to_prepare = binary_operator(
+                    unresolved_identifier{.ident = ::make_shared<column_identifier_raw>(lhs_col_name, false)},
+                    oper_t::CONTAINS, unprepared_rhs, comp_order);
+
+                expression expected = binary_operator(column_value(table_schema->get_column_definition(lhs_col_name)),
+                                                      oper_t::CONTAINS, prepared_rhs, comp_order);
+
+                test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+                test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_type, db,
+                                                                table_schema);
+            }
+        }
+    }
+}
