@@ -59,7 +59,9 @@ struct from_json_visitor {
         bo.write(t.from_string(rjson::to_string_view(v)));
     }
     void operator()(const bytes_type_impl& t) const {
-        bo.write(rjson::base64_decode(v));
+        // FIXME: it's difficult at this point to get information if value was provided
+        // in request or comes from the storage, for now we assume it's user's fault.
+        bo.write(*unwrap_bytes(v, true));
     }
     void operator()(const boolean_type_impl& t) const {
         bo.write(boolean_type->decompose(v.GetBool()));
@@ -198,7 +200,9 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
                 format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
     }
     if (column.type == bytes_type) {
-        return rjson::base64_decode(value);
+        // FIXME: it's difficult at this point to get information if value was provided
+        // in request or comes from the storage, for now we assume it's user's fault.
+        return *unwrap_bytes(value, true);
     } else {
         return column.type->from_string(value_view);
     }
@@ -210,7 +214,7 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
         std::string b64 = base64_encode(cell);
         return rjson::from_string(b64);
     } if (column.type == utf8_type) {
-        return rjson::from_string(std::string(reinterpret_cast<const char*>(cell.data()), cell.size()));
+        return rjson::from_string(reinterpret_cast<const char*>(cell.data()), cell.size());
     } else if (column.type == decimal_type) {
         // FIXME: use specialized Alternator number type, not the more
         // general "decimal_type". A dedicated type can be more efficient
@@ -319,6 +323,17 @@ std::optional<big_decimal> try_unwrap_number(const rjson::value& v) {
     }
 }
 
+std::optional<bytes> unwrap_bytes(const rjson::value& value, bool from_query) {
+    try {
+        return rjson::base64_decode(value);
+    } catch (...) {
+        if (from_query) {
+            throw api_error::serialization(format("Invalid base64 data"));
+        }
+        return std::nullopt;
+    }
+}
+
 const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         return {"", nullptr};
@@ -348,7 +363,7 @@ rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
     auto n1 = unwrap_number(v1, "UpdateExpression");
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
-    std::string str_ret = std::string((n1 + n2).to_string());
+    sstring str_ret = (n1 + n2).to_string();
     rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }
@@ -357,7 +372,7 @@ rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
     auto n1 = unwrap_number(v1, "UpdateExpression");
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
-    std::string str_ret = std::string((n1 - n2).to_string());
+    sstring str_ret = (n1 - n2).to_string();
     rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }

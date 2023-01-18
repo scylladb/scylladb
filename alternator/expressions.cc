@@ -634,7 +634,8 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
             }
             rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
             rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-            return to_bool_json(check_CONTAINS(v1.IsNull() ? nullptr : &v1,  v2));
+            return to_bool_json(check_CONTAINS(v1.IsNull() ? nullptr : &v1,  v2,
+                                    f._parameters[0].is_constant(), f._parameters[1].is_constant()));
         }
     },
 };

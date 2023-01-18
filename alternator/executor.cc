@@ -115,8 +115,7 @@ std::string json_string::to_json() const {
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::add(descr, "TableStatus", "ACTIVE");
-    auto schema_id_str = schema.id().to_sstring();
-    rjson::add(descr, "TableId", rjson::from_string(schema_id_str));
+    rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
     executor::supplement_table_stream_info(descr, schema, sp);
 }
@@ -3568,7 +3567,7 @@ public:
     }
 };
 
-static std::tuple<rjson::value, size_t> describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
+static std::tuple<rjson::value, size_t> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
     auto scanned_count = visitor.get_scanned_count();
@@ -3682,7 +3681,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         }
         auto paging_state = rs->get_metadata().paging_state();
         bool has_filter = filter;
-        auto [items, size] = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+        auto [items, size] = describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
         if (paging_state) {
             rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
         }

@@ -9,7 +9,7 @@
 #include "base64.hh"
 
 #include <ctype.h>
-
+#include <seastar/core/print.hh>
 
 // Arrays for quickly converting to and from an integer between 0 and 63,
 // and the character used in base64 encoding to represent it.
@@ -17,11 +17,12 @@ static class base64_chars {
 public:
     static constexpr const char to[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int8_t from[255];
+    static constexpr uint8_t invalid_char = 255;
+    uint8_t from[255];
     base64_chars() {
         static_assert(sizeof(to) == 64 + 1);
         for (int i = 0; i < 255; i++) {
-            from[i] = -1; // signal invalid character
+            from[i] = invalid_char; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
             from[(unsigned) to[i]] = i;
@@ -60,17 +61,30 @@ std::string base64_encode(bytes_view in) {
     return ret;
 }
 
+static size_t base64_padding_len(std::string_view str) {
+    size_t padding = 0;
+    padding += (!str.empty() && str.back() == '=');
+    padding += (str.size() > 1 && *(str.end() - 2) == '=');
+    return padding;
+}
+
+static void base64_trim_padding(std::string_view& str) {
+    if (str.size() % 4 != 0) {
+        throw std::invalid_argument(format("Base64 encoded length is expected a multiple of 4 bytes but found: {}", str.size()));
+    }
+    str.remove_suffix(base64_padding_len(str));
+}
+
 static std::string base64_decode_string(std::string_view in) {
+    base64_trim_padding(in);
     int i = 0;
     int8_t chunk4[4]; // chunk of input, each byte converted to 0..63;
     std::string ret;
     ret.reserve(in.size() * 3 / 4);
     for (unsigned char c : in) {
         uint8_t dc = base64_chars.from[c];
-        if (dc == 255) {
-            // Any unexpected character, include the "=" character usually
-            // used for padding, signals the end of the decode.
-            break;
+        if (dc == base64_chars::invalid_char) {
+           throw std::invalid_argument(format("Invalid Base64 character: '{}'", char(c)));
         }
         chunk4[i++] = dc;
         if (i == 4) {
@@ -96,13 +110,6 @@ bytes base64_decode(std::string_view in) {
     // To fix this we need to use bytes' "uninitialized" feature.
     std::string ret = base64_decode_string(in);
     return bytes(ret.begin(), ret.end());
-}
-
-static size_t base64_padding_len(std::string_view str) {
-    size_t padding = 0;
-    padding += (!str.empty() && str.back() == '=');
-    padding += (str.size() > 1 && *(str.end() - 2) == '=');
-    return padding;
 }
 
 size_t base64_decoded_len(std::string_view str) {

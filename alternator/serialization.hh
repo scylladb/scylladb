@@ -62,6 +62,11 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
 // when the given v does not encode a number.
 std::optional<big_decimal> try_unwrap_number(const rjson::value& v);
 
+// unwrap_bytes decodes byte value, on decoding failure it either raises api_error::serialization
+// iff from_query is true or returns unset optional iff from_query is false.
+// Therefore it's safe to dereference returned optional when called with from_query equal true.
+std::optional<bytes> unwrap_bytes(const rjson::value& value, bool from_query);
+
 // Check if a given JSON object encodes a set (i.e., it is a {"SS": [...]}, or "NS", "BS"
 // and returns set's type and a pointer to that set. If the object does not encode a set,
 // returned value is {"", nullptr}

@@ -98,7 +98,7 @@ def test_filter_expression_sort_key(test_table_sn_with_data):
 # bytes, list, map, set, bool):
 def test_filter_expression_eq(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
-    for xn in ['i', 's', 'b', 'l', 'm', 'ns', 'bool']:
+    for xn in ['i', 's', 'b', 'l', 'm', 'ns', 'ss', 'bool']:
         xv = items[2][xn]
         got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression=(xn+'=:xv'),
             ExpressionAttributeValues={':p': p, ':xv': xv})

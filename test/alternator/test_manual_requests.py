@@ -9,8 +9,10 @@ import pytest
 import requests
 import json
 import urllib3
+import base64
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
+from util import random_bytes
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
@@ -241,3 +243,72 @@ def test_exception_escape_raw(dynamodb, test_table_s):
     # In issue #10278, the JSON parsing fails:
     r = json.loads(response.text)
     assert 'ValidationException' in r['__type']
+
+def put_item_binary_data_in_key(dynamodb, test_table_b, item_data):
+    payload = '{"TableName": "%s", "Item": {"p": {"B": "%s"}}}' % (test_table_b.name, item_data)
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+def put_item_binary_data_in_non_key(dynamodb, test_table_b, item_data):
+    payload ='''{
+        "TableName": "%s",
+        "Item": {
+            "p": {
+                "B": "%s"
+            },
+            "c": {
+                "B": "%s"
+            }
+        }
+    }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# Reproduces issue #6487 where setting binary values with missing "=" padding characters
+# was allowed in Scylla.
+def test_base64_missing_padding(dynamodb, test_table_b):
+    r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
+    assert r.status_code == 400
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
+    assert r.status_code == 400
+
+# Tests the case where non base64 text is placed as binary data value.
+def test_base64_malformed(dynamodb, test_table_b):
+    r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400
+
+def scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, filter_expr, expr_attr_values):
+    payload ='''{
+        "TableName": "%s",
+        "FilterExpression": "%s",
+        "ExpressionAttributeValues": { %s }
+    }''' % (test_table_b.name, filter_expr, expr_attr_values)
+    req = get_signed_request(dynamodb, 'Scan', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# Tests the case where malformed binary data is placed as part of filter expression
+def test_base64_malformed_cond_expr(dynamodb, test_table_b):
+    # put some data
+    c_data = base64.b64encode(b"fefe").decode()
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, c_data)
+    assert r.status_code == 200
+
+    malformed_data = "ZmVmZQ=!" # has the same length as c_data to test begins_with
+    exp_attr = '''":v": {"B": "%s"}''' % malformed_data
+
+    # note that expression "c = :v" or "c in(:v)" would fail on dynamodb but not on alternator
+    # as we don't deserialize in this case
+    for exp in [
+            "c > :v",
+            ":v > c",
+            "NOT c > :v",
+            "contains(c, :v)",
+            "contains(:v, c)",
+            "c between :v and :v",
+            ":v between c and c",
+            "begins_with(c, :v)",
+            "begins_with(:v, c)"]:
+        r = scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, exp, exp_attr)
+        assert r.status_code == 400, "Failed on expression \"%s\"" % (exp)
