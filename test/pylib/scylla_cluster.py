@@ -706,6 +706,8 @@ class ScyllaCluster:
         to any specific test, throwing it here would stop a specific
         test."""
         if self.start_exception:
+            # Mark as dirty so further test cases don't try to reuse this cluster.
+            self.is_dirty = True
             raise self.start_exception
 
         for server in self.running.values():
