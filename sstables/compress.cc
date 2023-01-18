@@ -388,8 +388,9 @@ public:
         if (_pos != _beg_pos && addr.offset != 0) {
             throw std::runtime_error("compressed reader out of sync");
         }
-        return _input_stream->read_exactly(addr.chunk_len).
-            then([this, addr](temporary_buffer<char> buf) {
+        return _input_stream->read_exactly(addr.chunk_len).then([this, addr](temporary_buffer<char> buf) {
+            return _permit.request_memory(_compression_metadata->uncompressed_chunk_length()).then(
+                    [this, addr, buf = std::move(buf)] (reader_permit::resource_units res_units) mutable {
                 // The last 4 bytes of the chunk are the adler32/crc32 checksum
                 // of the rest of the (compressed) chunk.
                 auto compressed_len = addr.chunk_len - 4;
@@ -415,7 +416,8 @@ public:
                 _pos += out.size();
                 _underlying_pos += addr.chunk_len;
 
-                return make_tracked_temporary_buffer(std::move(out), _permit);
+                return make_tracked_temporary_buffer(std::move(out), std::move(res_units));
+            });
         });
     }
 

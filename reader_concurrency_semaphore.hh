@@ -15,6 +15,7 @@
 #include <seastar/core/expiring_fifo.hh>
 #include "reader_permit.hh"
 #include "readers/flat_mutation_reader_v2.hh"
+#include "utils/updateable_value.hh"
 
 namespace bi = boost::intrusive;
 
@@ -40,6 +41,21 @@ using namespace seastar;
 /// type `std::runtime_error` is thrown. Optionally, some additional
 /// code can be executed just before throwing (`prethrow_action` 
 /// constructor parameter).
+///
+/// The semaphore has 3 layers of defense against consuming more memory
+/// than desired:
+/// 1) After memory consumption is larger than the configured memory limit,
+///    no more reads are admitted
+/// 2) After memory consumption is larger than `_serialize_limit_multiplier`
+///    times the configured memory limit, reads are serialized: only one of them
+///    is allowed to make progress, the rest is made to wait before they can
+///    consume more memory. Enforced via `request_memory()`.
+/// 4) After memory consumption is larger than `_kill_limit_multiplier`
+///    times the configured memory limit, reads are killed, by `consume()`
+///    throwing `std::bad_alloc`.
+///
+/// This makes `_kill_limit_multiplier` times the memory limit the effective
+/// upper bound of the memory consumed by reads.
 ///
 /// The semaphore also acts as an execution stage for reads. This
 /// functionality is exposed via \ref with_permit() and \ref
@@ -71,10 +87,14 @@ public:
         uint64_t total_failed_reads = 0;
         // Total number of reads rejected because the admission queue reached its max capacity
         uint64_t total_reads_shed_due_to_overload = 0;
+        // Total number of reads killed due to the memory consumption reaching the kill limit.
+        uint64_t total_reads_killed_due_to_kill_limit = 0;
         // Total number of reads admitted, via all admission paths.
         uint64_t reads_admitted = 0;
         // Total number of reads enqueued to wait for admission.
-        uint64_t reads_enqueued = 0;
+        uint64_t reads_enqueued_for_admission = 0;
+        // Total number of reads enqueued to wait for memory.
+        uint64_t reads_enqueued_for_memory = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -177,11 +197,48 @@ private:
     resources _initial_resources;
     resources _resources;
 
-    expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
+    class wait_queue {
+        // Stores entries for permits waiting to be admitted.
+        expiring_fifo<entry, expiry_handler, db::timeout_clock> _admission_queue;
+        // Stores entries for serialized permits waiting to obtain memory.
+        expiring_fifo<entry, expiry_handler, db::timeout_clock> _memory_queue;
+    public:
+        wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
+        size_t size() const {
+            return _admission_queue.size() + _memory_queue.size();
+        }
+        bool empty() const {
+            return _admission_queue.empty() && _memory_queue.empty();
+        }
+        void push_to_admission_queue(entry&& e, db::timeout_clock::time_point timeout) {
+            _admission_queue.push_back(std::move(e), timeout);
+        }
+        void push_to_memory_queue(entry&& e, db::timeout_clock::time_point timeout) {
+            _memory_queue.push_back(std::move(e), timeout);
+        }
+        entry& front() {
+            if (_memory_queue.empty()) {
+                return _admission_queue.front();
+            } else {
+                return _memory_queue.front();
+            }
+        }
+        void pop_front() {
+            if (_memory_queue.empty()) {
+                _admission_queue.pop_front();
+            } else {
+                _memory_queue.pop_front();
+            }
+        }
+    };
+
+    wait_queue _wait_list;
     queue<entry> _ready_list;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
+    utils::updateable_value<uint32_t> _serialize_limit_multiplier;
+    utils::updateable_value<uint32_t> _kill_limit_multiplier;
     inactive_reads_type _inactive_reads;
     stats _stats;
     permit_list_type _permit_list;
@@ -190,6 +247,7 @@ private:
     gate _close_readers_gate;
     gate _permit_gate;
     std::optional<future<>> _execution_loop_future;
+    reader_permit::impl* _blessed_permit = nullptr;
 
 private:
     void do_detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
@@ -204,7 +262,8 @@ private:
 
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<> enqueue_waiter(reader_permit permit, read_func func);
+    enum class wait_on { admission, memory };
+    future<> enqueue_waiter(reader_permit permit, read_func func, wait_on wait);
     void evict_readers_in_background();
     future<> do_wait_admission(reader_permit permit, read_func func = {});
 
@@ -217,6 +276,16 @@ private:
     can_admit can_admit_read(const reader_permit& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
+
+    // Request more memory for the permit.
+    // Request is instantly granted while memory consumption of all reads is
+    // below _kill_limit_multiplier.
+    // After memory consumption goes above the above limit, only one reader
+    // (permit) is allowed to make progress, this method will block for all other
+    // one, until:
+    // * The blessed read finishes and a new blessed permit is choosen.
+    // * Memory consumption falls below the limit.
+    future<> request_memory(reader_permit::impl& permit, size_t memory);
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
@@ -234,6 +303,13 @@ private:
 
     future<> execution_loop() noexcept;
 
+    uint64_t get_serialize_limit() const;
+    uint64_t get_kill_limit() const;
+
+    // Throws std::bad_alloc if memory consumed is oom_kill_limit_multiply_threshold more than the memory limit.
+    void consume(reader_permit::impl& permit, resources r);
+    void signal(const resources& r) noexcept;
+
 public:
     struct no_limits { };
 
@@ -243,7 +319,9 @@ public:
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
-            size_t max_queue_length);
+            size_t max_queue_length,
+            utils::updateable_value<uint32_t> serialize_limit_multiplier,
+            utils::updateable_value<uint32_t> kill_limit_multiplier);
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
@@ -258,8 +336,10 @@ public:
     reader_concurrency_semaphore(for_tests, sstring name,
             int count = std::numeric_limits<int>::max(),
             ssize_t memory = std::numeric_limits<ssize_t>::max(),
-            size_t max_queue_length = std::numeric_limits<size_t>::max())
-        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length)
+            size_t max_queue_length = std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler), std::move(kill_limit_multipler))
     {}
 
     virtual ~reader_concurrency_semaphore();
@@ -427,12 +507,6 @@ public:
         return _initial_resources - _resources;
     }
 
-    void consume(resources r) {
-        _resources -= r;
-    }
-
-    void signal(const resources& r) noexcept;
-
     size_t waiters() const {
         return _wait_list.size();
     }
@@ -452,4 +526,6 @@ public:
     uint64_t active_reads() const noexcept {
         return _stats.current_permits - _stats.inactive_reads - waiters();
     }
+
+    void foreach_permit(noncopyable_function<void(const reader_permit&)> func);
 };

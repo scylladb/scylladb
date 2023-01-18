@@ -79,7 +79,8 @@ public:
     class blocked_guard;
 
     enum class state {
-        waiting, // waiting for admission
+        waiting_for_admission,
+        waiting_for_memory,
         active_unused,
         active_used,
         active_blocked,
@@ -100,8 +101,12 @@ private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
             reader_resources base_resources, db::timeout_clock::time_point timeout);
 
-    void on_waiting();
+    void on_waiting_for_admission();
+    void on_waiting_for_memory(future<> f);
     void on_admission();
+    void on_granted_memory();
+
+    future<> get_memory_future();
 
     void mark_used() noexcept;
 
@@ -130,6 +135,8 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
+    state get_state() const;
+
     bool needs_readmission() const;
 
     // Call only when needs_readmission() = true.
@@ -142,6 +149,8 @@ public:
     resource_units consume_memory(size_t memory = 0);
 
     resource_units consume_resources(reader_resources res);
+
+    future<resource_units> request_memory(size_t memory);
 
     reader_resources consumed_resources() const;
 
@@ -160,6 +169,8 @@ public:
 
     void on_start_sstable_read() noexcept;
     void on_finish_sstable_read() noexcept;
+
+    uintptr_t id() { return reinterpret_cast<uintptr_t>(_impl.get()); }
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;
@@ -171,7 +182,9 @@ class reader_permit::resource_units {
     friend class reader_permit;
     friend class reader_concurrency_semaphore;
 private:
-    resource_units(reader_permit permit, reader_resources res) noexcept;
+    class already_consumed_tag {};
+    resource_units(reader_permit permit, reader_resources res, already_consumed_tag);
+    resource_units(reader_permit permit, reader_resources res);
 public:
     resource_units(const resource_units&) = delete;
     resource_units(resource_units&&) noexcept;
@@ -183,6 +196,8 @@ public:
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
 };
+
+std::ostream& operator<<(std::ostream& os, reader_permit::state s);
 
 /// Mark a permit as used.
 ///
@@ -234,9 +249,13 @@ public:
 };
 
 template <typename Char>
-temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit& permit) {
-    return temporary_buffer<Char>(buf.get_write(), buf.size(),
-            make_deleter(buf.release(), [units = permit.consume_memory(buf.size())] () mutable { units.reset(); }));
+temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit::resource_units units) {
+    return temporary_buffer<Char>(buf.get_write(), buf.size(), make_object_deleter(buf.release(), std::move(units)));
+}
+
+inline temporary_buffer<char> make_new_tracked_temporary_buffer(size_t size, reader_permit& permit) {
+    auto buf = temporary_buffer<char>(size);
+    return temporary_buffer<char>(buf.get_write(), buf.size(), make_object_deleter(buf.release(), permit.consume_memory(size)));
 }
 
 file make_tracked_file(file f, reader_permit p);

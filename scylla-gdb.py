@@ -2059,36 +2059,30 @@ class scylla_memory(gdb.Command):
         gdb.write('\n')
 
     @staticmethod
+    def format_semaphore_stats(semaphore):
+        semaphore_name = "{} sstable reads:".format(str(semaphore['_name'])[1:-1].split("_")[1])
+        initial_count = int(semaphore["_initial_resources"]["count"])
+        initial_memory = int(semaphore["_initial_resources"]["memory"])
+        used_count = initial_count - int(semaphore["_resources"]["count"])
+        used_memory = initial_memory - int(semaphore["_resources"]["memory"])
+        try:
+            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+        except gdb.error: # 5.1 compatibility
+            waiters = int(semaphore["_wait_list"]["_size"])
+        return f'{semaphore_name:<24} {used_count:>3}/{initial_count:>3}, {used_memory:>13}/{initial_memory:>13}, queued: {waiters}'
+
+    @staticmethod
     def print_replica_stats():
         db = find_db()
         if not db:
             return
 
-        try:
-            mem_stats = dict()
-            for key, sem in [('user_mem_str', db['_read_concurrency_sem']), ('streaming_mem_str', db['_streaming_concurrency_sem']), ('system_mem_str', db['_system_read_concurrency_sem'])]:
-                mem_stats[key] = '{:>13}/{:>13} B'.format(int(sem['_initial_resources']['memory'] - sem['_resources']['memory']), int(sem['_initial_resources']['memory']))
-        except gdb.error: # <= 4.2 compatibility
-            for key, sem in [('user_mem_str', db['_read_concurrency_sem']), ('streaming_mem_str', db['_streaming_concurrency_sem']), ('system_mem_str', db['_system_read_concurrency_sem'])]:
-                mem_stats[key] = 'remaining mem: {:>13} B'.format(int(sem['_resources']['memory']))
-
         database_typename = lookup_type(['replica::database', 'database'])[1].name
         gdb.write('Replica:\n')
-        gdb.write('  Read Concurrency Semaphores:\n'
-                '    user sstable reads:      {user_sst_rd_count:>3}/{user_sst_rd_max_count:>3}, {user_mem_str}, queued: {user_sst_rd_queued}\n'
-                '    streaming sstable reads: {streaming_sst_rd_count:>3}/{streaming_sst_rd_max_count:>3}, {streaming_mem_str}, queued: {streaming_sst_rd_queued}\n'
-                '    system sstable reads:    {system_sst_rd_count:>3}/{system_sst_rd_max_count:>3}, {system_mem_str}, queued: {system_sst_rd_queued}\n'
-                .format(
-                        user_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_concurrent_reads')) - int(db['_read_concurrency_sem']['_resources']['count']),
-                        user_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_concurrent_reads')),
-                        user_sst_rd_queued=int(db['_read_concurrency_sem']['_wait_list']['_size']),
-                        streaming_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_streaming_concurrent_reads')) - int(db['_streaming_concurrency_sem']['_resources']['count']),
-                        streaming_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_streaming_concurrent_reads')),
-                        streaming_sst_rd_queued=int(db['_streaming_concurrency_sem']['_wait_list']['_size']),
-                        system_sst_rd_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_system_concurrent_reads')) - int(db['_system_read_concurrency_sem']['_resources']['count']),
-                        system_sst_rd_max_count=int(gdb.parse_and_eval(f'{database_typename}::max_count_system_concurrent_reads')),
-                        system_sst_rd_queued=int(db['_system_read_concurrency_sem']['_wait_list']['_size']),
-                        **mem_stats))
+        gdb.write('  Read Concurrency Semaphores:\n    {}\n    {}\n    {}\n'.format(
+                scylla_memory.format_semaphore_stats(db['_read_concurrency_sem']),
+                scylla_memory.format_semaphore_stats(db['_streaming_concurrency_sem']),
+                scylla_memory.format_semaphore_stats(db['_system_read_concurrency_sem'])))
 
         gdb.write('  Execution Stages:\n')
         for es_path in [('_apply_stage',)]:
@@ -4285,7 +4279,7 @@ class scylla_generate_object_graph(gdb.Command):
     at. The generated graph is an image, which allows the visual inspection of the
     object graph.
 
-    The graph is generated with the help of `graphwiz`. The command
+    The graph is generated with the help of `graphviz`. The command
     generates `.dot` files which can be converted to images with the help of
     the `dot` utility. The command can do this if the output file is one of
     the supported image formats (e.g. `png`), otherwise only the `.dot` file
@@ -4398,7 +4392,7 @@ class scylla_generate_object_graph(gdb.Command):
                 help="Output file. Supported extensions are: dot, png, jpg, jpeg, svg and pdf."
                 " Regardless of the extension, a `.dot` file will always be generated."
                 " If the output is one of the graphic formats the command will convert the `.dot` file using the `dot` utility."
-                " In this case the dot utility from the graphwiz suite has to be installed on the machine."
+                " In this case the dot utility from the graphviz suite has to be installed on the machine."
                 " To manually convert the `.dot` file do: `dot -Tpng graph.dot -o graph.png`.")
         parser.add_argument("-d", "--max-depth", action="store", type=int, default=5,
                 help="Maximum depth to traverse the object graph. Set to -1 for unlimited depth. Default is 5.")
@@ -5154,11 +5148,17 @@ class scylla_read_stats(gdb.Command):
         else:
             inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
 
+
+        try:
+            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+        except gdb.error: # 5.1 compatibility
+            waiters = int(semaphore["_wait_list"]["_size"])
+
         gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
                 semaphore_name,
                 initial_count - int(semaphore['_resources']['count']), initial_count,
                 initial_memory - int(semaphore['_resources']['memory']), initial_memory,
-                int(semaphore['_wait_list']['_size']), inactive_read_count))
+                waiters, inactive_read_count))
 
         gdb.write("{:>10} {:5} {:>12} {}\n".format('permits', 'count', 'memory', 'table/description/state'))
 

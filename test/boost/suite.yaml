@@ -31,6 +31,6 @@ custom_args:
     cql_query_test:
         - '-c2 -m2G --fail-on-abandoned-failed-futures=true'
     reader_concurrency_semaphore_test:
-        - '-c1 -m1G'
+        - '-c1 -m256M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test

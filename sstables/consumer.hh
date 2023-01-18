@@ -134,7 +134,7 @@ private:
                 return read_status::ready;
             } else {
                 _read_bytes.clear();
-                _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
+                _read_bytes.push_back(make_new_tracked_temporary_buffer(len, _permit));
                 std::copy(data.begin(), data.end(), _read_bytes.front().get_write());
                 _read_bytes_len = len;
                 _pos = data.size();
@@ -208,7 +208,7 @@ public:
         } else {
             // copy what we have so far, read the rest later
             _read_bytes.clear();
-            _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
+            _read_bytes.push_back(make_new_tracked_temporary_buffer(len, _permit));
             std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
             _read_bytes_len = len;
             _read_bytes_where_contiguous = &where;
@@ -273,7 +273,7 @@ public:
                 return read_bytes_contiguous(data, static_cast<uint32_t>(_u64), where);
             } else {
                 _read_bytes.clear();
-                _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
+                _read_bytes.push_back(make_new_tracked_temporary_buffer(len, _permit));
                 std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
                 _read_bytes_len = len;
                 _pos = data.size();
@@ -298,7 +298,7 @@ public:
                 return read_bytes(data, static_cast<uint32_t>(_u64), where);
             } else {
                 _read_bytes.clear();
-                _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
+                _read_bytes.push_back(make_new_tracked_temporary_buffer(len, _permit));
                 std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
                 _read_bytes_len = len;
                 _pos = data.size();

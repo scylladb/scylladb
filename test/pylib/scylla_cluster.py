@@ -97,6 +97,9 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
 
         'permissions_update_interval_in_ms': 100,
         'permissions_validity_in_ms': 100,
+
+        'reader_concurrency_semaphore_serialize_limit_multiplier': 0,
+        'reader_concurrency_semaphore_kill_limit_multiplier': 0,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
