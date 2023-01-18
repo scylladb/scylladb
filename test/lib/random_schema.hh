@@ -16,6 +16,8 @@
 /// Random schema and random data generation related utilities.
 ///
 
+class cql_test_env;
+
 namespace tests {
 
 class random_schema_specification {
@@ -172,6 +174,13 @@ public:
     }
 
     sstring cql() const;
+
+    /// Create the generated schema as a table via CQL.
+    ///
+    /// Along with all its dependencies, like UDTs.
+    /// The underlying schema_ptr instance is replaced with the one from the
+    /// local table instance.
+    future<> create_with_cql(cql_test_env& env);
 
     /// Make a partition key which is n-th in some arbitrary sequence of keys.
     ///

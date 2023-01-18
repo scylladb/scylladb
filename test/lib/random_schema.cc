@@ -14,6 +14,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/mutation_fragment.hh"
 #include "schema/schema_builder.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "types/list.hh"
@@ -1077,6 +1078,34 @@ void random_schema::delete_range(
     auto expiry_opt = exp_gen(engine, timestamp_destination::range_tombstone);
     const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now();
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), deletion_time});
+}
+
+future<> random_schema::create_with_cql(cql_test_env& env) {
+    return async([this, &env] {
+        const auto ks_name = _schema->ks_name();
+        const auto tbl_name = _schema->cf_name();
+
+        for (const auto& udt : dump_udts(*_schema)) {
+            env.execute_cql(udt_to_str(*udt)).get();
+            eventually_true([&] () mutable {
+                return env.db().map_reduce0([&] (replica::database& db) {
+                    return db.user_types().get(ks_name).has_type(udt->get_name());
+                }, true, std::logical_and<bool>{}).get();
+            });
+        }
+
+        auto& db = env.local_db();
+
+        std::stringstream ss;
+        _schema->describe(db, ss, false);
+
+        env.execute_cql(ss.str()).get();
+
+        env.require_table_exists(ks_name, tbl_name).get();
+        auto& tbl = db.find_column_family(ks_name, tbl_name);
+
+        _schema = tbl.schema();
+    });
 }
 
 future<std::vector<mutation>> generate_random_mutations(
