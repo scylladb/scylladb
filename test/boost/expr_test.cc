@@ -3492,3 +3492,266 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_multi_column) 
         }
     }
 }
+
+
+// `float_col IN ()`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_empty_list) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
+            collection_constructor{.style = collection_constructor::style_type::list, .elements = {}}, comp_order);
+
+        expression expected =
+            binary_operator(column_value(table_schema->get_column_definition("float_col")), oper_t::IN,
+                            constant(make_list_raw({}), list_type_impl::get_instance(float_type, false)), comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_in_list, db, table_schema);
+    }
+}
+
+// `float_col IN (1, 2.3)`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_dot_3) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
+            collection_constructor{.style = collection_constructor::style_type::list,
+                                   .elements = {make_int_untyped("1"), make_float_untyped("2.3")}},
+            comp_order);
+
+        expression expected =
+            binary_operator(column_value(table_schema->get_column_definition("float_col")), oper_t::IN,
+                            constant(make_list_raw({make_float_raw(1), make_float_raw(2.3)}),
+                                     list_type_impl::get_instance(float_type, false)),
+                            comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_in_list, db, table_schema);
+    }
+}
+
+// `float_col IN (1, 2, 3, 4)`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_3_4) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::regular_column)
+                                  .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
+            collection_constructor{.style = collection_constructor::style_type::list,
+                                   .elements =
+                                       {
+                                           make_int_untyped("1"),
+                                           make_int_untyped("2"),
+                                           make_int_untyped("3"),
+                                           make_int_untyped("4"),
+                                       }},
+            comp_order);
+
+        expression expected = binary_operator(
+            column_value(table_schema->get_column_definition("float_col")), oper_t::IN,
+            constant(make_list_raw({make_float_raw(1), make_float_raw(2), make_float_raw(3), make_float_raw(4)}),
+                     list_type_impl::get_instance(float_type, false)),
+            comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_in_list, db, table_schema);
+    }
+}
+
+// reverse_float_col IN ()
+BOOST_AUTO_TEST_CASE(prepare_binary_operato_reverse_float_col_in_empty_list) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("reverse_float_col", reversed_type_impl::get_instance(float_type), column_kind::regular_column)
+            .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_float_col", false)},
+            oper_t::IN, collection_constructor{.style = collection_constructor::style_type::list, .elements = {}},
+            comp_order);
+
+        expression expected =
+            binary_operator(column_value(table_schema->get_column_definition("reverse_float_col")), oper_t::IN,
+                            constant(make_list_raw({}), list_type_impl::get_instance(float_type, false)), comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_in_list, db, table_schema);
+    }
+}
+
+// `reverse_float_col IN (1.2, 2.3)`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_dot_2_2_dot_3) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("reverse_float_col", reversed_type_impl::get_instance(float_type), column_kind::regular_column)
+            .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_float_col", false)},
+            oper_t::IN,
+            collection_constructor{.style = collection_constructor::style_type::list,
+                                   .elements = {make_float_untyped("1.2"), make_float_untyped("2.3")}},
+            comp_order);
+
+        expression expected =
+            binary_operator(column_value(table_schema->get_column_definition("reverse_float_col")), oper_t::IN,
+                            constant(make_list_raw({make_float_raw(1.2), make_float_raw(2.3)}),
+                                     list_type_impl::get_instance(float_type, false)),
+                            comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_in_list, db, table_schema);
+    }
+}
+
+// `(float_col, int_col, text_col, reverse_double_col) IN ()`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::clustering_key)
+                                  .with_column("int_col", int32_type, column_kind::clustering_key)
+                                  .with_column("text_col", utf8_type, column_kind::clustering_key)
+                                  .with_column("reverse_double_col", reversed_type_impl::get_instance(double_type))
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression unprepared_lhs = tuple_constructor{
+        .elements =
+            {
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("int_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("text_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_double_col", false)},
+            },
+        .type = nullptr};
+
+    data_type tuple_type = tuple_type_impl::get_instance(
+        {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)});
+
+    expression prepared_lhs =
+        tuple_constructor{.elements = {column_value(table_schema->get_column_definition("float_col")),
+                                       column_value(table_schema->get_column_definition("int_col")),
+                                       column_value(table_schema->get_column_definition("text_col")),
+                                       column_value(table_schema->get_column_definition("reverse_double_col"))},
+                          .type = tuple_type};
+
+    expression unprepared_rhs =
+        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}};
+
+    // reversed is removed!
+    expression prepared_rhs = constant(
+        make_list_raw({}), list_type_impl::get_instance(
+                               tuple_type_impl::get_instance({float_type, int32_type, utf8_type, double_type}), false));
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(unprepared_lhs, oper_t::IN, unprepared_rhs, comp_order);
+
+        expression expected = binary_operator(prepared_lhs, oper_t::IN, prepared_rhs, comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::multi_column_tuple_in_list, db,
+                                                        table_schema);
+    }
+}
+
+// `(float_col, int_col, text_col, reverse_double_col) IN ((1.2, 3, 'four', 8.9), (5, 6, 'seven', 10.11))`
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("float_col", float_type, column_kind::clustering_key)
+                                  .with_column("int_col", int32_type, column_kind::clustering_key)
+                                  .with_column("text_col", utf8_type, column_kind::clustering_key)
+                                  .with_column("reverse_double_col", reversed_type_impl::get_instance(double_type))
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression unprepared_lhs = tuple_constructor{
+        .elements =
+            {
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("int_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("text_col", false)},
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_double_col", false)},
+            },
+        .type = nullptr};
+
+    data_type tuple_type = tuple_type_impl::get_instance(
+        {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)});
+
+    expression prepared_lhs =
+        tuple_constructor{.elements = {column_value(table_schema->get_column_definition("float_col")),
+                                       column_value(table_schema->get_column_definition("int_col")),
+                                       column_value(table_schema->get_column_definition("text_col")),
+                                       column_value(table_schema->get_column_definition("reverse_double_col"))},
+                          .type = tuple_type};
+
+    expression unprepared_rhs =
+        collection_constructor{.style = collection_constructor::style_type::list,
+                               .elements = {tuple_constructor{.elements =
+                                                                  {
+                                                                      make_float_untyped("1.2"),
+                                                                      make_int_untyped("3"),
+                                                                      make_string_untyped("four"),
+                                                                      make_float_untyped("8.9"),
+                                                                  }},
+                                            tuple_constructor{.elements = {
+                                                                  make_int_untyped("5"),
+                                                                  make_int_untyped("6"),
+                                                                  make_string_untyped("seven"),
+                                                                  make_float_untyped("10.11"),
+                                                              }}}};
+
+    raw_value prepared_rhs_raw = make_list_raw(
+        {make_tuple_raw({make_float_raw(1.2), make_int_raw(3), make_text_raw("four"), make_double_raw(8.9)}),
+         make_tuple_raw({make_float_raw(5), make_int_raw(6), make_text_raw("seven"), make_double_raw(10.11)})});
+
+    // reversed is removed!
+    data_type prepared_rhs_type = list_type_impl::get_instance(
+        tuple_type_impl::get_instance({float_type, int32_type, utf8_type, double_type}), false);
+
+    expression prepared_rhs = constant(prepared_rhs_raw, prepared_rhs_type);
+
+    for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+        expression to_prepare = binary_operator(unprepared_lhs, oper_t::IN, unprepared_rhs, comp_order);
+
+        expression expected = binary_operator(prepared_lhs, oper_t::IN, prepared_rhs, comp_order);
+
+        test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+        test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::multi_column_tuple_in_list, db,
+                                                        table_schema);
+    }
+}
