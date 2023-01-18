@@ -8,6 +8,7 @@
 
 namespace perf {
 
+int scylla_fast_forward_main(int argc, char** argv);
 int scylla_simple_query_main(int argc, char** argv);
 
 } // namespace tools

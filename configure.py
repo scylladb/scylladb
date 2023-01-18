@@ -513,7 +513,6 @@ scylla_tests = set([
     'test/perf/perf_cache_eviction',
     'test/perf/perf_commitlog',
     'test/perf/perf_cql_parser',
-    'test/perf/perf_fast_forward',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
@@ -1171,7 +1170,8 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc']
 
 scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc', 'tools/lua_sstable_consumer.cc']
-scylla_perfs = ['test/perf/perf_simple_query.cc',
+scylla_perfs = ['test/perf/perf_fast_forward.cc',
+                'test/perf/perf_simple_query.cc',
                 'test/perf/perf.cc',
                 'test/lib/alternator_test_env.cc',
                 'test/lib/cql_test_env.cc',
@@ -1282,7 +1282,6 @@ deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
-deps['test/perf/perf_fast_forward'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
