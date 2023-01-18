@@ -1235,7 +1235,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_list) {
 
     expression sub =
         subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
-                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+                  .sub = make_int_untyped("123")};
 
     expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
 
@@ -1256,7 +1256,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_map) {
 
     expression sub =
         subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
-                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+                  .sub = make_bool_untyped("true")};
 
     expression prepared = prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr);
 
@@ -1276,7 +1276,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_set) {
 
     expression sub =
         subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
-                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+                  .sub = make_int_untyped("123")};
 
     BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -1292,7 +1292,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_list_checks_type) {
 
     expression sub =
         subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
-                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}};
+                  .sub = make_bool_untyped("true")};
 
     BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -1308,7 +1308,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
 
     expression sub =
         subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r", true)},
-                  .sub = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}};
+                  .sub = make_int_untyped("123")};
 
     BOOST_REQUIRE_THROW(prepare_expression(sub, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -1357,7 +1357,7 @@ BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression cast_expr =
-        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+        cast{.arg = make_int_untyped("123"),
              .type = cql3_type::raw::from(int32_type)};
 
     ::lw_shared_ptr<column_specification> receiver = make_receiver(int32_type);
@@ -1373,7 +1373,7 @@ BOOST_AUTO_TEST_CASE(prepare_cast_int_short) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression cast_expr =
-        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+        cast{.arg = make_int_untyped("123"),
              .type = cql3_type::raw::from(short_type)};
 
     ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
@@ -1389,7 +1389,7 @@ BOOST_AUTO_TEST_CASE(prepare_cast_text_int) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression cast_expr =
-        cast{.arg = untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "123"},
+        cast{.arg = make_string_untyped("123"),
              .type = cql3_type::raw::from(short_type)};
 
     ::lw_shared_ptr<column_specification> receiver = make_receiver(short_type);
@@ -1451,7 +1451,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+    expression untyped = make_int_untyped("1337");
 
     // Can't infer type
     BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
@@ -1462,7 +1462,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"};
+    expression untyped = make_bool_untyped("true");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(boolean_type));
     expression expected = make_bool_const(true);
@@ -1474,7 +1474,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int8) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13"};
+    expression untyped = make_int_untyped("13");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(byte_type));
     expression expected = make_tinyint_const(13);
@@ -1486,7 +1486,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int16) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression untyped = untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337"};
+    expression untyped = make_int_untyped("1337");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(short_type));
     expression expected = make_smallint_const(1337);
@@ -1499,7 +1499,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int32) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression untyped =
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "13377331"};
+        make_int_untyped("13377331");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type));
     expression expected = make_int_const(13377331);
@@ -1512,7 +1512,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_int64) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression untyped =
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1337733113377331"};
+        make_int_untyped("1337733113377331");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(long_type));
     expression expected = make_bigint_const(1337733113377331);
@@ -1525,7 +1525,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_text) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression untyped =
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "scylla_is_the_best"};
+        make_string_untyped("scylla_is_the_best");
 
     expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(utf8_type));
     expression expected = make_text_const("scylla_is_the_best");
@@ -1538,7 +1538,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression untyped =
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "not_integer_text"};
+        make_int_untyped("not_integer_text");
 
     BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
                         exceptions::invalid_request_exception);
@@ -1551,9 +1551,9 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
     expression tup = tuple_constructor{
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
-                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+                make_int_untyped("123"),
+                make_int_untyped("456"),
+                make_string_untyped("some text"),
             },
         .type = nullptr};
 
@@ -1568,9 +1568,9 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
     expression tup = tuple_constructor{
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
-                untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "some text"},
+                make_int_untyped("123"),
+                make_int_untyped("456"),
+                make_string_untyped("some text"),
             },
         .type = nullptr};
 
@@ -1622,9 +1622,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor) {
         .style = collection_constructor::style_type::list,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                make_int_untyped("123"),
+                make_int_untyped("456"),
+                make_int_untyped("789"),
             },
         .type = nullptr};
 
@@ -1676,9 +1676,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_no_receiver) {
         .style = collection_constructor::style_type::list,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                make_int_untyped("123"),
+                make_int_untyped("456"),
+                make_int_untyped("789"),
             },
         .type = nullptr};
 
@@ -1696,9 +1696,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
         .style = collection_constructor::style_type::list,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                make_int_untyped("123"),
                 bind_variable{.bind_index = 1, .receiver = nullptr},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                make_int_untyped("789"),
             },
         .type = nullptr};
 
@@ -1734,8 +1734,8 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
 
     expression constructor = collection_constructor{
         .style = collection_constructor::style_type::list,
-        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+        .elements = {make_int_untyped("123"),
+                     make_int_untyped("456"),
                      make_untyped_null()},
         .type = nullptr};
 
@@ -1753,9 +1753,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor) {
         .style = collection_constructor::style_type::set,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                make_int_untyped("789"),
+                make_int_untyped("123"),
+                make_int_untyped("456"),
             },
         .type = nullptr};
 
@@ -1807,9 +1807,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_no_receiver) {
         .style = collection_constructor::style_type::set,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                make_int_untyped("789"),
+                make_int_untyped("123"),
+                make_int_untyped("456"),
             },
         .type = nullptr};
 
@@ -1825,9 +1825,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_bind_var) {
         .style = collection_constructor::style_type::set,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                make_int_untyped("789"),
                 bind_variable{.bind_index = 1, .receiver = nullptr},
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"},
+                make_int_untyped("123"),
             },
         .type = nullptr};
 
@@ -1864,9 +1864,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_null) {
         .style = collection_constructor::style_type::set,
         .elements =
             {
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "789"},
+                make_int_untyped("789"),
                 make_untyped_null(),
-                untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "456"},
+                make_int_untyped("456"),
             },
         .type = nullptr};
 
@@ -1887,20 +1887,16 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor) {
                 {
                     tuple_constructor{
                         .elements =
-                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
-                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                            {make_int_untyped("3"),
+                             make_int_untyped("30")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "2"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "-20"}},
+                        .elements = {make_int_untyped("2"),
+                                     make_int_untyped("-20")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "1"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "10"}},
+                        .elements = {make_int_untyped("1"),
+                                     make_int_untyped("10")},
                         .type = nullptr},
                 },
             .type = nullptr};
@@ -1959,20 +1955,16 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
                 {
                     tuple_constructor{
                         .elements =
-                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
-                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                            {make_int_untyped("3"),
+                             make_int_untyped("30")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "2"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "-20"}},
+                        .elements = {make_int_untyped("2"),
+                                     make_int_untyped("-20")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "1"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "10"}},
+                        .elements = {make_int_untyped("1"),
+                                     make_int_untyped("10")},
                         .type = nullptr},
                 },
             .type = nullptr};
@@ -1992,19 +1984,16 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
                 {
                     tuple_constructor{
                         .elements =
-                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
-                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                            {make_int_untyped("3"),
+                             make_int_untyped("30")},
                         .type = nullptr},
                     tuple_constructor{
                         .elements = {bind_variable{.bind_index = 1, .receiver = nullptr},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "-20"}},
+                                     make_int_untyped("-20")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "1"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "10"}},
+                        .elements = {make_int_untyped("1"),
+                                     make_int_untyped("10")},
                         .type = nullptr},
                 },
             .type = nullptr};
@@ -2054,19 +2043,14 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_value) {
         .style = collection_constructor::style_type::map,
         .elements =
             {
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "3"},
-                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "30"}},
+                tuple_constructor{.elements = {make_int_untyped("3"),
+                                               make_int_untyped("30")},
                                   .type = nullptr},
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "2"},
+                tuple_constructor{.elements = {make_int_untyped("2"),
                                                bind_variable{.bind_index = 1, .receiver = nullptr}},
                                   .type = nullptr},
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "1"},
-                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "10"}},
+                tuple_constructor{.elements = {make_int_untyped("1"),
+                                               make_int_untyped("10")},
                                   .type = nullptr},
             },
         .type = nullptr};
@@ -2119,19 +2103,16 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_key) {
                 {
                     tuple_constructor{
                         .elements =
-                            {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "3"},
-                             untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "30"}},
+                            {make_int_untyped("3"),
+                             make_int_untyped("30")},
                         .type = nullptr},
                     tuple_constructor{
                         .elements = {make_untyped_null(),
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                              .raw_text = "-20"}},
+                                     make_int_untyped("-20")},
                         .type = nullptr},
                     tuple_constructor{
-                        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "1"},
-                                     untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                      .raw_text = "10"}},
+                        .elements = {make_int_untyped("1"),
+                                     make_int_untyped("10")},
                         .type = nullptr},
                 },
             .type = nullptr};
@@ -2150,19 +2131,14 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_null_value) {
         .style = collection_constructor::style_type::map,
         .elements =
             {
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "3"},
-                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "30"}},
+                tuple_constructor{.elements = {make_int_untyped("3"),
+                                               make_int_untyped("30")},
                                   .type = nullptr},
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "2"},
+                tuple_constructor{.elements = {make_int_untyped("2"),
                                                make_untyped_null()},
                                   .type = nullptr},
-                tuple_constructor{.elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "1"},
-                                               untyped_constant{.partial_type = untyped_constant::type_class::integer,
-                                                                .raw_text = "10"}},
+                tuple_constructor{.elements = {make_int_untyped("1"),
+                                               make_int_untyped("10")},
                                   .type = nullptr},
             },
         .type = nullptr};
@@ -2181,7 +2157,7 @@ BOOST_AUTO_TEST_CASE(prepare_collection_constructor_checks_style_type) {
 
     expression set_constructor = collection_constructor{
         .style = collection_constructor::style_type::set,
-        .elements = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "123"}},
+        .elements = {make_int_untyped("123")},
         .type = nullptr};
 
     data_type set_type = set_type_impl::get_instance(int32_type, true);
@@ -2203,13 +2179,13 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor) {
     usertype_constructor::elements_map_type constructor_elements;
     constructor_elements.emplace(
         column_identifier("field1", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+        make_int_untyped("152"));
     constructor_elements.emplace(
         column_identifier("field2", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+        make_int_untyped("987"));
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2231,11 +2207,11 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_null) {
     usertype_constructor::elements_map_type constructor_elements;
     constructor_elements.emplace(
         column_identifier("field1", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+        make_int_untyped("152"));
     constructor_elements.emplace(column_identifier("field2", true), make_untyped_null());
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2258,10 +2234,10 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_missing_field) {
     usertype_constructor::elements_map_type constructor_elements;
     constructor_elements.emplace(
         column_identifier("field1", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+        make_int_untyped("152"));
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2283,13 +2259,13 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_no_receiver) {
     usertype_constructor::elements_map_type constructor_elements;
     constructor_elements.emplace(
         column_identifier("field1", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+        make_int_untyped("152"));
     constructor_elements.emplace(
         column_identifier("field2", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "987"});
+        make_int_untyped("987"));
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2304,12 +2280,12 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable) {
     usertype_constructor::elements_map_type constructor_elements;
     constructor_elements.emplace(
         column_identifier("field1", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "152"});
+        make_int_untyped("152"));
     constructor_elements.emplace(column_identifier("field2", true),
                                  bind_variable{.bind_index = 2, .receiver = nullptr});
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2354,7 +2330,7 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
                                  bind_variable{.bind_index = 2, .receiver = nullptr});
     constructor_elements.emplace(
         column_identifier("field3", true),
-        untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = "ututu"});
+        make_string_untyped("ututu"));
 
     expression constructor = usertype_constructor{.elements = constructor_elements, .type = nullptr};
 
@@ -2990,7 +2966,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_false) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj_one = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"}}};
+        .children = {make_bool_untyped("false")}};
 
     expression expected = make_bool_const(false);
 
@@ -3005,7 +2981,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_true) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj_one = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}}};
+        .children = {make_bool_untyped("true")}};
 
     expression expected = make_bool_const(true);
 
@@ -3020,7 +2996,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_untyped_const_null) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj_one = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::null, .raw_text = "null"}}};
+        .children = {make_null_untyped()}};
 
     expression expected = constant::make_null(boolean_type);
 
@@ -3036,7 +3012,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_one_int_untyped_const_0) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj_one = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "0"}}};
+        .children = {make_int_untyped("0")}};
 
     BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -3050,10 +3026,10 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_bools_and_one_int_untyped_const_0) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"}}};
+        .children = {make_bool_untyped("true"),
+                     make_bool_untyped("true"),
+                     make_int_untyped("1"),
+                     make_bool_untyped("true")}};
 
     BOOST_REQUIRE_THROW(prepare_expression(conj, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -3067,8 +3043,8 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_and_of_ints_is_invalid) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression conj_one = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "0"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"}}};
+        .children = {make_int_untyped("0"),
+                     make_int_untyped("1")}};
 
     BOOST_REQUIRE_THROW(prepare_expression(conj_one, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -3088,12 +3064,12 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression sub_conj = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"},
+        .children = {make_bool_untyped("false"),
                      unresolved_identifier{::make_shared<column_identifier_raw>("b2", false)}}};
 
     expression conj_many = conjunction{
-        .children = {untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "true"},
-                     untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = "false"},
+        .children = {make_bool_untyped("true"),
+                     make_bool_untyped("false"),
                      unresolved_identifier{
                          unresolved_identifier{::make_shared<column_identifier_raw>("b1", false)},
                      },
