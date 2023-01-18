@@ -96,6 +96,38 @@ constant make_double_const(double val) {
     return make_const(val);
 }
 
+untyped_constant make_int_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = raw_text};
+}
+
+untyped_constant make_float_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::floating_point, .raw_text = raw_text};
+}
+
+untyped_constant make_string_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::string, .raw_text = raw_text};
+}
+
+untyped_constant make_bool_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::boolean, .raw_text = raw_text};
+}
+
+untyped_constant make_duration_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::duration, .raw_text = raw_text};
+}
+
+untyped_constant make_uuid_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::uuid, .raw_text = raw_text};
+}
+
+untyped_constant make_hex_untyped(const char* raw_text) {
+    return untyped_constant{.partial_type = untyped_constant::type_class::hex, .raw_text = raw_text};
+}
+
+untyped_constant make_null_untyped() {
+    return untyped_constant{.partial_type = untyped_constant::type_class::null, .raw_text = "null"};
+}
+
 // This function implements custom serialization of collection values.
 // Some tests require the collection to contain an empty value,
 // which is impossible to express using the existing code.

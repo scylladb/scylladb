@@ -43,6 +43,15 @@ constant make_text_const(const sstring_view& text);
 constant make_float_const(float val);
 constant make_double_const(double val);
 
+untyped_constant make_int_untyped(const char* raw_text);
+untyped_constant make_float_untyped(const char* raw_text);
+untyped_constant make_string_untyped(const char* raw_text);
+untyped_constant make_bool_untyped(const char* raw_text);
+untyped_constant make_duration_untyped(const char* raw_text);
+untyped_constant make_uuid_untyped(const char* raw_text);
+untyped_constant make_hex_untyped(const char* raw_text);
+untyped_constant make_null_untyped();
+
 // This function implements custom serialization of collection values.
 // Some tests require the collection to contain unset_value or an empty value,
 // which is impossible to express using the existing code.
