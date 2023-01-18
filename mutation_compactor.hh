@@ -177,7 +177,6 @@ private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     stop_iteration do_consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
-        _validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
         stop_iteration gc_consumer_stop = stop_iteration::no;
         stop_iteration consumer_stop = stop_iteration::no;
         if (rtc.tombstone() <= _partition_tombstone) {
@@ -199,6 +198,7 @@ private:
             partition_is_not_empty(consumer);
             _current_emitted_tombstone = rtc.tombstone();
             consumer_stop = consumer.consume(std::move(rtc));
+            _validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
         }
         return gc_consumer_stop || consumer_stop;
     }
