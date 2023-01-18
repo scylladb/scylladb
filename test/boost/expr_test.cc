@@ -3089,3 +3089,406 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
     BOOST_REQUIRE_THROW(prepare_expression(conj_many, db, "test_ks", table_schema.get(), make_receiver(int32_type)),
                         exceptions::invalid_request_exception);
 }
+
+// Test that preparing the given binary operator works and produces the expected result.
+void test_prepare_good_binary_operator(expression good_binop_unprepared,
+                                       expression expected_prepared,
+                                       data_dictionary::database db,
+                                       const schema_ptr& table_schema) {
+    // Preparing without a receiver works as expected
+    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), nullptr),
+                        expected_prepared);
+
+    // Preparing with boolean receiver works as expected
+    BOOST_REQUIRE_EQUAL(
+        prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+        expected_prepared);
+
+    // reversed boolean type is also accepted
+    BOOST_REQUIRE_EQUAL(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                           make_receiver(reversed_type_impl::get_instance(boolean_type))),
+                        expected_prepared);
+
+    // Receivers with non-bool type are rejected.
+    // Potentially we could allow receivers that are tuple<bool, ...>.
+    // Both Scylla and Cassandra allow to insert a single value in place of a tuple without adding the parenthesis.
+    // So something like:
+    // INSERT INTO tab (pk_int, float_bool_tuple) VALUES (123, 321.456)'
+    // Would insert a tuple value (321.456, null)
+    // There is no need to write VALUES (123, (321.456,))
+    // In my opinion this kind of hidden type conversion is harmful and bug inducing.
+    // We should allow it only in places where it's needed to stay compatible with Cassandra.
+    std::vector<data_type> invalid_receiver_types = {
+        byte_type,
+        short_type,
+        int32_type,
+        long_type,
+        ascii_type,
+        bytes_type,
+        utf8_type,
+        date_type,
+        timeuuid_type,
+        timestamp_type,
+        simple_date_type,
+        time_type,
+        uuid_type,
+        inet_addr_type,
+        float_type,
+        double_type,
+        varint_type,
+        decimal_type,
+        counter_type,
+        duration_type,
+        empty_type,
+        list_type_impl::get_instance(boolean_type, false),
+        list_type_impl::get_instance(boolean_type, true),
+        set_type_impl::get_instance(boolean_type, false),
+        set_type_impl::get_instance(boolean_type, true),
+        map_type_impl::get_instance(boolean_type, boolean_type, false),
+        map_type_impl::get_instance(boolean_type, boolean_type, true),
+        tuple_type_impl::get_instance({boolean_type}),
+        tuple_type_impl::get_instance({boolean_type, float_type}),
+        tuple_type_impl::get_instance({utf8_type, float_type}),
+        user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, false),
+        user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, true)};
+
+    for (const data_type& invalid_receiver_type : invalid_receiver_types) {
+        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                               make_receiver(invalid_receiver_type)),
+                            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(prepare_expression(good_binop_unprepared, db, "test_ks", table_schema.get(),
+                                               make_receiver(reversed_type_impl::get_instance(invalid_receiver_type))),
+                            exceptions::invalid_request_exception);
+    }
+}
+
+// Expected valid type for RHS values.
+// We must know which values are valid to generate the invalid ones.
+enum struct expected_rhs_type {
+    // float
+    float_type,
+    // text/ascii
+    string_type,
+    // tuple<float, int, text, double>
+    multi_column_tuple,
+    // list<float>
+    float_in_list,
+    // list<tuple<float, int, text, double>
+    multi_column_tuple_in_list,
+    // IS_NOT alows only NULL as the RHS, everything else is invalid
+    is_not_null_rhs
+};
+
+// Generates invalid RHS values for use in prepare_binary_operator tests.
+// The argument specifies what type of RHS values are right, so we can avoid them when generating the wrong ones.
+std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
+    // Start by adding values that are wrong in all prepare_binary_operator tests
+    std::vector<expression> invalid_rhs_vals = {
+        make_bool_untyped("true"), make_duration_untyped("365d"), make_hex_untyped("0xdeadbeef"),
+        // A tuple where the third element has a type that doesn't match the one expected by multi_column_tuple
+        tuple_constructor{.elements =
+                              {
+                                  make_float_untyped("123.45"),
+                                  make_int_untyped("234"),
+                                  make_bool_untyped("true"),
+                                  make_float_untyped("45.67"),
+                              }},
+        // A tuple with too many elements for multi_column_tuple.
+        // A tuple with too little elements doesn't cause an error - CQL accepts it, the missing fields are assummed to
+        // be null.
+        tuple_constructor{.elements =
+                              {
+                                  make_float_untyped("123.45"),
+                                  make_int_untyped("234"),
+                                  make_string_untyped("hello"),
+                                  make_float_untyped("45.67"),
+                                  make_float_untyped("123.45"),
+                              }},
+        collection_constructor{.style = collection_constructor::style_type::set, .elements = {}},
+        collection_constructor{.style = collection_constructor::style_type::set,
+                               .elements = {make_float_untyped("12.3"), make_float_untyped("5.6")}},
+        collection_constructor{.style = collection_constructor::style_type::map, .elements = {}},
+        collection_constructor{
+            .style = collection_constructor::style_type::map,
+            .elements = {tuple_constructor{.elements = {make_float_untyped("1"), make_float_untyped("2")}},
+                         tuple_constructor{.elements = {make_float_untyped("3"), make_float_untyped("4")}}}},
+        usertype_constructor{.elements = {}},
+        usertype_constructor{.elements = {{column_identifier("field1", false), make_float_untyped("1")},
+                                          {column_identifier("field2", false), make_float_untyped("2")}}}};
+
+    // `float_int_tuple = 1.23` is a valid expression, so we have to avoid adding int/float values for multi_column
+    // tests. This is allowed in both Cassandra and Scylla, and is equivalent to writing `float_int_tuple = (1.23,
+    // null)`
+    if (expected_rhs != expected_rhs_type::float_type && expected_rhs != expected_rhs_type::multi_column_tuple) {
+        invalid_rhs_vals.push_back(make_int_untyped("123"));
+        invalid_rhs_vals.push_back(make_float_untyped("56.78"));
+    }
+
+    if (expected_rhs != expected_rhs_type::string_type) {
+        invalid_rhs_vals.push_back(make_string_untyped("good_day"));
+    }
+
+    if (expected_rhs != expected_rhs_type::multi_column_tuple) {
+        invalid_rhs_vals.push_back(tuple_constructor{.elements = {}});
+        invalid_rhs_vals.push_back(tuple_constructor{.elements = {
+                                                         make_float_untyped("123.45"),
+                                                         make_int_untyped("234"),
+                                                         make_string_untyped("hi"),
+                                                         make_float_untyped("45.67"),
+                                                     }});
+        invalid_rhs_vals.push_back(tuple_constructor{.elements = {
+                                                         make_float_untyped("123.45"),
+                                                         make_int_untyped("234"),
+                                                         make_string_untyped("hi"),
+                                                     }});
+    }
+    if (expected_rhs != expected_rhs_type::float_in_list &&
+        expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
+        invalid_rhs_vals.push_back(collection_constructor{
+            .style = collection_constructor::style_type::list,
+            .elements = {make_float_untyped("123.45"), make_float_untyped("732.2"), make_float_untyped("42.1")}});
+        invalid_rhs_vals.push_back(collection_constructor{
+            .style = collection_constructor::style_type::list,
+            .elements = {make_float_untyped("232"), make_float_untyped("121"), make_float_untyped("937")}});
+    }
+    if (expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
+        invalid_rhs_vals.push_back(collection_constructor{.style = collection_constructor::style_type::list,
+                                                          .elements = {
+                                                              tuple_constructor{.elements =
+                                                                                    {
+                                                                                        make_float_untyped("123.45"),
+                                                                                        make_int_untyped("234"),
+                                                                                        make_string_untyped("hi"),
+                                                                                        make_float_untyped("45.67"),
+                                                                                    }},
+                                                              tuple_constructor{.elements =
+                                                                                    {
+                                                                                        make_float_untyped("231.1"),
+                                                                                        make_int_untyped("232"),
+                                                                                        make_string_untyped("dfdf"),
+                                                                                        make_float_untyped("76.54"),
+                                                                                    }},
+                                                          }});
+    }
+
+    if (expected_rhs != expected_rhs_type::float_in_list &&
+        expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
+        invalid_rhs_vals.push_back(
+            collection_constructor{.style = collection_constructor::style_type::list, .elements = {}});
+    }
+    return invalid_rhs_vals;
+}
+
+// Test preparing the given binary_operator with various invalid RHS values.
+// The values are generated using get_invalid_rhs_values().
+void test_prepare_binary_operator_invalid_rhs_values(const expression& good_binop,
+                                                     expected_rhs_type expected_rhs,
+                                                     data_dictionary::database db,
+                                                     const schema_ptr& table_schema) {
+    std::vector<expression> invalid_rhs_vals = get_invalid_rhs_values(expected_rhs);
+
+    for (const expression& invalid_rhs : invalid_rhs_vals) {
+        binary_operator invalid_binop = as<binary_operator>(good_binop);
+        invalid_binop.rhs = invalid_rhs;
+
+        BOOST_REQUIRE_THROW(prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), nullptr),
+                            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            prepare_expression(invalid_binop, db, "test_ks", table_schema.get(), make_receiver(boolean_type)),
+            exceptions::invalid_request_exception);
+    }
+}
+
+// The tests iterate over all possible comparison_orders so a convenience function is convenient.
+std::array<comparison_order, 2> get_possible_comparison_orders() {
+    return {comparison_order::cql, comparison_order::clustering};
+}
+
+// Test preparing a binary_operator with operations: =, !=, <, <=, >, >=
+// The test enumerates various possible LHS values and tries all the operators for each of them.
+// The LHS values always are of type float to make testing easy.
+// This means that multi-column LHS are not tested in here and need to be tested in a separate test.
+// The same goes for reversed_type.
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("float_col", float_type, column_kind::regular_column)
+            .with_column("reversed_float_col", reversed_type_impl::get_instance(float_type))
+            .with_column("float_list_col", list_type_impl::get_instance(float_type, true), column_kind::regular_column)
+            .with_column("frozen_float_list_col", list_type_impl::get_instance(float_type, false),
+                         column_kind::regular_column)
+            .with_column("double_float_map_col", map_type_impl::get_instance(double_type, float_type, true),
+                         column_kind::regular_column)
+            .with_column("frozen_double_float_map_col", map_type_impl::get_instance(double_type, float_type, false),
+                         column_kind::regular_column)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    // `float_col`
+    expression unprepared_float_col =
+        unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)};
+    expression prepared_float_col = column_value(table_schema->get_column_definition("float_col"));
+
+    // `float_list_col[123]`
+    expression unprepared_subscripted_float_list =
+        subscript{.val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_list_col", false)},
+                  .sub = make_int_untyped("123")};
+
+    expression prepared_subscripted_float_list =
+        subscript{.val = column_value(table_schema->get_column_definition("float_list_col")),
+                  .sub = make_int_const(123),
+                  .type = float_type};
+
+    // `frozen_float_list_col[123]`
+    expression unprepared_subscripted_frozen_float_list = subscript{
+        .val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("frozen_float_list_col", false)},
+        .sub = make_int_untyped("123")};
+
+    expression prepared_subscripted_frozen_float_list =
+        subscript{.val = column_value(table_schema->get_column_definition("frozen_float_list_col")),
+                  .sub = make_int_const(123),
+                  .type = float_type};
+
+    // `double_float_map_col[123.4]`
+    expression unprepared_subscripted_double_float_map = subscript{
+        .val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("double_float_map_col", false)},
+        .sub = make_float_untyped("123.4")};
+
+    expression prepared_subscripted_double_float_map =
+        subscript{.val = column_value(table_schema->get_column_definition("double_float_map_col")),
+                  .sub = make_double_const(123.4),
+                  .type = float_type};
+
+    // `frozen_double_float_map_col[123.4]`
+    expression unprepared_subscripted_frozen_double_float_map = subscript{
+        .val =
+            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("frozen_double_float_map_col", false)},
+        .sub = make_float_untyped("123.4")};
+
+    expression prepared_subscripted_frozen_double_float_map =
+        subscript{.val = column_value(table_schema->get_column_definition("frozen_double_float_map_col")),
+                  .sub = make_double_const(123.4),
+                  .type = float_type};
+
+    // `double_float_map_col[123]` <- int index should work where double is expected
+    expression unprepared_subscripted_double_float_map_with_int_index = subscript{
+        .val = unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("double_float_map_col", false)},
+        .sub = make_int_untyped("123")};
+
+    expression prepared_subscripted_double_float_map_with_int_index =
+        subscript{.val = column_value(table_schema->get_column_definition("double_float_map_col")),
+                  .sub = make_double_const(123),
+                  .type = float_type};
+
+    std::vector<std::pair<expression, expression>> possible_lhs_vals = {
+        {unprepared_float_col, prepared_float_col},
+        {unprepared_subscripted_float_list, prepared_subscripted_float_list},
+        {unprepared_subscripted_frozen_float_list, prepared_subscripted_frozen_float_list},
+        {unprepared_subscripted_double_float_map, prepared_subscripted_double_float_map},
+        {unprepared_subscripted_frozen_double_float_map, prepared_subscripted_frozen_double_float_map},
+        {unprepared_subscripted_double_float_map_with_int_index, prepared_subscripted_double_float_map_with_int_index}};
+
+    std::vector<oper_t> possible_operations = {oper_t::EQ,  oper_t::NEQ, oper_t::LT,
+                                               oper_t::LTE, oper_t::GT,  oper_t::GTE};
+
+    for (auto [unprepared_lhs, prepared_lhs] : possible_lhs_vals) {
+        for (const oper_t& op : possible_operations) {
+            for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+                expression to_prepare = binary_operator(unprepared_lhs, op, make_float_untyped("123.4"), comp_order);
+
+                expression expected = binary_operator(prepared_lhs, op, make_float_const(123.4), comp_order);
+
+                test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+                test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_type, db,
+                                                                table_schema);
+            }
+        }
+    }
+}
+
+// Test operations =, !=, <, <=, >, >= with a LHS column that has reversed type.
+// The prepared RHS should also have inherit the reversed type.
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_reversed_type) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("reversed_float_col", reversed_type_impl::get_instance(float_type),
+                                               column_kind::regular_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    std::vector<oper_t> possible_operations = {oper_t::EQ,  oper_t::NEQ, oper_t::LT,
+                                               oper_t::LTE, oper_t::GT,  oper_t::GTE};
+
+    for (const oper_t& op : possible_operations) {
+        for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+            expression to_prepare = binary_operator(
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reversed_float_col", false)}, op,
+                make_float_untyped("123.4"), comp_order);
+
+            constant rhs_const = make_float_const(123.4);
+            rhs_const.type = reversed_type_impl::get_instance(float_type);
+            expression expected = binary_operator(
+                column_value(table_schema->get_column_definition("reversed_float_col")), op, rhs_const, comp_order);
+
+            test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+            test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::float_type, db,
+                                                            table_schema);
+        }
+    }
+}
+
+// Test operations =, !=, <, <=, >, >= with a multi-column LHS.
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_multi_column) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("c1", float_type, column_kind::clustering_key)
+            .with_column("c2", int32_type, column_kind::clustering_key)
+            .with_column("c3", utf8_type, column_kind::clustering_key)
+            .with_column("c4", reversed_type_impl::get_instance(double_type), column_kind::clustering_key)
+            .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression unprepared_lhs = tuple_constructor{
+        .elements = {unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c1", false)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c2", false)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c3", false)},
+                     unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c4", false)}},
+        .type = nullptr};
+
+    expression prepared_lhs =
+        tuple_constructor{.elements = {column_value(table_schema->get_column_definition("c1")),
+                                       column_value(table_schema->get_column_definition("c2")),
+                                       column_value(table_schema->get_column_definition("c3")),
+                                       column_value(table_schema->get_column_definition("c4"))},
+                          .type = tuple_type_impl::get_instance(
+                              {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)})};
+
+    expression unprepared_rhs =
+        tuple_constructor{.elements = {make_float_untyped("123.4"), make_int_untyped("1234"),
+                                       make_string_untyped("hello"), make_float_untyped("112233.44")},
+                          .type = nullptr};
+
+    expression prepared_rhs = make_tuple_const(
+        {make_float_raw(123.4), make_int_raw(1234), make_text_raw("hello"), make_double_raw(112233.44)},
+        {float_type, int32_type, utf8_type, double_type});
+
+    std::vector<oper_t> possible_operations = {oper_t::EQ,  oper_t::NEQ, oper_t::LT,
+                                               oper_t::LTE, oper_t::GT,  oper_t::GTE};
+
+    for (const oper_t& op : possible_operations) {
+        for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+            expression to_prepare = binary_operator(unprepared_lhs, op, unprepared_rhs, comp_order);
+
+            expression expected = binary_operator(prepared_lhs, op, prepared_rhs, comp_order);
+
+            test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+            test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::multi_column_tuple, db,
+                                                            table_schema);
+        }
+    }
+}
