@@ -21,14 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 class HTTPError(Exception):
-    def __init__(self, uri, code, message):            
+    def __init__(self, uri, code, params, json, message):
         super().__init__(message)
         self.uri = uri
         self.code = code
+        self.params = params
+        self.json = json
         self.message = message
 
     def __str__(self):
-        return f"HTTP error {self.code}: {self.message}, uri {self.uri}"
+        return f"HTTP error {self.code}, uri: {self.uri}, " \
+               f"params: {self.params}, json: {self.json}, body:\n{self.message}"
 
 
 # TODO: support ssl and verify_ssl
@@ -63,7 +66,7 @@ class RESTClient(metaclass=ABCMeta):
                            params = params, json = json, timeout = client_timeout) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                raise HTTPError(uri, resp.status, f"{text}, params {params}, json {json}")
+                raise HTTPError(uri, resp.status, params, json, text)
             if response_type is not None:
                 # Return response.text() or response.json()
                 return await getattr(resp, response_type)()

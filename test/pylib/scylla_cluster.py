@@ -17,6 +17,7 @@ import pathlib
 import shutil
 import tempfile
 import time
+import traceback
 from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
 from io import BufferedWriter
@@ -880,27 +881,45 @@ class ScyllaClusterManager:
 
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
-        app.router.add_get('/up', self._manager_up)
-        app.router.add_get('/cluster/up', self._cluster_up)
-        app.router.add_get('/cluster/is-dirty', self._is_dirty)
-        app.router.add_get('/cluster/replicas', self._cluster_replicas)
-        app.router.add_get('/cluster/running-servers', self._cluster_running_servers)
-        app.router.add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
-        app.router.add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
-        app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
-        app.router.add_get('/cluster/after-test', self._after_test)
-        app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
-        app.router.add_get('/cluster/server/{server_id}/stop', self._cluster_server_stop)
-        app.router.add_get('/cluster/server/{server_id}/stop_gracefully',
-                           self._cluster_server_stop_gracefully)
-        app.router.add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
-        app.router.add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
-        app.router.add_put('/cluster/addserver', self._cluster_server_add)
-        app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
-        app.router.add_get('/cluster/decommission-node/{server_id}',
-                           self._cluster_decommission_node)
-        app.router.add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
-        app.router.add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
+        def make_catching_handler(handler: Callable) -> Callable:
+            async def catching_handler(request) -> aiohttp.web.Response:
+                """Catch all exceptions and return them to the client.
+                   Without this, the client would get an 'Internal server error' message
+                   without any details. Thanks to this the test log shows the actual error.
+                """
+                try:
+                    return await handler(request)
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    self.logger.error(f'Exception when executing {handler.__name__}: {e}\n{tb}')
+                    return aiohttp.web.Response(status=500, text=str(e))
+            return catching_handler
+
+        def add_get(route: str, handler: Callable):
+            app.router.add_get(route, make_catching_handler(handler))
+
+        def add_put(route: str, handler: Callable):
+            app.router.add_put(route, make_catching_handler(handler))
+
+        add_get('/up', self._manager_up)
+        add_get('/cluster/up', self._cluster_up)
+        add_get('/cluster/is-dirty', self._is_dirty)
+        add_get('/cluster/replicas', self._cluster_replicas)
+        add_get('/cluster/running-servers', self._cluster_running_servers)
+        add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
+        add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
+        add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
+        add_get('/cluster/after-test', self._after_test)
+        add_get('/cluster/mark-dirty', self._mark_dirty)
+        add_get('/cluster/server/{server_id}/stop', self._cluster_server_stop)
+        add_get('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
+        add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
+        add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
+        add_put('/cluster/addserver', self._cluster_server_add)
+        add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
+        add_get('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
+        add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
+        add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
