@@ -30,6 +30,8 @@ raw_value make_smallint_raw(int16_t val);
 raw_value make_int_raw(int32_t val);
 raw_value make_bigint_raw(int64_t val);
 raw_value make_text_raw(const sstring_view& text);
+raw_value make_float_raw(float val);
+raw_value make_double_raw(double val);
 
 constant make_empty_const(data_type type);
 constant make_bool_const(bool val);
@@ -38,6 +40,8 @@ constant make_smallint_const(int16_t val);
 constant make_int_const(int32_t val);
 constant make_bigint_const(int64_t val);
 constant make_text_const(const sstring_view& text);
+constant make_float_const(float val);
+constant make_double_const(double val);
 
 // This function implements custom serialization of collection values.
 // Some tests require the collection to contain unset_value or an empty value,

@@ -46,6 +46,14 @@ raw_value make_text_raw(const sstring_view& text) {
     return raw_value::make_value(utf8_type->decompose(text));
 }
 
+raw_value make_float_raw(float val) {
+    return make_raw(val);
+}
+
+raw_value make_double_raw(double val) {
+    return make_raw(val);
+}
+
 template <class T>
 constant make_const(T t) {
     data_type val_type = data_type_for<T>();
@@ -78,6 +86,14 @@ constant make_bigint_const(int64_t val) {
 
 constant make_text_const(const sstring_view& text) {
     return constant(make_text_raw(text), utf8_type);
+}
+
+constant make_float_const(float val) {
+    return make_const(val);
+}
+
+constant make_double_const(double val) {
+    return make_const(val);
 }
 
 // This function implements custom serialization of collection values.
