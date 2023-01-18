@@ -216,7 +216,6 @@ def testSelectKeyIn(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT firstname, lastname FROM %s WHERE userid IN (?, ?)", id1, id2), 2)
 
-@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testSetContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories set<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -247,7 +246,6 @@ def testSetContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ?", "xyz", "lmn", "notPresent")
             assert_empty(execute(cql, table, "SELECT * FROM %s WHERE account = ? AND categories CONTAINS ? AND categories CONTAINS ? ALLOW FILTERING", "xyz", "lmn", "notPresent"))
 
-@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testListContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories list<text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -292,7 +290,6 @@ def testListContainsWithIndexAndFiltering(cql, test_keyspace):
                        [4, ["Dubai"], 3],
                        [3, ["Dubai"], 3])
 
-@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapKeyContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(keys(categories))")
@@ -328,7 +325,6 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
                                  "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ? AND categories CONTAINS ?",
                                  "test", 5, "lmn", "foo")
 
-@pytest.mark.xfail(reason="#10358 - Scylla doesn't throw error when UNSET_VALUE is used in WHERE clause")
 def testMapValueContainsWithIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(account text, id int, categories map<text, text>, PRIMARY KEY (account, id))") as table:
         execute(cql, table, "CREATE INDEX ON %s(categories)")
@@ -1032,7 +1028,6 @@ def testFilteringWithoutIndices(cql, test_keyspace):
                              UNSET_VALUE)
 
 # Reproduces #10358, #10361
-@pytest.mark.xfail(reason="#10358")
 def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1118,10 +1113,10 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
         assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset map key for column e",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE e[?] = 2 ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset map value for column e",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
                              UNSET_VALUE)
 
