@@ -3843,3 +3843,33 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains_key) {
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(prepare_binary_operator_like) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("pk", int32_type, column_kind::partition_key)
+                                  .with_column("text_col", utf8_type, column_kind::regular_column)
+                                  .with_column("ascii_col", ascii_type, column_kind::regular_column)
+                                  .build();
+
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    std::vector<const char*> possible_lhs_col_names = {"text_col", "ascii_col"};
+
+    for (const char* lhs_col_name : possible_lhs_col_names) {
+        for (const comparison_order& comp_order : get_possible_comparison_orders()) {
+            expression to_prepare = binary_operator(
+                unresolved_identifier{.ident = ::make_shared<column_identifier_raw>(lhs_col_name, false)}, oper_t::LIKE,
+                make_string_untyped("some%hing"), comp_order);
+
+            const column_definition* lhs_col_def = table_schema->get_column_definition(lhs_col_name);
+
+            expression expected = binary_operator(column_value(lhs_col_def), oper_t::LIKE,
+                                                  constant(make_text_raw("some%hing"), lhs_col_def->type), comp_order);
+
+            test_prepare_good_binary_operator(to_prepare, expected, db, table_schema);
+
+            test_prepare_binary_operator_invalid_rhs_values(to_prepare, expected_rhs_type::string_type, db,
+                                                            table_schema);
+        }
+    }
+}
