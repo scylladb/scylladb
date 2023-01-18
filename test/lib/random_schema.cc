@@ -180,7 +180,7 @@ public:
         return format("table{}", generate_unique_id(engine, _used_table_ids));
     }
     virtual sstring udt_name(std::mt19937& engine) override {
-        return format("UDT{}", generate_unique_id(engine, _used_udt_ids));
+        return format("udt{}", generate_unique_id(engine, _used_udt_ids));
     }
     virtual std::vector<data_type> partition_key_columns(std::mt19937& engine) override {
         return generate_types(engine, _partition_column_count_dist, type_generator::is_multi_cell::no, false);
@@ -793,48 +793,52 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
 }
 
 sstring udt_to_str(const user_type_impl& udt) {
-    std::vector<sstring> fields;
-    for (size_t i = 0; i < udt.field_types().size(); ++i) {
-        fields.emplace_back(format("{} {}", udt.field_name_as_string(i), udt.field_type(i)->as_cql3_type().to_string()));
-    }
-    return format("CREATE TYPE {} (\n\t{})",
-            udt.get_name_as_string(),
-            boost::algorithm::join(fields, ",\n\t"));
+    std::stringstream ss;
+    udt.describe(ss);
+    return ss.str();
 }
 
-// Single element overload, for convenience.
-std::unordered_set<const user_type_impl*> dump_udts(data_type type) {
-    if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(type.get())) {
-        return {maybe_user_type};
-    }
-    return {};
-}
+struct udt_list {
+    std::vector<const user_type_impl*> vector;
 
-std::unordered_set<const user_type_impl*> dump_udts(const std::vector<data_type>& types) {
-    std::unordered_set<const user_type_impl*> udts;
+    void insert(const user_type_impl* udt) {
+        auto it = std::find(vector.begin(), vector.end(), udt);
+        if (it == vector.end()) {
+            vector.push_back(udt);
+        }
+    }
+
+    void merge(udt_list other) {
+        for (auto& udt : other.vector) {
+            insert(udt);
+        }
+    }
+};
+
+udt_list dump_udts(const std::vector<data_type>& types) {
+    udt_list udts;
     for (const auto& dt : types) {
         const auto* const type = dt.get();
         if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(type)) {
-            udts.insert(maybe_user_type);
             udts.merge(dump_udts(maybe_user_type->field_types()));
+            udts.insert(maybe_user_type);
         } else if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(type)) {
             udts.merge(dump_udts(maybe_tuple_type->all_types()));
         } else if (auto maybe_list_type = dynamic_cast<const list_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_list_type->get_elements_type()));
+            udts.merge(dump_udts({maybe_list_type->get_elements_type()}));
         } else if (auto maybe_set_type = dynamic_cast<const set_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_set_type->get_elements_type()));
+            udts.merge(dump_udts({maybe_set_type->get_elements_type()}));
         } else if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_map_type->get_keys_type()));
-            udts.merge(dump_udts(maybe_map_type->get_values_type()));
+            udts.merge(dump_udts({maybe_map_type->get_keys_type(), maybe_map_type->get_values_type()}));
         } else if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_reversed_type->underlying_type()));
+            udts.merge(dump_udts({maybe_reversed_type->underlying_type()}));
         }
     }
     return udts;
 }
 
-std::vector<sstring> dump_udts(const schema& schema) {
-    std::unordered_set<const user_type_impl*> udts;
+std::vector<const user_type_impl*> dump_udts(const schema& schema) {
+    udt_list udts;
 
     const auto cdefs_to_types = [] (const schema::const_iterator_range_type& cdefs) -> std::vector<data_type> {
         return boost::copy_range<std::vector<data_type>>(cdefs |
@@ -846,8 +850,7 @@ std::vector<sstring> dump_udts(const schema& schema) {
     udts.merge(dump_udts(cdefs_to_types(schema.regular_columns())));
     udts.merge(dump_udts(cdefs_to_types(schema.static_columns())));
 
-    return boost::copy_range<std::vector<sstring>>(udts |
-            boost::adaptors::transformed([] (const user_type_impl* const udt) { return udt_to_str(*udt); }));
+    return udts.vector;
 }
 
 std::vector<sstring> columns_specs(schema_ptr schema, column_kind kind) {
@@ -947,7 +950,8 @@ sstring random_schema::cql() const {
 
     sstring udts_str;
     if (!udts.empty()) {
-        udts_str = boost::algorithm::join(udts, "\n");
+        udts_str = boost::algorithm::join(udts |
+                boost::adaptors::transformed([] (const user_type_impl* const udt) { return udt_to_str(*udt); }), "\n");
     }
 
     std::vector<sstring> col_specs;
