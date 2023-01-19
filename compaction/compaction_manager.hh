@@ -34,6 +34,7 @@
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction/compaction_descriptor.hh"
+#include "compaction_state.hh"
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
@@ -71,33 +72,6 @@ public:
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
-    };
-private:
-    struct compaction_state {
-        // Used both by compaction tasks that refer to the compaction_state
-        // and by any function running under run_with_compaction_disabled().
-        seastar::gate gate;
-
-        // Prevents table from running major and minor compaction at the same time.
-        rwlock lock;
-
-        // Raised by any function running under run_with_compaction_disabled();
-        long compaction_disabled_counter = 0;
-
-        // Signaled whenever a compaction task completes.
-        condition_variable compaction_done;
-
-        compaction_backlog_tracker backlog_tracker;
-
-        std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
-
-        explicit compaction_state(table_state& t);
-        compaction_state(compaction_state&&) = delete;
-        ~compaction_state();
-
-        bool compaction_disabled() const noexcept {
-            return compaction_disabled_counter > 0;
-        }
     };
 
 public:
@@ -485,7 +459,7 @@ public:
     class compaction_reenabler {
         compaction_manager& _cm;
         compaction::table_state* _table;
-        compaction_manager::compaction_state& _compaction_state;
+        compaction::compaction_state& _compaction_state;
         gate::holder _holder;
 
     public:
@@ -498,7 +472,7 @@ public:
             return _table;
         }
 
-        const compaction_manager::compaction_state& compaction_state() const noexcept {
+        const compaction::compaction_state& compaction_state() const noexcept {
             return _compaction_state;
         }
     };
