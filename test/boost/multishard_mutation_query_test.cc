@@ -28,7 +28,7 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
+const sstring KEYSPACE_NAME = "ks";
 
 namespace {
 
@@ -152,7 +152,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
             db.set_querier_cache_entry_ttl(1s);
         }).get();
 
-        auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, "test_abandoned_read");
+        auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, get_name());
         (void)_;
 
         auto cmd = query::read_command(
@@ -498,7 +498,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -539,7 +539,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
 
         const auto limit = std::numeric_limits<uint64_t>::max();
 
@@ -640,7 +640,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_evict_a_shard_reader_on_each_page");
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
