@@ -215,7 +215,7 @@ static std::pair<typename ResultBuilder::end_result_type, size_t>
 read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? query_id::create_random_id() : query_id::create_null_id();
-    ResultBuilder res_builder(s, slice);
+    ResultBuilder res_builder(s, slice, page_size);
     auto cmd = query::read_command(
             s->id(),
             s->version(),
@@ -238,25 +238,23 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         auto res = ResultBuilder::query(db, s, cmd, *ranges, nullptr, db::no_timeout);
         has_more = res_builder.add(*res);
         cmd.is_first_page = query::is_first_page::no;
+        if (page_hook && has_more) {
+            page_hook(0);
+        }
     }
 
     if (!has_more) {
         return std::pair(std::move(res_builder).get_end_result(), 1);
     }
 
-    unsigned npages = 0;
 
     const auto cmp = dht::ring_position_comparator(*s);
+
+    unsigned npages = 1;
 
     // Rest of the pages. Loop until an empty page turns up. Not very
     // sophisticated but simple and safe.
     while (has_more) {
-        if (page_hook) {
-            page_hook(npages);
-        }
-
-        ++npages;
-
         // Force freeing the vector to avoid hiding any bugs related to storing
         // references to the ranges vector (which is not alive between pages in
         // real life).
@@ -294,6 +292,12 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         }
 
         has_more = res_builder.add(*res);
+        if (has_more) {
+            if (page_hook) {
+                page_hook(npages);
+            }
+            npages++;
+        }
     }
 
     return std::pair(std::move(res_builder).get_end_result(), npages);
@@ -314,6 +318,7 @@ public:
 private:
     schema_ptr _s;
     const query::partition_slice& _slice;
+    uint64_t _page_size = 0;
     std::vector<mutation> _results;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -342,7 +347,7 @@ public:
         return std::get<0>(query_mutations_on_all_shards(db, std::move(s), cmd, ranges, std::move(trace_state), timeout).get());
     }
 
-    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice, uint64_t page_size) : _s(std::move(s)), _slice(slice), _page_size(page_size) { }
 
     bool add(const reconcilable_result& res) {
         auto it = res.partitions().begin();
@@ -374,7 +379,7 @@ public:
             _results.emplace_back(std::move(mut));
         }
 
-        return true;
+        return res.is_short_read() || res.row_count() >= _page_size;
     }
 
     const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
@@ -393,6 +398,7 @@ public:
 private:
     schema_ptr _s;
     const query::partition_slice& _slice;
+    uint64_t _page_size = 0;
     std::vector<query::result_set_row> _rows;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -426,7 +432,7 @@ public:
         return std::get<0>(query_data_on_all_shards(db, std::move(s), cmd, ranges, query::result_options::only_result(), std::move(trace_state), timeout).get());
     }
 
-    explicit data_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+    explicit data_result_builder(schema_ptr s, const query::partition_slice& slice, uint64_t page_size) : _s(std::move(s)), _slice(slice), _page_size(page_size) { }
 
     bool add(const query::result& raw_res) {
         auto res = query::result_set::from_raw_result(_s, _slice, raw_res);
@@ -444,7 +450,7 @@ public:
                 _last_pkey_rows = 1;
             }
         }
-        return true;
+        return raw_res.is_short_read() || res.rows().size() >= _page_size;
     }
 
     const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
