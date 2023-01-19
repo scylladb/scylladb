@@ -141,7 +141,7 @@ in derive ({
     libyamlcpp
     llvm.compiler-rt
     lksctp-tools
-    lua53Packages.lua
+    lua54Packages.lua
     lz4
     nettle
     numactl
