@@ -87,6 +87,7 @@
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
+#include "test/perf/entry_point.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "lang/wasm_instance_cache.hh"
 
@@ -435,7 +436,6 @@ sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
-sharded<replica::database>* the_database;
 sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
@@ -1740,38 +1740,49 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
   }
 }
 
+using main_func_type = std::function<int(int, char**)>;
+static main_func_type lookup_main_func(std::string_view name) {
+    std::pair<std::string_view, main_func_type> funcs[] = {
+        {"server", scylla_main},
+        {"types", tools::scylla_types_main},
+        {"sstable", tools::scylla_sstable_main},
+        {"perf-fast-forward", perf::scylla_fast_forward_main},
+        {"perf-row-cache-update", perf::scylla_row_cache_update_main},
+        {"perf-simple-query", perf::scylla_simple_query_main},
+        {"perf-sstable", perf::scylla_sstable_main},
+    };
+    auto found = std::ranges::find_if(funcs, [name] (auto& name_and_func) {
+        return name_and_func.first == name;
+    });
+    if (found == std::end(funcs)) {
+        return {};
+    }
+    return found->second;
+}
+
 int main(int ac, char** av) {
     // early check to avoid triggering
     if (!cpu_sanity()) {
         _exit(71);
     }
 
-    std::function<int(int, char**)> main_func;
-
     std::string exec_name;
     if (ac >= 2) {
         exec_name = av[1];
     }
 
-    bool recognized = true;
-    if (exec_name == "server") {
+    std::function<int(int, char**)> main_func;
+    if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
-    } else if (exec_name == "types") {
-        main_func = tools::scylla_types_main;
-    } else if (exec_name == "sstable") {
-        main_func = tools::scylla_sstable_main;
-    } else if (exec_name.empty() || exec_name[0] == '-') {
-        main_func = scylla_main;
-        recognized = false;
     } else {
-        fmt::print("error: unrecognized first argument: expected it to be \"server\", a regular command-line argument or a valid tool name (see `scylla --list-tools`), but got {}\n", exec_name);
-        return 1;
-    }
-
-    if (recognized) {
+        main_func = lookup_main_func(exec_name);
         // shift args to consume the recognized tool name
         std::shift_left(av + 1, av + ac, 1);
         --ac;
+    }
+    if (!main_func) {
+        fmt::print("error: unrecognized first argument: expected it to be \"server\", a regular command-line argument or a valid tool name (see `scylla --list-tools`), but got {}\n", exec_name);
+        return 1;
     }
 
     // Even on the environment which causes error during initalize Scylla,

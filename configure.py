@@ -513,15 +513,11 @@ scylla_tests = set([
     'test/perf/perf_cache_eviction',
     'test/perf/perf_commitlog',
     'test/perf/perf_cql_parser',
-    'test/perf/perf_fast_forward',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
-    'test/perf/perf_row_cache_update',
     'test/perf/perf_row_cache_reads',
     'test/perf/logalloc',
-    'test/perf/perf_simple_query',
-    'test/perf/perf_sstable',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
@@ -668,6 +664,7 @@ scylla_core = (['message/messaging_service.cc',
                 'caching_options.cc',
                 'collection_mutation.cc',
                 'client_data.cc',
+                'debug.cc',
                 'hashers.cc',
                 'schema.cc',
                 'frozen_schema.cc',
@@ -1171,9 +1168,21 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc']
 
 scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc', 'tools/lua_sstable_consumer.cc']
+scylla_perfs = ['test/perf/perf_fast_forward.cc',
+                'test/perf/perf_row_cache_update.cc',
+                'test/perf/perf_simple_query.cc',
+                'test/perf/perf_sstable.cc',
+                'test/perf/perf.cc',
+                'test/lib/alternator_test_env.cc',
+                'test/lib/cql_test_env.cc',
+                'test/lib/log.cc',
+                'test/lib/test_services.cc',
+                'test/lib/test_utils.cc',
+                'test/lib/tmpdir.cc',
+                'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools,
+    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools + scylla_perfs,
 }
 
 pure_boost_tests = set([
@@ -1222,7 +1231,6 @@ tests_not_using_seastar_test_framework = set([
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
-    'test/perf/perf_row_cache_update',
     'test/perf/logalloc',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
@@ -1275,11 +1283,8 @@ deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
-deps['test/perf/perf_fast_forward'] += ['seastar/tests/perf/linux_perf_event.cc']
-deps['test/perf/perf_simple_query'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc', 'test/lib/alternator_test_env.cc'] + alternator
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
-deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",
@@ -1898,7 +1903,9 @@ with open(buildfile, 'w') as f:
                 f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                 f.write('   libs = {}\n'.format(local_libs))
             else:
-                f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                if binary == 'scylla':
+                    local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                 f.write('   libs = {}\n'.format(local_libs))
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
                 f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')

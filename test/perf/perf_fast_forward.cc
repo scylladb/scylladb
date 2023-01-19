@@ -1880,7 +1880,9 @@ auto make_compaction_disabling_guard(replica::database& db, std::vector<replica:
     });
 }
 
-int main(int argc, char** argv) {
+namespace perf {
+
+int scylla_fast_forward_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app.add_options()
         ("random-seed", boost::program_options::value<unsigned>(), "Random number generator seed")
@@ -2063,3 +2065,5 @@ int main(int argc, char** argv) {
       });
     });
 }
+
+} // namespace perf
