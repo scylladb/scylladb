@@ -74,6 +74,8 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 /stable/getting-started/compaction.html: /stable/cql/compaction.html
 /stable/getting-started/reserved-keywords.html: /stable/cql/reserved-keywords.html
 /stable/getting-started/non-reserved-keywords.html: /stable/cql/non-reserved-keywords.html
+/stable/getting-started/cqlsh.html: /stable/cql/cqlsh.html
+
 
 ### scylladb/scylla-docs to scylladb/scylla-cloud-doc migration
 /scylla-cloud/index.html: https://cloud.docs.scylladb.com/stable/
