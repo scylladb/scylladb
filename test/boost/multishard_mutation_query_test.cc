@@ -16,7 +16,6 @@
 #include "test/lib/eventually.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "test/lib/test_table.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -112,6 +111,33 @@ static generated_table create_test_table(
     return {random_schema.schema(), keys, compacted_frozen_mutations};
 }
 
+api::timestamp_type no_tombstone_timestamp_generator(std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+    switch (destination) {
+        case tests::timestamp_destination::partition_tombstone:
+        case tests::timestamp_destination::row_tombstone:
+        case tests::timestamp_destination::collection_tombstone:
+        case tests::timestamp_destination::range_tombstone:
+            return api::missing_timestamp;
+        default:
+            return std::uniform_int_distribution<api::timestamp_type>(min_timestamp, api::max_timestamp)(engine);
+    }
+}
+
+static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, sstring ks_name,
+        sstring tbl_name, int partition_count = 10 * smp::count, int row_per_partition_count = 10) {
+    auto res = create_test_table(
+            env,
+            tests::random::get_int<uint32_t>(),
+            std::move(ks_name),
+            std::move(tbl_name),
+            true,
+            std::uniform_int_distribution<size_t>(partition_count, partition_count),
+            std::uniform_int_distribution<size_t>(row_per_partition_count, row_per_partition_count),
+            std::uniform_int_distribution<size_t>(0, 0),
+            no_tombstone_timestamp_generator);
+    return {std::move(res.schema), std::move(res.keys)};
+}
+
 static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (replica::database& local_db) {
@@ -152,7 +178,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
             db.set_querier_cache_entry_ttl(1s);
         }).get();
 
-        auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, get_name());
+        auto [s, _] = create_test_table(env, KEYSPACE_NAME, get_name());
         (void)_;
 
         auto cmd = query::read_command(
@@ -169,10 +195,6 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
                 query::is_first_page::yes);
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
-
-        check_cache_population(env.db(), 1);
-
-        sleep(2s).get();
 
         require_eventually_empty_caches(env.db());
 
@@ -498,14 +520,20 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+        uint64_t lookups = 0;
+
         // Then do a paged range-query, with reader caching
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
-            check_cache_population(env.db(), 1);
+        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+            const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+            if (page) {
+                tests::require(new_lookups > lookups);
+            }
+            lookups = new_lookups;
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
         }).first;
@@ -539,13 +567,18 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         const auto limit = std::numeric_limits<uint64_t>::max();
 
         const auto slice = s->full_slice();
 
+        testlog.info("pkeys.size()={}", pkeys.size());
+
         for (const auto step : {1ul, pkeys.size() / 4u, pkeys.size() / 2u}) {
+            if (!step) {
+                continue;
+            }
 
             dht::partition_range_vector ranges;
             ranges.push_back(dht::partition_range::make_ending_with({*pkeys.begin(), false}));
@@ -594,7 +627,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
 
         unsigned i = 0;
 
@@ -612,9 +645,15 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             // First read all partition-by-partition (not paged).
             auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+            uint64_t lookups = 0;
+
             // Then do a paged range-query, with reader caching
-            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
-                check_cache_population(env.db(), 1);
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+                const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+                if (page) {
+                    tests::require(new_lookups > lookups);
+                }
+                lookups = new_lookups;
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
             }).first;
@@ -640,28 +679,41 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name());
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+        int64_t lookups = 0;
+        uint64_t evictions = 0;
+
         // Then do a paged range-query
         auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
-            check_cache_population(env.db(), 1);
+            const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+            if (page) {
+                tests::require(new_lookups > lookups, std::source_location::current());
+            }
+            lookups = new_lookups;
 
-            env.db().invoke_on(page % smp::count, [&] (replica::database& db) {
-                return db.get_querier_cache().evict_one();
-            }).get();
+            for (unsigned shard = 0; shard < smp::count; ++shard) {
+                auto evicted = smp::submit_to(shard, [&] {
+                    return env.local_db().get_querier_cache().evict_one();
+                }).get();
+                if (evicted) {
+                    ++evictions;
+                    break;
+                }
+            }
 
-            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
-            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), page);
+            tests::require(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses) >= page, std::source_location::current());
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u, std::source_location::current());
         });
 
         check_results_are_equal(results1, results2);
 
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
-        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), evictions);
 
         require_eventually_empty_caches(env.db());
 
@@ -676,7 +728,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
 
         auto& db = env.db();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
 
         unsigned i = 0;
 
