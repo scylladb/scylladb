@@ -14,7 +14,7 @@ from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, C
 from cassandra.query import SimpleStatement
 from cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
-from util import new_test_table, unique_name
+from util import new_test_table, unique_name, unique_key_int
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -1531,3 +1531,28 @@ def test_index_filter_by_token(cql, test_keyspace):
         token3 = base_results[3].system_token_p
         assert base_results[4:] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 1 AND token(p) > {token3}"))
         assert [] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 0 AND token(p) > {token3}"))
+
+# Looking up a null value in a secondary index should match nothing (in
+# general in Scylla, "= null" matches nothing - not even a null value).
+# The "= null" expression is disallowed in Cassandra, so these tests are
+# Scylla-only.
+def test_global_secondary_index_null_lookup(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table}(p,v) VALUES ({p},1)')
+        assert [] == list(cql.execute(f'SELECT p FROM {table} WHERE v=null'))
+
+def test_local_secondary_index_null_lookup(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'CREATE INDEX ON {table}((p), v)')
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table}(p,v) VALUES ({p},1)')
+        assert [] == list(cql.execute(f'SELECT * FROM {table} WHERE p={p} AND v=null'))
+
+def test_local_secondary_index_null_lookup2(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c), v int') as table:
+        cql.execute(f'CREATE INDEX ON {table}((p), v)')
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table}(p,c,v) VALUES ({p},0,1)')
+        assert [] == list(cql.execute(f'SELECT * FROM {table} WHERE p={p} AND c=0 AND v=null'))
