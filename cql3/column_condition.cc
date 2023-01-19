@@ -72,15 +72,12 @@ int is_satisfied_by(cql3::expr::oper_t op, const abstract_type& cell_type,
         }
 }
 
-// Read the list index from key and check that list index is not
-// negative. The negative range check repeats Cassandra behaviour.
-uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
+// Read the list index from key. Negative values are allowed, like
+// in PostgresQL (but unlike Cassandra).
+int32_t read_list_index(const cql3::raw_value_view& key) {
     // The list element type is always int32_type, see lists::index_spec_of
     int32_t idx = read_simple_exactly<int32_t>(to_bytes(key));
-    if (idx < 0) {
-        throw exceptions::invalid_request_exception(format("Invalid negative list index {}", idx));
-    }
-    return static_cast<uint32_t>(idx);
+    return idx;
 }
 
 } // end of anonymous namespace
@@ -195,8 +192,8 @@ bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
         } else if (cell_type.is_list()) {
             const list_type_impl& list_type = static_cast<const list_type_impl&>(cell_type);
             const std::vector<data_value>& list = list_type.from_value(*cell_value);
-            uint32_t idx = read_and_check_list_index(key);
-            cell_value = idx >= list.size() ? nullptr : &list[idx];
+            uint32_t idx = read_list_index(key);
+            cell_value = idx < 0 || idx >= list.size() ? nullptr : &list[idx];
         } else {
             assert(false);
         }

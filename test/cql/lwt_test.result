@@ -2045,7 +2045,11 @@ Error from server: code=2200 [Invalid query] message="Cannot store NULL in list 
 +---------+
 > -- negative list index
 > update lwt set c = [true, false] where a = 1 if c[-1] = false;
-Error from server: code=2200 [Invalid query] message="Invalid negative list index -1"
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > update lwt set c = [true, false] where a = 1 if c[-1.5] = false;
 Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1.5) for "idx(c)" of type int"
 > update lwt set c = [true, false] where a = 1 if c[0] = false;
