@@ -113,10 +113,12 @@ in derive ({
       urwid
     ]))
     ragel
+    rustc
     stow
   ] ++ (devInputs { inherit pkgs llvm; });
 
   buildInputs = with pkgs; [
+    abseil-cpp
     antlr3
     boost
     c-ares
@@ -140,7 +142,7 @@ in derive ({
     libyamlcpp
     llvm.compiler-rt
     lksctp-tools
-    lua53Packages.lua
+    lua54Packages.lua
     lz4
     nettle
     numactl
