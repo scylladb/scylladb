@@ -332,6 +332,9 @@ const T& value_cast(const data_value& value);
 template <typename T>
 T&& value_cast(data_value&& value);
 
+struct empty_type_representation {
+};
+
 class data_value {
     void* _value;  // FIXME: use "small value optimization" for small types
     data_type _type;
@@ -386,6 +389,7 @@ public:
     data_value(utils::multiprecision_int);
     data_value(big_decimal);
     data_value(cql_duration);
+    data_value(empty_type_representation);
     explicit data_value(std::optional<bytes>);
     template <typename NativeType>
     data_value(std::optional<NativeType>);
@@ -1190,15 +1194,15 @@ size_t collection_size_len();
 size_t collection_value_len();
 void write_collection_size(bytes::iterator& out, int size);
 void write_collection_size(managed_bytes_mutable_view&, int size);
-void write_collection_value(bytes::iterator& out, bytes_view val_bytes);
-void write_collection_value(managed_bytes_mutable_view&, bytes_view val_bytes);
-void write_collection_value(managed_bytes_mutable_view&, const managed_bytes_view& val_bytes);
+void write_collection_value(bytes::iterator& out, bytes_view_opt val_bytes);
+void write_collection_value(managed_bytes_mutable_view&, bytes_view_opt val_bytes);
+void write_collection_value(managed_bytes_mutable_view&, const managed_bytes_view_opt& val_bytes);
 void write_int32(bytes::iterator& out, int32_t value);
 
 // Splits a serialized collection into a vector of elements, but does not recursively deserialize the elements.
 // Does not perform validation.
 template <FragmentedView View>
-utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in);
+utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in);
 template <FragmentedView View>
 std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in);
 

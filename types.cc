@@ -58,6 +58,8 @@
 
 static logging::logger tlogger("types");
 
+bytes_view_opt read_collection_value(bytes_view& in);
+
 void on_types_internal_error(std::exception_ptr ex) {
     on_internal_error(tlogger, std::move(ex));
 }
@@ -537,8 +539,8 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
     size_t list_size = read_collection_size(list);
     size_t map_size = read_collection_size(map);
 
-    bytes_view list_value;
-    bytes_view map_value[2];
+    bytes_view_opt list_value;
+    bytes_view_opt map_value[2];
 
     // Lists are represented as vector<pair<timeuuid, value>>, sets are vector<pair<value, empty>>
     size_t map_value_index = is_list();
@@ -546,10 +548,15 @@ std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_t
     // List elements are stored in both vectors in list index order.
     for (size_t i = 0; i < std::min(list_size, map_size); ++i) {
 
-        list_value = read_collection_value(list);
-        map_value[0] = read_collection_value(map);
+        list_value = read_collection_value_nonnull(list);
+        map_value[0] = read_collection_value_nonnull(map);
+        // sets-as-maps happen to be serialized with NULL
         map_value[1] = read_collection_value(map);
-        auto cmp = element_type.compare(list_value, map_value[map_value_index]);
+        if (!list_value) {
+            return std::strong_ordering::less;
+        }
+        // map_value[0] is known non-null, and sets will compare map_value[0].
+        auto cmp = element_type.compare(*list_value, *map_value[map_value_index]);
         if (cmp != 0) {
             return cmp;
         }
@@ -579,6 +586,22 @@ bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type
     }
     return b;
 }
+
+void
+listlike_collection_type_impl::validate_for_storage(const FragmentedView auto& value) const {
+    for (auto val_opt : partially_deserialize_listlike(value)) {
+        if (!val_opt) {
+            throw exceptions::invalid_request_exception("Cannot store NULL in list or set");
+        }
+    }
+}
+
+template
+void listlike_collection_type_impl::validate_for_storage(const managed_bytes_view& value) const;
+
+template
+void listlike_collection_type_impl::validate_for_storage(const fragmented_temporary_buffer::view& value) const;
+
 
 static bool is_compatible_with_aux(const collection_type_impl& t, const abstract_type& previous) {
     if (t.get_kind() != previous.get_kind()) {
@@ -631,7 +654,7 @@ void write_collection_size(bytes::iterator& out, int size) {
     serialize_int32(out, size);
 }
 
-bytes_view read_collection_value(bytes_view& in) {
+bytes_view read_collection_value_nonnull(bytes_view& in) {
     int32_t size = read_simple<int32_t>(in);
     if (size == -2) {
         throw exceptions::invalid_request_exception("unset value is not supported inside collections");
@@ -642,7 +665,33 @@ bytes_view read_collection_value(bytes_view& in) {
     return read_simple_bytes(in, size);
 }
 
-void write_collection_value(bytes::iterator& out, bytes_view val_bytes) {
+bytes_view read_collection_key(bytes_view& in) {
+    int32_t size = read_simple<int32_t>(in);
+    if (size < 0) {
+        throw exceptions::invalid_request_exception("null/unset is not supported inside collections");
+    }
+    return read_simple_bytes(in, size);
+}
+bytes_view_opt read_collection_value(bytes_view& in) {
+    int32_t size = read_simple<int32_t>(in);
+    if (size == -1) {
+        throw std::nullopt;
+    }
+    if (size == -2) {
+        throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+    }
+    if (size < 0) {
+        throw exceptions::invalid_request_exception("null is not supported inside collections");
+    }
+    return read_simple_bytes(in, size);
+}
+
+void write_collection_value(bytes::iterator& out, std::optional<bytes_view> val_bytes_opt) {
+    if (!val_bytes_opt) {
+        serialize_int32(out, int32_t(-1));
+        return;
+    }
+    auto& val_bytes = *val_bytes_opt;
     serialize_int32(out, int32_t(val_bytes.size()));
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
@@ -697,7 +746,12 @@ void write_collection_value(managed_bytes_mutable_view& out, bytes_view val) {
     write_fragmented(out, single_fragmented_view(val));
 }
 
-void write_collection_value(managed_bytes_mutable_view& out, const managed_bytes_view& val) {
+void write_collection_value(managed_bytes_mutable_view& out, const managed_bytes_view_opt& val_opt) {
+    if (!val_opt) {
+        write_simple<int32_t>(out, int32_t(-1));
+        return;
+    }
+    auto& val = *val_opt;
     write_simple<int32_t>(out, int32_t(val.size_bytes()));
     write_fragmented(out, val);
 }
@@ -977,6 +1031,12 @@ const sstring& abstract_type::cql3_type_name() const {
 }
 
 void write_collection_value(bytes::iterator& out, data_type type, const data_value& value) {
+    if (value.is_null()) {
+        auto val_len = -1;
+        serialize_int32(out, val_len);
+        return;
+    }
+
     size_t val_len = value.serialized_size();
 
     serialize_int32(out, val_len);
@@ -1051,14 +1111,14 @@ map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view
     int size2 = read_collection_size(o2);
     // FIXME: use std::lexicographical_compare()
     for (int i = 0; i < std::min(size1, size2); ++i) {
-        auto k1 = read_collection_value(o1);
-        auto k2 = read_collection_value(o2);
+        auto k1 = read_collection_key(o1);
+        auto k2 = read_collection_key(o2);
         auto cmp = keys->compare(k1, k2);
         if (cmp != 0) {
             return cmp;
         }
-        auto v1 = read_collection_value(o1);
-        auto v2 = read_collection_value(o2);
+        auto v1 = read_collection_value_nonnull(o1);
+        auto v2 = read_collection_value_nonnull(o2);
         cmp = values->compare(v1, v2);
         if (cmp != 0) {
             return cmp;
@@ -1093,8 +1153,8 @@ map_type_impl::deserialize(View in) const {
     native_type m;
     auto size = read_collection_size(in);
     for (int i = 0; i < size; ++i) {
-        auto k = _keys->deserialize(read_collection_value(in));
-        auto v = _values->deserialize(read_collection_value(in));
+        auto k = _keys->deserialize(read_collection_key(in));
+        auto v = _values->deserialize(read_collection_value_nonnull(in));
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
     return make_value(std::move(m));
@@ -1105,8 +1165,8 @@ template <FragmentedView View>
 static void validate_aux(const map_type_impl& t, View v) {
     auto size = read_collection_size(v);
     for (int i = 0; i < size; ++i) {
-        t.get_keys_type()->validate(read_collection_value(v));
-        t.get_values_type()->validate(read_collection_value(v));
+        t.get_keys_type()->validate(read_collection_key(v));
+        t.get_values_type()->validate(read_collection_value_nonnull(v));
     }
 }
 
@@ -1182,7 +1242,7 @@ static std::optional<data_type> update_user_type_aux(
         map_type_impl::get_instance(k ? *k : old_keys, v ? *v : old_values, m.is_multi_cell())));
 }
 
-static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf);
+static void serialize(const abstract_type& t, const void* value, bytes::iterator& out);
 
 set_type
 set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
@@ -1241,7 +1301,7 @@ template <FragmentedView View>
 static void validate_aux(const set_type_impl& t, View v) {
     auto nr = read_collection_size(v);
     for (int i = 0; i != nr; ++i) {
-        t.get_elements_type()->validate(read_collection_value(v));
+        t.get_elements_type()->validate(read_collection_value_nonnull(v));
     }
 }
 
@@ -1270,7 +1330,7 @@ set_type_impl::deserialize(View in) const {
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value(in));
+        auto e = _elements->deserialize(read_collection_value_nonnull(in));
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a set");
         }
@@ -1288,22 +1348,22 @@ set_type_impl::serialize_partially_deserialized_form(
 
 managed_bytes
 set_type_impl::serialize_partially_deserialized_form_fragmented(
-        const std::vector<managed_bytes_view>& v) {
+        const std::vector<managed_bytes_view_opt>& v) {
     return pack_fragmented(v.begin(), v.end(), v.size());
 }
 
 template <FragmentedView View>
-utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in) {
+utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in) {
     auto nr = read_collection_size(in);
-    utils::chunked_vector<managed_bytes> elements;
+    utils::chunked_vector<managed_bytes_opt> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
         elements.emplace_back(read_collection_value(in));
     }
     return elements;
 }
-template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in);
-template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in);
+template utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(managed_bytes_view in);
+template utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(fragmented_temporary_buffer::view in);
 
 template <FragmentedView View>
 std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in) {
@@ -1311,9 +1371,12 @@ std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(V
     std::vector<std::pair<managed_bytes, managed_bytes>> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto key = managed_bytes(read_collection_value(in));
-        auto value = managed_bytes(read_collection_value(in));
-        elements.emplace_back(std::move(key), std::move(value));
+        auto key = managed_bytes(read_collection_key(in));
+        auto value = managed_bytes_opt(read_collection_value_nonnull(in));
+        if (!value) {
+            on_internal_error(tlogger, "NULL value in map");
+        }
+        elements.emplace_back(std::move(key), std::move(*value));
     }
     return elements;
 }
@@ -1385,7 +1448,10 @@ template <FragmentedView View>
 static void validate_aux(const list_type_impl& t, View v) {
     auto nr = read_collection_size(v);
     for (int i = 0; i != nr; ++i) {
-        t.get_elements_type()->validate(read_collection_value(v));
+        auto val_opt = read_collection_value(v);
+        if (val_opt) {
+            t.get_elements_type()->validate(*val_opt);
+        }
     }
     if (v.size_bytes()) {
         auto hex = with_linearized(v, [] (bytes_view bv) { return to_hex(bv); });
@@ -1411,11 +1477,13 @@ list_type_impl::deserialize(View in) const {
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value(in));
-        if (e.is_null()) {
-            throw marshal_exception("Cannot deserialize a list");
+        auto serialized_value_opt = read_collection_value(in);
+        if (serialized_value_opt) {
+            auto e = _elements->deserialize(*serialized_value_opt);
+            s.push_back(std::move(e));
+        } else {
+            s.push_back(data_value::make_null(data_type(shared_from_this())));
         }
-        s.push_back(std::move(e));
     }
     return make_value(std::move(s));
 }
@@ -1932,7 +2000,7 @@ template data_value collection_type_impl::deserialize_impl<>(single_fragmented_v
 template data_value collection_type_impl::deserialize_impl<>(managed_bytes_view) const;
 
 template int read_collection_size(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
-template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
+template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value_nonnull(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
 
 template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
@@ -2111,7 +2179,7 @@ struct deserialize_visitor {
     }
     data_value operator()(const tuple_type_impl& t) { return deserialize_aux(t, v); }
     data_value operator()(const user_type_impl& t) { return deserialize_aux(t, v); }
-    data_value operator()(const empty_type_impl& t) { return data_value::make_null(t.shared_from_this()); }
+    data_value operator()(const empty_type_impl& t) { return data_value(empty_type_representation()); }
 };
 }
 
@@ -2225,7 +2293,13 @@ struct compare_visitor {
         return with_empty_checks([&] {
             return lexicographical_tri_compare(llpdi::begin(v1), llpdi::end(v1), llpdi::begin(v2),
                     llpdi::end(v2),
-                    [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
+                    [&] (const managed_bytes_view_opt& o1, const managed_bytes_view_opt& o2) {
+                        if (!o1.has_value() || !o2.has_value()) {
+                            return o1.has_value() <=> o2.has_value();
+                        } else {
+                            return l.get_elements_type()->compare(*o1, *o2);
+                        }
+            });
         });
     }
     std::strong_ordering operator()(const map_type_impl& m) {
@@ -2923,8 +2997,7 @@ struct native_value_clone_visitor {
     }
     void* operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
     void* operator()(const empty_type_impl&) {
-        // Can't happen
-        abort();
+        return new empty_type_representation();
     }
 };
 }
@@ -2944,8 +3017,7 @@ struct native_value_delete_visitor {
     }
     void operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
     void operator()(const empty_type_impl&) {
-        // Can't happen
-        abort();
+        delete reinterpret_cast<empty_type_representation*>(object);
     }
 };
 }
@@ -3399,6 +3471,9 @@ data_value::data_value(big_decimal v) : data_value(make_new(decimal_type, v)) {
 }
 
 data_value::data_value(cql_duration d) : data_value(make_new(duration_type, d)) {
+}
+
+data_value::data_value(empty_type_representation e) : data_value(make_new(empty_type, e)) {
 }
 
 sstring data_value::to_parsable_string() const {

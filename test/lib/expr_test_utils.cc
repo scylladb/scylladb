@@ -12,10 +12,20 @@ namespace cql3 {
 namespace expr {
 namespace test_utils {
 template <class T>
+requires (!requires (T t) { t.has_value(); })
 raw_value make_raw(T t) {
     data_type val_type = data_type_for<T>();
     data_value data_val(t);
     return raw_value::make_value(val_type->decompose(data_val));
+}
+
+template <class T>
+raw_value make_raw(std::optional<T> t) {
+    if (t.has_value()) {
+        return make_raw(t.value());
+    } else {
+        return raw_value::make_null();
+    }
 }
 
 raw_value make_empty_raw() {
@@ -282,7 +292,7 @@ constant make_tuple_const(const std::vector<constant>& vals, const std::vector<d
     return test_utils::make_tuple_const(to_raw_values(vals), element_types);
 }
 
-raw_value make_int_list_raw(const std::vector<int32_t>& values) {
+raw_value make_int_list_raw(const std::vector<std::optional<int32_t>>& values) {
     return make_list_raw(to_raw_values(values));
 }
 
@@ -294,7 +304,7 @@ raw_value make_int_int_map_raw(const std::vector<std::pair<int32_t, int32_t>>& v
     return make_map_raw(to_raw_value_pairs(values));
 }
 
-constant make_int_list_const(const std::vector<int32_t>& values) {
+constant make_int_list_const(const std::vector<std::optional<int32_t>>& values) {
     return constant(make_int_list_raw(values), list_type_impl::get_instance(int32_type, true));
 }
 

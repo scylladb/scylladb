@@ -19,6 +19,7 @@
 #include "utils/big_decimal.hh"
 
 struct empty_type_impl final : public abstract_type {
+    using native_type = empty_type_representation;
     empty_type_impl();
 };
 

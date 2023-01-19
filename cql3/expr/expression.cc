@@ -458,8 +458,8 @@ bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evalu
     auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
     expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
-    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
-    for (const managed_bytes& elem : list_elems) {
+    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
+    for (const managed_bytes_opt& elem : list_elems) {
         if (equal(lhs_constant, elem, evaluation_inputs{}).is_true()) {
             return true;
         }
@@ -614,7 +614,7 @@ value_list get_IN_values(
     if (in_list.is_null()) {
         return value_list();
     }
-    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
+    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
 
@@ -1094,7 +1094,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                     } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
                         tuple_constructor rhs_tuple;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
-                        for (const managed_bytes& elem : get_list_elements(as<constant>(opr.rhs).value)) {
+                        for (const managed_bytes_opt& elem : get_list_elements(as<constant>(opr.rhs).value)) {
                             rhs_tuple.elements.push_back(constant(raw_value::make_value(elem), list_typ->get_elements_type()));
                         }
                         os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(rhs_tuple);
@@ -1760,12 +1760,14 @@ template <FragmentedView View>
 static managed_bytes reserialize_value(View value_bytes,
                                        const abstract_type& type) {
     if (type.is_list()) {
-        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes);
+        utils::chunked_vector<managed_bytes_opt> elements = partially_deserialize_listlike(value_bytes);
 
         const abstract_type& element_type = dynamic_cast<const list_type_impl&>(type).get_elements_type()->without_reversed();
         if (element_type.bound_value_needs_to_be_reserialized()) {
-            for (managed_bytes& element : elements) {
-                element = reserialize_value(managed_bytes_view(element), element_type);
+            for (managed_bytes_opt& element_opt : elements) {
+                if (element_opt) {
+                    element_opt = reserialize_value(managed_bytes_view(*element_opt), element_type);
+                }
             }
         }
 
@@ -1777,18 +1779,23 @@ static managed_bytes reserialize_value(View value_bytes,
     }
 
     if (type.is_set()) {
-        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes);
+        utils::chunked_vector<managed_bytes_opt> elements = partially_deserialize_listlike(value_bytes);
 
         const abstract_type& element_type = dynamic_cast<const set_type_impl&>(type).get_elements_type()->without_reversed();
         if (element_type.bound_value_needs_to_be_reserialized()) {
-            for (managed_bytes& element : elements) {
-                element = reserialize_value(managed_bytes_view(element), element_type);
+            for (managed_bytes_opt& element_opt : elements) {
+                if (element_opt) {
+                    element_opt = reserialize_value(managed_bytes_view(*element_opt), element_type);
+                }
             }
         }
 
         std::set<managed_bytes, serialized_compare> values_set(element_type.as_less_comparator());
-        for (managed_bytes& element : elements) {
-            values_set.emplace(std::move(element));
+        for (managed_bytes_opt& element_opt : elements) {
+            if (!element_opt) {
+                throw exceptions::invalid_request_exception("Invalid NULL value in set");
+            }
+            values_set.emplace(std::move(*element_opt));
         }
 
         return collection_type_impl::pack_fragmented(
@@ -1896,18 +1903,21 @@ static cql3::raw_value evaluate(const tuple_constructor& tuple, const evaluation
 
 // Range of managed_bytes
 template <typename Range>
-requires requires (Range listlike_range) { {*listlike_range.begin()} -> std::convertible_to<const managed_bytes&>; }
+requires requires (Range listlike_range) { {*listlike_range.begin()} -> std::convertible_to<const managed_bytes_opt&>; }
 static managed_bytes serialize_listlike(const Range& elements, const char* collection_name) {
     if (elements.size() > std::numeric_limits<int32_t>::max()) {
         throw exceptions::invalid_request_exception(fmt::format("{} size too large: {} > {}",
             collection_name, elements.size(), std::numeric_limits<int32_t>::max()));
     }
 
-    for (const managed_bytes& element : elements) {
+    for (const managed_bytes_opt& element_opt : elements) {
+      if (element_opt) {
+        auto& element = *element_opt;
         if (element.size() > std::numeric_limits<int32_t>::max()) {
             throw exceptions::invalid_request_exception(fmt::format("{} element size too large: {} bytes > {}",
                 collection_name, elements.size(), std::numeric_limits<int32_t>::max()));
         }
+      }
     }
 
     return collection_type_impl::pack_fragmented(
@@ -1920,21 +1930,13 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
 static cql3::raw_value evaluate_list(const collection_constructor& collection,
                               const evaluation_inputs& inputs,
                               bool skip_null = false) {
-    std::vector<managed_bytes> evaluated_elements;
+    std::vector<managed_bytes_opt> evaluated_elements;
     evaluated_elements.reserve(collection.elements.size());
 
     for (const expression& element : collection.elements) {
         cql3::raw_value evaluated_element = evaluate(element, inputs);
 
-        if (evaluated_element.is_null()) {
-            if (skip_null) {
-                continue;
-            }
-
-            throw exceptions::invalid_request_exception("null is not supported inside collections");
-        }
-
-        evaluated_elements.emplace_back(std::move(evaluated_element).to_managed_bytes());
+        evaluated_elements.emplace_back(std::move(evaluated_element).to_managed_bytes_opt());
     }
 
     managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "List");
@@ -2125,7 +2127,7 @@ static void ensure_can_get_value_elements(const cql3::raw_value& val,
     }
 }
 
-utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value& val) {
+utils::chunked_vector<managed_bytes_opt> get_list_elements(const cql3::raw_value& val) {
     ensure_can_get_value_elements(val, "expr::get_list_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
@@ -2133,7 +2135,7 @@ utils::chunked_vector<managed_bytes> get_list_elements(const cql3::raw_value& va
     });
 }
 
-utils::chunked_vector<managed_bytes> get_set_elements(const cql3::raw_value& val) {
+utils::chunked_vector<managed_bytes_opt> get_set_elements(const cql3::raw_value& val) {
     ensure_can_get_value_elements(val, "expr::get_set_elements");
 
     return val.view().with_value([](const FragmentedView auto& value_bytes) {
@@ -2167,7 +2169,7 @@ std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val
     });
 }
 
-static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes>&& elements) {
+static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes_opt>&& elements) {
     return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
                                           std::make_move_iterator(elements.end()));
 }
@@ -2194,15 +2196,20 @@ std::vector<managed_bytes_opt> get_elements(const cql3::raw_value& val, const ab
 }
 
 utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const cql3::raw_value& val, const abstract_type& type) {
-    utils::chunked_vector<managed_bytes> elements = get_list_elements(val);
+    utils::chunked_vector<managed_bytes_opt> elements = get_list_elements(val);
     const list_type_impl& list_typ = dynamic_cast<const list_type_impl&>(type.without_reversed());
     const tuple_type_impl& tuple_typ = dynamic_cast<const tuple_type_impl&>(*list_typ.get_elements_type());
 
     utils::chunked_vector<std::vector<managed_bytes_opt>> tuples_list;
     tuples_list.reserve(elements.size());
 
-    for (managed_bytes& element : elements) {
-        std::vector<managed_bytes_opt> cur_tuple = tuple_typ.split_fragmented(managed_bytes_view(element));
+    for (managed_bytes_opt& element : elements) {
+        if (!element) {
+            // Note: just skipping would also be okay here, for our caller (maybe
+            //       even better, but leaving that for later)
+            throw exceptions::invalid_request_exception("Invalid NULL tuple in list of tuples");
+        }
+        std::vector<managed_bytes_opt> cur_tuple = tuple_typ.split_fragmented(managed_bytes_view(*element));
         tuples_list.emplace_back(std::move(cur_tuple));
     }
 

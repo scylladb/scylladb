@@ -281,13 +281,16 @@ operation::set_counter_value_from_tuple_list::prepare(data_dictionary::database 
                 throw std::invalid_argument("Invalid input data to counter set");
             }
 
-            utils::chunked_vector<managed_bytes> list_elements = expr::get_list_elements(list_value);
+            utils::chunked_vector<managed_bytes_opt> list_elements = expr::get_list_elements(list_value);
 
             counter_id last(utils::UUID(0, 0));
             counter_cell_builder ccb(list_elements.size());
             for (auto& bo : list_elements) {
+                if (!bo) {
+                    throw exceptions::invalid_request_exception("Invalid NULL value in list of counter shards");
+                }
                 // lexical etc cast fails should be enough type checking here.
-                auto tuple = value_cast<tuple_type_impl::native_type>(counter_tuple_type->deserialize(managed_bytes_view(bo)));
+                auto tuple = value_cast<tuple_type_impl::native_type>(counter_tuple_type->deserialize(managed_bytes_view(*bo)));
                 auto shard = value_cast<int>(tuple[0]);
                 auto id = counter_id(value_cast<utils::UUID>(tuple[1]));
                 auto clock = value_cast<int64_t>(tuple[2]);

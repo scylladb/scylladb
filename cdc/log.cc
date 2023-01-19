@@ -650,8 +650,8 @@ template<>
 void collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>>::parse() {
     assert(_rem > 0);
     _next = _v;
-    auto k = read_collection_value(_next);
-    auto v = read_collection_value(_next);
+    auto k = read_collection_key(_next);
+    auto v = read_collection_value_nonnull(_next);
     _current = std::make_pair(k, v);
 }
 
@@ -659,7 +659,15 @@ template<>
 void collection_iterator<managed_bytes_view>::parse() {
     assert(_rem > 0);
     _next = _v;
-    auto k = read_collection_value(_next);
+    auto k = read_collection_key(_next);
+    _current = k;
+}
+
+template<>
+void collection_iterator<managed_bytes_view_opt>::parse() {
+    assert(_rem > 0);
+    _next = _v;
+    auto k = read_collection_value_nonnull(_next);
     _current = k;
 }
 
@@ -720,6 +728,14 @@ std::strong_ordering maybe_back_insert_iterator<std::vector<managed_bytes_view>,
     return _type.compare(t, v);
 }
 
+template<>
+std::strong_ordering maybe_back_insert_iterator<std::vector<managed_bytes_view_opt>, managed_bytes_view_opt>::compare(const managed_bytes_view_opt& t, const value_type& v) {
+    if (!t.has_value() || !v.has_value()) {
+        return unsigned(t.has_value()) <=> unsigned(v.has_value());
+    }
+    return _type.compare(*t, *v);
+}
+
 template<typename Container, typename T>
 auto make_maybe_back_inserter(Container& c, const abstract_type& type, collection_iterator<T> s) {
     return maybe_back_insert_iterator<Container, T>(c, type, s);
@@ -753,13 +769,16 @@ static managed_bytes merge(const collection_type_impl& ctype, const managed_byte
     return map_type_impl::serialize_partially_deserialized_form_fragmented(res);
 }
 static managed_bytes merge(const set_type_impl& ctype, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
-    std::vector<managed_bytes_view> res;
+    std::vector<managed_bytes_view_opt> res;
     res.reserve(collection_size(prev) + collection_size(next));
     auto type = ctype.name_comparator();
-    auto cmp = [&type = *type](managed_bytes_view k1, managed_bytes_view k2) {
-        return type.compare(k1, k2) < 0;
+    auto cmp = [&type = *type](managed_bytes_view_opt k1, managed_bytes_view_opt k2) {
+        if (!k1.has_value() || !k2.has_value()) {
+            return unsigned(k1.has_value()) < unsigned(k2.has_value());
+        }
+        return type.compare(*k1, *k2) < 0;
     };
-    collection_iterator<managed_bytes_view> e, i(prev), j(next), d(deleted);
+    collection_iterator<managed_bytes_view_opt> e, i(prev), j(next), d(deleted);
     std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
     return set_type_impl::serialize_partially_deserialized_form_fragmented(res);
 }
@@ -816,8 +835,8 @@ static managed_bytes_opt get_preimage_col_value(const column_definition& cdef, c
                 std::vector<managed_bytes> tmp;
                 tmp.reserve(n);
                 while (n--) {
-                    tmp.emplace_back(read_collection_value(v)); // key
-                    read_collection_value(v); // value. ignore.
+                    tmp.emplace_back(read_collection_key(v)); // key
+                    read_collection_value_nonnull(v); // value. ignore.
                 }
                 return set_type_impl::serialize_partially_deserialized_form_fragmented({tmp.begin(), tmp.end()});
             },
@@ -1083,7 +1102,7 @@ struct process_row_visitor {
         // See `set_visitor`, `udt_visitior`, and `map_or_list_visitor` below.
         struct collection_visitor {
             bool _is_column_delete = false;
-            std::vector<managed_bytes_view> _deleted_keys;
+            std::vector<managed_bytes_view_opt> _deleted_keys;
 
             ttl_opt& _ttl_column;
 
@@ -1102,13 +1121,13 @@ struct process_row_visitor {
 
 
         // cdc$deleted_col, cdc$deleted_elements_col, col
-        using result_t = std::tuple<bool, std::vector<managed_bytes_view>, managed_bytes_opt>;
+        using result_t = std::tuple<bool, std::vector<managed_bytes_view_opt>, managed_bytes_opt>;
         auto result = visit(*cdef.type, make_visitor(
             [&] (const set_type_impl&) -> result_t {
                 _touched_parts.set<stats::part_type::SET>();
 
                 struct set_visitor : public collection_visitor {
-                    std::vector<managed_bytes_view> _added_keys;
+                    std::vector<managed_bytes_view_opt> _added_keys;
 
                     set_visitor(ttl_opt& ttl_column) : collection_visitor(ttl_column) {}
 

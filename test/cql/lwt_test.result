@@ -1987,9 +1987,20 @@ Error from server: code=2200 [Invalid query] message="Invalid operation (b = b +
 | True        | [False] |
 +-------------+---------+
 > update lwt set c = [false] where a = 1 if c = [null];
-Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
 > update lwt set c = [false] where a = 1 if c = [null, true];
-Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> -- lists with NULL are allowed, but cannot be stored
+> update lwt set c = [false, null] where a = 1 if c = [false];
+Error from server: code=2200 [Invalid query] message="Cannot store NULL in list or set"
 > select c from lwt where a = 1;
 +---------+
 | c       |

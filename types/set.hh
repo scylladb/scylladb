@@ -38,7 +38,7 @@ public:
     static bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v);
     static managed_bytes serialize_partially_deserialized_form_fragmented(
-            const std::vector<managed_bytes_view>& v);
+            const std::vector<managed_bytes_view_opt>& v);
 };
 
 data_value make_set_value(data_type tuple_type, set_type_impl::native_type value);
