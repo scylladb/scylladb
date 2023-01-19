@@ -143,12 +143,13 @@ private:
     std::vector<data_type> generate_types(std::mt19937& engine, std::uniform_int_distribution<size_t>& count_dist,
             type_generator::is_multi_cell multi_cell, bool allow_reversed = false) {
         std::uniform_int_distribution<uint8_t> reversed_dist{0, uint8_t(allow_reversed)};
+        std::uniform_int_distribution<uint8_t> multi_cell_dist{0, uint8_t(bool(multi_cell))};
 
         std::vector<data_type> types;
 
         const auto count = count_dist(engine);
         for (size_t c = 0; c < count; ++c) {
-            auto type = _type_generator(engine, multi_cell);
+            auto type = _type_generator(engine, type_generator::is_multi_cell(bool(multi_cell_dist(engine))));
             if (reversed_dist(engine)) {
                 types.emplace_back(make_shared<reversed_type_impl>(std::move(type)));
             } else {
