@@ -113,6 +113,7 @@ in derive ({
       urwid
     ]))
     ragel
+    rustc
     stow
   ] ++ (devInputs { inherit pkgs llvm; });
 
