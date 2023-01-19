@@ -1641,8 +1641,14 @@ Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (
 +-------------+---------+
 | [applied]   | b       |
 |-------------+---------|
-| False       | [False] |
+| True        | [False] |
 +-------------+---------+
+> update lwt set b = {false:false} where a = 1 if b[null] = null;
++-------------+---------------+
+| [applied]   | b             |
+|-------------+---------------|
+| True        | [False, True] |
++-------------+---------------+
 > update lwt set b = b + {false:true} where a = 1 if b[null] = true;
 +-------------+---------+
 | [applied]   | b       |
@@ -1803,8 +1809,14 @@ Error from server: code=2200 [Invalid query] message="Invalid null map key"
 +-------------+---------------------------------+
 | [applied]   | c                               |
 |-------------+---------------------------------|
-| False       | [True, False, True, True, True] |
+| True        | [True, False, True, True, True] |
 +-------------+---------------------------------+
+> update lwt set c = [true, false, true, true, true] where a = 1 if c[null] = null;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
 > update lwt set c = c + [false] where a = 1 if c[null] = 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "value(c)" of type boolean"
 > update lwt set c = [true] + c where a = 1 if c = [false];
@@ -2064,8 +2076,14 @@ Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1
 +-------------+--------+
 | [applied]   | c      |
 |-------------+--------|
-| False       | [True] |
+| True        | [True] |
 +-------------+--------+
+> update lwt set c = [true] where a = 1 if c[null] = null;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
 > update lwt set c = [true] + c where a = 1 if c = [false];
 Error from server: code=2200 [Invalid query] message="Invalid operation (c = [true] + c) for frozen list column 63"
 > update lwt set c = [true,true,true,false,false,false] where a = 1 if exists;

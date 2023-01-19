@@ -167,9 +167,9 @@ bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
         cql3::raw_value key_constant = expr::evaluate(*_collection_element, inputs);
         cql3::raw_value_view key = key_constant.view();
         if (key.is_null()) {
-            return false;
-        }
-        if (cell_type.is_map()) {
+            // A[NULL] is NULL. Continue to evaluate, since "A[NULL] IS NULL" is true.
+            cell_value = nullptr;
+        } else if (cell_type.is_map()) {
             const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
             // A map is serialized as a vector of data value pairs.
             const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(*cell_value);
