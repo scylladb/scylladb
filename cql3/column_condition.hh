@@ -21,21 +21,7 @@ namespace cql3 {
  */
 class column_condition final {
 public:
-    // If _collection_element is not zero, this defines the receiver cell, not the entire receiver
-    // column.
-    // E.g. if column type is list<string> and expression is "a = ['test']", then the type of the
-    // column definition below is list<string>. If expression is "a[0] = 'test'", then the column
-    // object stands for the string cell. See column_condition::raw::prepare() for details.
-    expr::expression _column;
-private:
-    // For collection, when testing the equality of a specific element, nullopt otherwise.
-    std::optional<expr::expression> _collection_element;
-    // A literal value for comparison predicates or a multi item terminal for "a IN ?"
-    std::optional<expr::expression> _value;
-    // List of terminals for "a IN (value, value, ...)"
-    std::vector<expr::expression> _in_values;
-    std::unique_ptr<like_matcher> _matcher;
-    expr::oper_t _op;
+    expr::expression _expr;
 public:
     column_condition(const column_definition& column, std::optional<expr::expression> collection_element,
         std::optional<expr::expression> value, std::vector<expr::expression> in_values,
@@ -71,14 +57,6 @@ public:
             std::optional<expr::expression> in_marker, std::vector<expr::expression> in_values) {
         return make_lw_shared<column_condition>(def, std::move(collection_element), std::move(in_marker),
             std::move(in_values), expr::oper_t::IN);
-    }
-
-    const std::optional<expr::expression>& get_value() const {
-        return _value;
-    }
-
-    expr::oper_t get_operation() const {
-        return _op;
     }
 
     class raw final {

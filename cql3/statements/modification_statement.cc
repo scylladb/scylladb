@@ -359,12 +359,12 @@ void modification_statement::build_cas_result_set_metadata() {
         }
     } else {
         for (const auto& cond : _regular_conditions) {
-            expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
                 _columns_of_cas_result_set.set(col.col->ordinal_id);
             });
         }
         for (const auto& cond : _static_conditions) {
-            expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
                 _columns_of_cas_result_set.set(col.col->ordinal_id);
             });
         }
@@ -615,7 +615,7 @@ bool modification_statement::is_conditional() const {
 }
 
 void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
-  expr::for_each_expression<expr::column_value>(cond->_column, [&] (const expr::column_value& col) {
+  expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
     if (col.col->is_static()) {
         _has_static_column_conditions = true;
         _static_conditions.emplace_back(std::move(cond));
