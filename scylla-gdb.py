@@ -906,20 +906,26 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = val
 
-    def bytes(self):
+    def pure_bytes(self):
         inf = gdb.selected_inferior()
-        def to_hex(data, size):
-            return bytes(inf.read_memory(data, size)).hex()
+        def to_bytes(data, size):
+            return bytes(inf.read_memory(data, size))
 
         if self.val['_u']['small']['size'] >= 0:
-            return to_hex(self.val['_u']['small']['data'], int(self.val['_u']['small']['size']))
+            return to_bytes(self.val['_u']['small']['data'], int(self.val['_u']['small']['size']))
         else:
             ref = self.val['_u']['ptr']
             chunks = list()
             while ref['ptr']:
-                chunks.append(to_hex(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
+                chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
                 ref = ref['ptr']['next']
-            return ''.join(chunks)
+            return b''.join(chunks)
+
+    def bytes_as_hex(self):
+        return self.pure_bytes().hex()
+
+    def bytes(self):
+        return self.bytes_as_hex()
 
     def to_string(self):
         return str(self.bytes())
