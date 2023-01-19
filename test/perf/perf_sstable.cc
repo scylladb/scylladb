@@ -68,7 +68,9 @@ static std::unordered_map<sstring, test_modes> test_mode = {
     {"compaction", test_modes::compaction },
 };
 
-int main(int argc, char** argv) {
+namespace perf {
+
+int scylla_sstable_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
@@ -144,3 +146,5 @@ int main(int argc, char** argv) {
         }).or_terminate();
     });
 }
+
+} // namespace perf

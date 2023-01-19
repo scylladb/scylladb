@@ -518,7 +518,6 @@ scylla_tests = set([
     'test/perf/perf_collection',
     'test/perf/perf_row_cache_reads',
     'test/perf/logalloc',
-    'test/perf/perf_sstable',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
@@ -1172,10 +1171,13 @@ scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schem
 scylla_perfs = ['test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
                 'test/perf/perf_simple_query.cc',
+                'test/perf/perf_sstable.cc',
                 'test/perf/perf.cc',
                 'test/lib/alternator_test_env.cc',
                 'test/lib/cql_test_env.cc',
                 'test/lib/log.cc',
+                'test/lib/test_services.cc',
+                'test/lib/test_utils.cc',
                 'test/lib/tmpdir.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
