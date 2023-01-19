@@ -63,6 +63,7 @@
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
+#include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
@@ -96,10 +97,6 @@ class compaction_data;
 class sstable_set;
 class directory_semaphore;
 
-}
-
-namespace compaction {
-class table_state;
 }
 
 namespace ser {
