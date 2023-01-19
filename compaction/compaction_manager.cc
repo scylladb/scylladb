@@ -32,15 +32,15 @@ using namespace compaction;
 
 class compacting_sstable_registration {
     compaction_manager& _cm;
-    compaction_manager::compaction_state& _cs;
+    compaction::compaction_state& _cs;
     std::unordered_set<sstables::shared_sstable> _compacting;
 public:
-    explicit compacting_sstable_registration(compaction_manager& cm, compaction_manager::compaction_state& cs) noexcept
+    explicit compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs) noexcept
         : _cm(cm)
         , _cs(cs)
     { }
 
-    compacting_sstable_registration(compaction_manager& cm, compaction_manager::compaction_state& cs, std::vector<sstables::shared_sstable> compacting)
+    compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, std::vector<sstables::shared_sstable> compacting)
         : compacting_sstable_registration(cm, cs)
     {
         register_compacting(compacting);
@@ -273,7 +273,7 @@ private:
     virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
 };
 
-compaction_manager::compaction_state& compaction_manager::get_compaction_state(table_state* t) {
+compaction::compaction_state& compaction_manager::get_compaction_state(table_state* t) {
     try {
         return _compaction_state.at(t);
     } catch (std::out_of_range&) {
@@ -580,7 +580,7 @@ inline compaction_controller make_compaction_controller(const compaction_manager
     return compaction_controller(csg, static_shares, 250ms, std::move(fn));
 }
 
-compaction_manager::compaction_state::~compaction_state() {
+compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
 
@@ -1663,7 +1663,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }, can_purge_tombstones::no);
 }
 
-compaction_manager::compaction_state::compaction_state(table_state& t)
+compaction::compaction_state::compaction_state(table_state& t)
     : backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
 {
 }

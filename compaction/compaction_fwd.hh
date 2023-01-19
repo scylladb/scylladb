@@ -15,6 +15,7 @@ namespace compaction {
 
 class table_state;
 class strategy_control;
+struct compaction_state;
 
 using owned_ranges_ptr = lw_shared_ptr<const dht::token_range_vector>;
 
