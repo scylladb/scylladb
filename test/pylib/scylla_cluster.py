@@ -735,7 +735,7 @@ class ScyllaCluster:
         if self.start_exception:
             # Mark as dirty so further test cases don't try to reuse this cluster.
             self.is_dirty = True
-            raise self.start_exception
+            raise Exception(f'Exception when starting cluster {self}:\n{self.start_exception}')
 
         for server in self.running.values():
             server.write_log_marker(f"------ Starting test {name} ------\n")
@@ -993,7 +993,8 @@ class ScyllaClusterManager:
         finally:
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
-        return aiohttp.web.Response(text="True")
+        cluster_str = str(self.cluster)
+        return aiohttp.web.Response(text=cluster_str)
 
     async def _mark_dirty(self, _request) -> aiohttp.web.Response:
         """Mark current cluster dirty"""

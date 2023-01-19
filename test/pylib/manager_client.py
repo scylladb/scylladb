@@ -89,7 +89,8 @@ class ManagerClient():
     async def after_test(self, test_case_name: str) -> None:
         """Tell harness this test finished"""
         logger.debug("after_test for %s", test_case_name)
-        await self.client.get(f"/cluster/after-test")
+        cluster_str = await self.client.get_text(f"/cluster/after-test")
+        logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
