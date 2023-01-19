@@ -5342,6 +5342,67 @@ class scylla_get_config_value(gdb.Command):
             unqualify(cfg_liveness)))
 
 
+class scylla_range_tombstones(gdb.Command):
+    """Prints and validates range tombstones in a given container.
+
+    Currently supported containers:
+        - mutation_partition
+
+    Example:
+
+        (gdb) scylla range-tombstones $mp
+        {
+          start: ['a', 'b'],
+          kind: bound_kind::excl_start,
+          end: ['a', 'b'],
+          kind: bound_kind::incl_end,
+          t: {timestamp = 1672546889091665, deletion_time = {__d = {__r = 1672546889}}}
+        }
+        {
+          start: ['a', 'b'],
+          kind: bound_kind::excl_start,
+          end: ['a', 'c']
+          kind: bound_kind::incl_end,
+          t: {timestamp = 1673731764010123, deletion_time = {__d = {__r = 1673731764}}}
+        }
+
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla range-tombstones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    """value is an instance of clustering_key"""
+    def parse_clustering(self, value):
+        return get_current_schema().parse_clustering_key(value)
+
+    def invoke(self, partition, from_tty):
+        p = gdb.parse_and_eval(partition)
+
+        prev_end = None
+        for r in intrusive_set(p['_row_tombstones']['_tombstones']):
+            t = r['_tombstone']
+            start = self.parse_clustering(t['start'])
+            end = self.parse_clustering(t['end'])
+            gdb.write('{\n  start: %s,\n  kind: %s,\n  end: %s,\n  kind: %s,\n  t: %s\n}\n' % (
+                start, t['start_kind'], end, t['end_kind'], t['tomb']))
+
+            # Detect crossed boundaries or empty ranges
+            if start > end or (start == end and (str(t['start_kind']) != 'bound_kind::incl_start'
+                                            or str(t['end_kind']) != 'bound_kind::incl_end')):
+                gdb.write('*** Invalid boundaries! ***\n')
+                return
+
+            # Detect out of order ranges
+            if prev_end:
+                if start < prev_end or \
+                        (start == prev_end and (str(prev['end_kind']) == 'bound_kind::incl_end'
+                                                and str(t['start_kind']) == 'bound_kind::incl_start')):
+                    gdb.write('*** Order violated! ***\n')
+                    return
+            prev_end = end
+            prev = t
+
+
 class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
     """Dereference the pointer guarded by the smart pointer instance.
 
@@ -5634,6 +5695,7 @@ scylla_set_schema()
 scylla_schema()
 scylla_read_stats()
 scylla_get_config_value()
+scylla_range_tombstones()
 
 
 # Convenience functions
