@@ -10,12 +10,9 @@
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "sstables/sstable_set.hh"
+#include "compaction/compaction_fwd.hh"
 
 #pragma once
-
-namespace compaction {
-class table_state;
-}
 
 namespace replica {
 

@@ -66,6 +66,7 @@
 #include "compaction/compaction_manager.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
+#include "compaction/compaction_fwd.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -96,10 +97,6 @@ class compaction_data;
 class sstable_set;
 class directory_semaphore;
 
-}
-
-namespace compaction {
-class table_state;
 }
 
 namespace ser {

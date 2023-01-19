@@ -19,16 +19,7 @@
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
 #include "compaction_weight_registration.hh"
-
-namespace compaction {
-
-using owned_ranges_ptr = lw_shared_ptr<const dht::token_range_vector>;
-
-inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
-    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
-}
-
-} // namespace compaction
+#include "compaction_fwd.hh"
 
 namespace sstables {
 
