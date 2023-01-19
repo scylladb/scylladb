@@ -1470,7 +1470,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
-                [](const dht::decorated_key&) { return api::min_timestamp; },
+                [](const dht::decorated_key&) { return api::max_timestamp; },
                 _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {

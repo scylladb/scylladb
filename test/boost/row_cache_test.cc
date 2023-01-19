@@ -4219,3 +4219,60 @@ SEASTAR_TEST_CASE(test_reading_of_nonfull_keys) {
                     .produces(m1);
         });
 }
+
+SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        sstring ks_name = "ks";
+        sstring table_name = "test_pop_cache_tomb_table";
+
+        env.execute_cql(format(
+            "CREATE KEYSPACE IF NOT EXISTS {} WITH REPLICATION = "
+            "{{'class' : 'SimpleStrategy', 'replication_factor' : 1}};", ks_name)).get();
+        env.execute_cql(format(
+            "CREATE TABLE {}.{} (pk int, ck int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
+
+        env.require_table_exists(ks_name, table_name).get();
+
+        replica::table& t = env.local_db().find_column_family(ks_name, table_name);
+        schema_ptr s = t.schema();
+
+        int32_t pk = 0;
+        dht::decorated_key dk(dht::token(), partition_key::make_empty());
+        do {
+            dk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(++pk)));
+        } while (dht::shard_of(*s, dk.token()) != this_shard_id());
+
+        auto ck1 = clustering_key::from_deeply_exploded(*s, {1});
+        auto ck1_prefix = clustering_key_prefix::from_deeply_exploded(*s, {1});
+        auto ck2 = clustering_key::from_deeply_exploded(*s, {2});
+        auto ck2_prefix = clustering_key_prefix::from_deeply_exploded(*s, {2});
+
+        auto dt_noexp = gc_clock::now();
+        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+
+        mutation m(s, dk);
+        m.partition().apply_delete(*s, ck1_prefix, tombstone(1, dt_noexp)); // create non-expired tombstone
+        m.partition().apply_delete(*s, ck2_prefix, tombstone(2, dt_exp)); // create expired tombstone
+        t.apply(m);
+        t.flush().get();
+
+        // Clear the cache and repopulate it by reading sstables
+        t.get_row_cache().evict();
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto reader = t.get_row_cache().make_reader(s, semaphore.make_permit());
+        deferred_close dc{reader};
+        reader.consume_pausable([s](mutation_fragment_v2&& mf) {
+            return stop_iteration::no;
+        }).get();
+
+        cache_entry& entry = t.get_row_cache().lookup(dk);
+        auto& cp = entry.partition().version()->partition();
+
+        BOOST_REQUIRE_EQUAL(cp.tombstone_for_row(*s, ck1), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
+        BOOST_REQUIRE(cp.find_row(*s, ck2) == nullptr); // expired tombstone isn't in cache
+
+        const auto rows = cp.non_dummy_rows();
+        BOOST_REQUIRE(std::distance(rows.begin(), rows.end()) == 1); // cache contains non-expired row only
+    });
+}
