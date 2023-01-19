@@ -867,8 +867,9 @@ class ScyllaClusterManager:
         else:
             self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
-            await self.clusters.steal()
             await self.cluster.stop()
+            await self.cluster.release_ips()
+            await self.clusters.steal()
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
