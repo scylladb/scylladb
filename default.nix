@@ -117,6 +117,7 @@ in derive ({
   ] ++ (devInputs { inherit pkgs llvm; });
 
   buildInputs = with pkgs; [
+    abseil-cpp
     antlr3
     boost
     c-ares
