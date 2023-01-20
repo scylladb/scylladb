@@ -326,7 +326,9 @@ class ScyllaServer:
                          protocol_version=4,
                          auth_provider=auth) as cluster:
                 with cluster.connect() as session:
-                    session.execute("SELECT * FROM system.local")
+                    # See the comment above about `auth::standard_role_manager`. We execute
+                    # a 'real' query to ensure that the auth service has finished initializing.
+                    session.execute("SELECT key FROM system.local where key = 'local'")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=[self.ip_addr],
