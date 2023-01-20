@@ -287,6 +287,8 @@ Non-frozen collections have the following noteworthy characteristics and limitat
   Further, some list operations are not idempotent by nature (see the section on :ref:`lists <lists>` below for
   details), making their retry in case of timeout problematic. It is thus advised to prefer sets over lists when
   possible.
+- Non-frozen collections impose a significant performance penalty. To ensure better performance, use frozen collections 
+  or frozen UDTs. See `this blog post <https://www.scylladb.com/2017/12/07/performance-udt/>`_ for more information about improving performance.
 
 Please note that while some of those limitations may or may not be removed/improved upon in the future, it is an
 anti-pattern to use a (single) collection to store large amounts of data.
