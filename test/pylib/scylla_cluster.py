@@ -20,6 +20,7 @@ import time
 import traceback
 from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
+from enum import Enum
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
@@ -178,6 +179,11 @@ def merge_cmdline_options(base: List[str], override: List[str]) -> List[str]:
 
     return run()
 
+class CqlUpState(Enum):
+    NOT_CONNECTED = 1,
+    CONNECTED = 2,
+    QUERIED = 3
+
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
@@ -300,7 +306,7 @@ class ScyllaServer:
         except Exception as exc:    # pylint: disable=broad-except
             return f"Exception when reading server log {self.log_filename}: {exc}"
 
-    async def cql_is_up(self) -> bool:
+    async def cql_is_up(self) -> CqlUpState:
         """Test that CQL is serving (a check we use at start up)."""
         caslog = logging.getLogger('cassandra')
         oldlevel = caslog.getEffectiveLevel()
@@ -315,6 +321,7 @@ class ScyllaServer:
         # work, so rely on this "side effect".
         profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.ip_addr]),
                                    request_timeout=self.START_TIMEOUT)
+        connected = False
         try:
             # In a cluster setup, it's possible that the CQL
             # here is directed to a node different from the initial contact
@@ -326,6 +333,7 @@ class ScyllaServer:
                          protocol_version=4,
                          auth_provider=auth) as cluster:
                 with cluster.connect() as session:
+                    connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
                     # a 'real' query to ensure that the auth service has finished initializing.
                     session.execute("SELECT key FROM system.local where key = 'local'")
@@ -334,10 +342,10 @@ class ScyllaServer:
                                                    contact_points=[self.ip_addr],
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
-                    return True
+                    return CqlUpState.QUERIED
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
             self.logger.debug("Exception when checking if CQL is up: %s", exc)
-            return False
+            return CqlUpState.CONNECTED if connected else CqlUpState.NOT_CONNECTED
         finally:
             caslog.setLevel(oldlevel)
         # Any other exception may indicate a problem, and is passed to the caller.
@@ -370,6 +378,7 @@ class ScyllaServer:
 
         self.start_time = time.time()
         sleep_interval = 0.1
+        cql_up_state = CqlUpState.NOT_CONNECTED
 
         while time.time() < self.start_time + self.START_TIMEOUT:
             if self.cmd.returncode:
@@ -384,20 +393,30 @@ class ScyllaServer:
                         logpath = log_handler.baseFilename   # type: ignore
                     else:
                         logpath = "?"
-                    raise RuntimeError(f"Failed to start server at host {self.ip_addr}.\n"
+                    raise RuntimeError(f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}.\n"
                                        "Check the log files:\n"
                                        f"{logpath}\n"
                                        f"{self.log_filename}")
 
             if hasattr(self, "host_id") or await self.get_host_id(api):
-                if await self.cql_is_up():
+                cql_up_state = await self.cql_is_up()
+                if cql_up_state == CqlUpState.QUERIED:
                     return
 
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        raise RuntimeError(f"failed to start server {self.ip_addr}, "
-                           f"check server log at {self.log_filename}")
+        err = f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}."
+        if hasattr(self, "host_id"):
+            err += f" Managed to obtain the server's Host ID ({self.host_id})"
+            if cql_up_state == CqlUpState.CONNECTED:
+                err += " and to connect the CQL driver, but failed to execute a query."
+            else:
+                err += " but failed to connect the CQL driver."
+        else:
+            err += " Failed to obtain the server's Host ID."
+        err += f"\nCheck server log at {self.log_filename}."
+        raise RuntimeError(err)
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
