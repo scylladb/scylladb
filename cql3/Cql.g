@@ -1678,25 +1678,29 @@ udtColumnOperation[operations_type& operations,
       }
     ;
 
+columnRefExpr returns [expression e]
+    : column=cident { e = unresolved_identifier{column}; }
+    ;
+
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
-    : key=cident
+    : key=columnRefExpr
         ( op=relationType t=term { conditions.emplace_back(
                         binary_operator(
-                            unresolved_identifier{key},
+                            key,
                             op,
                             t));
                 }
         | K_IN
             ( values=singleColumnInValues { conditions.emplace_back(
                         binary_operator(
-                            unresolved_identifier{key},
+                            key,
                             oper_t::IN,
                             collection_constructor{collection_constructor::style_type::list, values}));
                 }
             | marker1=marker { conditions.emplace_back(
                         binary_operator(
-                            unresolved_identifier{key},
+                            key,
                             oper_t::IN,
                             marker1));
                 }
@@ -1705,7 +1709,7 @@ columnCondition[conditions_type& conditions]
             ( op=relationType t=term { conditions.emplace_back(
                         binary_operator(
                             subscript{
-                                unresolved_identifier{key},
+                                key,
                                  element
                             },
                             op,
@@ -1715,7 +1719,7 @@ columnCondition[conditions_type& conditions]
                 ( values=singleColumnInValues { conditions.emplace_back(
                             binary_operator(
                                 subscript{
-                                    unresolved_identifier{key},
+                                    key,
                                     element
                                 },
                                 oper_t::IN,
@@ -1724,7 +1728,7 @@ columnCondition[conditions_type& conditions]
                 | marker1=marker { conditions.emplace_back(
                             binary_operator(
                                 subscript{
-                                    unresolved_identifier{key},
+                                    key,
                                     element
                                 },
                                 oper_t::IN,
