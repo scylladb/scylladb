@@ -100,7 +100,7 @@ using namespace cql3::selection;
 using namespace cql3::expr;
 
 using cql3::cql3_type;
-using conditions_type = std::vector<lw_shared_ptr<cql3::column_condition::raw>>;
+using conditions_type = std::vector<expression>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
@@ -1682,59 +1682,53 @@ columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
         ( op=relationType t=term { conditions.emplace_back(
-                    column_condition::raw::make(
                         binary_operator(
                             unresolved_identifier{key},
                             op,
-                            t)));
+                            t));
                 }
         | K_IN
             ( values=singleColumnInValues { conditions.emplace_back(
-                    column_condition::raw::make(
                         binary_operator(
                             unresolved_identifier{key},
                             oper_t::IN,
-                            collection_constructor{collection_constructor::style_type::list, values})));
+                            collection_constructor{collection_constructor::style_type::list, values}));
                 }
             | marker1=marker { conditions.emplace_back(
-                    column_condition::raw::make(
                         binary_operator(
                             unresolved_identifier{key},
                             oper_t::IN,
-                            marker1)));
+                            marker1));
                 }
             )
         | '[' element=term ']'
             ( op=relationType t=term { conditions.emplace_back(
-                    column_condition::raw::make(
                         binary_operator(
                             subscript{
                                 unresolved_identifier{key},
                                  element
                             },
                             op,
-                            t)));
+                            t));
                 }
             | K_IN
                 ( values=singleColumnInValues { conditions.emplace_back(
-                        column_condition::raw::make(
                             binary_operator(
                                 subscript{
                                     unresolved_identifier{key},
                                     element
                                 },
                                 oper_t::IN,
-                                collection_constructor{collection_constructor::style_type::list, values})));
+                                collection_constructor{collection_constructor::style_type::list, values}));
                     }
                 | marker1=marker { conditions.emplace_back(
-                        column_condition::raw::make(
                             binary_operator(
                                 subscript{
                                     unresolved_identifier{key},
                                     element
                                 },
                                 oper_t::IN,
-                                marker1)));
+                                marker1));
                     }
                 )
             )

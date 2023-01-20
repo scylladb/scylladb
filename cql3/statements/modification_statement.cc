@@ -537,7 +537,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
-                auto condition = entry->prepare(db, keyspace(), schema);
+                auto condition = column_condition::prepare(entry, db, keyspace(), schema);
 
                 condition->collect_marker_specificaton(ctx);
 

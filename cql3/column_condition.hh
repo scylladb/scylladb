@@ -38,20 +38,7 @@ public:
     // and evaluate the condition.
     bool applies_to(const expr::evaluation_inputs& inputs) const;
 
-    class raw final {
-    private:
-        expr::expression _expr;
-    public:
-        explicit raw(expr::expression expr)
-                : _expr(std::move(expr))
-        { }
-
-        static lw_shared_ptr<raw> make(expr::expression expr) {
-            return make_lw_shared<raw>(std::move(expr));
-        }
-
-        lw_shared_ptr<column_condition> prepare(data_dictionary::database db, const sstring& keyspace, const schema& schema) const;
-    };
+    static lw_shared_ptr<column_condition> prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema);
 };
 
 } // end of namespace cql3

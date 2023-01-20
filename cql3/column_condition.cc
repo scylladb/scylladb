@@ -65,8 +65,8 @@ bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
 }
 
 lw_shared_ptr<column_condition>
-column_condition::raw::prepare(data_dictionary::database db, const sstring& keyspace, const schema& schema) const {
-    auto prepared = expr::prepare_expression(_expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
+column_condition::prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
+    auto prepared = expr::prepare_expression(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
 
     expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
       auto def = cval.col;
