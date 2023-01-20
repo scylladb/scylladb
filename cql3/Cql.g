@@ -1682,9 +1682,14 @@ columnRefExpr returns [expression e]
     : column=cident { e = unresolved_identifier{column}; }
     ;
 
+subscriptExpr returns [expression e]
+    : col=columnRefExpr { e = std::move(col); }
+        ( '[' sub=term ']'  { e = subscript{std::move(e), std::move(sub)}; } )?
+    ;
+
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
-    : key=columnRefExpr
+    : key=subscriptExpr
         ( op=relationType t=term { conditions.emplace_back(
                         binary_operator(
                             key,
@@ -1704,37 +1709,6 @@ columnCondition[conditions_type& conditions]
                             oper_t::IN,
                             marker1));
                 }
-            )
-        | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(
-                        binary_operator(
-                            subscript{
-                                key,
-                                 element
-                            },
-                            op,
-                            t));
-                }
-            | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(
-                            binary_operator(
-                                subscript{
-                                    key,
-                                    element
-                                },
-                                oper_t::IN,
-                                collection_constructor{collection_constructor::style_type::list, values}));
-                    }
-                | marker1=marker { conditions.emplace_back(
-                            binary_operator(
-                                subscript{
-                                    key,
-                                    element
-                                },
-                                oper_t::IN,
-                                marker1));
-                    }
-                )
             )
         )
     ;
