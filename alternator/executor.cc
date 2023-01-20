@@ -90,7 +90,6 @@ json::json_return_type make_streamed(rjson::value&& value) {
         auto lrs = std::move(rs);
         try {
             co_await rjson::print(*lrs, los);
-            co_await los.flush();
             co_await los.close();
         } catch (...) {
             // at this point, we cannot really do anything. HTTP headers and return code are
