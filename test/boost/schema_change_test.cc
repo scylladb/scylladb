@@ -456,6 +456,58 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
     });
 }
 
+SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            service::migration_manager& mm = e.migration_manager().local();
+
+            auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+            auto s0 = schema_builder("ks", "table1")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("v1", bytes_type)
+                .build();
+
+            auto find_table = [&] () -> replica::column_family& {
+                return e.db().local().find_column_family("ks", "table1");
+            };
+
+            std::vector<mutation> all_muts;
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                const auto ts = group0_guard.write_timestamp();
+                auto muts = e.migration_manager().local().prepare_keyspace_drop_announcement("ks", ts);
+                boost::copy(muts, std::back_inserter(all_muts));
+                mm.announce(muts, std::move(group0_guard)).get();
+            }
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                const auto ts = group0_guard.write_timestamp();
+
+                // all_muts contains keyspace drop.
+                auto muts = e.migration_manager().local().prepare_new_keyspace_announcement(keyspace, ts);
+                boost::copy(muts, std::back_inserter(all_muts));
+                mm.announce(muts, std::move(group0_guard)).get();
+            }
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                const auto ts = group0_guard.write_timestamp();
+
+                auto muts = e.migration_manager().local().prepare_new_column_family_announcement(s0, ts).get0();
+                boost::copy(muts, std::back_inserter(all_muts));
+
+                mm.announce(all_muts, std::move(group0_guard)).get();
+            }
+
+            auto s1 = find_table().schema();
+            BOOST_REQUIRE(s1 == find_table().schema());
+        });
+    });
+}
+
 class counting_migration_listener : public service::migration_listener {
 public:
     int create_keyspace_count = 0;
