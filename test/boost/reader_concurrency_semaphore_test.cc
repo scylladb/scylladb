@@ -1266,7 +1266,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks
     auto stop_sem = deferred_stop(semaphore);
 
     const size_t reader_count_target = 6;
-    const size_t iteration_limit = 100;
+    const size_t iteration_limit = 1000;
 
     std::list<allocating_reader> readers;
 
