@@ -365,7 +365,7 @@ public:
 
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
-    static future<int> increment_and_get_generation();
+    future<int> increment_and_get_generation();
     bool bootstrap_needed() const;
     bool bootstrap_complete() const;
     bool bootstrap_in_progress() const;

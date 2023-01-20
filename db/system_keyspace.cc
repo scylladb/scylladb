@@ -3022,7 +3022,7 @@ future<> system_keyspace::get_repair_history(::table_id table_id, repair_history
 
 future<int> system_keyspace::increment_and_get_generation() {
     auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
-    auto rs = co_await qctx->qp().execute_internal(req, cql3::query_processor::cache_internal::yes);
+    auto rs = co_await _qp.local().execute_internal(req, cql3::query_processor::cache_internal::yes);
     int generation;
     if (rs->empty() || !rs->one().has("gossip_generation")) {
         // seconds-since-epoch isn't a foolproof new generation
@@ -3042,7 +3042,7 @@ future<int> system_keyspace::increment_and_get_generation() {
         }
     }
     req = format("INSERT INTO system.{} (key, gossip_generation) VALUES ('{}', ?)", LOCAL, LOCAL);
-    co_await qctx->qp().execute_internal(req, {generation}, cql3::query_processor::cache_internal::yes);
+    co_await _qp.local().execute_internal(req, {generation}, cql3::query_processor::cache_internal::yes);
     co_await force_blocking_flush(LOCAL);
     co_return generation;
 }
