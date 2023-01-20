@@ -1249,10 +1249,13 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
             cg.get_backlog_tracker().copy_ongoing_charges(new_bt, move_read_charges);
 
             new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(t._schema));
-            cg.main_sstables()->for_each_sstable([this] (const sstables::shared_sstable& s) {
-                add_sstable_to_backlog_tracker(new_bt, s);
+            std::vector<sstables::shared_sstable> new_sstables_for_backlog_tracker;
+            new_sstables_for_backlog_tracker.reserve(cg.main_sstables()->all()->size());
+            cg.main_sstables()->for_each_sstable([this, &new_sstables_for_backlog_tracker] (const sstables::shared_sstable& s) {
                 new_sstables->insert(s);
+                new_sstables_for_backlog_tracker.push_back(s);
             });
+            new_bt.replace_sstables({}, std::move(new_sstables_for_backlog_tracker));
         }
 
         void execute() noexcept {
