@@ -126,6 +126,7 @@ public:
     stats& get_stats() noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
     lru& get_lru() { return _lru; }
+    seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };
 
 inline

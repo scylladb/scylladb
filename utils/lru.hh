@@ -38,6 +38,9 @@ public:
 
     virtual void on_evicted() noexcept = 0;
 
+    // Used for testing to avoid cascading eviction of the containing object.
+    virtual void on_evicted_shallow() noexcept { on_evicted(); }
+
     bool is_linked() const {
         return _lru_link.is_linked();
     }
@@ -82,14 +85,30 @@ public:
     }
 
     // Evicts a single element from the LRU
-    reclaiming_result evict() noexcept {
+    template <bool Shallow = false>
+    reclaiming_result do_evict() noexcept {
         if (_list.empty()) {
             return reclaiming_result::reclaimed_nothing;
         }
         evictable& e = _list.front();
         _list.pop_front();
-        e.on_evicted();
+        if constexpr (!Shallow) {
+            e.on_evicted();
+        } else {
+            e.on_evicted_shallow();
+        }
         return reclaiming_result::reclaimed_something;
+    }
+
+    // Evicts a single element from the LRU.
+    reclaiming_result evict() noexcept {
+        return do_evict<false>();
+    }
+
+    // Evicts a single element from the LRU.
+    // Will call on_evicted_shallow() instead of on_evicted().
+    reclaiming_result evict_shallow() noexcept {
+        return do_evict<true>();
     }
 
     // Evicts all elements.
