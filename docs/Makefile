@@ -6,6 +6,7 @@ SPHINXBUILD   := $(POETRY) run sphinx-build
 PAPER         :=
 BUILDDIR      := _build
 SOURCEDIR     := .
+PREVIEW_HOST  := 127.0.0.1
 
 # Internal variables
 PAPEROPT_a4     := -D latex_paper_size=a4
@@ -82,7 +83,7 @@ redirects: setup
 # Preview commands
 .PHONY: preview
 preview: setup
-	$(POETRY) run sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --port 5500
+	$(POETRY) run sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --host $(PREVIEW_HOST) --port 5500
 
 .PHONY: multiversionpreview
 multiversionpreview: multiversion
