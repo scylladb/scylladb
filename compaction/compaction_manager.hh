@@ -557,7 +557,7 @@ public:
     friend class compaction_manager_test;
 };
 
-bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
+bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
 
 // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
 std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::table_state& table_s);

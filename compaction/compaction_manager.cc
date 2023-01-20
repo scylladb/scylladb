@@ -1498,8 +1498,7 @@ private:
 };
 
 bool needs_cleanup(const sstables::shared_sstable& sst,
-                   const dht::token_range_vector& sorted_owned_ranges,
-                   schema_ptr s) {
+                   const dht::token_range_vector& sorted_owned_ranges) {
     auto first_token = sst->get_first_decorated_key().token();
     auto last_token = sst->get_last_decorated_key().token();
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
@@ -1536,12 +1535,11 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 
     auto get_sstables = [this, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
         return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
-            auto schema = t.schema();
             auto sstables = std::vector<sstables::shared_sstable>{};
             const auto candidates = get_candidates(t);
-            std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
+            std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges] (const sstables::shared_sstable& sst) {
                 seastar::thread::maybe_yield();
-                return needs_cleanup(sst, *sorted_owned_ranges, schema);
+                return needs_cleanup(sst, *sorted_owned_ranges);
             });
             return sstables;
         });
