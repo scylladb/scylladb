@@ -403,6 +403,10 @@ public:
     named_value<uint64_t> wasm_udf_yield_fuel;
     named_value<uint64_t> wasm_udf_total_fuel;
     named_value<size_t> wasm_udf_memory_limit;
+    // wasm_udf_reserved_memory is static because the options in db::config
+    // are parsed using seastar::app_template, while this option is used for
+    // configuring the Seastar memory subsystem.
+    static constexpr size_t wasm_udf_reserved_memory = 50 * 1024 * 1024;
 
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 

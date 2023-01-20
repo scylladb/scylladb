@@ -2276,7 +2276,10 @@ public:
         add_partition(mutation_sink, "trace_probability", format("{:.2}", tracing::tracing::get_local_tracing_instance().get_trace_probability()));
         co_await add_partition(mutation_sink, "memory", [this] () {
             struct stats {
-                uint64_t total = 0;
+                // take the pre-reserved memory into account, as seastar only returns
+                // the stats of memory managed by the seastar allocator, but we instruct
+                // it to reserve addition memory for system.
+                uint64_t total = db::config::wasm_udf_reserved_memory;
                 uint64_t free = 0;
                 static stats reduce(stats a, stats b) { return stats{a.total + b.total, a.free + b.free}; }
             };
