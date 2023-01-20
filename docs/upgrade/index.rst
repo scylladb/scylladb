@@ -25,11 +25,10 @@ successive X.Y version. For example, to upgrade from version 4.4 to 5.0, you sho
    <div class="panel callout radius animated">
             <div class="row">
               <div class="medium-3 columns">
-                <h5 id="getting-started">Upgrade Scylla</h5>
+                <h5 id="getting-started">Procedures for upgrading ScyllaDB</h5>
               </div>
               <div class="medium-9 columns">
 
-Procedures for upgrading Scylla.
 
 * :doc:`Upgrade ScyllaDB Enterprise <upgrade-enterprise/index>`
 
