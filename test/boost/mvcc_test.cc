@@ -118,6 +118,16 @@ public:
         _region->merge(*other._region);
         _cleaner->merge(*other._cleaner);
     }
+
+    template<typename Func>
+    auto allocate_in_region(Func&& f) {
+        logalloc::allocating_section as;
+        return with_allocator(region().allocator(), [&] {
+            return as(region(), [&] {
+                return f();
+            });
+        });
+    }
 };
 
 class mvcc_partition {
@@ -157,18 +167,14 @@ public:
     }
 
     void upgrade(schema_ptr new_schema) {
-        logalloc::allocating_section as;
-        with_allocator(region().allocator(), [&] {
-            as(region(), [&] {
-                _e.upgrade(_s, new_schema, _container.cleaner(), _container.tracker());
-                _s = new_schema;
-            });
+        _container.allocate_in_region([&] {
+            _e.upgrade(_s, new_schema, _container.cleaner(), _container.tracker());
+            _s = new_schema;
         });
     }
 
     partition_snapshot_ptr read() {
-        logalloc::allocating_section as;
-        return as(region(), [&] {
+        return _container.allocate_in_region([&] {
             return _e.read(region(), _container.cleaner(), schema(), _container.tracker(), _container.phase());
         });
     }
