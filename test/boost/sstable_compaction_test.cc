@@ -3571,23 +3571,23 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
     {
         auto local_ranges = { token_range(0, 9) };
         auto sst = sst_gen(keys[0], keys[9]);
-        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges));
     }
 
     {
         auto local_ranges = { token_range(0, 1), token_range(3, 4), token_range(5, 6) };
 
         auto sst = sst_gen(keys[0], keys[1]);
-        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges));
 
         auto sst2 = sst_gen(keys[2], keys[2]);
-        BOOST_REQUIRE(needs_cleanup(sst2, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst2, local_ranges));
 
         auto sst3 = sst_gen(keys[0], keys[6]);
-        BOOST_REQUIRE(needs_cleanup(sst3, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst3, local_ranges));
 
         auto sst5 = sst_gen(keys[7], keys[7]);
-        BOOST_REQUIRE(needs_cleanup(sst5, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst5, local_ranges));
     }
   });
 }
