@@ -202,13 +202,8 @@ It is also possible to “group” ``CLUSTERING COLUMNS`` together in a relation
        AND (blog_title, posted_at) > ('John''s Blog', '2012-01-01')
 
 will request all rows that sort after the one having “John's Blog” as ``blog_title`` and '2012-01-01' for ``posted_at``
-in the clustering order. In particular, rows having a ``post_at <= '2012-01-01'`` will be returned as long as their
-``blog_title > 'John''s Blog'``, which would not be the case for::
-
-    SELECT * FROM posts
-     WHERE userid = 'john doe'
-       AND blog_title > 'John''s Blog'
-       AND posted_at > '2012-01-01'
+in the clustering order. In particular, rows having a ``posted_at <= '2012-01-01'`` will be returned as long as their
+``blog_title > 'John''s Blog'``.
 
 The tuple notation may also be used for ``IN`` clauses on clustering columns::
 
