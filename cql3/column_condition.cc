@@ -39,20 +39,6 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
 column_condition::column_condition(expr::expression expr)
         : _expr(std::move(expr))
 {
-    // If a collection is multi-cell and not frozen, it is returned as a map even if the
-    // underlying data type is "set" or "list". This is controlled by
-    // partition_slice::collections_as_maps enum, which is set when preparing a read command
-    // object. Representing a list as a map<timeuuid, listval> is necessary to identify the list field
-    // being updated, e.g. in case of UPDATE t SET list[3] = null WHERE a = 1 IF list[3]
-    // = 'key'
-    //
-    // We adjust for it by reinterpreting the returned value as a list, since the map
-    // representation is not needed here.
-    _expr = expr::adjust_for_collection_as_maps(_expr);
-
-    _expr = expr::optimize_like(_expr);
-
-    _expr = update_for_lwt_null_equality_rules(_expr);
 }
 
 void column_condition::collect_marker_specificaton(prepare_context& ctx) {
@@ -74,6 +60,23 @@ column_condition::prepare(const expr::expression& expr, data_dictionary::databas
         throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", def->name_as_text()));
       }
     });
+
+    // If a collection is multi-cell and not frozen, it is returned as a map even if the
+    // underlying data type is "set" or "list". This is controlled by
+    // partition_slice::collections_as_maps enum, which is set when preparing a read command
+    // object. Representing a list as a map<timeuuid, listval> is necessary to identify the list field
+    // being updated, e.g. in case of UPDATE t SET list[3] = null WHERE a = 1 IF list[3]
+    // = 'key'
+    //
+    // We adjust for it by reinterpreting the returned value as a list, since the map
+    // representation is not needed here.
+    prepared = expr::adjust_for_collection_as_maps(prepared);
+
+    prepared = expr::optimize_like(prepared);
+
+    prepared = update_for_lwt_null_equality_rules(prepared);
+
+
     return make_lw_shared<column_condition>(std::move(prepared));
 }
 
