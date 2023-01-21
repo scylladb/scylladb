@@ -562,7 +562,8 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
     ;
 
 updateConditions returns [conditions_type conditions]
-    : columnCondition[conditions] ( K_AND columnCondition[conditions] )*
+    : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
+         ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
     ;
 
 /**
@@ -1692,21 +1693,21 @@ singleColumnInValuesOrMarkerExpr returns [expression e]
     | m=marker { e = std::move(m); }
     ;
 
-columnCondition[conditions_type& conditions]
+columnCondition returns [expression e]
     // Note: we'll reject duplicates later
     : key=subscriptExpr
-        ( op=relationType t=term { conditions.emplace_back(
-                        binary_operator(
+        ( op=relationType t=term {
+                    e = binary_operator(
                             key,
                             op,
-                            t));
+                            t);
                 }
         | K_IN
-            values=singleColumnInValuesOrMarkerExpr { conditions.emplace_back(
-                        binary_operator(
+            values=singleColumnInValuesOrMarkerExpr {
+                    e = binary_operator(
                             key,
                             oper_t::IN,
-                            std::move(values)));
+                            std::move(values));
                 }
         )
     ;
