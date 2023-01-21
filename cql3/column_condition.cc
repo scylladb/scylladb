@@ -36,11 +36,6 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
     });
 }
 
-bool column_condition_applies_to(const expr::expression& expr, const expr::evaluation_inputs& inputs) {
-    static auto true_value = raw_value::make_value(data_value(true).serialize());
-    return expr::evaluate(expr, inputs) == true_value;
-}
-
 expr::expression
 column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
     auto prepared = expr::prepare_expression(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));

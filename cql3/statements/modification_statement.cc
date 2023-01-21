@@ -187,8 +187,9 @@ bool modification_statement::applies_to(const selection::selection* selection,
         .options = &options,
     };
 
+    static auto true_value = raw_value::make_value(data_value(true).serialize());
     auto condition_applies = [&row, &inputs](const expr::expression& cond) {
-        return column_condition_applies_to(cond, inputs);
+        return expr::evaluate(cond, inputs) == true_value;
     };
     return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
             std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
