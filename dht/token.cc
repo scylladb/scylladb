@@ -271,4 +271,21 @@ dht::token find_first_token_for_shard(
     }
 }
 
+size_t
+compaction_group_of(unsigned most_significant_bits, const token& t) {
+    if (!most_significant_bits) {
+        return 0;
+    }
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            return 0;
+        case token::kind::after_all_keys:
+            return (1 << most_significant_bits) - 1;
+        case token::kind::key:
+            uint64_t adjusted = unbias(t);
+            return adjusted >> (64 - most_significant_bits);
+    }
+    __builtin_unreachable();
+}
+
 } // namespace dht
