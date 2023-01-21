@@ -218,4 +218,6 @@ inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::
 inline bool operator>=(const token& t1, const token& t2) { return std::rel_ops::operator>=(t1, t2); }
 std::ostream& operator<<(std::ostream& out, const token& t);
 
+size_t compaction_group_of(unsigned most_significant_bits, const token& t);
+
 } // namespace dht
