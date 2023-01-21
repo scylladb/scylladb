@@ -45,6 +45,8 @@
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/lister.hh"
+#include "dht/token.hh"
+#include "dht/i_partitioner.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
@@ -508,10 +510,8 @@ void table::enable_off_strategy_trigger() {
 
 std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
     std::vector<std::unique_ptr<compaction_group>> ret;
-    auto number_of_cg = 1 << _x_log2_compaction_groups;
-    ret.reserve(number_of_cg);
-    for (auto i = 0; i < number_of_cg; i++) {
-        ret.emplace_back(std::make_unique<compaction_group>(*this));
+    for (auto&& range : dht::split_token_range_msb(_x_log2_compaction_groups)) {
+        ret.emplace_back(std::make_unique<compaction_group>(*this, std::move(range)));
     }
     return ret;
 }
@@ -525,7 +525,12 @@ compaction_group& table::compaction_group_for_token(dht::token token) const noex
     if (idx >= _compaction_groups.size()) {
         on_fatal_internal_error(tlogger, format("compaction_group_for_token: index out of range: idx={} size_log2={} size={} token={}", idx, _x_log2_compaction_groups, _compaction_groups.size(), token));
     }
-    return *_compaction_groups[idx];
+    auto& ret = *_compaction_groups[idx];
+    if (!ret.token_range().contains(token, dht::token_comparator())) {
+        on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
+                idx, ret.token_range(), token));
+    }
+    return ret;
 }
 
 compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
@@ -1376,9 +1381,10 @@ table::make_memtable_list(compaction_group& cg) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
-compaction_group::compaction_group(table& t)
+compaction_group::compaction_group(table& t, dht::token_range token_range)
     : _t(t)
     , _table_state(std::make_unique<table_state>(t, *this))
+    , _token_range(std::move(token_range))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
     , _main_sstables(make_lw_shared<sstables::sstable_set>(t._compaction_strategy.make_sstable_set(t.schema())))
     , _maintenance_sstables(t.make_maintenance_sstable_set())

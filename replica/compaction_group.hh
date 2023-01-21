@@ -33,6 +33,8 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
+    // Tokens included in this compaction_groups
+    dht::token_range _token_range;
     // Holds list of memtables for this group
     lw_shared_ptr<memtable_list> _memtables;
     // SSTable set which contains all non-maintenance sstables
@@ -56,7 +58,7 @@ private:
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
 public:
-    compaction_group(table& t);
+    compaction_group(table& t, dht::token_range token_range);
 
     // Will stop ongoing compaction on behalf of this group, etc.
     future<> stop() noexcept;
@@ -69,6 +71,11 @@ public:
 
     future<> flush();
     bool can_flush() const;
+
+    const dht::token_range& token_range() const noexcept {
+        return _token_range;
+    }
+
     lw_shared_ptr<memtable_list>& memtables() noexcept;
     size_t memtable_count() const noexcept;
     // Returns minimum timestamp from memtable list
