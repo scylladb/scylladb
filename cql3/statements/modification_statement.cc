@@ -539,7 +539,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             for (auto&& entry : _conditions) {
                 auto condition = column_condition_prepare(entry, db, keyspace(), schema);
 
-                column_condition_collect_marker_specificaton(condition, ctx);
+                expr::fill_prepare_context(condition, ctx);
 
                 stmt.add_condition(condition);
             }

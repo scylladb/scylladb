@@ -16,14 +16,6 @@
 
 namespace cql3 {
 
-    /**
-     * Collects the column specification for the bind variables of this operation.
-     *
-     * @param boundNames the list of column specification where to collect the
-     * bind variables of this term in.
-     */
-    void column_condition_collect_marker_specificaton(expr::expression& expr, prepare_context& ctx);
-
     // Retrieve parameter marker values, if any, find the appropriate collection
     // element if the cell is a collection and an element access is used in the expression,
     // and evaluate the condition.

@@ -36,10 +36,6 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
     });
 }
 
-void column_condition_collect_marker_specificaton(expr::expression& expr, prepare_context& ctx) {
-    expr::fill_prepare_context(expr, ctx);
-}
-
 bool column_condition_applies_to(const expr::expression& expr, const expr::evaluation_inputs& inputs) {
     static auto true_value = raw_value::make_value(data_value(true).serialize());
     return expr::evaluate(expr, inputs) == true_value;
