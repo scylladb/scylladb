@@ -1687,6 +1687,11 @@ subscriptExpr returns [expression e]
         ( '[' sub=term ']'  { e = subscript{std::move(e), std::move(sub)}; } )?
     ;
 
+singleColumnInValuesOrMarkerExpr returns [expression e]
+    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list, std::move(values)}; }
+    | m=marker { e = std::move(m); }
+    ;
+
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=subscriptExpr
@@ -1697,19 +1702,12 @@ columnCondition[conditions_type& conditions]
                             t));
                 }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(
+            values=singleColumnInValuesOrMarkerExpr { conditions.emplace_back(
                         binary_operator(
                             key,
                             oper_t::IN,
-                            collection_constructor{collection_constructor::style_type::list, values}));
+                            std::move(values)));
                 }
-            | marker1=marker { conditions.emplace_back(
-                        binary_operator(
-                            key,
-                            oper_t::IN,
-                            marker1));
-                }
-            )
         )
     ;
 
