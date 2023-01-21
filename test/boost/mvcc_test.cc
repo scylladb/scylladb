@@ -35,6 +35,7 @@ using namespace std::chrono_literals;
 
 static thread_local mutation_application_stats app_stats_for_tests;
 
+
 // Reads the rest of the partition into a mutation_partition object.
 // There must be at least one entry ahead of the cursor.
 // The cursor must be pointing at a row and valid.
@@ -102,6 +103,7 @@ public:
     logalloc::region& region() { return *_region; }
     cache_tracker* tracker() { return _tracker ? &*_tracker : nullptr; }
     mutation_cleaner& cleaner() { return *_cleaner; }
+    schema_ptr schema() const { return _schema; }
     partition_snapshot::phase_type next_phase() { return ++_phase; }
     partition_snapshot::phase_type phase() const { return _phase; }
     real_dirty_memory_accounter& accounter() { return *_acc; }
@@ -251,6 +253,8 @@ mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) 
         });
     });
 }
+
+static void evict_with_consistency_check(mvcc_container&, mvcc_partition&, const mutation_partition& expected);
 
 SEASTAR_TEST_CASE(test_apply_to_incomplete) {
     return seastar::async([] {
@@ -465,6 +469,8 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 
                 assert_that(s, std::move(sq))
                     .is_equal_to_compacted(expected, e_continuity.to_clustering_row_ranges());
+
+                evict_with_consistency_check(ms, e, expected);
             };
 
             test(false);
@@ -487,6 +493,37 @@ static mutation_partition read_using_cursor(partition_snapshot& snap, bool rever
     mp.set_static_row_continuous(snap.static_row_continuous());
     mp.apply(snap.partition_tombstone());
     return mp;
+}
+
+static
+void evict_with_consistency_check(mvcc_container& ms, mvcc_partition& e, const mutation_partition& expected) {
+    // Test for violation of "last versions are evicted first" and "information monotonicity"
+    // by evicting and verifying the result after each eviction.
+    const schema& s = *ms.schema();
+    testlog.trace("expected: {}", mutation_partition::printer(s, expected));
+    while (true) {
+        testlog.trace("evicting");
+        auto ret = ms.tracker()->evict_from_lru_shallow();
+
+        testlog.trace("entry: {}", partition_entry::printer(s, e.entry()));
+
+        auto p = e.squashed();
+        auto cont = p.get_continuity(s);
+
+        testlog.trace("squashed: {}", mutation_partition::printer(s, p));
+        testlog.trace("continuity: {}", cont);
+
+        // Check that cursor view is the same.
+        auto p2 = read_using_cursor(*e.read(), false);
+        assert_that(ms.schema(), p2).is_equal_to_compacted(p);
+
+        assert_that(ms.schema(), p)
+            .is_equal_to_compacted(expected, cont.to_clustering_row_ranges());
+
+        if (ret == memory::reclaiming_result::reclaimed_nothing) {
+            break;
+        }
+    }
 }
 
 static void reverse(schema_ptr s, mutation_partition& m) {
@@ -1994,5 +2031,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
 
         snp3 = {};
         ms.cleaner().drain().get();
+
+        evict_with_consistency_check(ms, e, expected.partition());
     });
 }
