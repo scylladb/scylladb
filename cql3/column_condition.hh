@@ -16,29 +16,19 @@
 
 namespace cql3 {
 
-/**
- * A CQL3 condition on the value of a column or collection element.  For example, "UPDATE .. IF a = 0".
- */
-class column_condition final {
-public:
-    expr::expression _expr;
-public:
-    explicit column_condition(expr::expression expr);
-
     /**
      * Collects the column specification for the bind variables of this operation.
      *
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    void collect_marker_specificaton(prepare_context& ctx);
+    void column_condition_collect_marker_specificaton(expr::expression& expr, prepare_context& ctx);
 
     // Retrieve parameter marker values, if any, find the appropriate collection
     // element if the cell is a collection and an element access is used in the expression,
     // and evaluate the condition.
-    bool applies_to(const expr::evaluation_inputs& inputs) const;
+    bool column_condition_applies_to(const expr::expression& expr, const expr::evaluation_inputs& inputs);
 
-    static lw_shared_ptr<column_condition> prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema);
-};
+    expr::expression column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema);
 
 } // end of namespace cql3

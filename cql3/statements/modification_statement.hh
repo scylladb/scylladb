@@ -72,8 +72,8 @@ protected:
     cql_stats& _stats;
 
     // Separating normal and static conditions makes things somewhat easier
-    std::vector<lw_shared_ptr<column_condition>> _regular_conditions;
-    std::vector<lw_shared_ptr<column_condition>> _static_conditions;
+    std::vector<expr::expression> _regular_conditions;
+    std::vector<expr::expression> _static_conditions;
 private:
     const ks_selector _ks_sel;
 
@@ -150,7 +150,7 @@ public:
     bool is_conditional() const override;
 
 public:
-    void add_condition(lw_shared_ptr<column_condition> cond);
+    void add_condition(expr::expression cond);
 
     void set_if_not_exist_condition();
 

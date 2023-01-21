@@ -297,23 +297,23 @@ void prepare_new_value(broadcast_tables::prepared_update& query, const std::vect
 }
 
 static
-std::optional<expr::expression> get_value_condition(const std::vector<lw_shared_ptr<column_condition>>& conditions) {
+std::optional<expr::expression> get_value_condition(const std::vector<expr::expression>& conditions) {
     if (conditions.size() == 0) {
         return std::nullopt;
     }
 
     if (conditions.size() > 1) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("conditions: {}", fmt::join(
-            conditions | boost::adaptors::transformed(std::mem_fn(&column_condition::_expr)), ", ")));
+            conditions, ", ")));
     }
 
     const auto& condition = conditions[0];
 
-    auto binop = expr::as_if<expr::binary_operator>(&condition->_expr);
+    auto binop = expr::as_if<expr::binary_operator>(&condition);
     auto lhs = binop ? expr::as_if<expr::column_value>(&binop->lhs) : nullptr;
     if (!lhs || (binop->op != cql3::expr::oper_t::EQ)) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "condition: {}", condition->_expr));
+            "condition: {}", condition));
     }
 
     return binop->rhs;

@@ -36,22 +36,17 @@ update_for_lwt_null_equality_rules(const expr::expression& e) {
     });
 }
 
-column_condition::column_condition(expr::expression expr)
-        : _expr(std::move(expr))
-{
+void column_condition_collect_marker_specificaton(expr::expression& expr, prepare_context& ctx) {
+    expr::fill_prepare_context(expr, ctx);
 }
 
-void column_condition::collect_marker_specificaton(prepare_context& ctx) {
-    expr::fill_prepare_context(_expr, ctx);
-}
-
-bool column_condition::applies_to(const expr::evaluation_inputs& inputs) const {
+bool column_condition_applies_to(const expr::expression& expr, const expr::evaluation_inputs& inputs) {
     static auto true_value = raw_value::make_value(data_value(true).serialize());
-    return expr::evaluate(_expr, inputs) == true_value;
+    return expr::evaluate(expr, inputs) == true_value;
 }
 
-lw_shared_ptr<column_condition>
-column_condition::prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
+expr::expression
+column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
     auto prepared = expr::prepare_expression(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
 
     expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
@@ -77,7 +72,7 @@ column_condition::prepare(const expr::expression& expr, data_dictionary::databas
     prepared = update_for_lwt_null_equality_rules(prepared);
 
 
-    return make_lw_shared<column_condition>(std::move(prepared));
+    return prepared;
 }
 
 } // end of namespace cql3
