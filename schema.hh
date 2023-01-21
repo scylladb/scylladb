@@ -22,7 +22,6 @@
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
-#include "utils/UUID.hh"
 #include "compress.hh"
 #include "compaction/compaction_strategy_type.hh"
 #include "caching_options.hh"
@@ -30,6 +29,7 @@
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "schema_fwd.hh"
 
 namespace dht {
 
@@ -108,21 +108,6 @@ private:
     bitset _mask;
 };
 
-// Cluster-wide identifier of schema version of particular table.
-//
-// The version changes the value not only on structural changes but also
-// temporal. For example, schemas with the same set of columns but created at
-// different times should have different versions. This allows nodes to detect
-// if the version they see was already synchronized with or not even if it has
-// the same structure as the past versions.
-//
-// Schema changes merged in any order should result in the same final version.
-//
-// When table_schema_version changes, schema_tables::calculate_schema_digest() should
-// also change when schema mutations are applied.
-using table_schema_version = utils::UUID;
-
-class schema;
 class schema_registry_entry;
 class schema_builder;
 
@@ -248,7 +233,7 @@ public:
     struct is_local_index_tag {};
     using is_local_index = bool_class<is_local_index_tag>;
 private:
-    utils::UUID _id;
+    table_id _id;
     sstring _name;
     index_metadata_kind _kind;
     index_options_map _options;
@@ -257,7 +242,7 @@ public:
     index_metadata(const sstring& name, const index_options_map& options, index_metadata_kind kind, is_local_index local);
     bool operator==(const index_metadata& other) const;
     bool equals_noname(const index_metadata& other) const;
-    const utils::UUID& id() const;
+    const table_id& id() const;
     const sstring& name() const;
     const index_metadata_kind kind() const;
     const index_options_map& options() const;
@@ -486,14 +471,14 @@ bool operator==(const column_mapping& lhs, const column_mapping& rhs);
  * Effectively immutable.
  */
 class raw_view_info final {
-    utils::UUID _base_id;
+    table_id _base_id;
     sstring _base_name;
     bool _include_all_columns;
     sstring _where_clause;
 public:
-    raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+    raw_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause);
 
-    const utils::UUID& base_id() const {
+    const table_id& base_id() const {
         return _base_id;
     }
 
@@ -575,10 +560,6 @@ public:
     }
 };
 
-class schema;
-
-using schema_ptr = lw_shared_ptr<const schema>;
-
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -599,8 +580,8 @@ private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
     struct raw_schema {
-        raw_schema(utils::UUID id);
-        utils::UUID _id;
+        raw_schema(table_id id);
+        table_id _id;
         sstring _ks_name;
         sstring _cf_name;
         // regular columns are sorted by name
@@ -692,7 +673,7 @@ public:
 private:
     struct reversed_tag { };
 
-    lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
+    lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def) const;
     void rebuild();
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
@@ -739,7 +720,7 @@ public:
     const thrift_schema& thrift() const {
         return _thrift;
     }
-    const utils::UUID& id() const {
+    const table_id& id() const {
         return _raw._id;
     }
     const sstring& comment() const {
@@ -1000,7 +981,7 @@ public:
     schema_ptr get_reversed() const;
 };
 
-lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name, std::string_view cf_name,
+lw_shared_ptr<const schema> make_shared_schema(std::optional<table_id> id, std::string_view ks_name, std::string_view cf_name,
     std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key, std::vector<schema::column> regular_columns,
     std::vector<schema::column> static_columns, data_type regular_column_name_type, sstring comment = "");
 
@@ -1035,7 +1016,7 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const view_ptr& view);
 
-utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
+table_id generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
 
 
 // Thrown when attempted to access a schema-dependent object using

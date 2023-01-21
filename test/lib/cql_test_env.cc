@@ -135,6 +135,7 @@ private:
     sharded<db::batchlog_manager>& _batchlog_manager;
     sharded<gms::gossiper>& _gossiper;
     service::raft_group0_client& _group0_client;
+    sharded<service::raft_group_registry>& _group0_registry;
 
 private:
     struct core_local_state {
@@ -186,7 +187,8 @@ public:
             sharded<qos::service_level_controller> &sl_controller,
             sharded<db::batchlog_manager>& batchlog_manager,
             sharded<gms::gossiper>& gossiper,
-            service::raft_group0_client& client)
+            service::raft_group0_client& client,
+            sharded<service::raft_group_registry>& group0_registry)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -198,6 +200,7 @@ public:
             , _batchlog_manager(batchlog_manager)
             , _gossiper(gossiper)
             , _group0_client(client)
+            , _group0_registry(group0_registry)
     {
         adjust_rlimit();
     }
@@ -284,7 +287,7 @@ public:
     }
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
-        auto id = utils::UUID_gen::get_time_UUID();
+        auto id = table_id(utils::UUID_gen::get_time_UUID());
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
@@ -417,6 +420,10 @@ public:
         return _group0_client;
     }
 
+    virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
+        return _group0_registry;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();
@@ -469,7 +476,9 @@ public:
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
+            // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
+            sharded<compaction_manager> cm;
             sharded<replica::database> db;
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
@@ -490,8 +499,8 @@ public:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
-            if (cfg->host_id == utils::UUID{}) {
-                cfg->host_id = utils::make_random_uuid();
+            if (!cfg->host_id) {
+                cfg->host_id = locator::host_id::create_random_id();
             }
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
@@ -621,7 +630,7 @@ public:
             auto stop_raft_gr = deferred_stop(raft_gr);
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
-            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -647,7 +656,21 @@ public:
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
             dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
+            // we need the getter since updateable_value is not shard-safe (#7316)
+            auto get_cm_cfg = sharded_parameter([&] {
+                return compaction_manager::config {
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                    .available_memory = dbcfg.available_memory,
+                    .static_shares = cfg->compaction_static_shares,
+                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                };
+            });
+            cm.start(std::move(get_cm_cfg), std::ref(abort_sources)).get();
+            auto stop_cm = deferred_stop(cm);
+
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
@@ -656,7 +679,7 @@ public:
 
             feature_service.invoke_on_all([] (auto& fs) {
                 return seastar::async([&fs] {
-                    fs.enable(fs.known_feature_set());
+                    fs.enable(fs.supported_feature_set());
                 });
             }).get();
 
@@ -678,7 +701,7 @@ public:
             auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local());
+            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
@@ -698,7 +721,7 @@ public:
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config).get();
+            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             sys_ks.invoke_on_all(&db::system_keyspace::start).get();
@@ -713,12 +736,10 @@ public:
             });
 
             sharded<service::storage_service> ss;
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
                 std::ref(sys_ks),
-                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(feature_service), std::ref(mm),
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(repair),
                 std::ref(stream_manager),
@@ -742,6 +763,7 @@ public:
                 }
             }).get();
 
+            group0_client.init().get();
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
 
             auto shutdown_db = defer([&db] {
@@ -793,7 +815,7 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms.local(),
-                    gossiper.local(), qp.local(), mm.local(), group0_client};
+                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), group0_client};
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });
@@ -855,7 +877,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client);
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

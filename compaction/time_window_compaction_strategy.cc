@@ -43,6 +43,10 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
         }
     }
 
+    if (window_size <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} must be greater than 1 for compaction_window_size", window_size));
+    }
+
     sstable_window_size = window_size * window_unit;
 
     it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
@@ -221,23 +225,26 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         return compaction_descriptor();
     }
 
-    // Find fully expired SSTables. Those will be included no matter what.
-    std::unordered_set<shared_sstable> expired;
+    auto now = db_clock::now();
+    if (now - _last_expired_check > _options.expired_sstable_check_frequency) {
+        clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
-    if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
-        clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");
-        expired = table_s.fully_expired_sstables(candidates, compaction_time);
-        _last_expired_check = db_clock::now();
+        // Find fully expired SSTables. Those will be included no matter what.
+        auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
+        if (!expired.empty()) {
+            clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
+            return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
+        }
+        // Keep checking for fully_expired_sstables until we don't find
+        // any among the candidates, meaning they are either already compacted
+        // or registered for compaction.
+        _last_expired_check = now;
     } else {
-        clogger.debug("TWCS skipping check for fully expired SSTables");
-    }
-
-    if (!expired.empty()) {
-        clogger.debug("Going to compact {} expired sstables", expired.size());
-        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
+        clogger.debug("[{}] TWCS skipping check for fully expired SSTables", fmt::ptr(this));
     }
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
+    clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
     return compaction_descriptor(std::move(compaction_candidates), service::get_local_compaction_priority());
 }
 
@@ -267,8 +274,8 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
-    auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time] (const shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, compaction_time);
+    auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time, &table_s] (const shared_sstable& sst) -> bool {
+        return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
     });
     non_expiring_sstables.erase(e, non_expiring_sstables.end());
     if (non_expiring_sstables.empty()) {

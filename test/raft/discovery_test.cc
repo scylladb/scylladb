@@ -54,11 +54,11 @@ void run_discovery(Args&&... args) {
 
 BOOST_AUTO_TEST_CASE(test_basic) {
 
-    server_address addr1 = {.id = id()};
+    server_address addr1 = {id(), {}};
 
     // Must supply an Internet address for self
     BOOST_CHECK_THROW(discovery(addr1, {}), std::logic_error);
-    server_address addr2 = {.id = id(), .info = "192.168.1.2"};
+    server_address addr2 = {id(), "192.168.1.2"};
     BOOST_CHECK_NO_THROW(discovery(addr2, {}));
     // Must supply an Internet address for each peer
     BOOST_CHECK_THROW(discovery(addr2, {addr1}), std::logic_error);
@@ -74,8 +74,8 @@ BOOST_AUTO_TEST_CASE(test_basic) {
 
 BOOST_AUTO_TEST_CASE(test_discovery) {
 
-    server_address addr1 = {.id = id(), .info = "192.168.1.1"};
-    server_address addr2 = {.id = id(), .info = "192.168.1.2"};
+    server_address addr1 = {id(), "192.168.1.1"};
+    server_address addr2 = {id(), "192.168.1.2"};
 
     discovery d1(addr1, {addr2});
     discovery d2(addr2, {addr1});
@@ -86,9 +86,9 @@ BOOST_AUTO_TEST_CASE(test_discovery) {
 
 BOOST_AUTO_TEST_CASE(test_discovery_fullmesh) {
 
-    server_address addr1 = {.id = id(), .info = "127.0.0.13"};
-    server_address addr2 = {.id = id(), .info = "127.0.0.19"};
-    server_address addr3 = {.id = id(), .info = "127.0.0.21"};
+    server_address addr1 = {id(), "127.0.0.13"};
+    server_address addr2 = {id(), "127.0.0.19"};
+    server_address addr3 = {id(), "127.0.0.21"};
 
     auto seeds = std::vector<server_address>({addr1, addr2, addr3});
 

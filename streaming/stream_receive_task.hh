@@ -10,13 +10,11 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
+#include "streaming/stream_fwd.hh"
 #include "streaming/stream_task.hh"
 #include <memory>
 
 namespace streaming {
-
-class stream_session;
 
 /**
  * Task that manages receiving files for the session for certain ColumnFamily.
@@ -28,7 +26,7 @@ private:
     // total size of files to receive
     long total_size;
 public:
-    stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
+    stream_receive_task(shared_ptr<stream_session> _session, table_id _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();
 
     virtual int get_total_number_of_files() const override {

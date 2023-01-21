@@ -60,7 +60,13 @@ public:
     }
 
     bool is_alive(raft::server_id srv) override {
-        return _alive_set.contains(_address_map.get_inet_address(srv));
+        // We could yield between updating the list of servers in raft/fsm
+        // and updating the raft_address_map, e.g. in case of a set_configuration.
+        // If tick_leader happens before the raft_address_map is updated,
+        // is_alive will be called with server_id that is not in the map yet.
+
+        const auto address = _address_map.find(srv);
+        return address && _alive_set.contains(*address);
     }
 };
 
@@ -169,7 +175,7 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_modify_config(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst,
-            std::vector<raft::server_address> add, std::vector<raft::server_id> del) mutable {
+            std::vector<raft::config_member> add, std::vector<raft::server_id> del) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst,
             [from, add = std::move(add), del = std::move(del)] (raft_rpc& rpc) mutable {
 
@@ -194,14 +200,22 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
+static void ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
+    if (!server_for_group.aborted) {
+        server_for_group.aborted = server_for_group.server->abort(std::move(reason))
+            .handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
+                rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
+            });
+    }
+}
+
 future<> raft_group_registry::stop_servers() noexcept {
     gate g;
     for (auto it = _servers.begin(); it != _servers.end(); it = _servers.erase(it)) {
-        auto abort_server = it->second.server->abort();
+        ensure_aborted(it->second, "raft group registry is stopped");
+        auto aborted = std::move(it->second.aborted);
         // discarded future is waited via g.close()
-        (void)std::move(abort_server).handle_exception([rsfg = std::move(it->second), gh = g.hold()] (std::exception_ptr ex) {
-            rslog.warn("Failed to abort raft group server {}: {}", rsfg.gid, ex);
-        });
+        (void)std::move(aborted)->finally([rsfg = std::move(it->second), gh = g.hold()]{});
     }
     co_await g.close();
 }
@@ -292,6 +306,15 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     if (ex) {
         co_await server.abort();
         std::rethrow_exception(ex);
+    }
+}
+
+void raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
+    // abort_server could be called from on_background_error for group0
+    // when the server has not yet been added to _servers.
+    // In this case we won't find gid in the if below.
+    if (const auto it = _servers.find(gid); it != _servers.end()) {
+        ensure_aborted(it->second, std::move(reason));
     }
 }
 

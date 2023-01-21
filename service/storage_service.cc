@@ -14,6 +14,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include "locator/snitch_base.hh"
+#include "locator/production_snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
@@ -82,7 +83,6 @@ storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_keyspace>& sys_ks,
     gms::feature_service& feature_service,
-    storage_service_config config,
     sharded<service::migration_manager>& mm,
     locator::shared_token_metadata& stm,
     locator::effective_replication_map_factory& erm_factory,
@@ -105,7 +105,11 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
-        , _snitch_reconfigure([this] { return snitch_reconfigured(); })
+        , _snitch_reconfigure([this] {
+            return container().invoke_on(0, [] (auto& ss) {
+                return ss.snitch_reconfigured();
+            });
+        })
 {
     register_metrics();
 
@@ -212,10 +216,6 @@ bool storage_service::should_bootstrap() {
     return !_sys_ks.local().bootstrap_complete() && !is_first_node();
 }
 
-future<> storage_service::snitch_reconfigured() {
-    return update_topology(utils::fb_utilities::get_broadcast_address());
-}
-
 /* Broadcasts the chosen tokens through gossip,
  * together with a CDC generation timestamp and STATUS=NORMAL.
  *
@@ -317,7 +317,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (_sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        bootstrap_tokens = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        auto ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+        bootstrap_tokens = std::move(ri.tokens);
         auto replace_address = get_replace_address();
         replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -325,15 +326,23 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
+        tmptr->update_topology(*replace_address, std::move(ri.dc_rack));
         co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
-        auto local_features = _feature_service.known_feature_set();
+        auto local_features = _feature_service.supported_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes);
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches();
+        // Check if the node is already removed from the cluster
+        auto local_host_id = _db.local().get_config().host_id;
+        auto my_ip = get_broadcast_address();
+        if (!_gossiper.is_safe_for_restart(my_ip, local_host_id)) {
+            throw std::runtime_error(fmt::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
+                    my_ip, local_host_id));
+        }
         co_await _gossiper.reset_endpoint_state_map();
         for (auto ep : loaded_endpoints) {
             co_await _gossiper.add_saved_endpoint(ep);
@@ -354,9 +363,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
+        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack());
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
-        cdc_gen_id = co_await db::system_keyspace::get_cdc_generation_id();
+        cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
         if (!cdc_gen_id) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
@@ -389,6 +399,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     // Ensure we know our own actual Schema UUID in preparation for updates
     co_await db::schema_tables::recalculate_schema_version(_sys_ks, proxy, _feature_service);
+
+    assert(_group0);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes);
+
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -424,27 +438,13 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    // Raft group0 can be joined before we wait for gossip to settle
-    // if one of the following applies:
-    //  - it's a fresh node start (in a fresh cluster)
-    //  - it's a restart of an existing node, which have already joined some group0
-    const bool can_join_with_raft =
-        _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT) && (
-            _sys_ks.local().bootstrap_needed() ||
-            !(co_await _sys_ks.local().get_raft_group0_id()).is_null());
-    if (can_join_with_raft) {
-        co_await _group0->join_group0();
-    }
-
-    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (utils::UUID schema_version) mutable {
+    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
 
     set_mode(mode::JOINING);
-
-    co_await _group0->join_group0();
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -487,9 +487,11 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
             if (*replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(service::load_broadcaster::BROADCAST_INTERVAL, _abort_source);
 
                 // check for operator errors...
@@ -506,6 +508,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                     }
                 }
             } else {
+                slogger.info("Sleeping before replacing {}...", *replace_addr);
                 co_await sleep_abortable(get_ring_delay(), _abort_source);
             }
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
@@ -537,6 +540,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
+        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack());
         return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
@@ -546,7 +550,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
-        co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
+        co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
     }
 
     if (!cdc_gen_id) {
@@ -578,15 +582,13 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
     if (cdc_gen_id) {
-        co_await db::system_keyspace::update_cdc_generation_id(*cdc_gen_id);
+        co_await _sys_ks.local().update_cdc_generation_id(*cdc_gen_id);
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
-
-    co_await _group0->become_voter();
 
     // start participating in the ring.
     co_await set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
@@ -599,6 +601,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         throw std::runtime_error(err);
     }
 
+    assert(_group0);
+    co_await _group0->finish_setup_after_join();
     co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
 }
 
@@ -682,6 +686,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
+                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack());
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
                 }).get();
@@ -704,7 +709,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
             } else {
@@ -717,9 +722,16 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             }
         } else {
             auto replace_addr = get_replace_address();
+            assert(replace_addr);
+
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             _sys_ks.local().remove_endpoint(*replace_addr).get();
-            _group0->leave_group0(replace_addr).get();
+
+            slogger.info("Replace: removing {} from group 0...", *replace_addr);
+            assert(_group0);
+            _group0->remove_from_group0(*replace_addr).get();
+            slogger.info("Replace: {} removed from group 0.", *replace_addr);
+
             slogger.info("Starting to bootstrap...");
             run_replace_ops(bootstrap_tokens);
         }
@@ -745,51 +757,53 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
     return boost::lexical_cast<std::string>(endpoint);
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(const sstring& keyspace) const {
-    return get_range_to_address_map(keyspace, get_token_metadata().sorted_tokens());
+    return get_range_to_address_map(_db.local().find_keyspace(keyspace).get_effective_replication_map());
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
+    return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
+}
+
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map_in_local_dc(
-        const sstring& keyspace) const {
-    auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
+        locator::effective_replication_map_ptr erm) const {
+    auto tmptr = erm->get_token_metadata_ptr();
+    auto orig_map = co_await get_range_to_address_map(erm, co_await get_tokens_in_local_dc(*tmptr));
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
+    filtered_map.reserve(orig_map.size());
+    auto local_dc_filter = tmptr->get_topology().get_local_dc_filter();
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
-        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), db::is_local);
+        std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), std::cref(local_dc_filter));
+        co_await coroutine::maybe_yield();
     }
 
-    return filtered_map;
+    co_return filtered_map;
 }
 
-std::vector<token>
-storage_service::get_tokens_in_local_dc() const {
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<std::vector<token>>
+storage_service::get_tokens_in_local_dc(const locator::token_metadata& tm) const {
     std::vector<token> filtered_tokens;
-    const auto& tm = get_token_metadata();
+    auto local_dc_filter = tm.get_topology().get_local_dc_filter();
     for (auto token : tm.sorted_tokens()) {
         auto endpoint = tm.get_endpoint(token);
-        if (db::is_local(*endpoint))
+        if (local_dc_filter(*endpoint))
             filtered_tokens.push_back(token);
+        co_await coroutine::maybe_yield();
     }
-    return filtered_tokens;
+    co_return filtered_tokens;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
-storage_service::get_range_to_address_map(const sstring& keyspace,
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) const {
-    sstring ks = keyspace;
-    // some people just want to get a visual representation of things. Allow null and set it to the first
-    // non-system keyspace.
-    if (keyspace == "") {
-        auto keyspaces = _db.local().get_non_system_keyspaces();
-        if (keyspaces.empty()) {
-            throw std::runtime_error("No keyspace provided and no non system kespace exist");
-        }
-        ks = keyspaces[0];
-    }
-    return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
+    co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
 
 future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
@@ -951,6 +965,9 @@ future<> storage_service::handle_state_normal(inet_address endpoint) {
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
+    if (!is_member) {
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+    }
     co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     co_await update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
@@ -999,6 +1016,7 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
@@ -1088,7 +1106,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
-            UUID host_id(coordinator[1]);
+            auto host_id = locator::host_id(utils::UUID(coordinator[1]));
             // grab any data we are now responsible for and notify responsible node
             auto ep = get_token_metadata().get_endpoint_for_host_id(host_id);
             if (!ep) {
@@ -1100,9 +1118,7 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
             // restore_replica_count to complete which can take a long time,
             // since when it completes, this node will send notification to
             // tell the removal_coordinator with IP address notify_endpoint
-            // that the restore process is finished on this node. This node
-            // will be removed from _replicating_nodes on the
-            // removal_coordinator.
+            // that the restore process is finished on this node.
             auto notify_endpoint = ep.value();
             // OK to discard future since _async_gate is closed on stop()
             (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
@@ -1186,8 +1202,26 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
                 co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
+            } else if (state == application_state::INTERNAL_IP) {
+                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value));
             }
         }
+    }
+}
+
+future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (!snitch->prefer_local()) {
+        co_return;
+    }
+
+    const auto& topo = get_token_metadata().get_topology();
+    if (topo.get_datacenter() == topo.get_datacenter(ep) && _messaging.local().get_preferred_ip(ep) != local_ip) {
+        slogger.debug("Initiated reconnect to an Internal IP {} for the {}", local_ip, ep);
+        co_await _messaging.invoke_on_all([ep, local_ip] (auto& local_ms) {
+            local_ms.cache_preferred_ip(ep, local_ip);
+            local_ms.remove_rpc_client(netw::msg_addr(ep));
+        });
     }
 }
 
@@ -1232,6 +1266,16 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         co_await update_table(endpoint, "data_center", value.value);
     } else if (state == application_state::RACK) {
         co_await update_table(endpoint, "rack", value.value);
+    } else if (state == application_state::INTERNAL_IP) {
+        auto col = sstring("preferred_ip");
+        inet_address ep;
+        try {
+            ep = gms::inet_address(value.value);
+        } catch (...) {
+            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value);
+            co_return;
+        }
+        co_await update_table(endpoint, col, ep.addr());
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
         inet_address ep;
@@ -1270,6 +1314,15 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     auto ret = versioned_value::tokens_from_string(tokens_string);
     slogger.trace("endpoint={}, tokens={}", endpoint, ret);
     return ret;
+}
+
+locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint) {
+    auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
+    auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
+    return locator::endpoint_dc_rack{
+        .dc = dc ? dc->value : locator::production_snitch_base::default_dc,
+        .rack = rack ? rack->value : locator::production_snitch_base::default_rack,
+    };
 }
 
 void endpoint_lifecycle_notifier::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
@@ -1341,6 +1394,18 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
+            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info();
+
+            auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
+                if (loaded_dc_rack.contains(ep)) {
+                    return loaded_dc_rack[ep];
+                } else {
+                    return locator::endpoint_dc_rack {
+                        .dc = locator::production_snitch_base::default_dc,
+                        .rack = locator::production_snitch_base::default_rack,
+                    };
+                }
+            };
 
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
@@ -1359,6 +1424,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                     // entry has been mistakenly added, delete it
                     _sys_ks.local().remove_endpoint(ep).get();
                 } else {
+                    tmptr->update_topology(ep, get_dc_rack(ep));
                     tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
@@ -1486,7 +1552,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
     return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
-        auto local_features = _feature_service.known_feature_set();
+        auto local_features = _feature_service.supported_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round(initial_contact_nodes).get();
@@ -1557,7 +1623,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     // make magic happen
     slogger.info("Checking remote features with gossip");
     co_await _gossiper.do_shadow_round(initial_contact_nodes);
-    auto local_features = _feature_service.known_feature_set();
+    auto local_features = _feature_service.supported_feature_set();
     _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
@@ -1577,14 +1643,18 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
     }
 
-    replacement_info ret {std::move(tokens)};
+    auto dc_rack = get_dc_rack_for(replace_address);
 
     // use the replacee's host Id as our own so we receive hints, etc
     auto host_id = _gossiper.get_host_id(replace_address);
     co_await _sys_ks.local().set_local_host_id(host_id).discard_result();
     const_cast<db::config&>(_db.local().get_config()).host_id = host_id; // FIXME -- carry non-cost config on storage service itself
     co_await _gossiper.reset_endpoint_state_map();
-    co_return ret;
+
+    co_return replacement_info {
+        .tokens = std::move(tokens),
+        .dc_rack = std::move(dc_rack),
+    };
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
@@ -1604,6 +1674,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
 
 future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
     return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
+        locator::effective_replication_map_ptr erm;
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
@@ -1612,6 +1683,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             if (typeid(rs) == typeid(locator::local_strategy)) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
+            erm = ks.get_effective_replication_map();
         } else {
             auto non_system_keyspaces = ss._db.local().get_non_system_keyspaces();
 
@@ -1625,6 +1697,8 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
             }
             keyspace_name = "system_traces";
+            const auto& ks = ss._db.local().find_keyspace(keyspace_name);
+            erm = ks.get_effective_replication_map();
         }
 
         // The following loops seems computationally heavy, but it's not as bad.
@@ -1632,7 +1706,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         // DC and all the instances in each DC.
         //
         // The call for get_range_for_endpoint is done once per endpoint
-        const auto& tm = ss.get_token_metadata();
+        const auto& tm = *erm->get_token_metadata_ptr();
         const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
         const auto datacenter_endpoints = tm.get_topology().get_datacenter_endpoints();
         std::map<gms::inet_address, float> final_ownership;
@@ -1642,7 +1716,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 // calculate the ownership with replication and add the endpoint to the final ownership map
                 try {
                     float ownership = 0.0f;
-                    auto ranges = ss.get_ranges_for_endpoint(keyspace_name, endpoint);
+                    auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
                     for (auto& r : ranges) {
                         // get_ranges_for_endpoint will unwrap the first range.
                         // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
@@ -1718,9 +1792,9 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();
-                return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, std::nullopt);
+                return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, std::nullopt);
             }
-            return std::pair<gms::inet_address, std::optional<utils::UUID>>(host, f.get0());
+            return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, f.get0());
         });
     }, std::move(results), [] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
@@ -1768,7 +1842,7 @@ future<> storage_service::start_gossiping() {
             co_await ss._gossiper.container().invoke_on_all(&gms::gossiper::start);
             bool should_stop_gossiper = false; // undo action
             try {
-                auto cdc_gen_ts = co_await db::system_keyspace::get_cdc_generation_id();
+                auto cdc_gen_ts = co_await ss._sys_ks.local().get_cdc_generation_id();
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
                 }
@@ -1864,7 +1938,7 @@ future<> storage_service::decommission() {
 
             ss.update_pending_ranges(format("decommission {}", endpoint)).get();
 
-            auto non_system_keyspaces = db.get_non_system_keyspaces();
+            auto non_system_keyspaces = db.get_non_local_strategy_keyspaces();
             for (const auto& keyspace_name : non_system_keyspaces) {
                 if (ss.get_token_metadata().has_pending_ranges(keyspace_name, ss.get_broadcast_address())) {
                     throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
@@ -1908,7 +1982,7 @@ future<> storage_service::decommission() {
                     throw std::runtime_error(msg);
                 }
                 if (!nodes_down.empty()) {
-                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool decommission --ignore-dead-nodes <list_of_dead_nodes>. E.g., nodetool decommission --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
                     slogger.warn("{}", msg);
                     throw std::runtime_error(msg);
                 }
@@ -1953,7 +2027,9 @@ future<> storage_service::decommission() {
             }
 
             slogger.info("DECOMMISSIONING: leaving Raft group 0");
+            assert(ss._group0);
             ss._group0->leave_group0().get();
+
             slogger.info("DECOMMISSIONING: left Raft group 0");
 
             ss.stop_transport().get();
@@ -2050,7 +2126,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
             throw std::runtime_error(msg);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again.", uuid, nodes_down);
             slogger.warn("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -2186,7 +2262,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
 
@@ -2228,7 +2304,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
         return seastar::async([&ss, host_id_string, ignore_nodes = std::move(ignore_nodes)] {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto host_id = utils::UUID(host_id_string);
+            auto host_id = locator::host_id(utils::UUID(host_id_string));
             auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
             if (!endpoint_opt) {
                 throw std::runtime_error(format("removenode[{}]: Host ID not found in the cluster", uuid));
@@ -2313,7 +2389,12 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                         return make_ready_future<>();
                     });
                 }).get();
-                ss._group0->leave_group0(endpoint).get();
+
+                slogger.info("removenode[{}]: removing node {} from group 0", uuid, endpoint);
+                assert(ss._group0);
+                ss._group0->remove_from_group0(endpoint).get();
+                slogger.info("removenode[{}]: node {} removed from group 0", uuid, endpoint);
+
                 slogger.info("removenode[{}]: Finished removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
             } catch (...) {
                 // we need to revert the effect of prepare verb the removenode ops is failed
@@ -2616,14 +2697,14 @@ future<> storage_service::rebuild(sstring source_dc) {
             co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                    ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
+                    ss.get_broadcast_address(), ss._sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
             if (source_dc != "") {
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
             }
-            auto keyspaces = ss._db.local().get_non_system_keyspaces();
-            for (auto& keyspace_name : keyspaces) {
-                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
+            auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
+            for (const auto& [keyspace_name, erm] : ks_erms) {
+                co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
             }
             try {
                 co_await streamer->stream_async();
@@ -2647,17 +2728,15 @@ int32_t storage_service::get_exception_count() {
     return 0;
 }
 
-future<std::unordered_multimap<dht::token_range, inet_address>> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
+future<std::unordered_multimap<dht::token_range, inet_address>> storage_service::get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint) {
     // First get all ranges the leaving endpoint is responsible for
-    auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
+    auto ranges = get_ranges_for_endpoint(erm, endpoint);
 
     slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = erm->get_natural_endpoints(end_token);
@@ -2680,7 +2759,7 @@ future<std::unordered_multimap<dht::token_range, inet_address>> storage_service:
     // is gone. Whoever is present in newReplicaEndpoints list, but
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
-    auto& rs = ks.get_replication_strategy();
+    const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
@@ -2726,9 +2805,9 @@ future<> storage_service::unbootstrap() {
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-        for (const auto& keyspace_name : non_system_keyspaces) {
-            auto ranges_mm = co_await get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
+        auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+        for (const auto& [keyspace_name, erm] : ks_erms) {
+            auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, get_broadcast_address());
             if (slogger.is_enabled(logging::log_level::debug)) {
                 std::vector<range<token>> ranges;
                 for (auto& x : ranges_mm) {
@@ -2758,16 +2837,16 @@ future<> storage_service::unbootstrap() {
 
 future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
     auto my_address = get_broadcast_address();
-    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-    for (const auto& keyspace_name : non_system_keyspaces) {
-        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = co_await get_changed_ranges_for_leaving(keyspace_name, leaving_node);
+    auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+    for (const auto& [keyspace_name, erm] : ks_erms) {
+        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = co_await get_changed_ranges_for_leaving(erm, leaving_node);
         dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
             if (x.second == my_address) {
                 my_new_ranges.emplace_back(x.first);
             }
         }
-        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
+        std::unordered_multimap<inet_address, dht::token_range> source_ranges = co_await get_new_source_ranges(erm, my_new_ranges);
         std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
         for (auto& x : source_ranges) {
             ranges_per_endpoint[x.first].emplace_back(x.second);
@@ -2793,7 +2872,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Removenode", streaming::stream_reason::removenode);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -2820,7 +2899,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             as.request_abort();
         }
     });
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
     removenode_add_ranges(streamer, endpoint).get();
     auto status_checker = seastar::async([this, endpoint, &as] {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
@@ -2922,21 +3001,6 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     );
 }
 
-future<> storage_service::confirm_replication(inet_address node) {
-    return run_with_no_api_lock([node] (storage_service& ss) {
-        auto removing_node = bool(ss._removing_node) ? format("{}", *ss._removing_node) : "NONE";
-        slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
-        // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
-        // but restarted before all 'replication finished' messages arrived. In that case, we'll
-        // still go ahead and acknowledge it.
-        if (!ss._replicating_nodes.empty()) {
-            ss._replicating_nodes.erase(node);
-        } else {
-            slogger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
-        }
-    });
-}
-
 future<> storage_service::leave_ring() {
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
@@ -2955,7 +3019,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -3011,24 +3075,22 @@ future<> storage_service::shutdown_protocol_servers() {
     }
 }
 
-std::unordered_multimap<inet_address, dht::token_range>
-storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) const {
+future<std::unordered_multimap<inet_address, dht::token_range>>
+storage_service::get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
     auto my_address = get_broadcast_address();
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = erm->get_range_addresses();
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = co_await erm->get_range_addresses();
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
+    auto tmptr = erm->get_token_metadata_ptr();
     for (auto r : ranges) {
-        inet_address_vector_replica_set possible_nodes;
+        inet_address_vector_replica_set sources;
         auto it = range_addresses.find(r);
         if (it != range_addresses.end()) {
-            possible_nodes = it->second;
+            sources = it->second;
         }
 
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        inet_address_vector_replica_set sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
+        tmptr->get_topology().sort_by_proximity(my_address, sources);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = format("get_new_source_ranges: sources={}, my_address={}", sources, my_address);
@@ -3043,8 +3105,10 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
                 break;
             }
         }
+
+        co_await coroutine::maybe_yield();
     }
-    return source_ranges;
+    co_return source_ranges;
 }
 
 future<> storage_service::move(token new_token) {
@@ -3058,11 +3122,13 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map =
+    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
             include_only_local_dc
-                    ? get_range_to_address_map_in_local_dc(keyspace)
-                    : get_range_to_address_map(keyspace);
-    auto tmptr = get_token_metadata_ptr();
+                    ? get_range_to_address_map_in_local_dc(erm)
+                    : get_range_to_address_map(erm)
+    );
+    auto tmptr = erm->get_token_metadata_ptr();
     for (auto entry : range_to_address_map) {
         const auto& topology = tmptr->get_topology();
         auto range = entry.first;
@@ -3105,17 +3171,18 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     co_return ranges;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::construct_range_to_endpoint_map(
-        const sstring& keyspace,
+        locator::effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
-    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
+    res.reserve(ranges.size());
     for (auto r : ranges) {
         res[r] = erm->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
+        co_await coroutine::maybe_yield();
     }
-    return res;
+    co_return res;
 }
 
 
@@ -3159,21 +3226,20 @@ future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_
 future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason) {
     assert(this_shard_id() == 0);
 
-    // long start = System.currentTimeMillis();
-    return do_with(_db.local().get_non_system_keyspaces(), [this, tmptr = std::move(tmptr)] (auto& keyspaces) mutable {
-        return do_for_each(keyspaces, [this, tmptr = std::move(tmptr)] (auto& keyspace_name) mutable {
-            auto& ks = this->_db.local().find_keyspace(keyspace_name);
-            auto& strategy = ks.get_replication_strategy();
+    try {
+        auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+        for (const auto& [keyspace_name, erm] : ks_erms) {
+            auto& strategy = erm->get_replication_strategy();
             slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
-            return tmptr->update_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
-                slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
-            });
-        });
-    }).handle_exception([this, reason = std::move(reason)] (std::exception_ptr ep) mutable {
+            locator::dc_rack_fn get_dc_rack_from_gossiper([this] (inet_address ep) { return get_dc_rack_for(ep); });
+            co_await tmptr->update_pending_ranges(strategy, keyspace_name, get_dc_rack_from_gossiper);
+            slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
+        }
+    } catch (...) {
+        auto ep = std::current_exception();
         slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
-        return make_exception_future<>(std::move(ep));
-    });
-    // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
+        std::rethrow_exception(std::move(ep));
+    }
 }
 
 future<> storage_service::update_pending_ranges(sstring reason, acquire_merge_lock acquire_merge_lock) {
@@ -3192,19 +3258,30 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     });
 }
 
-future<> storage_service::update_topology(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-            // re-read local rack and DC info
-            tmptr->update_topology(endpoint);
-            return make_ready_future<>();
-        });
+future<> storage_service::snitch_reconfigured() {
+    assert(this_shard_id() == 0);
+    co_await mutate_token_metadata([] (mutable_token_metadata_ptr tmptr) -> future<> {
+        // re-read local rack and DC info
+        auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        auto dr = locator::endpoint_dc_rack {
+            .dc = snitch->get_datacenter(endpoint),
+            .rack = snitch->get_rack(endpoint),
+        };
+        tmptr->update_topology(endpoint, std::move(dr));
+        return make_ready_future<>();
     });
+
+    if (_gossiper.is_enabled()) {
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        co_await _gossiper.add_local_application_state(snitch->get_app_states());
+    }
 }
 
 void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([this] (gms::inet_address from) {
-        return confirm_replication(from);
+        slogger.info("Got confirm_replication from {}", from);
+        return make_ready_future<>();
     });
 
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
@@ -3242,16 +3319,7 @@ future<> storage_service::isolate() {
 
 future<sstring> storage_service::get_removal_status() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        if (!ss._removing_node) {
-            return make_ready_future<sstring>(sstring("No token removals in process."));
-        }
-        auto tokens = ss.get_token_metadata().get_tokens(*ss._removing_node);
-        if (tokens.empty()) {
-            return make_ready_future<sstring>(sstring("Node has no token"));
-        }
-        auto status = format("Removing token ({}). Waiting for replication confirmation from [{}].",
-                tokens.front(), join(",", ss._replicating_nodes));
-        return make_ready_future<sstring>(status);
+        return make_ready_future<sstring>(sstring("No token removals in process."));
     });
 }
 
@@ -3271,11 +3339,11 @@ future<> storage_service::force_remove_completion() {
 
         try {
             const auto& tm = ss.get_token_metadata();
-            if (!ss._replicating_nodes.empty() || !tm.get_leaving_endpoints().empty()) {
+            if (!tm.get_leaving_endpoints().empty()) {
                 auto leaving = tm.get_leaving_endpoints();
-                slogger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
+                slogger.warn("Removal not confirmed, Leaving={}", leaving);
                 for (auto endpoint : leaving) {
-                    utils::UUID host_id;
+                    locator::host_id host_id;
                     auto tokens = tm.get_tokens(endpoint);
                     try {
                         host_id = tm.get_host_id(endpoint);
@@ -3286,10 +3354,11 @@ future<> storage_service::force_remove_completion() {
                     co_await ss._gossiper.advertise_token_removed(endpoint, host_id);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                     co_await ss.excise(tokens_set, endpoint);
-                    co_await ss._group0->leave_group0(endpoint);
+
+                    slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
+                    assert(ss._group0);
+                    co_await ss._group0->remove_from_group0(endpoint);
                 }
-                ss._replicating_nodes.clear();
-                ss._removing_node = std::nullopt;
             } else {
                 slogger.warn("No tokens to force removal on, call 'removenode' first");
             }
@@ -3363,24 +3432,28 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
 };
 
 dht::token_range_vector
-storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
-    return _db.local().find_keyspace(name).get_effective_replication_map()->get_ranges(ep);
+storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
+    return erm->get_ranges(ep);
 }
 
-dht::token_range_vector
+// Caller is responsible to hold token_metadata valid until the returned future is resolved
+future<dht::token_range_vector>
 storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     if (sorted_tokens.empty())
-        return dht::token_range_vector();
+        co_return dht::token_range_vector();
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
+    ranges.reserve(size);
     ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
+    co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
         dht::token_range r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
         ranges.push_back(r);
+        co_await coroutine::maybe_yield();
     }
     ranges.push_back(dht::token_range::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
 
-    return ranges;
+    co_return ranges;
 }
 
 inet_address_vector_replica_set
@@ -3476,6 +3549,7 @@ future<> storage_service::notify_joined(inet_address endpoint) {
     }
 
     co_await container().invoke_on_all([endpoint] (auto&& ss) {
+        ss._messaging.local().remove_rpc_client_with_ignored_topology(netw::msg_addr{endpoint, 0});
         return ss._lifecycle_notifier.notify_joined(endpoint);
     });
     slogger.debug("Notify node {} has joined the cluster", endpoint);

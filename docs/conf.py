@@ -99,11 +99,14 @@ html_theme = "sphinx_scylladb_theme"
 html_theme_options = {
     "conf_py_path": "docs/",
     "hide_edit_this_page_button": "false",
-    "github_issues_repository": "scylladb/scylla",
-    "github_repository": "scylladb/scylla",
-    "hide_version_dropdown": ["master"],
+    "github_issues_repository": "scylladb/scylladb",
+    "github_repository": "scylladb/scylladb",
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
+    'banner_button_text': 'Learn More',
+    'banner_button_url': 'https://lp.scylladb.com/university-live-2022-03-registration',
+    'banner_title_text': 'Join us for Scylla University LIVE, a half-day of FREE instructor-led training with exclusive new Scylla database content. March 22-23. Register for Free',
+    'hide_banner': 'true',
     "collapse_navigation": 'true',
 }
 
@@ -117,7 +120,7 @@ html_sidebars = {"**": ["side-nav.html"]}
 htmlhelp_basename = "ScyllaDocumentationdoc"
 
 # URL which points to the root of the HTML documentation.
-html_baseurl = 'https://scylla.docs.scylladb.com'
+html_baseurl = 'https://docs.scylladb.com'
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}

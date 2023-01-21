@@ -98,6 +98,6 @@ verb [[with_client_info, with_timeout, one_way]] raft_read_quorum (raft::group_i
 verb [[with_client_info, with_timeout, one_way]] raft_read_quorum_reply (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum_reply);
 verb [[with_client_info, with_timeout]] raft_execute_read_barrier_on_leader (raft::group_id, raft::server_id from_id, raft::server_id dst_id) -> raft::read_barrier_reply;
 verb [[with_client_info, with_timeout]] raft_add_entry (raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd) -> raft::add_entry_reply;
-verb [[with_client_info, with_timeout]] raft_modify_config (raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del) -> raft::add_entry_reply;
+verb [[with_client_info, with_timeout]] raft_modify_config (raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::config_member> add, std::vector<raft::server_id> del) -> raft::add_entry_reply;
 
 } // namespace raft

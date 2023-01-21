@@ -4,13 +4,15 @@
 
 # Tests for secondary indexes
 
+import random
+import itertools
 import time
 import tempfile
 import pytest
 import os
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
-from cassandra_tests.porting import assert_rows, assert_row_count
+from cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
 from util import new_test_table, unique_name
 
@@ -237,19 +239,80 @@ def test_range_deletion(cql, test_keyspace, scylla_only):
         res = [row.c1 for row in cql.execute(f"SELECT * FROM {table}_c1_idx_index")]
         assert sorted(res) == [x for x in range(1342) if x <= 5 or x >= 846]
 
+# Reproduces #8627:
 # Test that trying to insert a value for an indexed column that exceeds 64KiB fails,
 # because this value is too large to be written as a key in the underlying index
+@pytest.mark.xfail(reason="issue #8627")
 def test_too_large_indexed_value(cql, test_keyspace):
     schema = 'p int, c int, v text, primary key (p,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE INDEX ON {table}(v)")
         big = 'x'*66536
-        with pytest.raises(WriteFailure):
-            try:
-                cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
-            # Cassandra 4.0 uses a different error type - so a minor translation is needed
-            except InvalidRequest as ir:
-                raise WriteFailure(str(ir))
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+
+# Similar to the above test (test_too_large_indexed_value) but when indexing
+# keys of collection. Modern Cassandra, and Scylla, allow collection keys
+# and values to be up to 2GB, but the keys written to an index are limited
+# to 64 KB. When a collection is indexed, the insertion of oversized elements
+# should fail cleanly at the time of write.
+# Reproduces #8627
+@pytest.mark.xfail(reason="issue #8627")
+def test_too_large_indexed_collection_value(cql, test_keyspace):
+    schema = 'p int, c int, m map<text,text>, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(values(m))")
+        cql.execute(f"CREATE INDEX ON {table}(keys(m))")
+        big = 'x'*66536
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,m) VALUES (0,1,{{'hi': '{big}'}})")
+        with pytest.raises(InvalidRequest, match='size'):
+            cql.execute(f"INSERT INTO {table}(p,c,m) VALUES (0,1,{{'{big}': 'hi'}})")
+
+# Reproduces #8627:
+# Same as test_too_large_indexed_value above, just check adding an index
+# to a table with pre-existing data. The background index-building process
+# cannot return an error to the user, but we do expect it to skip the
+# problematic row and continue to complete the rest of the index build.
+@pytest.mark.xfail(reason="issue #8627")
+def test_too_large_indexed_value_build(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        # No index yet - a "big" value in v is perfectly fine:
+        stmt = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        for i in range(30):
+            cql.execute(stmt, [i, str(i)])
+        big = 'x'*66536
+        cql.execute(stmt, [30, big])
+        assert [(30,big)] == list(cql.execute(f'SELECT * FROM {table} WHERE p=30'))
+        # Create an index on v as the new key. The background index-building
+        # process should start promptly.
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        # If Scylla's view builder hangs or stops, there is no way to
+        # tell this state apart from a view build that simply hasn't
+        # completed yet (besides looking at the logs, which we don't).
+        # This means, unfortunately, that a failure of this test is slow -
+        # it needs to wait for a timeout.
+        # However, today we are lucky (?) that the cql.execute(read, [big])
+        # test also fails immediately on Scylla, so this test fails quickly.
+        read = cql.prepare(f'SELECT * FROM {table} WHERE v = ?')
+        start_time = time.time()
+        while time.time() < start_time + 30:
+            # The oversized "big" cannot be a key in the view, and
+            # cannot be searched. Cassandra reports: "Index expression
+            # values may not be larger than 64K".
+            with pytest.raises(InvalidRequest):
+                cql.execute(read, [big])
+            # All the other keys should eventually be there
+            c = 0
+            for i in range(30):
+                if list(cql.execute(read, [str(i)])):
+                    c += 1
+            if c == 30:
+                break
+            print(c)
+            time.sleep(0.1)
+        for i in range(30):
+            assert list(cql.execute(read, [str(i)]))
 
 # Selecting values using only clustering key should require filtering, but work correctly
 # Reproduces issue #8991
@@ -473,7 +536,6 @@ def test_filter_and_limit_2(cql, test_keyspace):
 # (and therefore index) updates are synchronous, so none of these tests need
 # loops to wait for a change to be indexed.
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_list(cql, test_keyspace):
     schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -530,7 +592,6 @@ def test_index_list(cql, test_keyspace):
         cql.execute(f'UPDATE {table} SET l = [] WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE l CONTAINS 2'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_set(cql, test_keyspace):
     schema = 'pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -583,7 +644,6 @@ def test_index_set(cql, test_keyspace):
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 17'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 18'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_values(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -641,7 +701,86 @@ def test_index_map_values(cql, test_keyspace):
         cql.execute(f'UPDATE {table} set m = m - {{4}} WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 6'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
+# In the previous test (test_index_map_values) we noted that if one map has
+# several keys with the same value, then the "values(m)" index must store
+# all all them, so that we can still match this value even after removing one
+# of those keys. We tested in the previous test that although the same value
+# appears more than once, when we search for it, we only get the same item
+# once. Under the hood, Scylla does find the same value multiple times, but
+# then eliminates the duplicate matched raw and returns it only once.
+# There is a complication, that this de-duplication does not easily span
+# *paging*. So the purpose of this test is to check that paging does not
+# cause the same row to be returned more than once.
+def test_index_map_values_paging(cql, test_keyspace):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert a map where 10 out of the 12 elements have the same value 3
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{0:4, 1:3, 2:3, 3:3, 4:3, 5:3, 6:3, 7:3, 8:3, 9:3, 10:3, 11:7}})')
+        # But looking for "m CONTAINS 3" should return the row (1,2) only once:
+        assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        # Try exactly the same with paging with small page sizes. If Scylla
+        # doesn't de-duplicate the results between pages, the same row will
+        # be returned multiple times.
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(1,2)] == list(cql.execute(stmt))
+
+# In the previous test (test_index_map_values*) all tests involved a single
+# row, which could match a search, or not. In this test we verify that the
+# case of multiple matching rows also works.
+def test_index_map_values_multiple_matching_rows(cql, test_keyspace, driver_bug_1):
+    schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert several rows with several different maps, some of them have
+        # the value 3 in them somewhere, others don't. One of the maps has
+        # multiple occurances of the value 3, so we also reproduce here the
+        # same bug that test_index_map_values_paging() reproduces.
+        # Note: Scylla needs to skip a duplicate 3 value in (2,4) which
+        # results in an empty page in the result set when page_size=1. We
+        # need the driver to correctly support this, hence the "driver_bug_1".
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 2, {{1:2, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 3, {{1:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (1, 4, {{7:3}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 2, {{1:3, 2:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 4, {{}})')
+        cql.execute(f'INSERT INTO {table} (pk, ck, m) VALUES (2, 5, {{7:3}})')
+        assert [(1,3),(1,4),(2,2),(2,5)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3'))
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(1,3),(1,4),(2,2),(2,5)] == list(cql.execute(stmt))
+
+# In the previous tests (test_index_map_values*) all tests involved a base
+# table with both partition keys and clustering keys. Because some of the
+# implementation is different depending the schema has clustering keys,
+# let's also write a similar test with just a partition key:
+def test_index_map_values_partition_key_only(cql, test_keyspace, driver_bug_1):
+    schema = 'pk int, m map<int,int>, PRIMARY KEY (pk)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # index m (same as values(m)). Will allow "CONTAINS".
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        # Insert several rows with several different maps, some of them have
+        # the value 3 in them somewhere, others don't. One of the maps has
+        # multiple occurances of the value 3, so we also reproduce here the
+        # same bug that test_index_map_values_paging() reproduces (and here
+        # test its intersection with the case of no clustering key).
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (1, {{1:2, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (2, {{1:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (3, {{7:3}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (4, {{1:3, 2:3, 3:4}})')
+        cql.execute(f'INSERT INTO {table} (pk, m) VALUES (5, {{}})')
+        assert [(2,), (3,), (4,)] == sorted(cql.execute(f'SELECT pk FROM {table} WHERE m CONTAINS 3'))
+        for page_size in [1, 2, 3, 7]:
+            stmt = SimpleStatement(f'SELECT pk FROM {table} WHERE m CONTAINS 3', fetch_size=page_size)
+            assert [(2,), (3,), (4,)] == sorted(cql.execute(stmt))
+            # I wanted to check here that page_size is actually obeyed,
+            # but we can't - when Scylla skips one of the duplicate values
+            # it can result in a smaller page, and while not great (Cassandra
+            # doesn't do it, all its pages are full size), it's legal.
+
 def test_index_map_keys(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -689,7 +828,6 @@ def test_index_map_keys(cql, test_keyspace):
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 3'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS KEY 4'))
 
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_entries(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -738,7 +876,6 @@ def test_index_map_entries(cql, test_keyspace):
 
 # Check that it is possible to index the same map column in different ways
 # (values, keys and entries) at the same time:
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_map_multiple(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -755,7 +892,6 @@ def test_index_map_multiple(cql, test_keyspace):
 
 # Test that indexing keys(x), values(x) or entries(x) is only allowed for
 # specific column types (namely, specific kinds of collections).
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962")
 def test_index_collection_wrong_type(cql, test_keyspace):
     schema = 'pk int primary key, x int, l list<int>, s set<int>, m map<int,int>, t tuple<int,int>'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -822,12 +958,41 @@ def test_index_collection_wrong_type(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match="full()"):
             cql.execute(f'CREATE INDEX ON {table}(full(t))')
 
+# Check the default name of collection indexes. This "default name" is
+# needed to drop an index which was created without explicitly specifying
+# a name for it. We want the default name to be identical to Cassandra,
+# because an application may assume it is so.
+def test_index_collection_default_name(cql, test_keyspace):
+    schema = 'pk int primary key, m map<int,int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # values(m) and m refer to the same thing so must have the same
+        # default name.
+        cql.execute(f'CREATE INDEX ON {table}(values(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # key(m) and entries(m) are different indexes than just m, but
+        # their default index name turns out to be exactly the same one:
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        # We can create multiple types of the above indexes at the same
+        # time (see also test_index_map_multiple() above), so they will
+        # get different default names using the standard default index
+        # name mechanism (adding _1, etc.)
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        cql.execute(f'CREATE INDEX ON {table}(keys(m))')
+        cql.execute(f'CREATE INDEX ON {table}(entries(m))')
+        cql.execute(f"DROP INDEX {table}_m_idx")
+        cql.execute(f"DROP INDEX {table}_m_idx_1")
+        cql.execute(f"DROP INDEX {table}_m_idx_2")
+
 # Reproducer for issue #10707 - indexing a column whose name is a quoted
 # string should work fine. Even if the quoted string happens to look like
 # an instruction to index a collection, e.g., "keys(m)".
-@pytest.mark.xfail(reason="collection indexing not implemented yet: issue #2962, #10707")
 def test_index_quoted_names(cql, test_keyspace):
-    quoted_names = ['"hEllo"', '"x y"', '"keys(m)"', '"values(m)"', '"entries(m)"']
+    quoted_names = ['"hEllo"', '"x y"', '"hi""hello""yo"', '"""hi"""', '"keys(m)"', '"values(m)"', '"entries(m)"']
     schema = 'pk int, ck int, m int, ' + ','.join([name + " int" for name in quoted_names]) + ', PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
         for name in quoted_names:
@@ -849,3 +1014,167 @@ def test_index_quoted_names(cql, test_keyspace):
         cql.execute(f'INSERT INTO {table} (pk, ck, {names}) VALUES (1, 2, {values})')
         for name in quoted_names:
             assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE {name} CONTAINS KEY 3'))
+
+@pytest.mark.xfail(reason="#10713 - local collection indexing is not implemented yet")
+def test_local_secondary_index_on_collection(cql, test_keyspace):
+    schema = 'pk int, ck int, l list<int>, PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}((pk), l)')
+
+# Test that queries with the index over collection provide the same answer as it
+# would be without index, but with ALLOW FILTERING.
+# The operations on collections here are picked up randomly.
+def test_secondary_collection_index(cql, test_keyspace):
+
+    seed = int(time.time()*1e8)
+    print(f"Seed for collection index test: {seed}")
+    rand = random.Random(seed)
+
+    schema = f'id int, m map<int, text>, primary key (id)'
+
+    possible_ids = [100, 101]
+    possible_keys = [1, 2, 3]
+    possible_values = ['abc', 'def', 'ghi']
+
+    def insert(table, id, map, **kwargs):
+        a = (f'insert into {table}(id, m) values (%s, %s)', (id, map))
+        print(a)
+        cql.execute(*a)
+    def update_cell(table, id, key, value, **kwargs):
+        a = (f'update {table} set m[%s] = %s where id = %s', (key, value, id))
+        print(a)
+        cql.execute(*a)
+    def update_delete(table, id, keys, **kwargs):
+        a = (f'update {table} set m = m - %s where id = %s', (keys, id))
+        print(a)
+        cql.execute(*a)
+    def update_add(table, id, map, **kwargs):
+        a = (f'update {table} set m = m + %s where id = %s', (map, id))
+        print(a)
+        cql.execute(*a)
+    def delete(table, id, **kwargs):
+        a = (f'delete m from {table} where id = %s', (id,))
+        print(a)
+        cql.execute(*a)
+    def delete_cell(table, id, key, **kwargs):
+        a = (f'delete m[%s] from {table} where id = %s', (key, id))
+        print(a)
+        cql.execute(*a)
+
+    def random_map():
+        size = rand.randrange(len(possible_keys))
+        keys = rand.sample(possible_keys, k=size)
+        values = rand.choices(possible_values, k=size)
+        return dict(zip(keys, values))
+    def random_keys():
+        return set(random_map())
+    def random_key():
+        return random.choice(possible_keys)
+    def random_value():
+        return random.choice(possible_values)
+    def random_id():
+        return random.choice(possible_ids)
+
+    def random_operation():
+        return random.choice([insert, update_cell, update_delete, update_add, delete, delete_cell])
+    def random_args():
+        return {
+            'map': random_map(),
+            'key': random_key(),
+            'value': random_value(),
+            'keys': random_keys(),
+            'id': random_id(),
+        }
+
+    with new_test_table(cql, test_keyspace, schema) as tab1, new_test_table(cql, test_keyspace, schema) as tab2:
+        def select(cql, table, where, *args):
+            query = f'select id from {table} where {where}'
+            if table is tab2:
+                query += ' allow filtering'
+            try:
+                return cql.execute(query, *args)
+            except:
+                print('args=', args, table, where)
+                raise
+        def test_all_possible_selects():
+            # Choose something that is not possible.
+            possible_ids_ = possible_ids + [10000]
+            possible_keys_ = possible_keys + [10000]
+            possible_values_ = possible_values + ['aaaaa']
+            for k, v in itertools.product(possible_keys_, possible_values_):
+                r1 = select(cql, tab1, 'm[%s] = %s', (k, v))
+                r2 = select(cql, tab2, 'm[%s] = %s', (k, v))
+                assert_rows_ignoring_order(r1, *list(r2))
+            for k in possible_keys_:
+                r1 = select(cql, tab1, 'm contains key %s', (k,))
+                r2 = select(cql, tab2, 'm contains key %s', (k,))
+                assert_rows_ignoring_order(r1, *list(r2))
+            for v in possible_values_:
+                r1 = select(cql, tab1, 'm contains %s', (v,))
+                r2 = select(cql, tab2, 'm contains %s', (v,))
+                assert_rows_ignoring_order(r1, *list(r2))
+
+
+        cql.execute(f'create index on {tab1}(keys(m))')
+        cql.execute(f'create index on {tab1}(values(m))')
+        cql.execute(f'create index on {tab1}(entries(m))')
+
+        for _ in range(50):
+            op = random_operation()
+            args = random_args()
+            print(f"op={op}, args={args}")
+            for tab in [tab1, tab2]:
+                op(tab, **args)
+            test_all_possible_selects()
+
+# Test that paging through a select using a secondary index works as
+# expected, returning pages of the requested size.
+# We have several tests here, for different schemas, that exercises
+# different code paths and may expose different bugs.
+
+def test_index_paging_pk_ck(cql, test_keyspace):
+    schema = 'p int, c int, x int, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(x)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,c,x) VALUES (?,?,?)")
+        for i in range(10):
+            cql.execute(insert, [i, i, 3])
+        cql.execute(insert, [17, 17, 2])
+        for page_size in [1, 2, 3, 100]:
+            stmt = SimpleStatement(f"SELECT p FROM {table} WHERE x = 3", fetch_size=page_size)
+            # Check that:
+            # 1. Each page of results has the expected page_size, or less in
+            #    the last page. Although partial pages are theoretically
+            #    allowed (and happen in other tests), in this test we don't
+            #    expect Scylla or Cassandra to generate them.
+            # 2. Check that all the results read over all pages are the
+            #    expected ones (0...9)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            # After pages of page_size, the last page should be partial
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            # Finally check that altogether, we read the right rows.
+            assert sorted(all_rows) == [(i,) for i in range(10)]
+
+def test_index_paging_pk_only(cql, test_keyspace):
+    schema = 'p int, x int, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(x)")
+        insert = cql.prepare(f"INSERT INTO {table}(p,x) VALUES (?,?)")
+        for i in range(10):
+            cql.execute(insert, [i, 3])
+        cql.execute(insert, [17, 2])
+        for page_size in [1, 2, 3, 100]:
+            stmt = SimpleStatement(f"SELECT p FROM {table} WHERE x = 3", fetch_size=page_size)
+            all_rows = []
+            results = cql.execute(stmt)
+            while len(results.current_rows) == page_size:
+                all_rows.extend(results.current_rows)
+                results = cql.execute(stmt, paging_state=results.paging_state)
+            assert len(results.current_rows) < page_size
+            all_rows.extend(results.current_rows)
+            assert sorted(all_rows) == [(i,) for i in range(10)]

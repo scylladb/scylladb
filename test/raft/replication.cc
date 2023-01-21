@@ -29,6 +29,10 @@ raft::server_address_set address_set(std::vector<node_id> nodes) noexcept {
     return address_set(to_raft_id_vec(nodes));
 }
 
+raft::config_member_set config_set(std::vector<node_id> nodes) noexcept {
+    return config_set(to_raft_id_vec(nodes));
+}
+
 size_t test_case::get_first_val() {
     // Count existing leader snap index and entries, if present
     size_t first_val = 0;

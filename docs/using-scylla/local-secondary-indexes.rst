@@ -114,7 +114,7 @@ More information
 ................
 
 * :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
-* :doc:`CQL Reference </getting-started/secondary-indexes/>` - CQL Reference for Secondary Indexes
+* :doc:`CQL Reference </cql/secondary-indexes/>` - CQL Reference for Secondary Indexes
 
 The following courses are available from Scylla University:
 

@@ -6,16 +6,15 @@ Admin Tools
    :hidden:
    
    Nodetool Reference </operating-scylla/nodetool>
-   CQLSh </getting-started/cqlsh>
+   CQLSh </cql/cqlsh>
    REST </operating-scylla/rest>
    Tracing </using-scylla/tracing>
-   scylla-sstable
-   scylla-types </operating-scylla/admin-tools/scylla-types/>
+   Scylla SStable </operating-scylla/admin-tools/scylla-sstable/>
+   Scylla Types </operating-scylla/admin-tools/scylla-types/>
    sstableloader
    cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>
    sstabledump
    sstable2json
-   sstable-index
    Scylla Logs </getting-started/logging/>
    perftune
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>

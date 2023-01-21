@@ -214,7 +214,6 @@ def test_filter_with_unused_static_column(cql, test_keyspace, scylla_only):
                         expected = [(42,43,44)] if '4' in where else [(42,43,44),(1,2,3)]
                         assert list(cql.execute(f"SELECT * FROM {mv}")) == expected
 
-
 # IS_NOT operator can only be used in the context of materialized view creation and it must be of the form IS NOT NULL.
 # Trying to do something like IS NOT 42 should fail.
 # The error is a SyntaxException because Scylla and Cassandra check this during parsing.
@@ -227,3 +226,146 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
                 cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT 42 PRIMARY KEY (p)")
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
+# The IS NOT NULL operator was first added to Cassandra and Scylla for use
+# just in key columns in materialized views. It was not supported in general
+# filters in SELECT (see issue #8517), and in particular cannot be used in
+# a materialized-view definition as a filter on non-key columns. However,
+# if this usage is not allowed, we expect to see a clear error and not silently
+# ignoring the IS NOT NULL condition as happens in issue #10365.
+#
+# NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
+# replace this test by a test that checks that the filter works as expected,
+# both in ordinary base-table SELECT and in materialized-view definition.
+@pytest.mark.xfail(reason="issue #10365")
+def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
+        # Check that "IS NOT NULL" is not supported in a regular (base table)
+        # SELECT filter. Cassandra reports an InvalidRequest: "Unsupported
+        # restriction: xyz IS NOT NULL". In Scylla the message is different:
+        # "restriction '(xyz) IS NOT { null }' is only supported in materialized
+        # view creation".
+        #
+        with pytest.raises(InvalidRequest, match="xyz"):
+            cql.execute(f'SELECT * FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING')
+        # Check that "xyz IS NOT NULL" is also not supported in a
+        # materialized-view definition (where xyz is not a key column)
+        # Reproduces #8517
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="xyz"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND xyz IS NOT NULL PRIMARY KEY (p)")
+                # There is no need to continue the test - if the CREATE
+                # MATERIALIZED VIEW above succeeded, it is already not what we
+                # expect without #8517. However, let's demonstrate that it's
+                # even worse - not only does the "xyz IS NOT NULL" not generate
+                # an error, it is outright ignored and not used in the filter.
+                # If it weren't ignored, it should filter out partition 124
+                # in the following example:
+                cql.execute(f"INSERT INTO {table} (p,xyz) VALUES (123, 456)")
+                cql.execute(f"INSERT INTO {table} (p) VALUES (124)")
+                assert sorted(list(cql.execute(f"SELECT p FROM {test_keyspace}.{mv}")))==[(123,)]
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
+# Test that a view can be altered with synchronous_updates property and that
+# the synchronous updates code path is then reached for such view.
+def test_mv_synchronous_updates(cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as sync_mv, \
+             new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as async_mv, \
+             new_materialized_view(cql, table, '*', 'v,p', 'v is not null and p is not null', extra='with synchronous_updates = true') as sync_mv_from_the_start, \
+             new_materialized_view(cql, table, '*', 'v,p', 'v is not null and p is not null', extra='with synchronous_updates = true') as async_mv_altered:
+            # Make one view synchronous
+            cql.execute(f"ALTER MATERIALIZED VIEW {sync_mv} WITH synchronous_updates = true")
+            # Make another one asynchronous
+            cql.execute(f"ALTER MATERIALIZED VIEW {async_mv_altered} WITH synchronous_updates = false")
+
+            # Execute a query and inspect its tracing info
+            res = cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, 'dog')", trace=True)
+            trace = res.get_query_trace()
+
+            wanted_trace1 = f"Forcing {sync_mv} view update to be synchronous"
+            wanted_trace2 = f"Forcing {sync_mv_from_the_start} view update to be synchronous"
+            unwanted_trace1 = f"Forcing {async_mv} view update to be synchronous"
+            unwanted_trace2 = f"Forcing {async_mv_altered} view update to be synchronous"
+
+            wanted_traces_were_found = [False, False]
+            for event in trace.events:
+                assert unwanted_trace1 not in event.description
+                assert unwanted_trace2 not in event.description
+                if wanted_trace1 in event.description:
+                    wanted_traces_were_found[0] = True
+                if wanted_trace2 in event.description:
+                    wanted_traces_were_found[1] = True
+            assert all(wanted_traces_were_found)
+
+# Reproduces #8627:
+# Whereas regular columns values are limited in size to 2GB, key columns are
+# limited to 64KB. This means that if a certain column is regular in the base
+# table but a key in one of its views, we cannot write to this regular column
+# an over-64KB value. Ideally, such a write should fail cleanly with an
+# InvalidQuery.
+# But today, neither Cassandra nor Scylla does this correctly. Both do not
+# detect the problem at the coordinator level, and both send the writes to the
+# replicas and fail the view update in each replica. The user's write may or
+# may not fail depending on whether the view update is done synchronously
+# (Scylla, sometimes) or asynchrhonously (Casandra). But even in the failure
+# case the failure does not explain why the replica writes failed - the only
+# message about a key being too long appears in the log.
+# Note that the same issue also applies to secondary indexes, and this is
+# tested in test_secondary_index.py.
+@pytest.mark.xfail(reason="issue #8627")
+def test_oversized_base_regular_view_key(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        with new_materialized_view(cql, table, select='*', pk='v,p', where='v is not null and p is not null') as mv:
+            big = 'x'*66536
+            with pytest.raises(InvalidRequest, match='size'):
+                cql.execute(f"INSERT INTO {table}(p,v) VALUES (1,'{big}')")
+            # Ideally, the entire write operation should be considered
+            # invalid, and no part of it will be done. In particular, the
+            # base write will also not happen.
+            assert [] == list(cql.execute(f"SELECT * FROM {table} WHERE p=1"))
+
+# Reproduces #8627:
+# Same as test_oversized_base_regular_view_key above, just check *view
+# building*- i.e., pre-existing data in the base table that needs to be
+# copied to the view. The view building cannot return an error to the user,
+# but we do expect it to skip the problematic row and continue to complete
+# the rest of the vew build.
+@pytest.mark.xfail(reason="issue #8627")
+# This test currently breaks the build (it repeats a failing build step,
+# and never complete) and we cannot quickly recognize this failure, so
+# to avoid a very slow failure, we currently "skip" this test.
+@pytest.mark.skip(reason="issue #8627, fails very slow")
+def test_oversized_base_regular_view_key_build(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        # No materialized view yet - a "big" value in v is perfectly fine:
+        stmt = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        for i in range(30):
+            cql.execute(stmt, [i, str(i)])
+        big = 'x'*66536
+        cql.execute(stmt, [30, big])
+        assert [(30,big)] == list(cql.execute(f'SELECT * FROM {table} WHERE p=30'))
+        # Add a materialized view with v as the new key. The view build,
+        # copying data from the base table to the view, should start promptly.
+        with new_materialized_view(cql, table, select='*', pk='v,p', where='v is not null and p is not null') as mv:
+            # If Scylla's view builder hangs or stops, there is no way to
+            # tell this state apart from a view build that simply hasn't
+            # completed yet (besides looking at the logs, which we don't).
+            # This means, unfortunately, that a failure of this test is slow -
+            # it needs to wait for a timeout.
+            start_time = time.time()
+            while time.time() < start_time + 30:
+                results = set(list(cql.execute(f'SELECT * from {mv}')))
+                # The oversized "big" cannot be a key in the view, so
+                # shouldn't be in results:
+                assert not (big, 30) in results
+                print(results)
+                # The rest of the items in the base table should be in
+                # the view:
+                if results == {(str(i), i) for i in range(30)}:
+                        break
+                time.sleep(0.1)
+            assert results == {(str(i), i) for i in range(30)}

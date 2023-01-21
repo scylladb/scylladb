@@ -36,7 +36,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
-#include "utils/joinpoint.hh"
 #include "types/user.hh"
 
 static seastar::logger mlogger("legacy_schema_migrator");
@@ -148,7 +147,7 @@ public:
 
             auto ks_name = td.get_as<sstring>("keyspace_name");
             auto cf_name = td.get_as<sstring>("columnfamily_name");
-            auto id = td.get_or("cf_id", generate_legacy_id(ks_name, cf_name));
+            auto id = table_id(td.get_or("cf_id", generate_legacy_id(ks_name, cf_name).uuid()));
 
             schema_builder builder(dst.name, cf_name, id);
 
@@ -534,13 +533,9 @@ public:
 
     future<> drop_legacy_tables() {
         mlogger.info("Dropping legacy schema tables");
-        return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
-            return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
-                auto with_snapshot = !_keyspaces.empty();
-                return _db.invoke_on_all([&tsf, cfname, with_snapshot](replica::database& db) {
-                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
-                });
-            });
+        auto with_snapshot = !_keyspaces.empty();
+        return parallel_for_each(legacy_schema_tables, [this, with_snapshot](const sstring& cfname) {
+            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, with_snapshot);
         });
     }
 
@@ -571,8 +566,8 @@ public:
     }
 
     future<> flush_schemas() {
-        auto& db = _qp.db().real_database();
-        return db.flush_on_all(db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
+        auto& db = _qp.db().real_database().container();
+        return replica::database::flush_tables_on_all_shards(db, db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
     }
 
     future<> migrate() {

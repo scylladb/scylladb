@@ -24,7 +24,7 @@ Removing a Running Node
    to remove the node you are connected to. Using ``nodetool decommission`` is the recommended method for cluster scale-down operations. It prevents data loss
    by ensuring that the node you're removing streams its data to the remaining nodes in the cluster.
 
-   If the node is **Joining**, see `Safely Remove a Joining Node <../safely-removing-joining-node>`_.
+   If the node is **Joining**, see :doc:`Safely Remove a Joining Node <safely-removing-joining-node>`.
 
    If the node status is **Down**, see `Removing an Unavailable Node`_.
 
@@ -78,7 +78,7 @@ the ``nodetool removenode`` operation will fail. To ensure successful operation 
 * Make sure the status of all other nodes in the cluster is Up Normal (UN). If one or more nodes are unavailable, see :doc:`nodetool removenode </operating-scylla/nodetool-commands/removenode>` for instructions.
 * Run a full cluster repair **before** ``nodetool removenode``, so all existing replicas have the most up-to-date data.
 * In the case of node failures during the ``removenode`` operation, re-run repair before running
-  ``nodetool removenode`` (not required when `Repair Based Node Operations (RBNO) <../repair-based-node-operation>`_ for ``removenode`` 
+  ``nodetool removenode`` (not required when :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for ``removenode`` 
   is enabled).
 
 

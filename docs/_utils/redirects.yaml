@@ -1,140 +1,79 @@
 ### a dictionary of redirections
 #old path: new path
 
-### scylladb/scylla dev docs migration
+# unifying the Ubunut upgrade guide for different Ubuntu versions: from 5.0 to 2022.1
 
-# stable branch
-/stable/contribute/index.html: https://github.com/scylladb/scylla/blob/master/docs/dev/index.md
-/stable/contribute/CONTRIBUTING.html: https://github.com/scylladb/scylla/blob/master/docs/dev/CONTRIBUTING.md
-/stable/contribute/backport.html: https://github.com/scylladb/scylla/blob/master/docs/dev/backport.md
-/stable/contribute/maintainer.html: https://github.com/scylladb/scylla/blob/master/docs/dev/maintainer.md
-/stable/contribute/review-checklist.html: https://github.com/scylladb/scylla/blob/master/docs/dev/review-checklist.md
-/stable/design-notes/IDL.html: https://github.com/scylladb/scylla/blob/master/docs/dev/IDL.md
-/stable/design-notes/cdc.html: https://github.com/scylladb/scylla/blob/master/docs/dev/cdc.md
-/stable/design-notes/compaction_controller.html: https://github.com/scylladb/scylla/blob/master/docs/dev/compaction_controller.md
-/stable/design-notes/cql-extensions.html: https://github.com/scylladb/scylla/blob/master/docs/dev/cql-extensions.md
-/stable/design-notes/cql-extensions-internal.html: https://github.com/scylladb/scylla/blob/master/docs/dev/cql-extensions-internal.md
-/stable/design-notes/cql3-type-mapping.html: https://github.com/scylladb/scylla/blob/master/docs/dev/cql3-type-mapping.md
-/stable/design-notes/hinted_handoff_design.html: https://github.com/scylladb/scylla/blob/master/docs/dev/hinted_handoff_design.md
-/stable/design-notes/index.html: https://github.com/scylladb/scylla/blob/master/docs/dev/index.md
-/stable/design-notes/isolation.html: https://github.com/scylladb/scylla/blob/master/docs/dev/isolation.md
-/stable/design-notes/lua-type-mapping.html: https://github.com/scylladb/scylla/blob/master/docs/dev/lua-type-mapping.md
-/stable/design-notes/metrics.html: https://github.com/scylladb/scylla/blob/master/docs/dev/metrics.md
-/stable/design-notes/migrating-from-users-to-roles.html: https://github.com/scylladb/scylla/blob/master/docs/dev/migrating-from-users-to-roles.md
-/stable/design-notes/paged-queries.html: https://github.com/scylladb/scylla/blob/master/docs/dev/paged-queries.md
-/stable/design-notes/protocol-extensions.html: https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md
-/stable/design-notes/protocols.html: https://github.com/scylladb/scylla/blob/master/docs/dev/protocols.md
-/stable/design-notes/redis.html: https://github.com/scylladb/scylla/blob/master/docs/dev/redis.md
-/stable/design-notes/repair_based_node_ops.html: https://github.com/scylladb/scylla/blob/master/docs/dev/repair_based_node_ops.md
-/stable/design-notes/reverse-reads.html: https://github.com/scylladb/scylla/blob/master/docs/dev/reverse-reads.md
-/stable/design-notes/row_cache.html: https://github.com/scylladb/scylla/blob/master/docs/dev/row_cache.md
-/stable/design-notes/row_level_repair.html: https://github.com/scylladb/scylla/blob/master/docs/dev/row_level_repair.md
-/stable/design-notes/secondary_index.html: https://github.com/scylladb/scylla/blob/master/docs/dev/secondary_index.md
-/stable/design-notes/sstable-scylla-format.html: https://github.com/scylladb/scylla/blob/master/docs/dev/sstable-scylla-format.md
-/stable/design-notes/sstables-directory-structure.html: https://github.com/scylladb/scylla/blob/master/docs/dev/sstables-directory-structure.md
-/stable/design-notes/system_keyspace.html: https://github.com/scylladb/scylla/blob/master/docs/dev/system_keyspace.md
-/stable/design-notes/system_schema_keyspace.html: https://github.com/scylladb/scylla/blob/master/docs/dev/system_schema_keyspace.md
-/stable/design-notes/wasm.html: https://github.com/scylladb/scylla/blob/master/docs/dev/wasm.md
-/stable/guides/index.html: https://github.com/scylladb/scylla/blob/master/docs/dev/index.md
-/stable/guides/HACKING.html: https://github.com/scylladb/scylla/blob/master/HACKING.md
-/stable/guides/api_v2.html: https://github.com/scylladb/scylla/blob/master/docs/dev/api_v2.md
-/stable/guides/building.html: https://github.com/scylladb/scylla/blob/master/docs/dev/building.md
-/stable/guides/debugging.html: https://github.com/scylladb/scylla/blob/master/docs/dev/debugging.md
-/stable/guides/docker-hub.html: https://github.com/scylladb/scylla/blob/master/docs/dev/docker-hub.md
-/stable/guides/logging.html: https://github.com/scylladb/scylla/blob/master/docs/dev/logging.md
-/stable/guides/testing.html: https://github.com/scylladb/scylla/blob/master/docs/dev/testing.md
-/stable/guides/tracing.html: https://github.com/scylladb/scylla/blob/master/docs/dev/tracing.md
-/stable/service_levels.html: https://github.com/scylladb/scylla/blob/master/docs/dev/service_levels.md
-/stable/virtual-tables.html: https://github.com/scylladb/scylla/blob/master/docs/dev/virtual-tables.md
+/stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-18-04.html: /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu.html
+/stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-20-04.html: /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu.html
 
-# 4.6 branch
-/branch-4.6/contribute/index.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/index.md
-/branch-4.6/contribute/CONTRIBUTING.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/CONTRIBUTING.md
-/branch-4.6/contribute/backport.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/backport.md
-/branch-4.6/contribute/maintainer.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/maintainer.md
-/branch-4.6/contribute/review-checklist.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/review-checklist.md
-/branch-4.6/design-notes/IDL.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/IDL.md
-/branch-4.6/design-notes/cdc.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/cdc.md
-/branch-4.6/design-notes/compaction_controller.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/compaction_controller.md
-/branch-4.6/design-notes/cql-extensions.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/cql-extensions.md
-/branch-4.6/design-notes/cql-extensions-internal.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/cql-extensions-internal.md
-/branch-4.6/design-notes/cql3-type-mapping.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/cql3-type-mapping.md
-/branch-4.6/design-notes/hinted_handoff_design.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/hinted_handoff_design.md
-/branch-4.6/design-notes/index.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/index.md
-/branch-4.6/design-notes/isolation.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/isolation.md
-/branch-4.6/design-notes/lua-type-mapping.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/lua-type-mapping.md
-/branch-4.6/design-notes/metrics.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/metrics.md
-/branch-4.6/design-notes/migrating-from-users-to-roles.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/migrating-from-users-to-roles.md
-/branch-4.6/design-notes/paged-queries.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/paged-queries.md
-/branch-4.6/design-notes/protocol-extensions.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/protocol-extensions.md
-/branch-4.6/design-notes/protocols.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/protocols.md
-/branch-4.6/design-notes/redis.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/redis.md
-/branch-4.6/design-notes/repair_based_node_ops.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/repair_based_node_ops.md
-/branch-4.6/design-notes/reverse-reads.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/reverse-reads.md
-/branch-4.6/design-notes/row_cache.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/row_cache.md
-/branch-4.6/design-notes/row_level_repair.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/row_level_repair.md
-/branch-4.6/design-notes/secondary_index.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/secondary_index.md
-/branch-4.6/design-notes/sstable-scylla-format.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/sstable-scylla-format.md
-/branch-4.6/design-notes/sstables-directory-structure.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/sstables-directory-structure.md
-/branch-4.6/design-notes/system_keyspace.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/system_keyspace.md
-/branch-4.6/design-notes/system_schema_keyspace.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/system_schema_keyspace.md
-/branch-4.6/design-notes/wasm.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/wasm.md
-/branch-4.6/guides/index.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/index.md
-/branch-4.6/guides/HACKING.html: https://github.com/scylladb/scylla/blob/branch-4.6/HACKING.md
-/branch-4.6/guides/api_v2.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/api_v2.md
-/branch-4.6/guides/building.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/building.md
-/branch-4.6/guides/debugging.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/debugging.md
-/branch-4.6/guides/docker-hub.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/docker-hub.md
-/branch-4.6/guides/logging.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/logging.md
-/branch-4.6/guides/testing.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/testing.md
-/branch-4.6/guides/tracing.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/tracing.md
-/branch-4.6/service_levels.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/service_levels.md
-/branch-4.6/virtual-tables.html: https://github.com/scylladb/scylla/blob/branch-4.6/docs/dev/virtual-tables.md
+# removing the old Monitoring Stack documentation from the ScyllaDB docs
 
+/stable/operating-scylla/monitoring/index.html: https://monitoring.docs.scylladb.com/stable/
+/stable/upgrade/upgrade-monitor/index.html: https://monitoring.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-1.x-to-monitoring-2.x.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-1.x-to-monitoring-2.x.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-2.x-to-monitoring-2.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-2.x-to-monitoring-2.y.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-2.x-to-monitoring-3.y.html
+/stable/upgrade/upgrade-monitor/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html: https://monitoring.docs.scylladb.com/stable/upgrade/upgrade-guide-from-monitoring-3.x-to-monitoring-3.y.html
 
-# 4.5 branch
-/branch-4.5/contribute/index.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/index.md
-/branch-4.5/contribute/CONTRIBUTING.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/CONTRIBUTING.md
-/branch-4.5/contribute/backport.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/backport.md
-/branch-4.5/contribute/maintainer.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/maintainer.md
-/branch-4.5/contribute/review-checklist.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/review-checklist.md
-/branch-4.5/design-notes/IDL.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/IDL.md
-/branch-4.5/design-notes/cdc.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/cdc.md
-/branch-4.5/design-notes/compaction_controller.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/compaction_controller.md
-/branch-4.5/design-notes/cql-extensions.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/cql-extensions.md
-/branch-4.5/design-notes/cql-extensions-internal.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/cql-extensions-internal.md
-/branch-4.5/design-notes/cql3-type-mapping.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/cql3-type-mapping.md
-/branch-4.5/design-notes/hinted_handoff_design.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/hinted_handoff_design.md
-/branch-4.5/design-notes/index.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/index.md
-/branch-4.5/design-notes/isolation.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/isolation.md
-/branch-4.5/design-notes/lua-type-mapping.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/lua-type-mapping.md
-/branch-4.5/design-notes/metrics.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/metrics.md
-/branch-4.5/design-notes/migrating-from-users-to-roles.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/migrating-from-users-to-roles.md
-/branch-4.5/design-notes/paged-queries.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/paged-queries.md
-/branch-4.5/design-notes/protocol-extensions.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/protocol-extensions.md
-/branch-4.5/design-notes/protocols.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/protocols.md
-/branch-4.5/design-notes/redis.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/redis.md
-/branch-4.5/design-notes/repair_based_node_ops.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/repair_based_node_ops.md
-/branch-4.5/design-notes/reverse-reads.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/reverse-reads.md
-/branch-4.5/design-notes/row_cache.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/row_cache.md
-/branch-4.5/design-notes/row_level_repair.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/row_level_repair.md
-/branch-4.5/design-notes/secondary_index.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/secondary_index.md
-/branch-4.5/design-notes/sstable-scylla-format.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/sstable-scylla-format.md
-/branch-4.5/design-notes/sstables-directory-structure.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/sstables-directory-structure.md
-/branch-4.5/design-notes/system_keyspace.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/system_keyspace.md
-/branch-4.5/design-notes/system_schema_keyspace.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/system_schema_keyspace.md
-/branch-4.5/design-notes/wasm.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/wasm.md
-/branch-4.5/guides/index.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/index.md
-/branch-4.5/guides/HACKING.html: https://github.com/scylladb/scylla/blob/branch-4.5/HACKING.md
-/branch-4.5/guides/api_v2.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/api_v2.md
-/branch-4.5/guides/building.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/building.md
-/branch-4.5/guides/debugging.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/debugging.md
-/branch-4.5/guides/docker-hub.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/docker-hub.md
-/branch-4.5/guides/logging.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/logging.md
-/branch-4.5/guides/testing.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/testing.md
-/branch-4.5/guides/tracing.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/tracing.md
-/branch-4.5/service_levels.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/service_levels.md
-/branch-4.5/virtual-tables.html: https://github.com/scylladb/scylla/blob/branch-4.5/docs/dev/virtual-tables.md
+# removing the old Operator documentation from the ScyllaDB docs
+
+/stable/operating-scylla/scylla-operator/index.html: https://operator.docs.scylladb.com/stable/
+
+### removing the old Scylla Manager documentation from the ScyllaDB docs
+
+/stable/operating-scylla/manager/index.html: https://manager.docs.scylladb.com/
+/stable/upgrade/upgrade-manager/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-maintenance-1.x.y-to-1.x.z/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-maintenance-1.x.y-to-1.x.z/upgrade-guide-from-manager-1.x.y-to-1.x.z-CentOS.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-maintenance-1.x.y-to-1.x.z/upgrade-guide-from-manager-1.x.y-to-1.x.z-ubuntu.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-manager-1.0.x-to-1.1.x.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-manager-1.1.x-to-1.2.x.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.2-to-1.3/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.2-to-1.3/upgrade-guide-from-manager-1.2.x-to-1.3.x-CentOS.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.2-to-1.3/upgrade-guide-from-manager-1.2.x-to-1.3.x-ubuntu.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.2-to-1.3/manager-metric-update-1.2-to-1.3.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.3-to-1.4/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.3-to-1.4/upgrade-guide-from-manager-1.3.x-to-1.4.x-CentOS.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.3-to-1.4/upgrade-guide-from-manager-1.3.x-to-1.4.x-ubuntu.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.3-to-1.4/manager-metric-update-1.3-to-1.4.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.4-to-2.0/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.4-to-2.0/upgrade-guide-from-manager-1.4.x-to-2.0.x.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-1.4-to-2.0/manager-metric-update-1.4-to-2.0.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/index.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/upgrade-2.x.a-to-2.y.b.html: https://manager.docs.scylladb.com/stable/upgrade/index.html
+/stable/upgrade/upgrade-manager/upgrade-guide-from-2.x.a-to-2.y.b/upgrade-row-level-repair.html: https://www.scylladb.com/2019/08/13/scylla-open-source-3-1-efficiently-maintaining-consistency-with-row-level-repair/
+stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/architecture.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/install.html: https://manager.docs.scylladb.com/stable/install-scylla-manager.html
+/stable/operating-scylla/manager/2.1/install-agent.html: https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html
+/stable/operating-scylla/manager/2.1/add-a-cluster.html: https://manager.docs.scylladb.com/stable/add-a-cluster.html
+/stable/operating-scylla/manager/2.1/repair.html: https://manager.docs.scylladb.com/stable/repair/index.html
+/stable/operating-scylla/manager/2.1/backup.html: https://manager.docs.scylladb.com/stable/backup/index.html
+/stable/operating-scylla/manager/2.1/extract-schema-from-backup.html: https://manager.docs.scylladb.com/stable/sctool/backup.html
+/stable/operating-scylla/manager/2.1/restore-a-backup.html: https://manager.docs.scylladb.com/stable/restore/index.html
+/stable/operating-scylla/manager/2.1/health-check.html: https://manager.docs.scylladb.com/stable/health-check.html
+/stable/operating-scylla/manager/2.1/sctool.html: https://manager.docs.scylladb.com/stable/sctool/index.html
+/stable/operating-scylla/manager/2.1/monitoring-manager-integration.html: https://manager.docs.scylladb.com/stable/scylla-monitoring.html
+/stable/operating-scylla/manager/2.1/use-a-remote-db.html: https://manager.docs.scylladb.com/
+/stable/operating-scylla/manager/2.1/configuration-file.html: https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html
+/stable/operating-scylla/manager/2.1/agent-configuration-file.html: https://manager.docs.scylladb.com/stable/config/scylla-manager-agent-config.html
+
+### moving the CQL reference files to the new cql folder
+
+/stable/getting-started/ddl.html: /stable/cql/ddl.html
+/stable/getting-started/dml.html: /stable/cql/dml.html
+/stable/getting-started/time-to-live.html: /stable/cql/time-to-live.html
+/stable/getting-started/types.html: /stable/cql/types.html
+/stable/getting-started/appendices.html: /stable/cql/appendices.html
+/stable/getting-started/definitions.html: /stable/cql/definitions.html
+/stable/getting-started/mv.html: /stable/cql/mv.html
+/stable/getting-started/functions.html: /cql/functions.html
+/stable/getting-started/json.html: /stable/cql/json.html
+/stable/getting-started/secondary-indexes.html: /stable/cql/secondary-indexes.html
+/stable/getting-started/consistency.html: /stable/cql/consistency.html
+/stable/getting-started/compaction.html: /stable/cql/compaction.html
+/stable/getting-started/reserved-keywords.html: /stable/cql/reserved-keywords.html
+/stable/getting-started/non-reserved-keywords.html: /stable/cql/non-reserved-keywords.html
 
 ### scylladb/scylla-docs to scylladb/scylla-cloud-doc migration
 /scylla-cloud/index.html: https://cloud.docs.scylladb.com/stable/
@@ -318,7 +257,6 @@
 /operating-scylla/admin-tools/perftune/index.html: /stable/operating-scylla/admin-tools/perftune
 /operating-scylla/admin-tools/scylla-sstable/index.html: /stable/operating-scylla/admin-tools/scylla-sstable
 /operating-scylla/admin-tools/scylla-types/index.html: /stable/operating-scylla/admin-tools/scylla-types
-/operating-scylla/admin-tools/sstable-index/index.html: /stable/operating-scylla/admin-tools/sstable-index
 /operating-scylla/admin-tools/sstable2json/index.html: /stable/operating-scylla/admin-tools/sstable2json
 /operating-scylla/admin-tools/sstabledump/index.html: /stable/operating-scylla/admin-tools/sstabledump
 /operating-scylla/admin-tools/sstableloader/index.html: /stable/operating-scylla/admin-tools/sstableloader

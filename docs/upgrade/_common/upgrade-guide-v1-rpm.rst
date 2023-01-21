@@ -33,7 +33,7 @@ Apply the following procedure **serially** on each node. Do not move to the next
 **During** the rolling upgrade it is highly recommended:
 
 * Not to use new |NEW_VERSION| features
-* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See :doc:`here </operating-scylla/manager/2.1/sctool>` for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/index.html>`_ for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
 * Not to apply schema changes
 
 .. note:: Before upgrading, make sure to use |SCYLLA_MONITOR|_ or newer, for the Dashboards.
@@ -75,7 +75,7 @@ Stop Scylla
 
 Download and install the new release
 ------------------------------------
-Before upgrading, check what version you are running now using ``rpm -qa | grep scylla-server``. You should use the same version in case you want to `rollback <#rollback-procedure>`_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+Before upgrading, check what version you are running now using ``rpm -qa | grep scylla-server``. You should use the same version in case you want to :ref:`rollback <rollback-procedure>` the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
 To upgrade:
 
@@ -102,6 +102,8 @@ Validate
 Once you are sure the node upgrade is successful, move to the next node in the cluster.
 
 * More on |Scylla_METRICS|_
+
+.. _rollback-procedure:
 
 Rollback Procedure
 ==================

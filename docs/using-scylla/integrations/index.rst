@@ -33,18 +33,18 @@ Scylla Integrations and Connectors
   If you have tested your application with Scylla and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
 
 
-  * `Integrate Scylla with Spark <integration-spark>`_
-  * `Integrate Scylla with KairosDB <integration-kairos>`_
-  * `Integrate Scylla with Presto <integration-presto>`_
-  * `Integrate Scylla with Elasticsearch <integration-elasticsearch>`_
-  * `Integrate Scylla with Kubernetes <integration-k8>`_
-  * `Integrate Scylla with JanusGraph <integration-janus>`_
-  * `Integrate Scylla with DataDog <integration-datadog>`_
-  * `Integrate Scylla with Apache Kafka <integration-kafka>`_
-  * `Integrate Scylla with IOTA <integration-iota>`_
-  * `Integrate Scylla with Spring <integration-spring>`_
-  * `Install Scylla with Ansible <integration-ansible>`_
-  * `Integrate Scylla with Databricks <integration-databricks>`_
+  * :doc:`Integrate Scylla with Spark <integration-spark>`
+  * :doc:`Integrate Scylla with KairosDB <integration-kairos>`
+  * :doc:`Integrate Scylla with Presto <integration-presto>`
+  * :doc:`Integrate Scylla with Elasticsearch <integration-elasticsearch>`
+  * :doc:`Integrate Scylla with Kubernetes <integration-k8>`
+  * :doc:`Integrate Scylla with JanusGraph <integration-janus>`
+  * :doc:`Integrate Scylla with DataDog <integration-datadog>`
+  * :doc:`Integrate Scylla with Apache Kafka <integration-kafka>`
+  * :doc:`Integrate Scylla with IOTA <integration-iota>`
+  * :doc:`Integrate Scylla with Spring <integration-spring>`
+  * :doc:`Install Scylla with Ansible <integration-ansible>`
+  * :doc:`Integrate Scylla with Databricks <integration-databricks>`
 
 .. panel-box::
   :title: Scylla Connectors

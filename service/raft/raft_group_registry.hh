@@ -39,6 +39,7 @@ struct raft_server_for_group {
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
+    std::optional<seastar::future<>> aborted;
 };
 
 // This class is responsible for creating, storing and accessing raft servers.
@@ -50,6 +51,7 @@ class raft_group_registry : public seastar::peering_sharded_service<raft_group_r
 private:
     // True if the feature is enabled
     bool _is_enabled;
+
     netw::messaging_service& _ms;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
@@ -71,7 +73,7 @@ private:
 
     raft_server_for_group& server_for_group(raft::group_id id);
 
-    // Group 0 id, valid only on shard 0 after boot is over
+    // Group 0 id, valid only on shard 0 after boot/upgrade is over
     std::optional<raft::group_id> _group0_id;
 
 public:
@@ -95,17 +97,20 @@ public:
     raft::server& get_server(raft::group_id gid);
 
     // Return an instance of group 0. Valid only on shard 0,
-    // after boot is complete
+    // after boot/upgrade is complete
     raft::server& group0();
 
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);
+    void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map<>& address_map() { return _srv_address_mappings; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 
+    // Is the RAFT local feature enabled?
+    // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
     bool is_enabled() const { return _is_enabled; }
 };
 

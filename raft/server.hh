@@ -23,17 +23,29 @@ public:
         // automatically snapshot state machine after applying
         // this number of entries
         size_t snapshot_threshold = 1024;
-        // how many entries to leave in the log after tacking a snapshot
+        // Automatically snapshot state machine if the log memory usage exceeds this value.
+        // The value is in bytes.
+        // Must be smaller than max_log_size.
+        // It is recommended to set this value to no more than half of the max_log_size,
+        // so that snapshots are taken in advance and there is no backpressure due to max_log_size.
+        size_t snapshot_threshold_log_size = 2 * 1024 * 1024;
+        // how many entries to leave in the log after taking a snapshot
         size_t snapshot_trailing = 200;
+        // Limit on the total number of bytes, consumed by snapshot trailing entries.
+        // Must be smaller than snapshot_threshold_log_size.
+        // It is recommended to set this value to no more than half of snapshot_threshold_log_size
+        // so that not all memory is held for trailing when taking a snapshot.
+        size_t snapshot_trailing_size = 1 * 1024 * 1024;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
-        // Max number of entries of in-memory part of the log after
+        // Limit in bytes on the size of in-memory part of the log after
         // which requests are stopped to be admitted until the log
-        // is shrunk back by a snapshot. Should be greater than
-        // whatever the default number of trailing log entries
-        // is configured by the snapshot, otherwise the state
-        // machine will deadlock on attempt to submit a new entry.
-        size_t max_log_size = 5000;
+        // is shrunk back by a snapshot.
+        // The following condition must be satisfied:
+        // max_command_size <= max_log_size - snapshot_trailing_size
+        // this ensures that trailing log entries won't block incoming commands and at least
+        // one command can fit in the log
+        size_t max_log_size = 4 * 1024 * 1024;
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
         // If set to true, forward configuration and entries from
@@ -41,6 +53,16 @@ public:
         // add_entry()/modify_config() never throws not_a_leader,
         // but makes timed_out_error more likely.
         bool enable_forwarding = true;
+
+        // Max size of a single command, add_entry with a bigger command will throw command_is_too_big_error.
+        // The following condition must be satisfied:
+        // max_command_size <= max_log_size - snapshot_trailing_size
+        // this ensures that trailing log entries won't block incoming commands and at least
+        // one command can fit in the log
+        size_t max_command_size = 100 * 1024;
+        // A callback to invoke if one of internal server
+        // background activities has stopped because of an error.
+        std::function<void(std::exception_ptr e)> on_background_error;
     };
 
     virtual ~server() {}
@@ -93,7 +115,7 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
-    virtual future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) = 0;
+    virtual future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) = 0;
 
     // A simplified wrapper around set_configuration() which adds
     // and deletes servers. Unlike set_configuration(),
@@ -116,7 +138,7 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
-    virtual future<> modify_config(std::vector<server_address> add,
+    virtual future<> modify_config(std::vector<config_member> add,
         std::vector<server_id> del, seastar::abort_source* as = nullptr) = 0;
 
     // Return the currently known configuration
@@ -132,7 +154,7 @@ public:
     // to know if they succeeded or not. If this server was
     // a leader it will relinquish its leadership and cease
     // replication.
-    virtual future<> abort() = 0;
+    virtual future<> abort(sstring reason = "") = 0;
 
     // Return Raft protocol current term.
     virtual term_t get_current_term() const = 0;
@@ -165,6 +187,7 @@ public:
     virtual void tick() = 0;
     // Server id of this server
     virtual raft::server_id id() const = 0;
+    virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

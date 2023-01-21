@@ -590,7 +590,7 @@ private:
         size_t promoted_index_block_size;
         size_t promoted_index_auto_scale_threshold;
     } _pi_write_m;
-    utils::UUID _run_identifier;
+    run_id _run_identifier;
     bool _write_regular_as_static; // See #4139
     scylla_metadata::large_data_stats _large_data_stats;
 
@@ -1284,7 +1284,27 @@ stop_iteration writer::consume(clustering_row&& cr) {
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
     write_clustered(cr);
-    return stop_iteration::no;
+
+    auto can_split_partition_at_clustering_boundary = [this] {
+        // will allow size limit to be exceeded for 10%, so we won't perform unnecessary split
+        // of a partition which crossed the limit by a small margin.
+        uint64_t size_threshold = [this] {
+            const uint64_t max_size = std::numeric_limits<uint64_t>::max();
+            if (_cfg.max_sstable_size == max_size) {
+                return max_size;
+            }
+            uint64_t threshold_goal = _cfg.max_sstable_size * 1.1;
+            // handle overflow.
+            return threshold_goal < _cfg.max_sstable_size ? max_size : threshold_goal;
+        }();
+        // Check there are enough promoted index entries, meaning that current fragment won't
+        // unnecessarily cut the current partition in the middle.
+        bool has_enough_promoted_index_entries = _pi_write_m.promoted_index_size >= 2;
+
+        return get_data_offset() > size_threshold && has_enough_promoted_index_entries;
+    };
+
+    return stop_iteration(can_split_partition_at_clustering_boundary());
 }
 
 // Write clustering prefix along with its bound kind and, if not full, its size

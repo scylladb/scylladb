@@ -69,10 +69,7 @@ Other Restrictions
 ------------------
 
 When starting up, Scylla will check the hardware and operating system
-configuration to verify that it is compatible with Scylla's performance requirements. See `developer mode`_ for more instructions.
-
-..  _`developer mode`: /getting-started/install-scylla/dev_mod/
-
+configuration to verify that it is compatible with Scylla's performance requirements. See :doc:`developer mode </getting-started/install-scylla/dev-mod>` for more instructions.
 
 Summary
 -------

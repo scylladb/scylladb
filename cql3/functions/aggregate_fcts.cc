@@ -8,13 +8,22 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-
+#include "bytes.hh"
+#include "types.hh"
+#include "types/tuple.hh"
+#include "cql3/functions/scalar_function.hh"
+#include "cql_serialization_format.hh"
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
 #include "user_aggregate.hh"
 #include "functions.hh"
 #include "native_aggregate_function.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/multiprecision_int.hh"
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <type_traits>
 
 using namespace cql3;
 using namespace functions;
@@ -37,14 +46,36 @@ public:
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         ++_count;
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            _count = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return long_type->decompose(_count);
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc) {
+            auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
+            _count += other;
+        }
+    }
 };
 
 class count_rows_function final : public native_aggregate_function {
 public:
     count_rows_function() : native_aggregate_function(COUNT_ROWS_FUNCTION_NAME, long_type, {}) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_count_function>();
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<count_rows_function>();
+    };
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "count";
     }
@@ -66,6 +97,40 @@ struct int128_accumulator_for {
         }
         return ret;
     }
+
+    static data_value decompose_to_data_value(const type& acc) {
+        uint64_t upper = acc >> 64;
+        uint64_t lower = acc;
+
+        utils::multiprecision_int value(upper);
+        value = (value << 64) + lower;
+        return value;
+    }
+
+    static bytes_opt decompose(const data_value& value) {
+        return varint_type->decompose(value);
+    }
+
+    static bytes_opt decompose(const type& acc) {
+        return varint_type->decompose(decompose_to_data_value(acc));
+    }
+
+    static type cast_to_accumulator(const data_value& value) {
+        auto mint = value_cast<utils::multiprecision_int>(value);
+        uint64_t upper = (uint64_t)(mint >> 64);
+        uint64_t lower = (uint64_t)mint;
+
+        __int128 result = upper;
+        return (result << 64) | lower;
+    }
+
+    static type deserialize(const bytes_opt& acc) {
+        return cast_to_accumulator(varint_type->deserialize(*acc));
+    }
+
+    static shared_ptr<const abstract_type> data_type() {
+        return varint_type;
+    }
 };
 
 template <typename T>
@@ -74,6 +139,30 @@ struct same_type_accumulator_for {
 
     static T narrow(type acc) {
         return acc;
+    }
+
+    static data_value decompose_to_data_value(const type& acc) {
+        return narrow(acc);
+    }
+
+    static bytes_opt decompose(const data_value& value) {
+        return data_type_for<type>()->decompose(value);
+    }
+
+    static bytes_opt decompose(const type& acc) {
+        return data_type_for<type>()->decompose(decompose_to_data_value(acc));
+    }
+
+    static type cast_to_accumulator(const data_value& value) {
+        return value_cast<type>(value);
+    }
+
+    static type deserialize(const bytes_opt& acc) {
+        return cast_to_accumulator(data_type_for<type>()->deserialize(*acc));
+    }
+
+    static shared_ptr<const abstract_type> data_type() {
+        return data_type_for<T>();
     }
 };
 
@@ -85,12 +174,14 @@ struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
 
 class impl_user_aggregate : public aggregate_function::aggregate {
     ::shared_ptr<scalar_function> _sfunc;
+    ::shared_ptr<scalar_function> _rfunc;
     ::shared_ptr<scalar_function> _finalfunc;
     const bytes_opt _initcond;
     bytes_opt _acc;
 public:
-    impl_user_aggregate(bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
+    impl_user_aggregate(bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> rfunc, ::shared_ptr<scalar_function> finalfunc)
             : _sfunc(std::move(sfunc))
+            , _rfunc(std::move(rfunc))
             , _finalfunc(std::move(finalfunc))
             , _initcond(std::move(initcond))
             , _acc(_initcond)
@@ -106,10 +197,21 @@ public:
         args.insert(args.end(), values.begin(), values.end());
         _acc = _sfunc->execute(sf, args);
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        _acc = acc;
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return _acc;
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        std::vector<bytes_opt> args{_acc, acc};
+        _acc = _rfunc->execute(sf, args);
+    }
 };
 
 template <typename Type>
-class impl_sum_function_for final : public aggregate_function::aggregate {
+class impl_sum_function_for : public aggregate_function::aggregate {
+protected:
     using accumulator_type = typename accumulator_for<Type>::type;
     accumulator_type _sum{};
 public:
@@ -125,15 +227,59 @@ public:
         }
         _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            _sum = accumulator_for<Type>::deserialize(acc);
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return accumulator_for<Type>::decompose(_sum);
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc) {
+            auto other = accumulator_for<Type>::deserialize(acc);
+            _sum += other;
+        }
+    }
 };
 
 template <typename Type>
-class sum_function_for final : public native_aggregate_function {
+class impl_reducible_sum_function final : public impl_sum_function_for<Type> {
+public:
+    virtual bytes_opt compute(cql_serialization_format sf) override {
+        return this->get_accumulator();
+    }
+};
+
+template <typename Type>
+class sum_function_for : public native_aggregate_function {
 public:
     sum_function_for() : native_aggregate_function("sum", data_type_for<Type>(), { data_type_for<Type>() }) {}
+    sum_function_for(data_type return_type, std::vector<data_type> arg_types) 
+      : native_aggregate_function("sum", std::move(return_type), std::move(arg_types)) {}
+
+    virtual bool is_reducible() const override {
+        return true;
+    }
+
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_sum_function_for<Type>>();
     }
+
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        class reducible_sum_function : public sum_function_for<Type> {
+        public:
+            reducible_sum_function() : sum_function_for(accumulator_for<Type>::data_type(), { data_type_for<Type>() }) {}
+
+            virtual std::unique_ptr<aggregate> new_aggregate() override {
+                return std::make_unique<impl_reducible_sum_function<Type>>();
+            }
+        };
+
+        return ::make_shared<reducible_sum_function>();
+    };
 };
 
 
@@ -161,7 +307,8 @@ public:
 };
 
 template <typename Type>
-class impl_avg_function_for final : public aggregate_function::aggregate {
+class impl_avg_function_for : public aggregate_function::aggregate {
+protected:
    typename accumulator_for<Type>::type _sum{};
    int64_t _count = 0;
 public:
@@ -183,14 +330,72 @@ public:
         ++_count;
         _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            data_type tuple_type = tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type});
+            auto tuple = value_cast<tuple_type_impl::native_type>(tuple_type->deserialize(bytes_view(*acc)));
+
+            _sum = accumulator_for<Type>::cast_to_accumulator(tuple[0]);
+            _count = value_cast<int64_t>(tuple[1]);
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        data_value tuple_val = make_tuple_value(
+            tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type}),
+            {accumulator_for<Type>::decompose_to_data_value(_sum), data_value(_count)}
+        );
+        return tuple_val.serialize();
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc) {
+            data_type tuple_type = tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type});
+            auto tuple = value_cast<tuple_type_impl::native_type>(tuple_type->deserialize(bytes_view(*acc)));
+
+            _sum += accumulator_for<Type>::cast_to_accumulator(tuple[0]);
+            _count += value_cast<int64_t>(tuple[1]);
+        }
+    }
 };
 
 template <typename Type>
-class avg_function_for final : public native_aggregate_function {
+class impl_reducible_avg_function : public impl_avg_function_for<Type> {
+public:
+    virtual bytes_opt compute(cql_serialization_format sf) override {
+        return this->get_accumulator();
+    }
+};
+
+template <typename Type>
+class avg_function_for : public native_aggregate_function {
 public:
     avg_function_for() : native_aggregate_function("avg", data_type_for<Type>(), { data_type_for<Type>() }) {}
+    avg_function_for(data_type return_type, std::vector<data_type> arg_types) 
+      : native_aggregate_function("avg", std::move(return_type), std::move(arg_types)) {}
+
+    virtual bool is_reducible() const override {
+        return true;
+    }
+
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_avg_function_for<Type>>();
+    }
+
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        class reducible_avg_function : public avg_function_for<Type> {
+        public:
+            reducible_avg_function() : avg_function_for(
+                tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type}), 
+                { data_type_for<Type>() }
+            ) {}
+
+            virtual std::unique_ptr<aggregate> new_aggregate() override {
+                return std::make_unique<impl_reducible_avg_function<Type>>();
+            }
+        };
+
+        return ::make_shared<reducible_avg_function>();
     }
 };
 
@@ -269,6 +474,22 @@ public:
             _max = max_wrapper(*_max, val);
         }
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            _max = value_cast<typename aggregate_type_for<Type>::type>(data_type_for<Type>()->deserialize(*acc));
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        if (_max) {
+            return data_type_for<Type>()->decompose(data_value(Type{*_max}));
+        }
+        return {};
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        return add_input(sf, {acc});
+    }
 };
 
 /// The same as `impl_max_function_for' but without compile-time dependency on `Type'.
@@ -288,9 +509,21 @@ public:
         if (values.empty() || !values[0]) {
             return;
         }
-        if (!_max || _io_type->less(*_max, *values[0])) {
+        if (!_max || !_max->length() || _io_type->less(*_max, *values[0])) {
             _max = values[0];
         }
+    }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        _max = acc;
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return _max;
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc && !acc->length()) {
+            return;
+        }
+        return add_input(sf, {acc});
     }
 };
 
@@ -298,9 +531,15 @@ template <typename Type>
 class max_function_for final : public native_aggregate_function {
 public:
     max_function_for() : native_aggregate_function("max", data_type_for<Type>(), { data_type_for<Type>() }) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_max_function_for<Type>>();
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<max_function_for<Type>>();
+    };
 };
 
 class max_dynamic_function final : public native_aggregate_function {
@@ -309,9 +548,15 @@ public:
     max_dynamic_function(data_type io_type)
             : native_aggregate_function("max", io_type, { io_type })
             , _io_type(std::move(io_type)) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }            
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_max_dynamic_function>(_io_type);
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<max_dynamic_function>(_io_type);
+    };
 };
 
 /**
@@ -370,6 +615,22 @@ public:
             _min = min_wrapper(*_min, val);
         }
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            _min = value_cast<typename aggregate_type_for<Type>::type>(data_type_for<Type>()->deserialize(*acc));
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        if (_min) {
+            return data_type_for<Type>()->decompose(data_value(Type{*_min}));
+        }
+        return {};
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        return add_input(sf, {acc});
+    }
 };
 
 /// The same as `impl_min_function_for' but without compile-time dependency on `Type'.
@@ -389,9 +650,21 @@ public:
         if (values.empty() || !values[0]) {
             return;
         }
-        if (!_min || _io_type->less(*values[0], *_min)) {
+        if (!_min || !_min->length() || _io_type->less(*values[0], *_min)) {
             _min = values[0];
         }
+    }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        _min = acc;
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return _min;
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc && !acc->length()) {
+            return;
+        }
+        return add_input(sf, {acc});
     }
 };
 
@@ -399,9 +672,15 @@ template <typename Type>
 class min_function_for final : public native_aggregate_function {
 public:
     min_function_for() : native_aggregate_function("min", data_type_for<Type>(), { data_type_for<Type>() }) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_min_function_for<Type>>();
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<min_function_for<Type>>();
+    };
 };
 
 class min_dynamic_function final : public native_aggregate_function {
@@ -410,9 +689,15 @@ public:
     min_dynamic_function(data_type io_type)
             : native_aggregate_function("min", io_type, { io_type })
             , _io_type(std::move(io_type)) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_min_dynamic_function>(_io_type);
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<min_dynamic_function>(_io_type);
+    };
 };
 
 /**
@@ -444,15 +729,37 @@ public:
         }
         ++_count;
     }
+    virtual void set_accumulator(const opt_bytes& acc) override {
+        if (acc) {
+            _count = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
+        } else {
+            reset();
+        }
+    }
+    virtual opt_bytes get_accumulator() const override {
+        return long_type->decompose(_count);
+    }
+    virtual void reduce(cql_serialization_format sf, const opt_bytes& acc) override {
+        if (acc) {
+            auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
+            _count += other;
+        }
+    }
 };
 
 template <typename Type>
 class count_function_for final : public native_aggregate_function {
 public:
     count_function_for() : native_aggregate_function("count", long_type, { data_type_for<Type>() }) {}
+    virtual bool is_reducible() const override {
+        return true;
+    }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_count_function_for<Type>>();
     }
+    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
+        return ::make_shared<count_function_for<Type>>();
+    };
 };
 
 /**
@@ -482,20 +789,28 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
     return ffunc ? ffunc->return_type() : sfunc->return_type();
 }
 
-user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
+user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
         : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), uda_return_type(finalfunc, sfunc))
         , _initcond(std::move(initcond))
         , _sfunc(std::move(sfunc))
+        , _reducefunc(std::move(reducefunc))
         , _finalfunc(std::move(finalfunc))
 {}
 
 std::unique_ptr<aggregate_function::aggregate> user_aggregate::new_aggregate() {
-    return std::make_unique<impl_user_aggregate>(_initcond, _sfunc, _finalfunc);
+    return std::make_unique<impl_user_aggregate>(_initcond, _sfunc, _reducefunc, _finalfunc);
+}
+
+::shared_ptr<aggregate_function> user_aggregate::reducible_aggregate_function() {
+    auto name = _name;
+    name.name += "_reducible";
+    return ::make_shared<user_aggregate>(name, _initcond, _sfunc, _reducefunc, nullptr);
 }
 
 bool user_aggregate::is_pure() const { return _sfunc->is_pure() && (!_finalfunc || _finalfunc->is_pure()); }
 bool user_aggregate::is_native() const { return false; }
 bool user_aggregate::is_aggregate() const { return true; }
+bool user_aggregate::is_reducible() const { return _reducefunc != nullptr; }
 bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || (_finalfunc && _finalfunc->requires_thread()); }
 bool user_aggregate::has_finalfunc() const { return _finalfunc != nullptr; }
 

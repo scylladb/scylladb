@@ -78,11 +78,13 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
     std::set<mutation, mutation_decorated_key_less_comparator> merged;
     for (auto&& m : muts) {
-        auto result = merged.insert(m);
-        if (!result.second) {
-            auto old = *result.first;
-            merged.erase(result.first);
-            merged.insert(old + m);
+        auto it = merged.find(m);
+        if (it == merged.end()) {
+            merged.insert(std::move(m));
+        } else {
+            auto old = merged.extract(it);
+            old.value().apply(std::move(m));
+            merged.insert(std::move(old));
         }
     }
 
@@ -207,27 +209,29 @@ compaction_manager_for_testing::wrapped_compaction_manager::~wrapped_compaction_
 }
 
 class compaction_manager::compaction_manager_test_task : public compaction_manager::task {
-    utils::UUID _run_id;
+    sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
 
 public:
-    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, utils::UUID run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction_manager::task(cm, cf, sstables::compaction_type::Compaction, "Test compaction")
+    compaction_manager_test_task(compaction_manager& cm, replica::column_family* cf, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
+        : compaction_manager::task(cm, &cf->as_table_state(), sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }
 
 protected:
-    virtual future<> do_run() override {
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         setup_new_compaction(_run_id);
-        return _job(_compaction_data);
+        return _job(_compaction_data).then([] {
+            return make_ready_future<compaction_stats_opt>(std::nullopt);
+        });
     }
 };
 
-future<> compaction_manager_test::run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+future<> compaction_manager_test::run(sstables::run_id output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, cf, output_run_id, std::move(job));
     auto& cdata = register_compaction(task);
-    return task->run().finally([this, &cdata] {
+    return task->run().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
     });
 }

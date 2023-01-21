@@ -14,6 +14,7 @@
 #include <seastar/core/timer.hh>
 #include <iosfwd>
 #include "seastarx.hh"
+#include "estimated_histogram.hh"
 
 namespace utils {
 /**
@@ -118,9 +119,13 @@ public:
      * Return true if the current event should be sample.
      * In the typical case, there is no need to use this method
      * Call set_latency, that would start a latency object if needed.
+     *
+     * Typically, sample_mask is of the form of 2^n-1 which would
+     * mean that we sample one of 2^n, but setting sample_mask to zero
+     * would mean we would always sample.
      */
-    bool should_sample() const {
-        return total == 0 || (started & sample_mask);
+    bool should_sample() const noexcept {
+        return total == 0 || ((started & sample_mask) == sample_mask);
     }
     /**
      * Set the latency according to the sample rate.
@@ -196,6 +201,25 @@ inline basic_ihistogram<Unit> operator +(basic_ihistogram<Unit> a, const basic_i
 
 using ihistogram = basic_ihistogram<std::chrono::microseconds>;
 
+/*!
+ * \brief a helper timer class for the metering functionality
+ *
+ * To make an object use a timer, include an instance of this
+ * class and set a handler at its constructor.
+ */
+class meter_timer {
+    std::function<void()> _fun;
+    timer<> _timer;
+public:
+    static constexpr latency_counter::duration tick_interval() {
+        return std::chrono::seconds(10);
+    }
+
+    meter_timer(std::function<void()>&& fun) : _fun(std::move(fun)), _timer(_fun) {
+        _timer.arm_periodic(tick_interval());
+    }
+};
+
 struct rate_moving_average {
     uint64_t count = 0;
     double rates[3] = {0};
@@ -216,22 +240,14 @@ inline rate_moving_average operator+ (rate_moving_average a, const rate_moving_a
     return a;
 }
 
-class timed_rate_moving_average {
-    static constexpr latency_counter::duration tick_interval() {
-        return std::chrono::seconds(10);
-    }
-    moving_average rates[3] = {{std::chrono::minutes(1), tick_interval()}, {std::chrono::minutes(5), tick_interval()}, {std::chrono::minutes(15), tick_interval()}};
+class rates_moving_average {
     latency_counter::time_point start_time;
-    timer<> _timer;
-
+    moving_average rates[3] = {{std::chrono::minutes(1), meter_timer::tick_interval()}, {std::chrono::minutes(5), meter_timer::tick_interval()}, {std::chrono::minutes(15), meter_timer::tick_interval()}};
 public:
     // _count is public so the collectd will be able to use it.
     // for all other cases use the count() method
     uint64_t _count = 0;
-    timed_rate_moving_average() : start_time(latency_counter::now()), _timer([this] {
-        update();
-    }) {
-        _timer.arm_periodic(tick_interval());
+    rates_moving_average() : start_time(latency_counter::now()) {
     }
 
     void mark(uint64_t n = 1) {
@@ -260,7 +276,7 @@ public:
         return res;
     }
 
-    void update() {
+    void update() noexcept {
         for (int i = 0; i < 3; i++) {
             rates[i].update();
         }
@@ -271,6 +287,128 @@ public:
     }
 };
 
+/*!
+ * \brief A timed wrapper for the rates moving average.
+ *
+ * This is a wrapper for the rates_moving_average class. It uses a meter_timer
+ * to update the rates_moving_average periodically.
+ */
+class timed_rate_moving_average {
+    rates_moving_average _rates;
+    meter_timer _timer;
+public:
+    timed_rate_moving_average() : _timer([this]{_rates.update();}) {
+
+    }
+    rates_moving_average& operator()() noexcept {
+        return _rates;
+    }
+    const rates_moving_average& operator()() const noexcept {
+        return _rates;
+    }
+    void mark(uint64_t n = 1) noexcept {
+        _rates.mark(n);
+    }
+
+    uint64_t count() const noexcept {
+        return _rates.count();
+    }
+
+    rate_moving_average rate() const noexcept {
+        return _rates.rate();
+    }
+};
+
+/*!
+ * \brief A class for a histogram-based summary calculation.
+ *
+ * A summary is a histogram where each bucket holds some quantile.
+ * While a histogram typically holds values from the system start,
+ * a summary is defined over some duration (i.e., latencies in the last 10 seconds).
+ * To calculate a summary, we use two estimated-histograms, calculate their delta, and get the
+ * summary from that delta histogram.
+ *
+ */
+class summary_calculator {
+    std::vector<double> _quantiles = { 0.5, 0.95, 0.99};
+    std::vector<double> _summary = { 0, 0, 0};
+    time_estimated_histogram _previous_histogram;
+    time_estimated_histogram _current_histogram;
+public:
+    /*!
+     * \brief update the summary and histograms
+     *
+     * The update method is called every time tick.
+     * When done, _previous_histogram would equal _current_histogram
+     * and the _summary would contain the current _summary calculation
+     *
+     * The calculation is done in two stages. first, we determine what is
+     * the cutoff for each quantile, for example, assume that there are new 1000
+     * entries and the quantiles are 0.5, 0.95 and 0.99
+     * The cutoffs will be 500, 950, and 990. We reuse the _summary array
+     * to hold these values.
+     *
+     * Second, while coping the _current_histogram to the _previous_histogram,
+     * we collect the diffs. Each time we cross a cutoff value, we update the
+     * _summary with the bucket limit (i.e., the latency value).
+     *
+     * To continue the previous example, if the first 3 diffs had the values:
+     * 10, 300, 200. When reaching the third one, the total diff will be 510,
+     * and we set the summary[0] as the third bucket limit.
+     *
+     */
+    void update() {
+        auto new_entries = _current_histogram.count() - _previous_histogram.count();
+        if (new_entries == 0) {
+            clear();
+            return;
+        }
+        for (size_t i = 0; i < _quantiles.size(); i++ ) {
+            _summary[i] = _quantiles[i] * new_entries;
+        }
+        size_t pos = 0;
+        size_t total_diff = 0;
+
+        for (size_t i = 0; i < _current_histogram.size(); i++) {
+            total_diff += _current_histogram[i] - _previous_histogram[i];
+            while (pos < _summary.size() && total_diff >= _summary[pos]) {
+                _summary[pos] = _current_histogram.get_bucket_upper_limit(i);
+                pos++;
+            }
+            _previous_histogram[i] = _current_histogram[i];
+        }
+    }
+
+    const std::vector<double>& quantiles() const noexcept {
+        return _quantiles;
+    }
+
+    void clear() {
+        for (size_t i =0; i< _summary.size(); i++) {
+            _summary[i] = 0;
+        }
+    }
+    void set_quantiles(const std::vector<double>& quantiles) {
+        _quantiles = quantiles;
+        _summary.resize(quantiles.size());
+        clear();
+    }
+
+    const std::vector<double>& summary() const noexcept {
+        return _summary;
+    }
+
+    template <typename Rep, typename Ratio>
+    void mark(std::chrono::duration<Rep, Ratio> dur) {
+        if (std::chrono::duration_cast<ihistogram::duration_unit>(dur).count() >= 0) {
+            _current_histogram.add(dur);
+        }
+    }
+
+    const time_estimated_histogram& histogram() const noexcept {
+        return _current_histogram;
+    }
+};
 
 struct rate_moving_average_and_histogram {
     ihistogram hist;
@@ -307,13 +445,13 @@ public:
     void mark(std::chrono::duration<Rep, Ratio> dur) {
         if (std::chrono::duration_cast<ihistogram::duration_unit>(dur).count() >= 0) {
             hist.mark(dur);
-            met.mark();
+            met().mark();
         }
     }
 
     void mark(latency_counter& lc) {
         hist.mark(lc);
-        met.mark();
+        met().mark();
     }
 
     void set_latency(latency_counter& lc) {
@@ -323,8 +461,93 @@ public:
     rate_moving_average_and_histogram rate() const {
         rate_moving_average_and_histogram res;
         res.hist = hist;
-        res.rate = met.rate();
+        res.rate = met().rate();
         return res;
+    }
+};
+
+/**
+ * \brief A unified timer-based histogram rate and summary collector.
+ *
+ * This timer metric handles all latencies histogram options for the API and the metrics layer.
+ *
+ * The metrics layer requires a histogram of the values from the system start and a quantile
+ * summary from the last time tick.
+ *
+ * The API requires a moving average and its kind of histogram (ihistogram)
+ *
+ * This class will replace timed_rate_moving_average_and_histogram and share the same API.
+ *
+ * The summary calculation is per some interval, that interval should be reasonable, by default
+ * it is set to 30s, but can be set to something else.
+ * Because it is different than the tick_interval _match_duration holds once in every how
+ * many times the summary should be updated.
+ *
+ */
+class timed_rate_moving_average_summary_and_histogram {
+    meter_timer _timer;
+    summary_calculator _summary;
+    rates_moving_average _rates;
+    size_t _match_duration = 0;
+    size_t _last_update = 0;
+public:
+    ihistogram hist;
+    timed_rate_moving_average_summary_and_histogram(latency_counter::duration d = std::chrono::seconds(30)) : _timer([this]{
+        _rates.update();
+        _summary.update();}) {
+        _match_duration = d/meter_timer::tick_interval();
+    }
+    rates_moving_average& operator()() noexcept {
+        return _rates;
+    }
+    const rates_moving_average& operator()() const noexcept {
+        return _rates;
+    }
+
+    timed_rate_moving_average_summary_and_histogram(timed_rate_moving_average_summary_and_histogram&&) = default;
+    timed_rate_moving_average_summary_and_histogram(const timed_rate_moving_average_summary_and_histogram&) = default;
+    timed_rate_moving_average_summary_and_histogram(size_t size) : _timer([this]{
+        _rates.update();
+        _last_update++;
+        if (_last_update < _match_duration) {
+            return;
+        }
+        _last_update = 0;
+        _summary.update();}), hist(size, 0) {
+    }
+    timed_rate_moving_average_summary_and_histogram& operator=(const timed_rate_moving_average_summary_and_histogram&) = default;
+
+    template <typename Rep, typename Ratio>
+    void mark(std::chrono::duration<Rep, Ratio> dur) noexcept {
+        if (std::chrono::duration_cast<ihistogram::duration_unit>(dur).count() >= 0) {
+            hist.mark(dur);
+            _summary.mark(dur);
+            _rates.mark();
+        }
+    }
+
+    void mark(latency_counter& lc) noexcept {
+        hist.mark(lc);
+        _summary.mark(lc.latency());
+        _rates.mark();
+    }
+
+    void set_latency(latency_counter& lc) noexcept {
+        hist.set_latency(lc);
+    }
+
+    rate_moving_average_and_histogram rate() const noexcept {
+        rate_moving_average_and_histogram res;
+        res.hist = hist;
+        res.rate = _rates.rate();
+        return res;
+    }
+    const time_estimated_histogram& histogram() const noexcept {
+        return _summary.histogram();
+    }
+
+    const summary_calculator& summary() const noexcept {
+        return _summary;
     }
 };
 

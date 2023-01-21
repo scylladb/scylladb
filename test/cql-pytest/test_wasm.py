@@ -9,7 +9,7 @@
 
 from cassandra.protocol import InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from util import new_test_table, unique_name, new_function
+from util import new_test_table, unique_name, new_function, new_aggregate
 
 import pytest
 import requests
@@ -54,6 +54,8 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
       (call ${fib_name} (i64.sub (local.get $n) (i64.const 2)))
     )
   )
+  (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{fib_name}" (func ${fib_name}))
 )
 """
@@ -155,6 +157,7 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{inf_loop_name}" (func ${inf_loop_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -185,6 +188,7 @@ def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{dec_double_name}" (func ${dec_double_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -211,6 +215,7 @@ def test_f32_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{inc_float_name}" (func ${inc_float_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -236,6 +241,7 @@ def test_bool_negate(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{negate_name}" (func ${negate_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -266,6 +272,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{plus_name}" (func ${plus_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -289,6 +296,48 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
         # Overflow is fine
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 43")]
         assert len(res) == 1 and res[0].result == -9535
+    # Check whether we can use a different function under the same name
+    wat_path = os.path.realpath(os.path.join(__file__, '../../resource/wasm/plus42.wat'))
+    plus42_source = open(wat_path, 'r').read().replace('export "plus42"', f'export "{plus_name}"')
+    plus42_src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE xwasm AS '{plus42_source}'"
+    # Repeat a number of times so the wasm instances get cached on all shards
+    with new_function(cql, test_keyspace, src, plus_name):
+        for _ in range(100):
+            res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 42")]
+            assert len(res) == 1 and res[0].result == 88
+    with new_function(cql, test_keyspace, plus42_src, plus_name):
+        for _ in range(100):
+            res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 42")]
+            assert len(res) == 1 and res[0].result == 88 + 42
+
+    # Check whether we can use another function with the same name but different signature
+    plusplus_source = f"""
+(module
+  (type (;0;) (func (param i32 i32 i32) (result i32)))
+  (func ${plus_name} (type 0) (param i32 i32 i32) (result i32)
+    local.get 2
+    local.get 1
+    i32.add
+    local.get 0
+    i32.add)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{plus_name}" (func ${plus_name}))
+  (global (;0;) i32 (i32.const 1024))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    plusplus_src = f"(input smallint, input2 smallint, input3 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE xwasm AS '{plusplus_source}'"
+    # Repeat a number of times so the wasm instances get cached on all shards
+    with new_function(cql, test_keyspace, src, plus_name):
+        for _ in range(100):
+            res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 42")]
+            assert len(res) == 1 and res[0].result == 88
+    with new_function(cql, test_keyspace, plusplus_src, plus_name):
+        for _ in range(100):
+            res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s, s2) AS result FROM {table} WHERE p = 42")]
+            assert len(res) == 1 and res[0].result == 121
 
 # Test that passing a large number of params works fine
 def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
@@ -318,6 +367,7 @@ def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (export "{sum9_name}" (func ${sum9_name}))
   (elem (;0;) (i32.const 0) func)
   (global (;0;) i32 (i32.const 1024))
@@ -387,6 +437,7 @@ def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
   (table (;0;) 1 1 funcref)
   (table (;1;) 32 externref)
   (memory (;0;) 17)
+  (export "memory" (memory 0))
   (global (;0;) i32 (i32.const 1024))
   (export "{pow_name}" (func ${pow_name}))
   (elem (;0;) (i32.const 0) func)
@@ -527,6 +578,8 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
         cql.execute(f"INSERT INTO {table} (p, txt) VALUES (1001, 'cat42')")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{dbl_name}(txt) AS result FROM {table} WHERE p = 1001")]
         assert len(res) == 1 and res[0].result == 'cat42cat42'
+        res = [row for row in cql.execute(f"SELECT {test_keyspace}.{dbl_name}(txt) AS result FROM {table} WHERE p IN (1000, 1001)")]
+        assert len(res) == 2 and (res[0].result == 'cat42cat42' and res[1].result == 'doggodoggo' or res[0].result == 'doggodoggo' and res[1].result == 'cat42cat42')
 
 # Test that calling a wasm-based function works with ABI version 2.
 # The function returns the input. It's compatible with all data types represented by size + pointer.
@@ -568,3 +621,469 @@ def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (2000, 'doggo')")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{ri_name}(txt) AS result FROM {table} WHERE p = 2000")]
         assert len(res) == 1 and res[0].result == 'doggo'
+
+@pytest.fixture(scope="module")
+def metrics(request, scylla_with_wasm_only):
+    url = request.config.getoption('host')
+    # The Prometheus API is on port 9180, and always http
+    url = 'http://' + url + ':9180/metrics'
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        pytest.skip('Metrics port 9180 is not available')
+    yield url
+
+def get_metrics(metrics):
+    response = requests.get(metrics)
+    assert response.status_code == 200
+    return response.text
+
+def get_metric(metrics, name, requested_labels=None, the_metrics=None):
+    if not the_metrics:
+        the_metrics = get_metrics(metrics)
+    total = 0.0
+    lines = re.compile('^'+name+'{.*$', re.MULTILINE)
+    for match in re.findall(lines, the_metrics):
+        a = match.split()
+        metric = a[0]
+        val = float(a[1])
+        # Check if match also matches the requested labels
+        if requested_labels:
+            # we know metric begins with name{ and ends with } - the labels
+            # are what we have between those
+            got_labels = metric[len(name)+1:-1].split(',')
+            # Check that every one of the requested labels is in got_labels:
+            for k, v in requested_labels.items():
+                if not f'{k}="{v}"' in got_labels:
+                    # No match for requested label, skip this metric (python
+                    # doesn't have "continue 2" so let's just set val to 0...
+                    val = 0
+                    break
+        total += float(val)
+    return total
+
+# Test that calling a wasm-based aggregate works.
+# The aggregate calculates the average of integers.
+# Created with scalar function:
+# const int _scylla_abi = 1;
+
+# static int swap_int32(int val) {
+#     val = ((val << 8) & 0xFF00FF00 ) | ((val >> 8) & 0x00FF00FF );
+#     return (val << 16) | ((val >> 16) & 0xFFFF);
+# }
+
+# long long sum(long long acc, long long p) {
+#     int size = p >> 32;
+#     int accsize = acc >> 32;
+#     if (size != 4 || accsize != 16) {
+#         return acc;
+#     }
+#     int p_val = swap_int32(*(int*)(p & 0xffffffff));
+#     int* acc_val_cnt = (int*)((acc + 4) & 0xffffffff);
+#     int* acc_val_sum = (int*)((acc + 12) & 0xffffffff);
+#     *acc_val_cnt = swap_int32(1 + swap_int32(*acc_val_cnt));
+#     *acc_val_sum = swap_int32(p_val + swap_int32(*acc_val_sum));
+#     return acc;
+# }
+
+# ... and compiled with
+# clang --target=wasm32 --no-standard-libraries -Wl,--export=sum -Wl,--export=_scylla_abi -Wl,--no-entry scalar.c -o scalar.wasm
+# wasm2wat scalar.wasm > scalar.wat
+
+# And final function:
+# const int _scylla_abi = 1;
+
+# static int swap_int32(int val) {
+#     val = ((val << 8) & 0xFF00FF00 ) | ((val >> 8) & 0x00FF00FF );
+#     return (val << 16) | ((val >> 16) & 0xFFFF);
+# }
+
+# long long div(long long acc) {
+#     int accsize = acc >> 32;
+#     if (accsize != 16) {
+#         long long ret = -1;
+#         return ret << 32;
+#     }
+#     int* acc_val_cnt = (int*)((acc + 4) & 0xffffffff);
+#     int* acc_val_sum = (int*)((acc + 12) & 0xffffffff);
+#     int cnt = swap_int32(*acc_val_cnt);
+#     int sum = swap_int32(*acc_val_sum);
+#     float ret_val = (float)sum / cnt;
+#     *acc_val_cnt = swap_int32(*((unsigned int*)&ret_val));
+#     acc = 4ll << 32 | (int)acc_val_cnt;
+#     return acc;
+# }
+
+
+# ... and compiled with
+# clang --target=wasm32 --no-standard-libraries -Wl,--export=div -Wl,--export=_scylla_abi -Wl,--no-entry final.c -o final.wasm
+# wasm2wat final.wasm > final.wat
+
+
+def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
+    table = table1
+    sum_name = unique_name()
+    sum_source = f"""
+(module
+  (type (;0;) (func (param i64 i64) (result i64)))
+  (func (;0;) (type 0) (param i64 i64) (result i64)
+    (local i32 i32 i32)
+    block  ;; label = @1
+      local.get 1
+      i64.const -4294967296
+      i64.and
+      i64.const 17179869184
+      i64.ne
+      br_if 0 (;@1;)
+      local.get 0
+      i64.const -4294967296
+      i64.and
+      i64.const 68719476736
+      i64.ne
+      br_if 0 (;@1;)
+      local.get 1
+      i32.wrap_i64
+      i32.load
+      local.set 3
+      local.get 0
+      i32.wrap_i64
+      local.tee 4
+      i32.const 4
+      i32.add
+      local.tee 2
+      local.get 2
+      i32.load
+      local.tee 2
+      i32.const 24
+      i32.shl
+      local.get 2
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 2
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 2
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      i32.const 1
+      i32.add
+      local.tee 2
+      i32.const 24
+      i32.shl
+      local.get 2
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 2
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 2
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      i32.store
+      local.get 4
+      i32.const 12
+      i32.add
+      local.tee 2
+      local.get 2
+      i32.load
+      local.tee 2
+      i32.const 24
+      i32.shl
+      local.get 2
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 2
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 2
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      local.get 3
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      local.get 3
+      i32.const 24
+      i32.shl
+      i32.or
+      local.get 3
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 3
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      i32.add
+      local.tee 3
+      i32.const 24
+      i32.shl
+      local.get 3
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 3
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 3
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      i32.store
+    end
+    local.get 0)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{sum_name}" (func 0))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    sum_src = f"(acc tuple<int, int>, input int) CALLED ON NULL INPUT RETURNS tuple<int,int> LANGUAGE xwasm AS '{sum_source}'"
+
+    div_name = unique_name()
+    div_source = f"""
+(module
+  (type (;0;) (func (param i64) (result i64)))
+  (func (;0;) (type 0) (param i64) (result i64)
+    (local i32 i32 i64)
+    i64.const -4294967296
+    local.set 3
+    local.get 0
+    i64.const -4294967296
+    i64.and
+    i64.const 68719476736
+    i64.eq
+    if (result i64)  ;; label = @1
+      local.get 0
+      i32.wrap_i64
+      local.tee 1
+      i32.const 4
+      i32.add
+      local.tee 2
+      local.get 1
+      i32.const 12
+      i32.add
+      i32.load
+      local.tee 1
+      i32.const 24
+      i32.shl
+      local.get 1
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 1
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 1
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      f32.convert_i32_s
+      local.get 2
+      i32.load
+      local.tee 1
+      i32.const 24
+      i32.shl
+      local.get 1
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 1
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 1
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      f32.convert_i32_s
+      f32.div
+      i32.reinterpret_f32
+      local.tee 1
+      i32.const 24
+      i32.shl
+      local.get 1
+      i32.const 8
+      i32.shl
+      i32.const 16711680
+      i32.and
+      i32.or
+      local.get 1
+      i32.const 8
+      i32.shr_u
+      i32.const 65280
+      i32.and
+      local.get 1
+      i32.const 24
+      i32.shr_u
+      i32.or
+      i32.or
+      i32.store
+      local.get 2
+      i64.extend_i32_s
+      i64.const 17179869184
+      i64.or
+    else
+      local.get 3
+    end)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{div_name}" (func 0))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    div_src = f"(acc tuple<int, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{div_source}'"
+    for i in range(20):
+      cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES ({i}, {i}, {i})")
+    with new_function(cql, test_keyspace, sum_src, sum_name), new_function(cql, test_keyspace, div_src, div_name):
+        agg_body = f"(int) SFUNC {sum_name} STYPE tuple<int,int> FINALFUNC {div_name} INITCOND (0,0)"
+        hits_before = get_metric(metrics, 'scylla_user_functions_cache_hits')
+        with new_aggregate(cql, test_keyspace, agg_body) as custom_avg:
+          custom_res = [row for row in cql.execute(f"SELECT {test_keyspace}.{custom_avg}(i) AS result FROM {table}")]
+          avg_res = [row for row in cql.execute(f"SELECT avg(cast(i as float)) AS result FROM {table}")]
+          assert custom_res == avg_res
+          hits_after = get_metric(metrics, 'scylla_user_functions_cache_hits')
+          assert hits_after - hits_before >= 1
+          misses_before_reuse = get_metric(metrics, 'scylla_user_functions_cache_misses')
+          for i in range(100):
+            custom_res = [row for row in cql.execute(f"SELECT {test_keyspace}.{custom_avg}(i2) AS result FROM {table}")]
+            avg_res = [row for row in cql.execute(f"SELECT avg(cast(i2 as float)) AS result FROM {table}")]
+            assert custom_res == avg_res
+
+          res = [row for row in cql.execute(f"SELECT i2 AS result FROM {table}")]
+
+          misses_after_reuse = get_metric(metrics, 'scylla_user_functions_cache_misses')
+          # Sum of hits and misses should equal the total number of UDF calls, which is one row function call for
+          # each of the table elements and one additional call for the final function, both multiplied by the number of repetitions.
+          assert misses_after_reuse - misses_before_reuse + get_metric(metrics, 'scylla_user_functions_cache_hits') - hits_after == 100 * (1 + len(res))
+          # Each shard has its own cache, so check if at least one shard reuses the cache without excessive missing.
+          # Misses caused by replacing an instance that can no longer be used can be justified, we estimate that this happens
+          # once every 7 calls for row function calls (memory has 2 initial pages, 2 pages are added for 2 arguments, max instance
+          # size = 16 pages) and once every 14 calls for final function calls (1 page is added for each call in this case).
+          # Additionally, 2 misses are expected for each of the 2 shards, for the first calls of row and final functions.
+          assert misses_after_reuse - misses_before_reuse <= 4 + 100 * len(res) / 7 + 100 / 14
+
+# Test that wasm instances are removed from the cache when:
+# - a single instance is too big
+# - the instances in cache consume too much memory in total
+# - the instance hasn't been used for a long time
+# FIXME: shorten the wait time when such configuration becomes possible
+
+# The function grows the memory by n pages and returns n.
+# Compiled from:
+# const int _scylla_abi = 1;
+
+# int grow_mem(int val) {
+#     __builtin_wasm_memory_grow(0, val);
+#     return val;
+# }
+#
+# with:
+# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=grow_mem -Wl,--export=_scylla_abi -Wl,--no-entry grow_mem.c -o grow_mem.wasm
+# $ wasm2wat grow_mem.wasm > grow_mem.wat
+@pytest.mark.skip(reason="slow test, remove skip to try it anyway")
+def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
+    table = table1
+    mem_grow_name = "mem_grow_" + unique_name()
+    mem_grow_source = f"""
+(module
+  (type (;0;) (func (param i32) (result i32)))
+  (func ${mem_grow_name} (type 0) (param i32) (result i32)
+    local.get 0
+    memory.grow
+    drop
+    local.get 0)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{mem_grow_name}" (func ${mem_grow_name}))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    src = f"(pages int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{mem_grow_source}'"
+    with new_function(cql, test_keyspace, src, mem_grow_name):
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (8, 8)")
+        for i in range(512):
+            cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 8")
+            # We grow the memory by 10 pages, each page is 64KiB, so in total we'll grow 512*8*64*1024=256MiB
+            # The default memory limit is 128MiB, so assert we're staying under that anyway
+            assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') <= 128*1024*1024)
+
+        # Wait for all instances to time out
+        import time
+        time.sleep(10)
+        assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') == 0)
+
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (100, 100)")
+        cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 100")
+        # A memory of 100+ pages is too big for the cache, so assert that it's not cached
+        assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') == 0)
+
+# Test that all wasm instance entries are removed from the cache when the correlating UDF is dropped,
+# to avoid using excessive memory for unused UDFs.
+# The first UDF used returns the input integer.
+def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
+    table = table1
+    ret_name = "ret_" + unique_name()
+    ret_source = f"""
+(module
+  (type (;0;) (func (param i64) (result i64)))
+  (func $ret_name (type 0) (param i64) (result i64)
+    local.get 0)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "ret_name" (func $ret_name))
+  (export "_scylla_abi" (global 0))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{ret_source}'"
+    cql.execute(f"INSERT INTO {table} (p) VALUES (42)")
+    for _ in range(10):
+        ret_name = "ret_" + unique_name()
+        with new_function(cql, test_keyspace, src.replace('ret_name', ret_name), ret_name):
+            cql.execute(f"SELECT {test_keyspace}.{ret_name}(p) AS result FROM {table} WHERE p = 42")
+            assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') > 0)
+        assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') == 0)
+
+
+

@@ -1030,7 +1030,7 @@ sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, s
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now());
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
     return result;
 }
 
@@ -2585,7 +2585,8 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                     source = make_forwardable(std::move(source));
                 }
                 auto mr = make_compacting_reader(std::move(source), query_time,
-                        [] (const dht::decorated_key&) { return api::min_timestamp; }, fwd_sm);
+                        [] (const dht::decorated_key&) { return api::min_timestamp; },
+                        tombstone_gc_state(nullptr), fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
                 }
@@ -2640,7 +2641,8 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
 
         auto mr = make_compacting_reader(make_flat_mutation_reader_from_fragments(ss.schema(), permit, std::move(mfs)),
                 gc_clock::now(),
-                [] (const dht::decorated_key&) { return api::min_timestamp; });
+                [] (const dht::decorated_key&) { return api::min_timestamp; },
+                tombstone_gc_state(nullptr));
         mr.set_max_buffer_size(buffer_size);
 
         return mr;
@@ -2685,7 +2687,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
         .produces_range_tombstone_change({position_in_partition::for_range_end(r), {}})
         .produces_partition_end();
 
-    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), [] (const dht::decorated_key&) { return api::min_timestamp; }))
+    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), [] (const dht::decorated_key&) { return api::min_timestamp; }, tombstone_gc_state(nullptr)))
             .exact()
             .produces_partition_start(m.decorated_key(), p_tomb)
             .produces_partition_end();

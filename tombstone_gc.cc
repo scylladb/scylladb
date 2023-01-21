@@ -22,14 +22,11 @@
 
 extern logging::logger dblog;
 
-class repair_history_map {
-public:
-    boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
-};
-
-thread_local std::unordered_map<utils::UUID, seastar::lw_shared_ptr<repair_history_map>> repair_history_maps;
-
-static seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_map_for_table(const utils::UUID& id) {
+seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_repair_history_map_for_table(const table_id& id) {
+    if (!_repair_history_maps) {
+        return {};
+    }
+    auto& repair_history_maps = *_repair_history_maps;
     auto it = repair_history_maps.find(id);
     if (it != repair_history_maps.end()) {
         return it->second;
@@ -39,7 +36,11 @@ static seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_m
     }
 }
 
-seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(const utils::UUID& id) {
+seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_repair_history_map_for_table(const table_id& id) const {
+    if (!_repair_history_maps) {
+        return {};
+    }
+    auto& repair_history_maps = *_repair_history_maps;
     auto it = repair_history_maps.find(id);
     if (it != repair_history_maps.end()) {
         return it->second;
@@ -48,8 +49,8 @@ seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(cons
     }
 }
 
-void drop_repair_history_map_for_table(const utils::UUID& id) {
-    repair_history_maps.erase(id);
+void tombstone_gc_state::drop_repair_history_map_for_table(const table_id& id) {
+    _repair_history_maps->erase(id);
 }
 
 // This is useful for a sstable to query a gc_before for a range. The range is
@@ -60,7 +61,7 @@ void drop_repair_history_map_for_table(const utils::UUID& id) {
 // The knows_entire_range is set to true:
 // 1) if the tombstone_gc_mode is not repair, since we have the same value for all the keys in the ranges.
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
-get_gc_before_for_range_result get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) {
+tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
     bool knows_entire_range = true;
     const auto& options = s->tombstone_gc_options();
     switch (options.mode()) {
@@ -118,7 +119,7 @@ get_gc_before_for_range_result get_gc_before_for_range(schema_ptr s, const dht::
     std::abort();
 }
 
-gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) {
+gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
     // if mode = immediate  // can gc tombstone immediately
@@ -155,8 +156,8 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
     std::abort();
 }
 
-void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time) {
-    auto m = get_or_create_repair_history_map_for_table(s->id());
+void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
+    auto m = get_or_create_repair_history_map_for_table(id);
     m->map += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
 }
 

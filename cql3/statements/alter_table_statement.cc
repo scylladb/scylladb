@@ -341,6 +341,10 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                 }
             }
 
+            if (_properties->get_synchronous_updates_flag()) {
+                throw exceptions::invalid_request_exception(format("The synchronous_updates option is only applicable to materialized views, not to base tables"));
+            }
+
             _properties->apply_to_builder(cfm, std::move(schema_extensions));
         }
         break;
@@ -405,7 +409,8 @@ cql3::statements::alter_table_statement::prepare(data_dictionary::database db, c
 
 future<::shared_ptr<messages::result_message>>
 alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp, keyspace(), column_family(), *_properties);
+    auto s = validation::validate_column_family(qp.db(), keyspace(), column_family());
+    std::optional<sstring> warning = check_restricted_table_properties(qp, s, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

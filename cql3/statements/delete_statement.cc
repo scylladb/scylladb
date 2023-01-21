@@ -78,7 +78,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
-    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
+    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
         }
@@ -92,7 +92,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
 delete_statement::delete_statement(cf_name name,
                                  std::unique_ptr<attributes::raw> attrs,
                                  std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
-                                 std::vector<expr::expression> where_clause,
+                                 expr::expression where_clause,
                                  conditions_vector conditions,
                                  bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)

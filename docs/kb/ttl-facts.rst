@@ -87,5 +87,5 @@ Additional Information
 ----------------------
 
 * :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds/>`
-* :doc:`Expiring Data with Time to Live (TTL) </getting-started/time-to-live/>`
+* :doc:`Expiring Data with Time to Live (TTL) </cql/time-to-live/>`
 * :ref:`CQL Reference: Table Options <create-table-general-options>`

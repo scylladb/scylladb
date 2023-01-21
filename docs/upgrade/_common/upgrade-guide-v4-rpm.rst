@@ -2,89 +2,84 @@
 Upgrade Guide - |SCYLLA_NAME| |SRC_VERSION| to |NEW_VERSION| for |OS|
 =============================================================================================================
 
-This document is a step by step procedure for upgrading from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|, and rollback to |SRC_VERSION| if required.
+This document is a step by step procedure for upgrading from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|, and rollback to version |SRC_VERSION| if required.
 
 
-Applicable versions
+Applicable Versions
 ===================
-This guide covers upgrading Scylla from the following versions: |SRC_VERSION|.x or later to |SCYLLA_NAME| version |NEW_VERSION|.y, on the following platforms:
-
-* |OS|
+This guide covers upgrading |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION| on |OS|. 
+See :doc:`OS Support by Platform and Version </getting-started/os-support>` for information about supported versions.
 
 Upgrade Procedure
 =================
 
-Upgrading your Scylla version is a rolling procedure that does not require a full cluster shutdown. For each of the nodes in the cluster, serially (i.e. one at a time), you will:
+Upgrading your ScyllaDB version is a rolling procedure that does not require a full cluster shutdown. For each of the nodes in the cluster, serially (i.e. one at a time), you will:
 
 * Check the cluster's schema
 * Drain the node and backup the data
 * Backup the configuration file
-* Stop the Scylla service
-* Download and install new Scylla packages
-* Start the Scylla service
+* Stop ScyllaDB
+* Download and install new ScyllaDB packages
+* Start ScyllaDB
 * Validate that the upgrade was successful
 
-Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running with the new version.
+Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running the new version.
 
 **During** the rolling upgrade, it is highly recommended:
 
-* Not to use new |NEW_VERSION| features
-* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See :doc:`here </operating-scylla/manager/2.1/sctool>` for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
+* Not to use the new |NEW_VERSION| features
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/index.html>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
 * Not to apply schema changes
 
-.. note:: Before upgrading, make sure to use the latest `Scylla Montioring <https://monitoring.docs.scylladb.com/>`_ stack.
+.. note:: Before upgrading, make sure to use the latest `ScyllaDB Montioring <https://monitoring.docs.scylladb.com/>`_ stack.
 
-Upgrade steps
+Upgrade Steps
 =============
 Check the cluster schema
 ------------------------
-Make sure that all nodes have the schema synched prior to upgrade as any schema disagreement between the nodes causes the upgrade to fail.
+Make sure that all nodes have the schema synced before the upgrade. The upgrade will fail if there is a schema disagreement between nodes.
 
 .. code:: sh
 
        nodetool describecluster
 
-Drain node and backup the data
-------------------------------
-Before any major procedure, like an upgrade, it is **highly recommended** to backup all the data to an external device. In Scylla, backup is done using the ``nodetool snapshot`` command. For **each** node in the cluster, run the following command:
+Drain the nodes and backup the data
+--------------------------------------
+Before any major procedure, like an upgrade, it is recommended to backup all the data to an external device. In ScyllaDB, backup is done using the ``nodetool snapshot`` command. For **each** node in the cluster, run the following command:
 
 .. code:: sh
 
    nodetool drain
    nodetool snapshot
 
-Take note of the directory name that nodetool gives you, and copy all the directories having this name under ``/var/lib/scylla`` to an external backup device.
+Take note of the directory name that nodetool gives you, and copy all the directories having that name under ``/var/lib/scylla`` to an external backup device.
 
-When the upgrade is complete (for all nodes), remove the snapshot by running ``nodetool clearsnapshot -t <snapshot>``, or you risk running out of disk space.
+When the upgrade is completed on all nodes, remove the snapshot with the ``nodetool clearsnapshot -t <snapshot>`` command to prevent running out of space.
 
-Backup configuration file
--------------------------
+Backup the configuration file
+------------------------------
 .. code:: sh
 
    sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup-src
 
-Stop Scylla
------------
+Stop ScyllaDB
+---------------
 .. include:: /rst_include/scylla-commands-stop-index.rst
 
 
 Download and install the new release
 ------------------------------------
-Before upgrading, check what Scylla version you are currently running with ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to `rollback <#rollback-procedure>`_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+Before upgrading, check what version you are running now using ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to :ref:`rollback <rollback-procedure>` the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
 To upgrade:
 
-1. Update the |SCYLLA_REPO|_  to |NEW_VERSION|
-2. Install the new Scylla version
+#. Update the |SCYLLA_REPO|_  to |NEW_VERSION|.
+#. Install the new ScyllaDB version:
 
-.. code:: sh
+    .. code:: sh
 
-   sudo yum clean all
-   sudo yum update scylla\* -y
-
-.. note::
-
-   Alternator users upgrading from Scylla 4.0 to 4.1, need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`
+       sudo yum clean all
+       sudo yum update scylla\* -y
 
 
 Start the node
@@ -94,62 +89,63 @@ Start the node
 
 Validate
 --------
-1. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in UN status.
-2. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the Scylla version. Validate that the version matches the one you upgraded to. 
-3. Use ``journalctl _COMM=scylla`` to check there are no new errors in the log.
-4. Check again after two minutes, to validate no new issues are introduced.
+#. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in UN status.
+#. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the ScyllaDB version. Validate that the version matches the one you upgraded to. 
+#. Use ``journalctl _COMM=scylla`` to check there are no new errors in the log.
+#. Check again after two minutes, to validate no new issues are introduced.
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
-* More on |Scylla_METRICS|_
+See |Scylla_METRICS|_ for more information..
 
 Rollback Procedure
 ==================
 
 .. include:: /upgrade/_common/warning_rollback.rst
 
-The following procedure describes a rollback from |SCYLLA_NAME| release |NEW_VERSION|.x to |SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to |NEW_VERSION| failed before completing on all nodes. Use this procedure only for the nodes that you upgraded to |NEW_VERSION|
+The following procedure describes a rollback from |SCYLLA_NAME| release |NEW_VERSION|.x to |SRC_VERSION|.y. Apply this procedure if an upgrade from |SRC_VERSION| to |NEW_VERSION| failed before completing on all nodes. Use this procedure only for the nodes that you upgraded to |NEW_VERSION|.
 
 
-Scylla rollback is a rolling procedure that does **not** require a full cluster shutdown.
-For each of the nodes rollback to |SRC_VERSION|, you will:
+ScyllaDB rollback is a rolling procedure that does **not** require a full cluster shutdown.
+For each of the nodes you rollback to |SRC_VERSION|, you will:
 
-* Drain the node and stop Scylla
-* Retrieve the old Scylla packages
+* Drain the node and stop ScyllaDB
+* Retrieve the old ScyllaDB packages
 * Restore the configuration file
 * Reload the systemd configuration
-* Restart the Scylla service
+* Restart ScyllaDB
 * Validate the rollback success
 
-Apply the following procedure **serially** on each node. Do not move to the next node before validating the rollback was successful and that the node is up and running with the old version.
+Apply the following procedure **serially** on each node. Do not move to the next node before validating the rollback was successful and that the node is up and running the old version.
 
-Rollback steps
+Rollback Steps
 ==============
-Gracefully shutdown Scylla
---------------------------
+Gracefully shutdown ScyllaDB
+-----------------------------
 .. code:: sh
 
    nodetool drain
  .. include:: /rst_include/scylla-commands-stop-index.rst
 
-Download and install the new release
+Download and install the old release
 ------------------------------------
-1. Remove the old repo file.
+#. Remove the old repo file.
 
-.. code:: sh
+    .. code:: sh
 
-   sudo rm -rf /etc/yum.repos.d/scylla.repo
+       sudo rm -rf /etc/yum.repos.d/scylla.repo
 
-2. Update the |SCYLLA_REPO|_  to |SRC_VERSION|
-3. Install
+#. Update the |SCYLLA_REPO|_  to |SRC_VERSION|.
+#. Install:
 
-.. parsed-literal::
-   \    sudo yum clean all
-   \    sudo rm -rf /var/cache/yum
-   \    sudo yum remove scylla\\*tools-core
-   \    sudo yum downgrade scylla\\* -y
-   \    sudo yum install |PKG_NAME|
-   \    
+    .. code:: console
+
+       sudo yum clean all
+       sudo rm -rf /var/cache/yum
+       sudo yum remove scylla\\*tools-core
+       sudo yum downgrade scylla\\* -y
+       sudo yum install scylla
+     
 
 Restore the configuration file
 ------------------------------
@@ -162,7 +158,7 @@ Restore the configuration file
 Restore system tables
 ---------------------
 
-Restore all tables of **system** and **system_schema** from previous snapshot, |NEW_VERSION| uses a different set of system tables. Reference doc: :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>`
+Restore all tables of **system** and **system_schema** from previous snapshot because |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for details.
 
 .. code:: sh
 
@@ -173,7 +169,7 @@ Restore all tables of **system** and **system_schema** from previous snapshot, |
 Reload systemd configuration
 ---------------------------------
 
-Require to reload the unit file if the systemd unit file is changed.
+You must reload the unit file if the systemd unit file is changed.
 
 .. code:: sh
 
@@ -182,9 +178,8 @@ Require to reload the unit file if the systemd unit file is changed.
 Start the node
 --------------
 
-
    .. include:: /rst_include/scylla-commands-start-index.rst
 
 Validate
 --------
-Check the upgrade instruction above for validation. Once you are sure the node rollback is successful, move to the next node in the cluster. Keep in mind that the version you want to see on your node is the old version, which you noted at the beginning of the procedure.
+Check the upgrade instructions above for validation. Once you are sure the node rollback is successful, move to the next node in the cluster.

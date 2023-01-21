@@ -8,8 +8,10 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "cql3/cql_statement.hh"
 #include "types/map.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/util.hh"
@@ -28,6 +30,7 @@
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "service/broadcast_tables/experimental/lang.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -211,7 +214,7 @@ modification_statement::read_command(query_processor& qp, query::clustering_row_
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
     const auto max_result_size = qp.proxy().get_max_result_size(ps);
-    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size));
+    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size), query::tombstone_limit::max);
 }
 
 std::vector<query::clustering_range>
@@ -372,7 +375,7 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(data_dictionary::database db, std::vector<expr::expression> where_clause, prepare_context& ctx) {
+modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
     _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, ctx,
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*
@@ -399,10 +402,10 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
                                          | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
         throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
     }
-    auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (has_slice(ck_restrictions->expression) && !allow_clustering_key_slices()) {
+    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {
         throw exceptions::invalid_request_exception(
-                format("Invalid operator in where clause {}", to_string(ck_restrictions->expression)));
+                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
     }
     if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
         // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
@@ -415,13 +418,13 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
         // Those tables don't have clustering columns so we wouldn't reach this code, thus
         // the check seems redundant.
         if (require_full_clustering_key()) {
-            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
             throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}", col.name_as_text()));
         }
         // In general, we can't modify specific columns if not all clustering columns have been specified.
         // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!has_slice(ck_restrictions->expression)) {
-            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+        if (!has_slice(ck_restrictions)) {
+            auto& col = s->column_at(column_kind::clustering_key, _restrictions->clustering_columns_restrictions_size());
             for (auto&& op : _column_operations) {
                 if (!op->column.is_static()) {
                     throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
@@ -439,13 +442,30 @@ modification_statement::process_where_clause(data_dictionary::database db, std::
     }
 }
 
+::shared_ptr<strongly_consistent_modification_statement>
+modification_statement::prepare_for_broadcast_tables() const {
+    // FIXME: implement for every type of `modification_statement`.
+    throw service::broadcast_tables::unsupported_operation_error{};
+}
+
 namespace raw {
+
+::shared_ptr<cql_statement_opt_metadata>
+modification_statement::prepare_statement(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) {
+    ::shared_ptr<cql3::statements::modification_statement> statement = prepare(db, ctx, stats);
+
+    if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
+        return statement->prepare_for_broadcast_tables();
+    } else {
+        return statement;
+    }
+}
 
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
-    auto statement = prepare(db, meta, stats);
+    auto statement = prepare_statement(db, meta, stats);
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(std::move(statement), meta, std::move(partition_key_bind_indices));
 }

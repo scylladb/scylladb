@@ -14,18 +14,9 @@
 #include "counters.hh"
 #include "partition_builder.hh"
 #include "mutation_partition_serializer.hh"
-#include "utils/UUID.hh"
 #include "utils/data_input.hh"
 #include "query-result-set.hh"
-#include "utils/UUID.hh"
-#include "serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
 #include "idl/mutation.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -44,12 +35,12 @@ ser::mutation_view frozen_mutation::mutation_view() const {
     return ser::deserialize(in, boost::type<ser::mutation_view>());
 }
 
-utils::UUID
+table_id
 frozen_mutation::column_family_id() const {
     return mutation_view().table_id();
 }
 
-utils::UUID
+table_schema_version
 frozen_mutation::schema_version() const {
     return mutation_view().schema_version();
 }

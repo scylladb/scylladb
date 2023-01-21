@@ -115,6 +115,7 @@ static constexpr auto VIEWS = "views";
 static constexpr auto TYPES = "types";
 static constexpr auto FUNCTIONS = "functions";
 static constexpr auto AGGREGATES = "aggregates";
+static constexpr auto SCYLLA_AGGREGATES = "scylla_aggregates";
 static constexpr auto INDEXES = "indexes";
 static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla specific
 static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
@@ -169,9 +170,9 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ks);
 // saves/creates "system_schema" keyspace
 future<> save_system_keyspace_schema(cql3::query_processor& qp);
 
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features, noncopyable_function<bool(std::string_view)> accept_keyspace);
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features, noncopyable_function<bool(std::string_view)> accept_keyspace);
 // Calculates schema digest for all non-system keyspaces
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
+future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
 std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
@@ -212,9 +213,9 @@ std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions:
 
 std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
 
-std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> func, api::timestamp_type timestamp);
+std::vector<mutation> make_create_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> func, api::timestamp_type timestamp);
 
-std::vector<mutation> make_drop_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp);
+std::vector<mutation> make_drop_aggregate_mutations(schema_features features, shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp);
 
 std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 
@@ -284,11 +285,11 @@ std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const ss
 /// overwriting an existing column mapping to garbage collect obsolete entries.
 future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl);
 /// Query column mapping for a given version of the table locally.
-future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version version);
+future<column_mapping> get_column_mapping(table_id table_id, table_schema_version version);
 /// Check that column mapping exists for a given version of the table
-future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version);
+future<bool> column_mapping_exists(table_id table_id, table_schema_version version);
 /// Delete matching column mapping entries from the `system.scylla_table_schema_history` table
-future<> drop_column_mapping(utils::UUID table_id, table_schema_version version);
+future<> drop_column_mapping(table_id table_id, table_schema_version version);
 
 } // namespace schema_tables
 } // namespace db

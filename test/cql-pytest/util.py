@@ -12,6 +12,7 @@ import time
 import socket
 import os
 import collections
+import ssl
 from contextlib import contextmanager
 
 from cassandra.auth import PlainTextAuthProvider
@@ -121,10 +122,10 @@ def new_aggregate(cql, keyspace, body):
 # A utility function for creating a new temporary materialized view in
 # an existing table.
 @contextmanager
-def new_materialized_view(cql, table, select, pk, where):
+def new_materialized_view(cql, table, select, pk, where, extra=""):
     keyspace = table.split('.')[0]
     mv = keyspace + "." + unique_name()
-    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk})")
+    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
     try:
         yield mv
     finally:
@@ -145,7 +146,7 @@ def new_secondary_index(cql, table, column, name='', extra=''):
 
 # Helper function for establishing a connection with given username and password
 @contextmanager
-def cql_session(host, port, ssl, username, password):
+def cql_session(host, port, is_ssl, username, password):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -156,7 +157,7 @@ def cql_session(host, port, ssl, username, password):
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout = 120)
-    if ssl:
+    if is_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -171,6 +172,13 @@ def cql_session(host, port, ssl, username, password):
         protocol_version=4,
         auth_provider=PlainTextAuthProvider(username=username, password=password),
         ssl_context=ssl_context,
+        # The default timeout for new connections is 5 seconds, and for
+        # requests made by the control connection is 2 seconds. These should
+        # have been more than enough, but in some extreme cases with a very
+        # slow debug build running on a very busy machine, they may not be.
+        # so let's increase them to 60 seconds. See issue #11289.
+        connect_timeout = 60,
+        control_connection_timeout = 60,
     )
     yield cluster.connect()
     cluster.shutdown()
@@ -188,7 +196,7 @@ def new_user(cql, username=''):
 @contextmanager
 def new_session(cql, username):
     endpoint = cql.hosts[0].endpoint
-    with cql_session(host=endpoint.address, port=endpoint.port, ssl=False, username=username, password=username) as session:
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=False, username=username, password=username) as session:
         yield session
         session.shutdown()
 
@@ -248,3 +256,21 @@ def local_process_id(cql):
 # The number of arguments is assumed to be even.
 def user_type(*args):
     return collections.namedtuple('user_type', args[::2])(*args[1::2])
+
+class config_value_context:
+    """Change the value of a config item while the context is active.
+
+    The config item has to be live-updatable.
+    """
+    def __init__(self, cql, key, value):
+        self._cql = cql
+        self._key = key
+        self._value = value
+        self._original_value = None
+
+    def __enter__(self):
+        self._original_value = self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value
+        self._cql.execute(f"UPDATE system.config SET value='{self._value}' WHERE name='{self._key}'")
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self._cql.execute(f"UPDATE system.config SET value='{self._original_value}' WHERE name='{self._key}'")

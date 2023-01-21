@@ -9,8 +9,12 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 
+#include "db/functions/function_name.hh"
+#include "db/functions/function.hh"
+#include "db/functions/aggregate_function.hh"
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
@@ -19,11 +23,13 @@
 #include "utils/small_vector.hh"
 #include "query_class_config.hh"
 #include "db/per_partition_rate_limit_info.hh"
-
+#include "utils/UUID.hh"
 #include "bytes.hh"
 
 class position_in_partition_view;
 class partition_slice_builder;
+
+using query_id = utils::tagged_uuid<struct query_id_tag>;
 
 namespace query {
 
@@ -261,10 +267,12 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice);
 partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
+constexpr auto max_tombstones = std::numeric_limits<uint64_t>::max();
 
 // Tagged integers to disambiguate constructor arguments.
 enum class row_limit : uint64_t { max = max_rows };
 enum class partition_limit : uint32_t { max = max_partitions };
+enum class tombstone_limit : uint64_t { max = max_tombstones };
 
 using is_first_page = bool_class<class is_first_page_tag>;
 
@@ -273,7 +281,7 @@ using is_first_page = bool_class<class is_first_page_tag>;
 // Can be accessed across cores.
 class read_command {
 public:
-    utils::UUID cf_id;
+    table_id cf_id;
     table_schema_version schema_version; // TODO: This should be enough, drop cf_id
     partition_slice slice;
     uint32_t row_limit_low_bits;
@@ -287,7 +295,7 @@ public:
     // under the unique key "query_uuid". Later, when we want to resume
     // the read at exactly the same position (i.e., to request the next page)
     // we can pass this same unique id in that query's "query_uuid" field.
-    utils::UUID query_uuid;
+    query_id query_uuid;
     // Signal to the replica that this is the first page of a (maybe) paged
     // read request as far the replica is concerned. Can be used by the replica
     // to avoid doing work normally done on paged requests, e.g. attempting to
@@ -298,21 +306,24 @@ public:
     // the remote doesn't send it.
     std::optional<query::max_result_size> max_result_size;
     uint32_t row_limit_high_bits;
+    // Cut the page after processing this many tombstones (even if the page is empty).
+    uint64_t tombstone_limit;
     api::timestamp_type read_timestamp; // not serialized
     db::allow_per_partition_rate_limit allow_limit; // not serialized
 public:
     // IDL constructor
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
                  uint32_t row_limit_low_bits,
                  gc_clock::time_point now,
                  std::optional<tracing::trace_info> ti,
                  uint32_t partition_limit,
-                 utils::UUID query_uuid,
+                 query_id query_uuid,
                  query::is_first_page is_first_page,
                  std::optional<query::max_result_size> max_result_size,
-                 uint32_t row_limit_high_bits)
+                 uint32_t row_limit_high_bits,
+                 uint64_t tombstone_limit)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
@@ -324,19 +335,21 @@ public:
         , is_first_page(is_first_page)
         , max_result_size(max_result_size)
         , row_limit_high_bits(row_limit_high_bits)
+        , tombstone_limit(tombstone_limit)
         , read_timestamp(api::new_timestamp())
         , allow_limit(db::allow_per_partition_rate_limit::no)
     { }
 
-    read_command(utils::UUID cf_id,
+    read_command(table_id cf_id,
             table_schema_version schema_version,
             partition_slice slice,
             query::max_result_size max_result_size,
+            query::tombstone_limit tombstone_limit,
             query::row_limit row_limit = query::row_limit::max,
             query::partition_limit partition_limit = query::partition_limit::max,
             gc_clock::time_point now = gc_clock::now(),
             std::optional<tracing::trace_info> ti = std::nullopt,
-            utils::UUID query_uuid = utils::UUID(),
+            query_id query_uuid = query_id::create_null_id(),
             query::is_first_page is_first_page = query::is_first_page::no,
             api::timestamp_type rt = api::new_timestamp(),
             db::allow_per_partition_rate_limit allow_limit = db::allow_per_partition_rate_limit::no)
@@ -351,6 +364,7 @@ public:
         , is_first_page(is_first_page)
         , max_result_size(max_result_size)
         , row_limit_high_bits(static_cast<uint32_t>(static_cast<uint64_t>(row_limit) >> 32))
+        , tombstone_limit(static_cast<uint64_t>(tombstone_limit))
         , read_timestamp(rt)
         , allow_limit(allow_limit)
     { }
@@ -369,10 +383,18 @@ public:
 struct forward_request {
     enum class reduction_type {
         count,
+        aggregate
+    };
+    struct aggregation_info {
+        db::functions::function_name name;
+        std::vector<sstring> column_names;
+    };
+    struct reductions_info { 
+        // Used by selector_factries to prepare reductions information
+        std::vector<reduction_type> types;
+        std::vector<aggregation_info> infos;
     };
 
-    // multiple reduction types are needed to support queries like:
-    // `SELECT min(x), max(x), avg(x) FROM tab`
     std::vector<reduction_type> reduction_types;
 
     query::read_command cmd;
@@ -380,19 +402,19 @@ struct forward_request {
 
     db::consistency_level cl;
     lowres_clock::time_point timeout;
+    std::optional<std::vector<aggregation_info>> aggregation_infos;
 };
 
 std::ostream& operator<<(std::ostream& out, const forward_request& r);
 std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r);
+std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a);
 
 struct forward_result {
     // vector storing query result for each selected column
     std::vector<bytes_opt> query_results;
 
-    void merge(const forward_result& other, const std::vector<forward_request::reduction_type>& types);
-
     struct printer {
-        const std::vector<forward_request::reduction_type>& types;
+        const std::vector<::shared_ptr<db::functions::aggregate_function>>& functions;
         const query::forward_result& res;
     };
 };

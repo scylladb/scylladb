@@ -13,8 +13,8 @@ The connector allows you to use Apache Kafka and the Confluent platform while ta
 
 The following documents will get you started with the Kafka Connector:
 
-* `Kafka Sink Connector Quickstart <../kafka-connector/>`_
-* `Kafka Sink Connector Configuration <../sink-config/>`_
+* :doc:`Kafka Sink Connector Quickstart <kafka-connector>`
+* :doc:`Kafka Sink Connector Configuration <sink-config>`
 * `Introducing the Kafka Scylla Connector <https://www.scylladb.com/2020/02/18/introducing-the-kafka-scylla-connector/>`_ - Scylla Users blog
 
 

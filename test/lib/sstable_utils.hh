@@ -179,7 +179,7 @@ public:
         _sst->_data_file_write_time = wtime;
     }
 
-    void set_run_identifier(utils::UUID identifier) {
+    void set_run_identifier(sstables::run_id identifier) {
         _sst->_run_identifier = identifier;
     }
 
@@ -209,10 +209,13 @@ public:
         _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
-        _sst->_run_identifier = utils::make_random_uuid();
+        _sst->_run_identifier = run_id::create_random_id();
+        _sst->_shards.push_back(this_shard_id());
     }
 
-    void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
+    void set_values(sstring first_key, sstring last_key, stats_metadata stats, uint64_t data_file_size = 1) {
+        _sst->_data_file_size = data_file_size;
+        _sst->_bytes_on_disk = data_file_size;
         // scylla component must be present for a sstable to be considered fully expired.
         _sst->_recognized_components.insert(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
@@ -220,7 +223,8 @@ public:
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
-        _sst->_run_identifier = utils::make_random_uuid();
+        _sst->_run_identifier = run_id::create_random_id();
+        _sst->_shards.push_back(this_shard_id());
     }
 
     void rewrite_toc_without_scylla_component() {
@@ -315,16 +319,14 @@ public:
     }
 
     static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
-        return seastar::async([fut = std::move(fut)] {
+        return test_env::do_with_async([fut = std::move(fut)] (test_env& env) {
             auto tmp = tmpdir();
-            test_env env;
-            auto close_env = defer([&] { env.stop().get(); });
             fut(env, tmp.path().string()).get();
         });
     }
 
     static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (test_env&, sstring srcdir_path, sstring destdir_path)>&& fut) {
-        return seastar::async([fut = std::move(fut), src = std::move(src)] {
+        return test_env::do_with_async([fut = std::move(fut), src = std::move(src)] (test_env& env) {
             auto src_dir = tmpdir();
             auto dest_dir = tmpdir();
             for (const auto& entry : std::filesystem::directory_iterator(src.c_str())) {
@@ -332,8 +334,6 @@ public:
             }
             auto dest_path = dest_dir.path() / src.c_str();
             std::filesystem::create_directories(dest_path);
-            test_env env;
-            auto close_env = defer([&] { env.stop().get(); });
             fut(env, src_dir.path().string(), dest_path.string()).get();
         });
     }
@@ -374,10 +374,10 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) noexcept : _cm(cm) {}
 
-    future<> run(utils::UUID output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
+    future<> run(sstables::run_id output_run_id, replica::column_family* cf, noncopyable_function<future<> (sstables::compaction_data&)> job);
 
     void propagate_replacement(replica::table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-        _cm.propagate_replacement(t, removed, added);
+        _cm.propagate_replacement(t->as_table_state(), removed, added);
     }
 private:
     sstables::compaction_data& register_compaction(shared_ptr<compaction_manager::task> task);

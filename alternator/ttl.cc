@@ -46,6 +46,7 @@
 #include "alternator/serialization.hh"
 #include "dht/sharder.hh"
 #include "db/config.hh"
+#include "db/tags/utils.hh"
 
 #include "ttl.hh"
 
@@ -91,7 +92,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
     sstring attribute_name(v->GetString(), v->GetStringLength());
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     if (enabled) {
         if (tags_map.contains(TTL_TAG_KEY)) {
             co_return api_error::validation("TTL is already enabled");
@@ -108,7 +109,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
         }
         tags_map.erase(TTL_TAG_KEY);
     }
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     // Prepare the response, which contains a TimeToLiveSpecification
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
@@ -119,7 +120,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);
     if (i == tags_map.end()) {
@@ -135,7 +136,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLeave request.
+// Alternator tables with TTL configured via a UpdateTimeToLive request.
 //
 // Here is a brief overview of how the expiration service works:
 //
@@ -149,25 +150,25 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // To avoid scanning the same items RF times in RF replicas, only one node is
 // responsible for scanning a token range at a time. Normally, this is the
 // node owning this range as a "primary range" (the first node in the ring
-// with this range), but when this node is down, other nodes may take over
-// (FIXME: this is not implemented yet).
+// with this range), but when this node is down, the secondary owner (the
+// second in the ring) may take over.
 // An expiration thread is reponsible for all tables which need expiration
-// scans. FIXME: explain how this is done with multiple tables - parallel,
-// staggered, or what?
+// scans. Currently, the different tables are scanned sequentially (not in
+// parallel).
 // The expiration thread scans item using CL=QUORUM to ensures that it reads
 // a consistent expiration-time attribute. This means that the items are read
 // locally and in addition QUORUM-1 additional nodes (one additional node
 // when RF=3) need to read the data and send digests.
-// FIXME: explain if we can read the exact attribute or the entire map.
 // When the expiration thread decides that an item has expired and wants
 // to delete it, it does it using a CL=QUORUM write. This allows this
 // deletion to be visible for consistent (quorum) reads. The deletion,
 // like user deletions, will also appear on the CDC log and therefore
-// Alternator Streams if enabled (FIXME: explain how we mark the
-// deletion different from user deletes. We don't do it yet.).
-expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy)
+// Alternator Streams if enabled - currently as ordinary deletes (the
+// userIdentity flag is currently missing this is issue #11523).
+expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy, gms::gossiper& g)
         : _db(db)
         , _proxy(proxy)
+        , _gossiper(g)
 {
 }
 
@@ -364,7 +365,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 // 2. The primary replica for this token is currently marked down.
 // 3. In this node, this shard is responsible for this token.
 // We use the <secondary> case to handle the possibility that some of the
-// nodes in the system are down. A dead node will not be expiring expiring
+// nodes in the system are down. A dead node will not be expiring
 // the tokens owned by it, so we want the secondary owner to take over its
 // primary ranges.
 //
@@ -510,7 +511,7 @@ struct scan_ranges_context {
         opts.set<query::partition_slice::option::bypass_cache>();
         std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
         auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
-        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
         executor::client_state client_state{executor::client_state::internal_tag()};
         tracing::trace_state_ptr trace_state;
         // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
@@ -636,6 +637,7 @@ static future<> scan_table_ranges(
 static future<bool> scan_table(
     service::storage_proxy& proxy,
     data_dictionary::database db,
+    gms::gossiper& gossiper,
     schema_ptr s,
     abort_source& abort_source,
     named_semaphore& page_sem,
@@ -644,7 +646,7 @@ static future<bool> scan_table(
     // Check if an expiration-time attribute is enabled for this table.
     // If not, just return false immediately.
     // FIXME: the setting of the TTL may change in the middle of a long scan!
-    std::optional<std::string> attribute_name = find_tag(*s, TTL_TAG_KEY);
+    std::optional<std::string> attribute_name = db::find_tag(*s, TTL_TAG_KEY);
     if (!attribute_name) {
         co_return false;
     }
@@ -688,7 +690,7 @@ static future<bool> scan_table(
     expiration_stats.scan_table++;
     // FIXME: need to pace the scan, not do it all at once.
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
-    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), proxy.gossiper(), s);
+    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), gossiper, s);
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
@@ -708,7 +710,7 @@ static future<bool> scan_table(
     // by tasking another node to take over scanning of the dead node's primary
     // ranges. What we do here is that this node will also check expiration
     // on its *secondary* ranges - but only those whose primary owner is down.
-    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), proxy.gossiper(), s);
+    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), gossiper, s);
     while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
         expiration_stats.secondary_ranges_scanned++;
         dht::partition_range_vector partition_ranges;
@@ -740,7 +742,7 @@ future<> expiration_service::run() {
                 co_return;
             }
             try {
-                co_await scan_table(_proxy, _db, s, _abort_source, _page_sem, _expiration_stats);
+                co_await scan_table(_proxy, _db, _gossiper, s, _abort_source, _page_sem, _expiration_stats);
             } catch (...) {
                 // The scan of a table may fail in the middle for many
                 // reasons, including network failure and even the table
@@ -766,13 +768,15 @@ future<> expiration_service::run() {
         // in the next iteration by reducing the scanner's scheduling-group
         // share (if using a separate scheduling group), or introduce
         // finer-grain sleeps into the scanning code.
-        std::chrono::seconds scan_duration(std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start));
-        std::chrono::seconds period(_db.get_config().alternator_ttl_period_in_seconds());
+        std::chrono::milliseconds scan_duration(std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start));
+        std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
         if (scan_duration < period) {
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count());
+                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
                 co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
             } catch(seastar::sleep_aborted&) {}
+        } else {
+                tlogger.warn("scan took {} seconds, longer than period - not sleeping", scan_duration.count()/1000.0);
         }
     }
 }

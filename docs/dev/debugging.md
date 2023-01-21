@@ -327,8 +327,11 @@ Or from the executable like this:
 
     $ eu-unstrip -n --exec $executable
 
-With the build-id you can find the relocatable using the
-http://backtrace.scylladb.com/index.html search form.
+You can find the relocatable using the
+http://backtrace.scylladb.com/index.html search form
+using either the scylla Build ID or the Release number (e.g. 5.0.0 or 2022.1)
+to search the packages.
+
 The form can also be used to decode backtraces generated
 by the corresponding scylla binary.
 

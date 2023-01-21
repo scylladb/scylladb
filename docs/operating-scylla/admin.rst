@@ -79,7 +79,7 @@ The following addresses can be configured in scylla.yaml:
    * - api_address
      - Address for REST API requests. See api_port in the :ref:`Networking <cqlsh-networking>` parameters.
    * - prometheus_address
-     - Address for Prometheus queries. See prometheus_port in the :ref:`Networking <cqlsh-networking>` parameters and :doc:`Scylla Monitoring </operating-scylla/monitoring/index>` for more details.
+     - Address for Prometheus queries. See prometheus_port in the :ref:`Networking <cqlsh-networking>` parameters and `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/stable/>`_ for more details.
    * - replace_address_first_boot
      - Address of the node this Scylla instance is meant to replace. Refer to :doc:`Replace a Dead Node in a Scylla Cluster </operating-scylla/procedures/cluster-management/replace-dead-node>` for more details.
 
@@ -104,7 +104,7 @@ Compression between the client and the node is set by the driver that the applic
 
 For example:
 
-* `Scylla Python Driver <https://scylladb.github.io/python-driver/master/api/cassandra/cluster.html#cassandra.cluster.Cluster.compression>`_
+* `Scylla Python Driver <https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.html#cassandra.cluster.Cluster.compression>`_
 * `Scylla Java Driver <https://github.com/scylladb/java-driver/tree/3.7.1-scylla/manual/compression>`_
 * `Go Driver <https://godoc.org/github.com/gocql/gocql#Compressor>`_
 
@@ -137,7 +137,7 @@ Networking
 
 .. image:: /operating-scylla/security/Scylla-Ports2.png
 
-The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://scylladb.github.io/scylla-manager>`_.
+The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com/>`_.
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 

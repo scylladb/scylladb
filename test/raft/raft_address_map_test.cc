@@ -93,12 +93,12 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         BOOST_CHECK_THROW(m.set(id1, addr2, false), std::runtime_error);
     }
     {
-        // Check that transition from regular to expiring entry works
+        // Check that transition from regular to expiring entry is not possible
         raft_address_map<manual_clock> m;
         m.set(id1, addr1, false);
         m.set(id1, addr1, true);
         manual_clock::advance(expiration_time);
-        BOOST_CHECK(!m.find(id1));
+        BOOST_CHECK(m.find(id1));
     }
     {
         // Check that transition from expiring to regular entry works

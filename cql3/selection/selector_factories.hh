@@ -10,9 +10,12 @@
 
 #pragma once
 
+#include <algorithm>
+#include <stdexcept>
 #include <vector>
 #include "cql3/selection/selector.hh"
 #include "schema.hh"
+#include "query-request.hh"
 
 namespace cql3 {
 
@@ -39,6 +42,11 @@ private:
      * <code>true</code> if one of the factory creates TTL selectors.
      */
     bool _contains_ttl_factory;
+
+    /**
+     * The number of factories creating simple selectors.
+     */
+    uint32_t _number_of_simple_factories;
 
     /**
      * The number of factories creating aggregates.
@@ -79,6 +87,17 @@ public:
     void add_selector_for_post_processing(const column_definition& def, uint32_t index);
 
     /**
+     * Checks if this <code>SelectorFactories</code> contains only factories for simple selectors.
+     *
+     * @return <code>true</code> if this <code>SelectorFactories</code> contains only factories for simple selectors,
+     * <code>false</code> otherwise.
+     */
+    bool contains_only_simple_selection() const {
+        auto size = _factories.size();
+        return _number_of_simple_factories == (size - _number_of_factories_for_post_processing);
+    }
+
+    /**
      * Checks if this <code>SelectorFactories</code> contains only factories for aggregates.
      *
      * @return <code>true</code> if this <code>SelectorFactories</code> contains only factories for aggregates,
@@ -103,6 +122,27 @@ public:
             return false;
         }
         return _factories[0]->is_count_selector_factory();
+    }
+
+    bool does_reduction() const {
+        return std::all_of(_factories.cbegin(), _factories.cend(), [](const ::shared_ptr<selector::factory>& factory) {
+            return factory->is_reducible_selector_factory() && factory->contains_only_simple_arguments();
+        });
+    }
+
+    query::forward_request::reductions_info get_reductions() const {
+        std::vector<query::forward_request::reduction_type> types;
+        std::vector<query::forward_request::aggregation_info> infos;
+        for (const auto& factory: _factories) {
+            auto r = factory->get_reduction();
+            if (!r) {
+                throw std::runtime_error(format("Column {} doesn't have reduction type", factory->column_name()));
+            }
+
+            types.push_back(r->first);
+            infos.push_back(r->second);
+        }
+        return {types, infos};
     }
 
     /**

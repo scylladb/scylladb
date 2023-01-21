@@ -18,8 +18,8 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(snitch, config_options, replication_strategy_type::simple) {
+simple_strategy::simple_strategy(const replication_strategy_config_options& config_options) :
+        abstract_replication_strategy(config_options, replication_strategy_type::simple) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -33,19 +33,23 @@ simple_strategy::simple_strategy(snitch_ptr& snitch, const replication_strategy_
     }
 }
 
-future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
+future<endpoint_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
-        co_return inet_address_vector_replica_set();
+        co_return endpoint_set();
     }
 
     size_t replicas = _replication_factor;
-    utils::sequenced_set<inet_address> endpoints;
+    endpoint_set endpoints;
     endpoints.reserve(replicas);
 
     for (auto& token : tm.ring_range(t)) {
-        if (endpoints.size() == replicas) {
+        // If the number of nodes in the cluster is smaller than the desired
+        // replication factor we should return the loop when endpoints already
+        // contains all the nodes in the cluster because no more nodes could be
+        // added to endpoints lists.
+        if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
            break;
         }
 
@@ -56,7 +60,7 @@ future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpo
         co_await coroutine::maybe_yield();
     }
 
-    co_return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
+    co_return endpoints;
 }
 
 size_t simple_strategy::get_replication_factor(const token_metadata&) const {
@@ -75,7 +79,7 @@ std::optional<std::set<sstring>>simple_strategy::recognized_options(const topolo
     return {{ "replication_factor" }};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, snitch_ptr&, const replication_strategy_config_options&>;
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 

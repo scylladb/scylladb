@@ -364,6 +364,50 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
     });
 }
 
+// Tests behavior when incompatible CREATE TABLE statements are
+// issued concurrently in the cluster.
+// Relevant only for the pre-raft schema management, with raft the scenario should not happen.
+SEASTAR_TEST_CASE(test_concurrent_table_creation_with_different_schema) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            service::migration_manager& mm = e.migration_manager().local();
+
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            auto s1 = schema_builder("ks", "table1")
+                    .with_column("pk1", bytes_type, column_kind::partition_key)
+                    .with_column("pk2", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            auto s2 = schema_builder("ks", "table1")
+                    .with_column("pk1", bytes_type, column_kind::partition_key)
+                    .with_column("pk3", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            auto ann1 = mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get();
+            auto ann2 = mm.prepare_new_column_family_announcement(s2, api::new_timestamp()).get();
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                mm.announce(std::move(ann1), std::move(group0_guard)).get();
+            }
+
+            {
+                auto group0_guard = mm.start_group0_operation().get();
+                mm.announce(std::move(ann2), std::move(group0_guard)).get();
+            }
+
+            auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
+
+            // s2 should win because it has higher timestamp
+            auto new_schema = e.db().local().find_schema(s2->id());
+            BOOST_REQUIRE(*new_schema == *s2);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
@@ -680,7 +724,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
-                BOOST_REQUIRE_EQUAL(actual, expected);
+                BOOST_REQUIRE_EQUAL(actual.uuid(), expected);
             }
         };
 
@@ -689,7 +733,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
-                BOOST_REQUIRE_EQUAL(actual, expected);
+                BOOST_REQUIRE_EQUAL(actual.uuid(), expected);
             }
         };
 
@@ -893,7 +937,7 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
     testlog.info("   reversed_schema->version(): {}", reversed_schema->version());
 
     BOOST_REQUIRE(schema->version() != reversed_schema->version());
-    BOOST_REQUIRE(utils::UUID_gen::negate(schema->version()) == reversed_schema->version());
+    BOOST_REQUIRE(reversed(schema->version()) == reversed_schema->version());
 
     auto re_reversed_schema = reversed_schema->make_reversed();
     testlog.info("re_reversed_schema->version(): {}", re_reversed_schema->version());

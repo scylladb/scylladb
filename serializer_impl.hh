@@ -86,11 +86,11 @@ struct container_traits<absl::btree_set<T>> {
     };
 };
 
-template<typename T>
-struct container_traits<std::unordered_set<T>> {
+template<typename T, typename... Args>
+struct container_traits<std::unordered_set<T, Args...>> {
     struct back_emplacer {
-        std::unordered_set<T>& c;
-        back_emplacer(std::unordered_set<T>& c_) : c(c_) {}
+        std::unordered_set<T, Args...>& c;
+        back_emplacer(std::unordered_set<T, Args...>& c_) : c(c_) {}
         void operator()(T&& v) {
             c.emplace(std::move(v));
         }
@@ -279,18 +279,18 @@ struct serializer<absl::btree_set<T>> {
     }
 };
 
-template<typename T>
-struct serializer<std::unordered_set<T>> {
+template<typename T, typename... Args>
+struct serializer<std::unordered_set<T, Args...>> {
     template<typename Input>
-    static std::unordered_set<T> read(Input& in) {
+    static std::unordered_set<T, Args...> read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        std::unordered_set<T> v;
+        std::unordered_set<T, Args...> v;
         v.reserve(sz);
         deserialize_array_helper<false, T>::doit(in, v, sz);
         return v;
     }
     template<typename Output>
-    static void write(Output& out, const std::unordered_set<T>& v) {
+    static void write(Output& out, const std::unordered_set<T, Args...>& v) {
         safe_serialize_as_uint32(out, v.size());
         serialize_array_helper<false, T>::doit(out, v);
     }

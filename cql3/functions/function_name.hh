@@ -10,66 +10,12 @@
 
 #pragma once
 
-#include <seastar/core/sstring.hh>
-#include "seastarx.hh"
-#include <iosfwd>
-#include <functional>
-
-namespace db {
-
-sstring system_keyspace_name();
-
-}
+#include "db/functions/function_name.hh"
 
 namespace cql3 {
-
 namespace functions {
 
-class function_name final {
-public:
-    sstring keyspace;
-    sstring name;
-
-    static function_name native_function(sstring name) {
-        return function_name(db::system_keyspace_name(), name);
-    }
-
-    function_name() = default; // for ANTLR
-    function_name(sstring keyspace, sstring name)
-            : keyspace(std::move(keyspace)), name(std::move(name)) {
-    }
-
-    function_name as_native_function() const {
-        return native_function(name);
-    }
-
-    bool has_keyspace() const {
-        return !keyspace.empty();
-    }
-
-    bool operator==(const function_name& x) const {
-        return keyspace == x.keyspace && name == x.name;
-    }
-};
-
-inline
-std::ostream& operator<<(std::ostream& os, const function_name& fn) {
-    if (!fn.keyspace.empty()) {
-        os << fn.keyspace << ".";
-    }
-    return os << fn.name;
-}
+using function_name = db::functions::function_name;
 
 }
-}
-
-namespace std {
-
-template <>
-struct hash<cql3::functions::function_name> {
-    size_t operator()(const cql3::functions::function_name& x) const {
-        return std::hash<sstring>()(x.keyspace) ^ std::hash<sstring>()(x.name);
-    }
-};
-
 }

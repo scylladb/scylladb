@@ -27,4 +27,4 @@ Port    Description                                   Protocol
 19142   Native shard-aware transport port  (ssl)         TCP
 ======  ============================================  ========
 
-.. note:: For Scylla Manager ports, see `Scylla Manager <https://scylladb.github.io/scylla-manager/>`_.
+.. note:: For Scylla Manager ports, see `Scylla Manager <https://manager.docs.scylladb.com/>`.

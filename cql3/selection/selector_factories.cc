@@ -22,6 +22,7 @@ selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> sel
         std::vector<const column_definition*>& defs)
     : _contains_write_time_factory(false)
     , _contains_ttl_factory(false)
+    , _number_of_simple_factories(0)
     , _number_of_aggregate_factories(0)
     , _number_of_factories_for_post_processing(0)
 {
@@ -33,6 +34,8 @@ selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> sel
         _contains_ttl_factory |= factory->is_ttl_selector_factory();
         if (factory->is_aggregate_selector_factory()) {
             ++_number_of_aggregate_factories;
+        } else if (factory->is_simple_selector_factory()) {
+            ++_number_of_simple_factories;
         }
         _factories.emplace_back(std::move(factory));
     }

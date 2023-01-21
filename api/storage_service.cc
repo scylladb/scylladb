@@ -11,6 +11,7 @@
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
+#include <optional>
 #include <sstream>
 #include <time.h>
 #include <algorithm>
@@ -514,10 +515,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ctx.db.local().get_config().saved_caches_directory();
     });
 
-    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_range_to_address_map(keyspace),
+        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
@@ -534,7 +535,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 m.value.push(address.to_sstring());
             }
             return m;
-        }));
+        });
     });
 
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
@@ -546,7 +547,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        return describe_ring_as_json(ss, "");
+        // Find an arbitrary non-system keyspace.
+        auto keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
+        if (keyspaces.empty()) {
+            throw std::runtime_error("No keyspace provided and no non system kespace exist");
+        }
+        auto ks = keyspaces[0];
+        return describe_ring_as_json(ss, ks);
     });
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
@@ -604,11 +611,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-            auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
+            auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
                 return db.find_uuid(keyspace, cf_name);
             }));
             // major compact smaller tables first, to increase chances of success if low on space.
-            std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+            std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                 return db.find_column_family(id).get_stats().live_disk_space_used;
             });
             // as a table can be dropped during loop below, let's find it before issuing major compaction request.
@@ -634,18 +641,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
             return ctx.db.invoke_on_all([keyspace, column_families] (replica::database& db) -> future<> {
-                auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
+                auto table_ids = boost::copy_range<std::vector<table_id>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
                 }));
                 // cleanup smaller tables first, to increase chances of success if low on space.
-                std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+                std::ranges::sort(table_ids, std::less<>(), [&] (const table_id& id) {
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
                 auto& cm = db.get_compaction_manager();
+                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     replica::table& t = db.find_column_family(id);
-                    co_await cm.perform_cleanup(db, &t);
+                    co_await cm.perform_cleanup(owned_ranges_ptr, t.as_table_state());
                 }
                 co_return;
             }).then([]{
@@ -669,10 +677,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         return ctx.db.invoke_on_all([=] (replica::database& db) {
+            auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(db, &cf, exclude_current_version);
+                return cm.perform_sstable_upgrade(owned_ranges_ptr, cf.as_table_state(), exclude_current_version);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
@@ -682,11 +691,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        auto &db = ctx.db.local();
+        auto& db = ctx.db;
         if (column_families.empty()) {
-            co_await db.flush_on_all(keyspace);
+            co_await replica::database::flush_keyspace_on_all_shards(db, keyspace);
         } else {
-            co_await db.flush_on_all(keyspace, std::move(column_families));
+            co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
         }
         co_return json_void();
     });
@@ -797,9 +806,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (type == "user") {
             return ctx.db.local().get_user_keyspaces();
         } else if (type == "non_local_strategy") {
-            return map_keys(ctx.db.local().get_keyspaces() | boost::adaptors::filtered([](const auto& p) {
-                return p.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local;
-            }));
+            return ctx.db.local().get_non_local_strategy_keyspaces();
         }
         return map_keys(ctx.db.local().get_keyspaces());
     });
@@ -1260,6 +1267,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 }
 
+enum class scrub_status {
+    successful = 0,
+    aborted,
+    unable_to_cancel,   // Not used in Scylla, included to ensure compability with nodetool api.
+    validation_errors,
+};
+
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<request> req) {
         return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
@@ -1403,16 +1417,35 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } else {
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
-        return f.then([&ctx, keyspace, column_families, opts] {
-            return ctx.db.invoke_on_all([=] (replica::database& db) {
-                return do_for_each(column_families, [=, &db](sstring cfname) {
+
+        const auto& reduce_compaction_stats = [] (const compaction_manager::compaction_stats_opt& lhs, const compaction_manager::compaction_stats_opt& rhs) {
+            sstables::compaction_stats stats{};
+            stats += lhs.value();
+            stats += rhs.value();
+            return stats;
+        };
+
+        return f.then([&ctx, keyspace, column_families, opts, &reduce_compaction_stats] {
+            return ctx.db.map_reduce0([=] (replica::database& db) {
+                return map_reduce(column_families, [=, &db] (sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, opts);
-                });
-            });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
+                    return cm.perform_sstable_scrub(cf.as_table_state(), opts);
+                }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
+            }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
+        }).then_wrapped([] (auto f) {
+            if (f.failed()) {
+                auto ex = f.get_exception();
+                if (try_catch<sstables::compaction_aborted_exception>(ex)) {
+                    return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::aborted));
+                } else {
+                    return make_exception_future<json::json_return_type>(std::move(ex));
+                }
+            } else if (f.get()->validation_errors) {
+                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::validation_errors));
+            } else {
+                return make_ready_future<json::json_return_type>(static_cast<int>(scrub_status::successful));
+            }
         });
     });
 }

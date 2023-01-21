@@ -68,7 +68,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     cm::get_pending_tasks_by_table.set(r, [&ctx] (std::unique_ptr<request> req) {
         return ctx.db.map_reduce0([&ctx](replica::database& db) {
             return do_with(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [&ctx, &db](std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& tasks) {
-                return do_for_each(db.get_column_families(), [&tasks](const std::pair<utils::UUID, seastar::lw_shared_ptr<replica::table>>& i) {
+                return do_for_each(db.get_column_families(), [&tasks](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) {
                     replica::table& cf = *i.second.get();
                     tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = cf.get_compaction_strategy().estimated_pending_compactions(cf.as_table_state());
                     return make_ready_future<>();
@@ -119,7 +119,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             auto& cm = db.get_compaction_manager();
             return parallel_for_each(table_names, [&db, &cm, &ks_name, type] (sstring& table_name) {
                 auto& t = db.find_column_family(ks_name, table_name);
-                return cm.stop_compaction(type, &t);
+                return cm.stop_compaction(type, &t.as_table_state());
             });
         });
         co_return json_void();

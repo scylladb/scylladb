@@ -175,6 +175,13 @@ Whole entry
        // It contains only one commit log position interval - [lower bound of commit log, upper bound of commit log].
     
        array<be32<int32_t>, commit_log_interval> commit_log_intervals;
+
+       // Versions MC and MD of SSTable 3.x format end here.
+
+       // UUID of the host that wrote the SSTable.
+       // Qualifies all commitlog positions in the SSTable Statistics file.
+       
+       UUID host_id;
    }
 
    using clustering_bound = array<be32<int32_t>, clustering_column>;

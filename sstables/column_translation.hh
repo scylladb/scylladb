@@ -13,7 +13,6 @@
 
 #include "schema_fwd.hh"
 #include "sstables/types.hh"
-#include "utils/UUID.hh"
 #include "db/marshal/type_parser.hh"
 
 namespace sstables {
@@ -61,7 +60,7 @@ private:
                 const sstable_enabled_features& features,
                 bool is_static);
 
-        utils::UUID schema_uuid;
+        table_schema_version schema_uuid;
         std::vector<column_info> regular_schema_columns_from_sstable;
         std::vector<column_info> static_schema_columns_from_sstable;
         column_values_fixed_lengths clustering_column_value_fix_lengths;

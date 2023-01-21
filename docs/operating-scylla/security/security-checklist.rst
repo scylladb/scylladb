@@ -58,7 +58,7 @@ Also, see the list of ports used by Scylla.
 
 .. image:: Scylla-Ports2.png
 
-The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://scylladb.github.io/scylla-manager>`_.
+The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com>`_.
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 

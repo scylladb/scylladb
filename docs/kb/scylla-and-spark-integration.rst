@@ -353,7 +353,8 @@ Scylla limitations
 
 For more compatibility information check `Scylla status <http://www.scylladb.com/technology/status/>`_
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`
+
+
 
 .. include:: /rst_include/apache-copyrights.rst

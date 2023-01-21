@@ -1,5 +1,5 @@
-Scylla Features
-===============
+ScyllaDB Features
+==================
 
 
 .. toctree::
@@ -14,5 +14,5 @@ Scylla Features
   :id: "getting-started"
   :class: my-panel
 
-  * `Scylla Open Source Features <../features-open-source/>`_
-  * `Scylla Enterprise Features <../features-ent/>`_
+  * :doc:`ScyllaDB Open Source Features </using-scylla/features-open-source/>`
+  * :doc:`ScyllaDB Enterprise Features </using-scylla/features-ent/>`

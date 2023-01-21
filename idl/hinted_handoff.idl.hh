@@ -6,6 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "gms/inet_address_serializer.hh"
+#include "db/hints/sync_point.hh"
+
+#include "idl/replay_position.idl.hh"
+#include "idl/uuid.idl.hh"
+
 namespace db {
 
 namespace hints {
@@ -18,7 +24,7 @@ struct per_manager_sync_point_v1 {
 };
 
 struct sync_point_v1 {
-    utils::UUID host_id;
+    locator::host_id host_id;
     uint16_t shard_count;
 
     // Sync point information for regular mutation hints

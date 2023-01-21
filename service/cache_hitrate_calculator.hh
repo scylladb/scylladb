@@ -9,7 +9,7 @@
 #pragma  once
 
 #include "replica/database_fwd.hh"
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/sharded.hh>
 
@@ -35,9 +35,11 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     timer<lowres_clock> _timer;
     bool _stopped = false;
     float _diff = 0;
-    std::unordered_map<utils::UUID, stat> _rates;
+    std::unordered_map<table_id, stat> _rates;
     size_t _slen = 0;
     std::string _gstate;
+    uint64_t _published_nr = 0;
+    lowres_clock::time_point _published_time;
     future<> _done = make_ready_future();
 
     future<lowres_clock::duration> recalculate_hitrates();

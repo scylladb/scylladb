@@ -409,7 +409,7 @@ Should I use RAID for replications, such as RAID1, RAID4 or higher?
 You can, but it is not recommended. Scylla :doc:`clustering architecture </architecture/ringarchitecture/index/>` already provides data replication across nodes and DCs.
 Adding another layer of replication in each node is redundant, slows down I/O operation and reduces available storage.
 Want a higher level of replication?
-Increase the Replication Factor (RF) of :doc:`relevant Keyspaces </getting-started/ddl/>`.
+Increase the Replication Factor (RF) of :doc:`relevant Keyspaces </cql/ddl/>`.
 
 Can I use JBOD and not use RAID0?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -431,7 +431,7 @@ Is ``Nodetool Repair`` a Local (One Node) Operation or a Global (Full Cluster) O
 
 When running :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` on a node, it performs a repair on every token range this node owns; this will also repair other nodes that share the same range.
 
-If you wish to repair the entire cluster, it is recommended to run ``nodetool repair -pr`` on each node in the cluster, sequentially, or use the :doc:`Scylla Manager </operating-scylla/manager/index/>`.
+If you wish to repair the entire cluster, it is recommended to run ``nodetool repair -pr`` on each node in the cluster, sequentially, or use the `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_.
 
 
 How can I change the maximum number of IN restrictions?

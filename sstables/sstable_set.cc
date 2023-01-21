@@ -27,8 +27,55 @@
 
 namespace sstables {
 
-void sstable_run::insert(shared_sstable sst) {
+extern logging::logger sstlog;
+
+bool
+sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const shared_sstable& s2) const {
+    auto r = s1->compare_by_first_key(*s2);
+    if (r == 0) {
+        position_in_partition::less_compare less_cmp(*s1->get_schema());
+        return less_cmp(s1->first_partition_first_position(), s2->first_partition_first_position());
+    }
+    return r < 0;
+}
+
+bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
+    // checks if s1 is *all* before s2, meaning their bounds don't overlap.
+    auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
+        auto pkey_tri_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
+            return k1.tri_compare(*s, k2);
+        };
+        auto r = pkey_tri_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
+        if (r == 0) {
+            position_in_partition::tri_compare ckey_tri_cmp(*s1->get_schema());
+            const auto& s1_last_position = s1->last_partition_last_position();
+            const auto& s2_first_position = s2->first_partition_first_position();
+            auto r2 = ckey_tri_cmp(s1_last_position, s2_first_position);
+            // Forgive overlapping if s1's last position and s2's first position are both after key.
+            // That still produces correct results because the writer translates after_all_prefixed
+            // for s1's end bound into bound_kind::incl_end, and s2's start bound into bound_kind::excl_start,
+            // meaning they don't actually overlap.
+            if (r2 == 0 && s1_last_position.get_bound_weight() == bound_weight::after_all_prefixed) {
+                return true;
+            }
+            return r2 < 0;
+        }
+        return r < 0;
+    };
+    // lower bound will be the 1st element which is not *all* before the candidate sstable.
+    // upper bound will be the 1st element which the candidate sstable is *all* before.
+    // if there's overlapping, lower bound will be 1st element which overlaps, whereas upper bound the 1st one which doesn't (or end iterator)
+    // if there's not overlapping, lower and upper bound will both point to 1st element which the candidate sstable is *all* before (or end iterator).
+    auto p = std::equal_range(_all.begin(), _all.end(), sst, completely_ordered_before);
+    return p.first != p.second;
+};
+
+bool sstable_run::insert(shared_sstable sst) {
+    if (will_introduce_overlapping(sst)) {
+        return false;
+    }
     _all.insert(std::move(sst));
+    return true;
 }
 
 void sstable_run::erase(shared_sstable sst) {
@@ -101,8 +148,8 @@ sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) co
 std::vector<sstable_run>
 partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
     auto has_run = [this] (const shared_sstable& sst) { return _all_runs.contains(sst->run_identifier()); };
-    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
-    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
+    auto run_ids = boost::copy_range<std::unordered_set<sstables::run_id>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (sstables::run_id run_id) {
         return _all_runs.at(run_id);
     }));
 }
@@ -231,7 +278,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<utils::UUID, sstable_run>& all_runs, bool use_level_metadata)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata)
         : _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)
@@ -271,7 +318,12 @@ void partitioned_sstable_set::insert(shared_sstable sst) {
     _all->insert(sst);
     auto undo_all_insert = defer([&] () { _all->erase(sst); });
 
-    _all_runs[sst->run_identifier()].insert(sst);
+    // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
+    while (!_all_runs[sst->run_identifier()].insert(sst)) {
+        sstlog.warn("Generating a new run identifier for SSTable {} as overlapping was detected when inserting it into SSTable run {}",
+                    sst->get_filename(), sst->run_identifier());
+        sst->generate_new_run_identifier();
+    }
     auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()].erase(sst); });
 
     if (store_as_unleveled(sst)) {

@@ -6,12 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "restrictions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "seastar/util/defer.hh"
 #include "cql3/prepare_context.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
-#include "cql3/restrictions/token_restriction.hh"
+#include "types/list.hh"
 
 namespace cql3 {
 namespace expr {
@@ -273,111 +271,5 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     return prepared_binop;
 }
 
-namespace {
-
-::shared_ptr<restrictions::restriction> new_multi_column_restriction(const tuple_constructor& prepared_lhs_tuple,
-                                                                     oper_t oper,
-                                                                     expression prepared_rhs,
-                                                                     comparison_order order,
-                                                                     const schema_ptr& schema) {
-    std::vector<const column_definition*> lhs_cols = to_column_definitions(prepared_lhs_tuple.elements);
-
-    if (oper == oper_t::EQ) {
-        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema,
-                                                                         std::move(lhs_cols),
-                                                                         std::move(prepared_rhs));
-    }
-
-    if (oper == oper_t::LT) {
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
-                                                                            std::move(lhs_cols),
-                                                                            statements::bound::END,
-                                                                            false,
-                                                                            std::move(prepared_rhs),
-                                                                            order);
-    }
-
-    if (oper == oper_t::LTE) {
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
-                                                                            std::move(lhs_cols),
-                                                                            statements::bound::END,
-                                                                            true,
-                                                                            std::move(prepared_rhs),
-                                                                            order);
-    }
-
-    if (oper == oper_t::GT) {
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
-                                                                            std::move(lhs_cols),
-                                                                            statements::bound::START,
-                                                                            false,
-                                                                            std::move(prepared_rhs),
-                                                                            order);
-    }
-
-    if (oper == oper_t::GTE) {
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema,
-                                                                            std::move(lhs_cols),
-                                                                            statements::bound::START,
-                                                                            true,
-                                                                            std::move(prepared_rhs),
-                                                                            order);
-    }
-
-    if (oper == oper_t::IN) {
-        if (auto rhs_marker = as_if<bind_variable>(&prepared_rhs)) {
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema,
-                                                                                         std::move(lhs_cols),
-                                                                                         std::move(*rhs_marker));
-        }
-
-        if (auto rhs_list = as_if<collection_constructor>(&prepared_rhs)) {
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema,
-                                                                                         std::move(lhs_cols),
-                                                                                         std::move(rhs_list->elements));
-        }
-
-        if (auto rhs_list = as_if<constant>(&prepared_rhs)) {
-            const list_type_impl* list_type = dynamic_cast<const list_type_impl*>(&rhs_list->type->without_reversed());
-            const data_type& elements_type = list_type->get_elements_type();
-
-            utils::chunked_vector<managed_bytes> raw_elems = get_list_elements(rhs_list->value);
-            std::vector<expression> list_elems;
-            list_elems.reserve(raw_elems.size());
-
-            for (managed_bytes elem : std::move(raw_elems)) {
-                raw_value elem_val = raw_value::make_value(std::move(elem));
-                list_elems.emplace_back(constant(elem_val, elements_type));
-            }
-
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema,
-                                                                                         std::move(lhs_cols),
-                                                                                         std::move(list_elems));
-        }
-    }
-
-    on_internal_error(expr_logger,
-                      fmt::format("new_multi_column_restriction operation type: {} not handled", oper));
-}
-
-} // anonymous namespace
-
-::shared_ptr<restrictions::restriction> convert_to_restriction(const binary_operator& prepared_binop, const schema_ptr& schema) {
-    if (is<column_value>(prepared_binop.lhs) || is<subscript>(prepared_binop.lhs)) {
-        ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::restriction>();
-        r->expression = prepared_binop;
-        return r;
-    } else if (auto lhs_tuple = as_if<tuple_constructor>(&prepared_binop.lhs)) {
-        return new_multi_column_restriction(*lhs_tuple, prepared_binop.op, prepared_binop.rhs, prepared_binop.order, schema);
-    } else if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
-        std::vector<const column_definition*> column_defs = to_column_definitions(lhs_token->args);
-        ::shared_ptr<restrictions::restriction> r = ::make_shared<restrictions::token_restriction>(std::move(column_defs));
-        r->expression = prepared_binop;
-        return r;
-    } else {
-        throw exceptions::invalid_request_exception(
-            format("expr::validate_and_prepare_new_restriction unhandled restriction: {}", prepared_binop));
-    }
-}
 } // namespace expr
 } // namespace cql3

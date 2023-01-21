@@ -34,7 +34,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
-from test.pylib.scylla_server import ScyllaServer, ScyllaCluster
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable
 
 output_is_a_tty = sys.stdout.isatty()
@@ -337,17 +337,24 @@ class PythonTestSuite(TestSuite):
 
     def topology_for_class(self, class_name: str, cfg: dict) -> Callable[[], Awaitable]:
 
-        def create_server(cluster_name, seed):
+        def create_server(cluster_name: str, seeds: List[str]):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
+
+            default_config_options = \
+                    {"authenticator": "PasswordAuthenticator",
+                     "authorizer": "CassandraAuthorizer"}
+            config_options = default_config_options | self.cfg.get("extra_scylla_config_options", {})
+
             server = ScyllaServer(
                 exe=self.scylla_exe,
                 vardir=os.path.join(self.options.tmpdir, self.mode),
                 host_registry=self.hosts,
                 cluster_name=cluster_name,
-                seed=seed,
-                cmdline_options=cmdline_options)
+                seeds=seeds,
+                cmdline_options=cmdline_options,
+                config_options=config_options)
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
@@ -390,6 +397,9 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
+    def build_test_list(self) -> List[str]:
+        return TestSuite.build_test_list(self)
+
     async def add_test(self, shortname: str) -> None:
         test = CQLApprovalTest(self.next_id, shortname, self)
         self.tests.append(test)
@@ -397,6 +407,28 @@ class CQLApprovalTestSuite(PythonTestSuite):
     @property
     def pattern(self) -> str:
         return "*test.cql"
+
+
+class TopologyTestSuite(PythonTestSuite):
+    """A collection of Python pytests against Scylla instances dealing with topology changes.
+       Instead of using a single Scylla cluster directly, there is a cluster manager handling
+       the lifecycle of clusters and bringing up new ones as needed. The cluster health checks
+       are done per test case.
+    """
+
+    def build_test_list(self) -> List[str]:
+        """Build list of Topology python tests"""
+        return TestSuite.build_test_list(self)
+
+    async def add_test(self, shortname: str) -> None:
+        """Add test to suite"""
+        test = TopologyTest(self.next_id, shortname, self)
+        self.tests.append(test)
+
+    @property
+    def pattern(self) -> str:
+        """Python pattern"""
+        return "test_*.py"
 
 
 class RunTestSuite(TestSuite):
@@ -591,6 +623,8 @@ class CQLApprovalTest(Test):
         self.result = suite.suite_path / (self.shortname + ".result")
         self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = suite.suite_path / (self.shortname + ".reject")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         CQLApprovalTest._reset(self)
 
     def _reset(self) -> None:
@@ -603,6 +637,7 @@ class CQLApprovalTest(Test):
         self.summary = "not run"
         self.unidiff: Optional[str] = None
         self.server_log = None
+        self.server_log_filename = None
         self.env: Dict[str, str] = dict()
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
@@ -621,18 +656,18 @@ class CQLApprovalTest(Test):
         def set_summary(summary):
             self.summary = summary
             logging.info("Test %s %s", self.uname, summary)
-            if self.server_log:
+            if self.server_log is not None:
                 logging.info("Server log:\n%s", self.server_log)
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(1, "--host={}".format(cluster[0].host))
-            # If pre-check fails, e.g. because Scylla failed to start
-            # or crashed between two tests, fail entire test.py
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                self.args.insert(1, "--host={}".format(cluster.endpoint()))
+                # If pre-check fails, e.g. because Scylla failed to start
+                # or crashed between two tests, fail entire test.py
                 self.is_before_test_ok = True
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
@@ -661,7 +696,8 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
-                    self.server_log = cluster[0].read_log()
+                    self.server_log = cluster.read_server_log()
+                    self.server_log_filename = cluster.server_log_filename()
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -670,14 +706,14 @@ Check test log at {}.""".format(self.log_filename))
                         raise
                 set_summary("failed: {}".format(e))
             finally:
-                if self.is_new or self.is_equal_result is False:
-                    # Put a copy of the .reject file close to the .result file
-                    # so that it's easy to analyze the diff or overwrite .result
-                    # with .reject. Preserve the original .reject file: in
-                    # multiple modes the copy .reject file may be overwritten.
-                    shutil.copyfile(self.tmpfile, self.reject)
-                elif os.path.exists(self.tmpfile):
-                    pathlib.Path(self.tmpfile).unlink()
+                if os.path.exists(self.tmpfile):
+                    if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
+                        # Move the .reject file close to the .result file
+                        # so that it's easy to analyze the diff or overwrite .result
+                        # with .reject.
+                        shutil.move(self.tmpfile, self.reject)
+                    else:
+                        pathlib.Path(self.tmpfile).unlink()
 
         return self
 
@@ -686,7 +722,7 @@ Check test log at {}.""".format(self.log_filename))
                                        self.summary))
         if self.is_executed_ok is False:
             print(read_log(self.log_filename))
-            if self.server_log:
+            if self.server_log is not None:
                 print("Server log of the first server:")
                 print(self.server_log)
         elif self.is_equal_result is False and self.unidiff:
@@ -700,9 +736,9 @@ Check test log at {}.""".format(self.log_filename))
             if self.log_filename.exists():
                 system_out = ET.SubElement(xml_res, 'system-out')
                 system_out.text = read_log(self.log_filename)
-            if self.server_log:
+            if self.server_log_filename:
                 system_err = ET.SubElement(xml_res, 'system-err')
-                system_err.text = read_log(self.server_log)
+                system_err.text = read_log(self.server_log_filename)
         elif self.unidiff:
             system_out = ET.SubElement(xml_res, 'system-out')
             system_out.text = palette.nocolor(self.unidiff)
@@ -740,15 +776,19 @@ class PythonTest(Test):
         super().__init__(test_no, shortname, suite)
         self.path = "pytest"
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.server_log: Optional[str] = None
+        self.server_log_filename: Optional[pathlib.Path] = None
         PythonTest._reset(self)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
         self.server_log = None
+        self.server_log_filename = None
         self.is_before_test_ok = False
         self.is_after_test_ok = False
         self.args = [
             "-s",  # don't capture print() output inside pytest
+            "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
@@ -757,25 +797,26 @@ class PythonTest(Test):
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
-        if self.server_log:
+        if self.server_log is not None:
             print("Server log of the first server:")
             print(self.server_log)
 
     async def run(self, options: argparse.Namespace) -> Test:
 
         async with self.suite.clusters.instance() as cluster:
-            logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, "--host={}".format(cluster[0].host))
             try:
                 cluster.before_test(self.uname)
+                logging.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+                self.args.insert(0, "--host={}".format(cluster.endpoint()))
                 self.is_before_test_ok = True
-                cluster[0].take_log_savepoint()
+                cluster.take_log_savepoint()
                 status = await run_test(self, options)
                 cluster.after_test(self.uname)
                 self.is_after_test_ok = True
                 self.success = status
             except Exception as e:
-                self.server_log = cluster[0].read_log()
+                self.server_log = cluster.read_server_log()
+                self.server_log_filename = cluster.server_log_filename()
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
@@ -786,9 +827,38 @@ class PythonTest(Test):
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
         super().write_junit_failure_report(xml_res)
-        if self.server_log:
+        if self.server_log_filename is not None:
             system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log)
+            system_err.text = read_log(self.server_log_filename)
+
+
+class TopologyTest(PythonTest):
+    """Run a pytest collection of cases against Scylla clusters handling topology changes"""
+    status: bool
+
+    def __init__(self, test_no: int, shortname: str, suite) -> None:
+        super().__init__(test_no, shortname, suite)
+
+    async def run(self, options: argparse.Namespace) -> Test:
+
+        test_path = os.path.join(self.suite.options.tmpdir, self.mode)
+        async with get_cluster_manager(self.shortname, self.suite.clusters, test_path) as manager:
+            self.args.insert(0, "--manager-api={}".format(manager.sock_path))
+
+            try:
+                # Note: start manager here so cluster (and its logs) is availale in case of failure
+                await manager.start()
+                self.success = await run_test(self, options)
+            except Exception as e:
+                self.server_log = manager.cluster.read_server_log()
+                self.server_log_filename = manager.cluster.server_log_filename()
+                if manager.is_before_test_ok is False:
+                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                    print("Server log of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        return self
 
 
 class TabularConsoleOutput:

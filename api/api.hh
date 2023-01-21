@@ -137,6 +137,14 @@ future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_
     });
 }
 
+template<class T, class F>
+future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
+            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return make_ready_future<json::json_return_type>(timer_to_json(val));
+    });
+}
+
 inline int64_t min_int64(int64_t a, int64_t b) {
     return std::min(a,b);
 }

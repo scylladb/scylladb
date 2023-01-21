@@ -2,7 +2,7 @@ Consistency Level Console Demo
 ==============================
 In this demo, we'll bring up 3 nodes and demonstrate how writes and reads look, with tracing enabled in a cluster where our :term:`Replication Factor (RF)<Replication Factor (RF)>` is set to **3**.  We'll change the :term:`Consistency Level (CL)<Consistency Level (CL)>` between operations to show how messages are passed between nodes, and finally take down a few nodes to show failure conditions in a Scylla cluster.
 
-You can also learn more in the `High Availability lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/high-availability//>`_ on Scylla University.
+You can also learn more in the `High Availability lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/high-availability/>`_ on Scylla University.
 
 
 Note:  We use asciinema_ to generate the console casts used in this demo.  These asciicasts are more readable than embedded video, and allow you to copy the text or commands directly from the console to your clipboard.   We suggest viewing console casts in **fullscreen** to see the properly formatted output. 

@@ -71,12 +71,38 @@ extern seastar::logger tlogger;
 
 const auto dummy_command = std::numeric_limits<int>::min();
 
-class hasher_int : public xx_hasher {
+class hasher_int {
+    std::variant<uint64_t, xx_hasher> _hasher;
+    inline static thread_local bool _commutative{false};
 public:
-    using xx_hasher::xx_hasher;
-    void update(int val) noexcept {
-        xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
+    static void set_commutative(bool commutative) {
+        _commutative = commutative;
     }
+
+    hasher_int() {
+        if (_commutative) {
+            _hasher.emplace<uint64_t>(0);
+        } else {
+            _hasher.emplace<xx_hasher>();
+        }
+    }
+
+    void update(int val) noexcept {
+        if (auto* h = get_if<xx_hasher>(&_hasher); h != nullptr) {
+            h->update(reinterpret_cast<const char *>(&val), sizeof(val));
+        } else {
+            get<uint64_t>(_hasher) += val;
+        }
+    }
+
+    uint64_t finalize_uint64() {
+        if (auto* h = get_if<xx_hasher>(&_hasher); h != nullptr) {
+            return h->finalize_uint64();
+        } else {
+            return get<uint64_t>(_hasher);
+        }
+    }
+
     static hasher_int hash_range(int max) {
         hasher_int h;
         for (int i = 0; i < max; ++i) {
@@ -92,7 +118,7 @@ struct snapshot_value {
 };
 
 struct initial_state {
-    raft::server_address address;
+    raft::config_member address{config_member_from_id({})};
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
@@ -110,6 +136,7 @@ struct node_id {
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept;
 
 raft::server_address_set address_set(std::vector<node_id> nodes) noexcept;
+raft::config_member_set config_set(std::vector<node_id> nodes) noexcept;
 
 // Updates can be
 //  - Entries
@@ -119,7 +146,10 @@ struct entries {
     size_t n;
     // If provided, use this server to add entries.
     std::optional<size_t> server;
-    entries(size_t n_arg, std::optional<size_t> server_arg = {}) :n(n_arg), server(server_arg) {}
+    // Don't wait for previous requests to finish before issuing a new one.
+    bool concurrent;
+    entries(size_t n_arg, std::optional<size_t> server_arg = {}, bool concurrent_arg = false)
+        :n(n_arg), server(server_arg), concurrent(concurrent_arg) {}
 };
 struct new_leader {
     size_t id;
@@ -176,8 +206,8 @@ struct config {
     std::vector<node_id> curr;
     std::vector<node_id> prev;
     operator raft::configuration() {
-        auto current = address_set(curr);
-        auto previous = address_set(prev);
+        auto current = config_set(curr);
+        auto previous = config_set(prev);
         return raft::configuration{current, previous};
     }
 };
@@ -242,6 +272,8 @@ struct test_case {
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
+    const bool commutative_hash = false;
+    const bool verify_persisted_snapshots = true;
     size_t get_first_val();
 };
 
@@ -300,6 +332,7 @@ class raft_cluster {
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
     typename Clock::duration _tick_delta;
+    bool _verify_persisted_snapshots;
     rpc_net _rpc_net;
     // Tick phase delay for each node, uniformly spread across tick delta
     std::vector<typename Clock::duration> _tick_delays;
@@ -312,7 +345,8 @@ public:
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
-    future<> stop_server(size_t id);
+    raft::server& get_server(size_t id);
+    future<> stop_server(size_t id, sstring reason = "");
     future<> reset_server(size_t id, initial_state state); // Reset a stopped server
     size_t size() {
         return _servers.size();
@@ -331,7 +365,9 @@ public:
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
     void init_tick_delays(size_t n);
+    future<> add_entry(size_t val, std::optional<size_t> server);
     future<> add_entries(size_t n, std::optional<size_t> server = std::nullopt);
+    future<> add_entries_concurrent(size_t n, std::optional<size_t> server = std::nullopt);
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log(::wait_log followers);
@@ -723,18 +759,18 @@ public:
         return _net[id]->_client->execute_add_entry(_id, cmd, nullptr);
     }
     future<raft::add_entry_reply> send_modify_config(raft::server_id id,
-        const std::vector<raft::server_address>& add,
+        const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) override {
         check_known_and_connected(id);
         return _net[id]->_client->execute_modify_config(_id, add, del, nullptr);
     }
 
-    void add_server(raft::server_id id, bytes node_info) override {
-        _known_peers.insert(raft::server_address{id});
+    void add_server(raft::server_address addr) override {
+        _known_peers.insert(addr);
         ++_servers_added;
     }
     void remove_server(raft::server_id id) override {
-        _known_peers.erase(raft::server_address{id});
+        _known_peers.erase(server_addr_from_id(id));
         ++_servers_removed;
     }
 
@@ -784,8 +820,8 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     size_t apply_entries, size_t first_val, size_t first_leader,
     bool prevote, typename Clock::duration tick_delta,
     rpc_config rpc_config)
-        : _connected(std::make_unique<struct connected>(test.nodes)),
-        _snapshots(std::make_unique<snapshots>())
+        : _connected(std::make_unique<struct connected>(test.nodes))
+        , _snapshots(std::make_unique<snapshots>())
         , _persisted_snapshots(std::make_unique<persisted_snapshots>())
         , _apply_entries(apply_entries)
         , _next_val(first_val)
@@ -793,7 +829,8 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         , _prevote(prevote)
         , _apply(apply)
         , _leader(first_leader)
-        , _tick_delta(tick_delta) {
+        , _tick_delta(tick_delta)
+        , _verify_persisted_snapshots(test.verify_persisted_snapshots) {
 
     auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
@@ -803,7 +840,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     raft::configuration config;
 
     for (size_t i = 0; i < states.size(); i++) {
-        states[i].address = raft::server_address{to_raft_id(i)};
+        states[i].address = config_member_from_id(to_raft_id(i));
         config.current.emplace(states[i].address);
     }
 
@@ -814,7 +851,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = states[i].address;
         states[i].snapshot.config = config;
-        (*_snapshots)[s.id][states[i].snapshot.id] = states[i].snp_value;
+        (*_snapshots)[s.addr.id][states[i].snapshot.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
 }
@@ -829,11 +866,16 @@ void raft_cluster<Clock>::init_tick_delays(size_t n) {
 }
 
 template <typename Clock>
-future<> raft_cluster<Clock>::stop_server(size_t id) {
+raft::server& raft_cluster<Clock>::get_server(size_t id) {
+    return *_servers[id].server;
+}
+
+template <typename Clock>
+future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     cancel_ticker(id);
-    co_await _servers[id].server->abort();
+    co_await _servers[id].server->abort(std::move(reason));
     if (_snapshots->contains(to_raft_id(id))) {
-        BOOST_CHECK((*_snapshots)[to_raft_id(id)].size() <= 2);
+        BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), 2);
         _snapshots->erase(to_raft_id(id));
     }
     _persisted_snapshots->erase(to_raft_id(id));
@@ -887,10 +929,26 @@ template <typename Clock>
 future<> raft_cluster<Clock>::add_entries(size_t n, std::optional<size_t> server) {
     size_t end = _next_val + n;
     while (_next_val != end) {
+        co_await add_entry(_next_val, server);
+        _next_val++;
+    }
+}
+
+// Add consecutive integer entries to a leader concurrently
+template <typename Clock>
+future<> raft_cluster<Clock>::add_entries_concurrent(size_t n, std::optional<size_t> server) {
+    const auto start = _next_val;
+    _next_val += n;
+    return parallel_for_each(boost::irange(start, _next_val), [this, server](size_t v) { return add_entry(v, server); });
+}
+
+template <typename Clock>
+future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server) {
+    while (true) {
         try {
             auto& at = _servers[server ? *server : _leader].server;
-            co_await at->add_entry(create_command(_next_val), raft::wait_type::committed);
-            _next_val++;
+            co_await at->add_entry(create_command(val), raft::wait_type::committed);
+            break;
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
             // retry if an entry is dropped because the leader have changed after it was submitted
@@ -1099,13 +1157,13 @@ future<> raft_cluster<Clock>::free_election() {
 template <typename Clock>
 future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
-    raft::server_address_set set;
+    raft::config_member_set set;
     std::unordered_set<size_t> new_config;
     for (auto s: sc) {
         new_config.insert(s.node_idx);
-        auto addr = to_server_address(s.node_idx);
-        addr.can_vote = s.can_vote;
-        set.insert(std::move(addr));
+        auto m = to_config_member(s.node_idx);
+        m.can_vote = s.can_vote;
+        set.insert(std::move(m));
         BOOST_CHECK_MESSAGE(s.node_idx < _servers.size(),
                 format("Configuration element {} past node limit {}", s.node_idx, _servers.size() - 1));
     }
@@ -1315,15 +1373,17 @@ void raft_cluster<Clock>::verify() {
                 format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
     }
 
-    BOOST_TEST_MESSAGE("Verifying persisted snapshots");
-    // TODO: check that snapshot is taken when it should be
-    for (auto& s : (*_persisted_snapshots)) {
-        auto& [snp, val] = s.second;
-        auto digest = val.hasher.finalize_uint64();
-        auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
-        BOOST_CHECK_MESSAGE(digest == expected,
-                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
-   }
+    if (_verify_persisted_snapshots) {
+        BOOST_TEST_MESSAGE("Verifying persisted snapshots");
+        // TODO: check that snapshot is taken when it should be
+        for (auto& s : (*_persisted_snapshots)) {
+            auto& [snp, val] = s.second;
+            auto digest = val.hasher.finalize_uint64();
+            auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
+            BOOST_CHECK_MESSAGE(digest == expected,
+                                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
+        }
+    }
 }
 
 template <typename Clock>
@@ -1363,6 +1423,8 @@ struct run_test {
     future<> operator() (test_case test, bool prevote, typename Clock::duration tick_delta,
             rpc_config rpc_config) {
 
+        hasher_int::set_commutative(test.commutative_hash);
+
         tlogger.debug("starting test with {}",
                 rpc_config.network_delay > 0ms? "delays" : "no delays");
 
@@ -1377,7 +1439,9 @@ struct run_test {
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
-                co_await rafts.add_entries(update.n, update.server);
+                co_await (update.concurrent
+                        ? rafts.add_entries_concurrent(update.n, update.server)
+                        : rafts.add_entries(update.n, update.server));
             },
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);

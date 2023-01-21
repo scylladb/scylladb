@@ -46,7 +46,7 @@ create_view_statement::create_view_statement(
         cf_name view_name,
         cf_name base_name,
         std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-        std::vector<expr::expression> where_clause,
+        expr::expression where_clause,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
         bool if_not_exists)
@@ -270,7 +270,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     // non-pk base column + base column used in view pk)". When the filtered
     // column *is* the base column added to the view pk, we don't have this
     // problem. And this case actually works correctly.
-    auto non_pk_restrictions = restrictions->get_non_pk_restriction();
+    const expr::single_column_restrictions_map& non_pk_restrictions = restrictions->get_non_pk_restriction();
     if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
             target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
         // This case (filter by new PK column of the view) works, as explained above

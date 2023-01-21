@@ -35,12 +35,6 @@ db::nop_large_data_handler nop_lp_handler;
 db::config test_db_config;
 gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
 
-replica::column_family::config column_family_test_config(reader_concurrency_semaphore& compaction_semaphore) {
-    replica::column_family::config cfg;
-    cfg.compaction_concurrency_semaphore = &compaction_semaphore;
-    return cfg;
-}
-
 column_family_for_tests::data::data()
     : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
 { }
@@ -58,7 +52,7 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     : _data(make_lw_shared<data>())
 {
     _data->s = s;
-    _data->cfg = column_family_test_config(_data->semaphore);
+    _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
     _data->cfg.enable_disk_writes = bool(datadir);
     _data->cfg.datadir = datadir.value_or(sstring());
     _data->cfg.cf_stats = &_data->cf_stats;

@@ -28,12 +28,12 @@ namespace raw {
 class delete_statement : public modification_statement {
 private:
     std::vector<std::unique_ptr<operation::raw_deletion>> _deletions;
-    std::vector<expr::expression> _where_clause;
+    expr::expression _where_clause;
 public:
     delete_statement(cf_name name,
            std::unique_ptr<attributes::raw> attrs,
            std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
-           std::vector<expr::expression> where_clause,
+           expr::expression where_clause,
            conditions_vector conditions,
            bool if_exists);
 protected:

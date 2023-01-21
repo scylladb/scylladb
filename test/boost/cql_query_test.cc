@@ -91,6 +91,157 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
     });
 }
 
+SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Create a TWCS table with no TTL defined
+        e.execute_cql("UPDATE system.config SET value='warn' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
+        e.require_table_exists("ks", "tbl").get();
+        // Ensure ALTER TABLE works
+        e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=60;").get();
+        // LiveUpdate and enforce TTL to be defined
+        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
+        assert_that_failed(e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};"));
+        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'} AND "
+                      "default_time_to_live=60").get();
+        e.require_table_exists("ks", "tbl2").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;"));
+        // LiveUpdate and disable the check, then try table creation again
+        e.execute_cql("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("CREATE TABLE tbl3 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
+        // LiveUpdate back, and ensure that unrelated CQL requests are able to get through 
+        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
+        e.execute_cql("ALTER TABLE tbl3 WITH gc_grace_seconds=0;").get();
+
+        e.require_table_exists("ks", "tbl3").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_twcs_max_window) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Hardcode restriction to max 10 windows
+        e.execute_cql("UPDATE system.config SET value='10' WHERE name='twcs_max_window_count';").get();
+        // Creating a TWCS table with a large number of windows/buckets should fail
+        assert_that_failed(e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
+                      "AND default_time_to_live=86400;"));
+        // However the creation of a table within bounds should succeed
+        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
+                      "AND default_time_to_live=36000;").get();
+        e.require_table_exists("ks", "tbl").get();
+        // LiveUpdate - Disable check
+        e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
+                      "AND default_time_to_live=864000000;").get();
+        e.require_table_exists("ks", "tbl2").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Hardcode restriction to max 10 windows
+        e.execute_cql("UPDATE system.config SET value='10' WHERE name='twcs_max_window_count';").get();
+
+        // Cenario 1: STCS->TWCS with no TTL defined
+        e.execute_cql("CREATE TABLE tbl (a int PRIMARY KEY, b int);").get();
+        e.execute_cql("ALTER TABLE tbl WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
+        e.require_table_exists("ks", "tbl").get();
+
+        // Cenario 2: STCS->TWCS with small TTL. Note: TWCS default window size is 1 day (86400s)
+        e.execute_cql("CREATE TABLE tbl2 (a int PRIMARY KEY, b int) WITH default_time_to_live = 60;").get();
+        e.execute_cql("ALTER TABLE tbl2 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
+        e.require_table_exists("ks", "tbl2").get();
+
+        // Cenario 3: STCS->TWCS with large TTL value
+        e.execute_cql("CREATE TABLE tbl3 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
+        e.require_table_exists("ks", "tbl3").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl3 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
+
+        // Cenario 4: TWCS table with small to large TTL
+        e.execute_cql("CREATE TABLE tbl4 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 60;").get();
+        e.require_table_exists("ks", "tbl4").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl4 WITH default_time_to_live = 86400000;"));
+
+        // Cenario 5: No TTL TWCS to large TTL and then small TTL
+        e.execute_cql("CREATE TABLE tbl5 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'}").get();
+        e.require_table_exists("ks", "tbl5").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 86400000;"));
+        e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 60;").get();
+
+        // Cenario 6: twcs_max_window_count LiveUpdate - Decrease TTL
+        e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("CREATE TABLE tbl6 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
+        e.require_table_exists("ks", "tbl6").get();
+        e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("ALTER TABLE tbl6 WITH default_time_to_live = 60;").get();
+
+        // Cenario 7: twcs_max_window_count LiveUpdate - Switch CompactionStrategy
+        e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("CREATE TABLE tbl7 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
+        e.require_table_exists("ks", "tbl7").get();
+        e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("ALTER TABLE tbl7 WITH compaction = {'class': 'SizeTieredCompactionStrategy'}").get();
+
+        // Cenario 8: No TTL TWCS table to STCS
+        e.execute_cql("CREATE TABLE tbl8 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'};").get();
+        e.require_table_exists("ks", "tbl8").get();
+        e.execute_cql("ALTER TABLE tbl8 WITH compaction = {'class': 'SizeTieredCompactionStrategy'};").get();
+
+        // Cenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
+        e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("CREATE TABLE tbl9 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
+        e.require_table_exists("ks", "tbl9").get();
+        e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
+        e.execute_cql("ALTER TABLE tbl9 WITH gc_grace_seconds = 0;").get();
+
+        // Cenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
+        e.execute_cql("CREATE TABLE tbl10 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
+        e.require_table_exists("ks", "tbl10").get();
+        assert_that_failed(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
+        e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 0;").get();
+
+        // Cenario 11: Ensure default_time_to_live updates reference existing table properties
+        e.execute_cql("CREATE TABLE tbl11 (a int PRIMARY KEY, b int) WITH compaction = "
+                      "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '1', "
+                      "'compaction_window_unit': 'MINUTES'} AND default_time_to_live=3000;").get();
+       e.require_table_exists("ks", "tbl11").get();
+       assert_that_failed(e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;"));
+       e.execute_cql("ALTER TABLE tbl11 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
+                     "'compaction_window_size': '2', 'compaction_window_unit': 'MINUTES'};").get();
+       e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;").get();
+
+       // Cenario 12: Ensure that window sizes <= 0 are forbidden
+       assert_that_failed(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
+                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '0'};"));
+       assert_that_failed(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
+                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': -65535};"));
+       e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
+                     "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1};").get();
+       e.require_table_exists("ks", "tbl12").get();
+       assert_that_failed(e.execute_cql("ALTER TABLE tbl12 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
+                          "'compaction_window_size': 0};"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&e] {
@@ -5086,6 +5237,199 @@ SEASTAR_TEST_CASE(test_parallelized_select_count) {
     });
 }
 
+SEASTAR_TEST_CASE(test_parallelized_select_min) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MIN(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(0))}
+        });
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_max) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MAX(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(value_count - 1))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_sum) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT SUM(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_non_parallelized_multiple_select) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT MIN(k), MAX(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(0)), int32_type->decompose(int32_t(value_count - 1))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, c int, v int, PRIMARY KEY (k, c));").get();
+        int value_count = 10;
+        for (int k = 0; k < 2; k++) {
+            for (int c = 0; c < value_count; c++) {
+                e.execute_cql(format("INSERT INTO tbl (k, c, v) VALUES ({:d}, {:d}, {:d});", k, c, c)).get();
+            }
+        }
+    
+        auto msg = e.execute_cql("SELECT k, SUM(v) FROM tbl GROUP BY k;").get();
+        assert_that(msg).is_rows().with_rows({
+            {int32_type->decompose(int32_t(1)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))},
+            {int32_type->decompose(int32_t(0)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+template<typename Func>
+static future<> with_udf_enabled(Func&& func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
+    db_cfg.user_defined_function_time_limit_ms(1000);
+    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
+    return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
+}
+
+SEASTAR_TEST_CASE(test_parallelized_select_uda) {
+    return with_udf_enabled([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc+val "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION reduce_fct(acc1 bigint, acc2 bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc1+acc2 "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return -acc "
+                        "$$;").get0();
+        e.execute_cql("CREATE AGGREGATE aggr(int) "
+                        "SFUNC row_fct "
+                        "STYPE bigint "
+                        "REDUCEFUNC reduce_fct "
+                        "FINALFUNC final_fct "
+                        "INITCOND 0;").get0();
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
+    });
+}
+
+SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
+    return with_udf_enabled([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return acc+val "
+                        "$$;").get0();
+        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
+                        "RETURNS NULL ON NULL INPUT "
+                        "RETURNS bigint "
+                        "LANGUAGE lua "
+                        "AS $$ "
+                        "return -acc "
+                        "$$;").get0();
+        e.execute_cql("CREATE AGGREGATE aggr(int) "
+                        "SFUNC row_fct "
+                        "STYPE bigint "
+                        "FINALFUNC final_fct "
+                        "INITCOND 0;").get0();
+        
+        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
+        int value_count = 10;
+        for (int i = 0; i < value_count; i++) {
+            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
+        }
+        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
+        assert_that(msg).is_rows().with_rows({
+            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
+    });
+}
+
 cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
     cql_serialization_format sf = cql_serialization_format::latest();
 
@@ -5340,5 +5684,36 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
         // Test :var with a compatible type
         e.prepare("INSERT INTO tab1 (p, a, c) VALUES (0, :var, :var)").get();
         e.prepare("SELECT * FROM tab1 WHERE a = :var AND c = :var ALLOW FILTERING").get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table base (k int, v int, primary key (k));").get();
+
+        // Check if setting synchronous_updates property works with CREATE
+        // MATERIALIZED VIEW and ALTER MATERIALIZED VIEW statements.
+        e.execute_cql("create materialized view mv as select * from base "
+                       "where k is not null and v is not null primary key (v, k)"
+                       "with synchronous_updates = true").get();
+        e.execute_cql("alter materialized view mv with synchronous_updates = true").get();
+        e.execute_cql("alter materialized view mv with synchronous_updates = false").get();
+
+        // Check if index can be altered
+        e.execute_cql("create index on base (v)").get();
+        e.execute_cql("alter materialized view base_v_idx_index with synchronous_updates = true").get();
+
+        // Setting synchronous_updates in CREATE TABLE or ALTER TABLE is
+        // invalid
+        BOOST_REQUIRE_THROW(
+            e.execute_cql(
+                "create table t (k int, v int, primary key (k)) with synchronous_updates = true"
+            ).get(),
+            exceptions::invalid_request_exception
+        );
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("alter table base with synchronous_updates = true").get(),
+            exceptions::invalid_request_exception
+        );
     });
 }

@@ -33,7 +33,6 @@
 #include "gms/feature_service.hh"
 
 #include "executor.hh"
-#include "tags_extension.hh"
 #include "rmw_operation.hh"
 
 /**
@@ -75,8 +74,8 @@ struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
     : public from_string_helper<ValueType, utils::UUID>
 {};
 
-static db_clock::time_point as_timepoint(const utils::UUID& uuid) {
-    return db_clock::time_point{utils::UUID_gen::unix_timestamp(uuid)};
+static db_clock::time_point as_timepoint(const table_id& tid) {
+    return db_clock::time_point{utils::UUID_gen::unix_timestamp(tid.uuid())};
 }
 
 /**
@@ -106,6 +105,9 @@ public:
     stream_arn() = default;
     stream_arn(const UUID& uuid)
         : UUID(uuid)
+    {}
+    stream_arn(const table_id& tid)
+        : UUID(tid.uuid())
     {}
     stream_arn(std::string_view v)
         : UUID(v.substr(1))
@@ -156,7 +158,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     // and we can probably expect this to be a single call.
     if (streams_start) {
         i = std::find_if(i, e, [&](data_dictionary::table t) {
-            return t.schema()->id() == streams_start 
+            return t.schema()->id().uuid() == streams_start
                 && cdc::get_base_table(db.real_database(), *t.schema())
                 && is_alternator_keyspace(t.schema()->ks_name())
                 ;
@@ -431,7 +433,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     auto db = _proxy.data_dictionary();
 
     try {
-        auto cf = db.find_column_family(stream_arn);
+        auto cf = db.find_column_family(table_id(stream_arn));
         schema = cf.schema();
         bs = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
@@ -718,7 +720,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     std::optional<shard_id> sid;
 
     try {
-        auto cf = db.find_column_family(stream_arn);
+        auto cf = db.find_column_family(table_id(stream_arn));
         schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
@@ -803,7 +805,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto db = _proxy.data_dictionary();
     schema_ptr schema, base;
     try {
-        auto log_table = db.find_column_family(iter.table);
+        auto log_table = db.find_column_family(table_id(iter.table));
         schema = log_table.schema();
         base = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
@@ -877,7 +879,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         ++mul;
     }
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-            query::row_limit(limit * mul));
+            query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       

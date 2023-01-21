@@ -55,7 +55,6 @@
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
-#include "utils/joinpoint.hh"
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
@@ -81,10 +80,6 @@
 #include "db/virtual_table.hh"
 #include "canonical_mutation.hh"
 #include "schema_mutations.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -121,6 +116,708 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 }
 
 }
+
+template<typename... Elements>
+static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(
+        gms::feature_service& features, future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
+    using original_std_tuple_type = std::tuple<Elements...>;
+    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
+
+    if (!f.failed()) {
+        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
+    }
+
+    std::exception_ptr eptr = f.get_exception();
+    if (features.typed_errors_in_read_rpc) {
+        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
+        if (ex) {
+            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
+        }
+    }
+
+    return make_exception_future<final_tuple_type>(std::move(eptr));
+}
+
+// This class handles all communication with other nodes in `storage_proxy`:
+// sending and receiving RPCs, checking the state of other nodes (e.g. by accessing gossiper state), fetching schema.
+//
+// The object is uniquely owned by `storage_proxy`, its lifetime is bounded by the lifetime of `storage_proxy`.
+//
+// The presence of this object indicates that `storage_proxy` is able to perform remote queries.
+// Without it only local queries are available.
+class storage_proxy::remote {
+    storage_proxy& _sp;
+    migration_manager* _mm;
+    netw::messaging_service& _ms;
+    const gms::gossiper& _gossiper;
+
+    netw::connection_drop_slot_t _connection_dropped;
+    netw::connection_drop_registration_t _condrop_registration;
+
+public:
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
+        : _sp(sp), _ms(ms), _gossiper(g)
+        , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
+        , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
+    {}
+
+    void init_messaging_service(migration_manager* mm, storage_proxy* sp) {
+        _mm = mm;
+
+        ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
+        ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
+        ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
+        ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
+        ser::storage_proxy_rpc_verbs::register_read_data(&_ms, std::bind_front(&remote::handle_read_data, this));
+        ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&remote::handle_read_mutation_data, this));
+        ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
+        ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
+        // Register PAXOS verb handlers
+        ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
+        ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
+        ser::storage_proxy_rpc_verbs::register_paxos_prune(&_ms, std::bind_front(&remote::handle_paxos_prune, this));
+    }
+
+    future<> uninit_messaging_service() {
+        co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
+        _mm = nullptr;
+    }
+
+    const gms::gossiper& gossiper() const {
+        return _gossiper;
+    }
+
+    bool is_alive(const gms::inet_address& ep) const {
+        return _gossiper.is_alive(ep);
+    }
+
+    future<> send_mutation(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
+            frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
+        return ser::storage_proxy_rpc_verbs::send_mutation(
+                &_ms, std::move(addr), timeout,
+                std::move(m), std::move(forward), std::move(reply_to), shard,
+                response_id, std::move(trace_info), rate_limit_info);
+    }
+
+    future<> send_hint_mutation(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
+        tracing::trace(tr_state, "Sending a hint to /{}", addr.addr);
+        return ser::storage_proxy_rpc_verbs::send_hint_mutation(
+                &_ms, std::move(addr), timeout,
+                std::move(m), std::move(forward), std::move(reply_to), shard,
+                response_id, tracing::make_trace_info(tr_state));
+    }
+
+    future<> send_counter_mutation(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            std::vector<frozen_mutation> fms, db::consistency_level cl) {
+        tracing::trace(tr_state, "Enqueuing counter update to {}", addr);
+        return ser::storage_proxy_rpc_verbs::send_counter_mutation(
+                &_ms, std::move(addr), timeout,
+                std::move(fms), cl, tracing::make_trace_info(tr_state));
+    }
+
+    future<> send_mutation_done(
+            netw::msg_addr addr, tracing::trace_state_ptr tr_state,
+            unsigned shard, uint64_t response_id, db::view::update_backlog backlog) {
+        tracing::trace(tr_state, "Sending mutation_done to /{}", addr.addr);
+        return ser::storage_proxy_rpc_verbs::send_mutation_done(
+                &_ms, std::move(addr),
+                shard, response_id, std::move(backlog));
+    }
+
+    future<> send_mutation_failed(
+            netw::msg_addr addr, tracing::trace_state_ptr tr_state,
+            unsigned shard, uint64_t response_id, size_t num_failed, db::view::update_backlog backlog, replica::exception_variant exception) {
+        tracing::trace(tr_state, "Sending mutation_failure with {} failures to /{}", num_failed, addr.addr);
+        return ser::storage_proxy_rpc_verbs::send_mutation_failed(
+                &_ms, std::move(addr),
+                shard, response_id, num_failed, std::move(backlog), std::move(exception));
+    }
+
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
+    send_read_mutation_data(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            const query::read_command& cmd, const dht::partition_range& pr) {
+        tracing::trace(tr_state, "read_mutation_data: sending a message to /{}", addr.addr);
+        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr);
+        if (opt_exception.has_value() && *opt_exception) {
+            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
+
+        tracing::trace(tr_state, "read_mutation_data: got response from /{}", addr.addr);
+        co_return rpc::tuple{make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
+    }
+
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
+    send_read_data(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            const query::read_command& cmd, const dht::partition_range& pr,
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+        tracing::trace(tr_state, "read_data: sending a message to /{}", addr.addr);
+        auto&& [result, hit_rate, opt_exception] =
+            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+        if (opt_exception.has_value() && *opt_exception) {
+            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
+
+        tracing::trace(tr_state, "read_data: got response from /{}", addr.addr);
+        co_return rpc::tuple{make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
+    }
+
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>
+    send_read_digest(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            const query::read_command& cmd, const dht::partition_range& pr,
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+        tracing::trace(tr_state, "read_digest: sending a message to /{}", addr.addr);
+        auto&& [d, t, hit_rate, opt_exception, opt_last_pos] =
+            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+        if (opt_exception.has_value() && *opt_exception) {
+            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
+
+        tracing::trace(tr_state, "read_digest: got response from /{}", addr.addr);
+        co_return rpc::tuple{d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid()), opt_last_pos ? std::move(*opt_last_pos) : std::nullopt};
+    }
+
+    future<> send_truncate(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout,
+            sstring ks_name, sstring cf_name) {
+        return ser::storage_proxy_rpc_verbs::send_truncate(&_ms, std::move(addr), timeout, std::move(ks_name), std::move(cf_name));
+    }
+
+    future<service::paxos::prepare_response> send_paxos_prepare(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            const query::read_command& cmd, const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da) {
+        tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, addr.addr);
+        return ser::storage_proxy_rpc_verbs::send_paxos_prepare(
+                &_ms, addr, timeout, cmd, key, ballot, only_digest, da, tracing::make_trace_info(tr_state));
+    }
+
+    future<bool> send_paxos_accept(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            const service::paxos::proposal& proposal) {
+        tracing::trace(tr_state, "accept_proposal: send accept {} to {}", proposal, addr.addr);
+        return ser::storage_proxy_rpc_verbs::send_paxos_accept(&_ms, std::move(addr), timeout, proposal, tracing::make_trace_info(tr_state));
+    }
+
+    future<> send_paxos_learn(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
+            const service::paxos::proposal& decision, inet_address_vector_replica_set&& forward,
+            gms::inet_address reply_to, unsigned shard, uint64_t response_id) {
+        return ser::storage_proxy_rpc_verbs::send_paxos_learn(
+                &_ms, addr, timeout, decision, std::move(forward), reply_to, shard, response_id, std::move(trace_info));
+    }
+
+    future<> send_paxos_prune(
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            table_schema_version schema_id, const partition_key& key, utils::UUID ballot) {
+        return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
+    }
+
+    future<> send_truncate_blocking(sstring keyspace, sstring cfname) {
+        slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
+
+        if (!_gossiper.get_unreachable_token_owners().empty()) {
+            slogger.info("Cannot perform truncate, some hosts are down");
+            // Since the truncate operation is so aggressive and is typically only
+            // invoked by an admin, for simplicity we require that all nodes are up
+            // to perform the operation.
+            auto live_members = _gossiper.get_live_members().size();
+
+            return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
+                    live_members + _gossiper.get_unreachable_members().size(),
+                    live_members));
+        }
+
+        auto all_endpoints = _gossiper.get_live_token_owners();
+        auto timeout = clock_type::now() + std::chrono::milliseconds(_sp._db.local().get_config().truncate_request_timeout_in_ms());
+
+        slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+
+        return parallel_for_each(all_endpoints, [this, keyspace, cfname, timeout] (auto ep) {
+            return send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+        }).handle_exception([cfname](auto ep) {
+           try {
+               std::rethrow_exception(ep);
+           } catch (rpc::timeout_error& e) {
+               slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
+               throw;
+           } catch (...) {
+               throw;
+           }
+        });
+    }
+
+private:
+    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
+    }
+
+    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
+        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
+    }
+
+    future<> handle_counter_mutation(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        tracing::trace_state_ptr trace_state_ptr;
+        if (trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
+        }
+
+        return do_with(std::vector<frozen_mutation_and_schema>(),
+                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
+            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
+                // FIXME: optimise for cases when all fms are in the same schema
+                auto schema_version = fm.schema_version();
+                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
+                });
+            }).then([&sp = _sp, trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
+                return sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+            });
+        });
+    }
+
+    future<rpc::no_wait_type> handle_write(
+            netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
+            auto schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+            unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+            auto&& apply_fn, auto&& forward_fn) {
+        tracing::trace_state_ptr trace_state_ptr;
+
+        if (trace_info) {
+            tracing::trace_info& tr_info = *trace_info;
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
+        }
+
+        storage_proxy::clock_type::time_point timeout;
+        if (!t) {
+            auto timeout_in_ms = _sp._db.local().get_config().write_request_timeout_in_ms();
+            timeout = clock_type::now() + std::chrono::milliseconds(timeout_in_ms);
+        } else {
+            timeout = *t;
+        }
+
+        struct errors_info {
+            size_t count = 0;
+            replica::exception_variant local;
+        };
+
+        return do_with(std::move(in), _sp.shared_from_this(), errors_info{}, [this, src_addr = std::move(src_addr),
+                       forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
+                       schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
+                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
+            ++p->get_stats().received_mutations;
+            p->get_stats().forwarded_mutations += forward.size();
+            return when_all(
+                // mutate_locally() may throw, putting it into apply() converts exception to a future.
+                futurize_invoke([this, timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
+                                      apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
+                    // FIXME: get_schema_for_write() doesn't timeout
+                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})
+                                         .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
+                        return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
+                    });
+                }).then([this, &p, reply_to, shard, response_id, trace_state_ptr] () {
+                    // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
+                    // lots of unsent responses, which can OOM our shard.
+                    //
+                    // Usually we will return immediately, since this work only involves appending data to the connection
+                    // send buffer.
+                    return send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
+                            shard, response_id, p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                    });
+                }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
+                    errors.count++;
+                    errors.local = replica::try_encode_replica_exception(eptr);
+                    seastar::log_level l = seastar::log_level::warn;
+                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
+                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
+                        // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
+                        l = seastar::log_level::debug;
+                    }
+                    slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                }),
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
+                                  timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
+                    tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
+                    return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
+                                      tracing::make_trace_info(trace_state_ptr))
+                            .then_wrapped([&p, &errors] (future<> f) {
+                        if (f.failed()) {
+                            ++p->get_stats().forwarding_errors;
+                            errors.count++;
+                        };
+                        f.ignore_ready_future();
+                    });
+                })
+            ).then_wrapped([this, trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
+                // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
+                auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+                if (errors.count) {
+                    fut = send_mutation_failed(
+                            netw::messaging_service::msg_addr{reply_to, shard},
+                            trace_state_ptr,
+                            shard,
+                            response_id,
+                            errors.count,
+                            p->get_view_update_backlog(),
+                            std::move(errors.local)).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                        return netw::messaging_service::no_wait();
+                    });
+                }
+                return fut.finally([trace_state_ptr] {
+                    tracing::trace(trace_state_ptr, "Mutation handling is done");
+                });
+            });
+        });
+    }
+
+    future<rpc::no_wait_type> receive_mutation_handler(
+            smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t,
+            frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+            unsigned shard, storage_proxy::response_id_type response_id,
+            rpc::optional<std::optional<tracing::trace_info>> trace_info, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+
+        auto schema_version = in.schema_version();
+        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
+                trace_info ? *trace_info : std::nullopt,
+                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                        clock_type::time_point timeout) {
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+                },
+                /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
+                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                        std::optional<tracing::trace_info> trace_info) {
+                    return send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
+                });
+    }
+
+    future<rpc::no_wait_type> handle_paxos_learn(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+
+        auto schema_version = decision.update.schema_version();
+        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
+                response_id, trace_info,
+               /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+                       const paxos::proposal& decision, clock_type::time_point timeout) {
+                     return paxos::paxos_state::learn(*p, std::move(s), decision, timeout, tr_state);
+              },
+              /* forward_fn */ [this] (shared_ptr<storage_proxy>&, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
+                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                      std::optional<tracing::trace_info> trace_info) {
+                    return send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
+              });
+    }
+
+    future<rpc::no_wait_type> handle_mutation_done(
+            const rpc::client_info& cinfo,
+            unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
+                [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from, std::move(backlog));
+            return netw::messaging_service::no_wait();
+        });
+    }
+
+    future<rpc::no_wait_type> handle_mutation_failed(
+            const rpc::client_info& cinfo,
+            unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed,
+            rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
+                [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+            error err = error::FAILURE;
+            if (exception) {
+                err = std::visit([] <typename Ex> (Ex&) {
+                    if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
+                        return error::RATE_LIMIT;
+                    } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
+                        return error::FAILURE;
+                    }
+                }, exception->reason);
+            }
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
+            return netw::messaging_service::no_wait();
+        });
+    }
+
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>>
+    handle_read_data(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            query::read_command cmd, ::compat::wrapping_partition_range pr,
+            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        if (cmd.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
+        }
+        auto da = oda.value_or(query::digest_algorithm::MD5);
+        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+        if (!cmd.max_result_size) {
+            auto& cfg = _sp.local_db().get_config();
+            cmd.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
+        }
+
+        return do_with(std::move(pr), _sp.shared_from_this(), std::move(trace_state_ptr),
+                [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info]
+                    (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            p->get_stats().replica_data_reads++;
+            auto src_ip = src_addr.addr;
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, t, rate_limit_info] (schema_ptr s) {
+                auto pr2 = ::compat::unwrap(std::move(pr), *s);
+                if (pr2.second) {
+                    // this function assumes singular queries but doesn't validate
+                    throw std::runtime_error("READ_DATA called with wrapping range");
+                }
+                query::result_options opts;
+                opts.digest_algo = da;
+                opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
+                auto timeout = t ? *t : db::no_timeout;
+                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info);
+            }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
+                tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
+                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
+            });
+        });
+    }
+
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
+    handle_read_mutation_data(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            query::read_command cmd, ::compat::wrapping_partition_range pr) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        if (cmd.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
+        }
+        if (!cmd.max_result_size) {
+            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        }
+        return do_with(std::move(pr),
+                       _sp.shared_from_this(),
+                       std::move(trace_state_ptr),
+                       ::compat::one_or_two_partition_ranges({}),
+                       [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
+                               ::compat::wrapping_partition_range& pr,
+                               shared_ptr<storage_proxy>& p,
+                               tracing::trace_state_ptr& trace_state_ptr,
+                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
+            p->get_stats().replica_mutation_data_reads++;
+            auto src_ip = src_addr.addr;
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
+                unwrapped = ::compat::unwrap(std::move(pr), *s);
+                auto timeout = t ? *t : db::no_timeout;
+                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
+            }).then_wrapped([&p, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
+                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
+                return encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
+            });
+        });
+    }
+
+    future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>>
+    handle_read_digest(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            query::read_command cmd, ::compat::wrapping_partition_range pr,
+            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+        tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        if (cmd.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
+        }
+        auto da = oda.value_or(query::digest_algorithm::MD5);
+        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+        if (!cmd.max_result_size) {
+            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        }
+        return do_with(std::move(pr), _sp.shared_from_this(), std::move(trace_state_ptr),
+                [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info]
+                    (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            p->get_stats().replica_digest_reads++;
+            auto src_ip = src_addr.addr;
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, t, da, rate_limit_info] (schema_ptr s) {
+                auto pr2 = ::compat::unwrap(std::move(pr), *s);
+                if (pr2.second) {
+                    // this function assumes singular queries but doesn't validate
+                    throw std::runtime_error("READ_DIGEST called with wrapping range");
+                }
+                auto timeout = t ? *t : db::no_timeout;
+                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
+            }).then_wrapped([this, p, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) mutable {
+                tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
+
+                using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
+
+                if (!f.failed()) {
+                    auto&& [d, t, c, p] = f.get();
+                    return make_ready_future<final_tuple_type>(d, t, std::move(c), replica::exception_variant(), std::move(p));
+                }
+
+                std::exception_ptr eptr = f.get_exception();
+                if (p->features().typed_errors_in_read_rpc) {
+                    replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
+                    if (ex) {
+                        return make_ready_future<final_tuple_type>(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
+                    }
+                }
+
+                return make_exception_future<final_tuple_type>(std::move(eptr));
+            });
+        });
+    }
+
+    future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
+        return replica::database::truncate_table_on_all_shards(_sp._db, ksname, cfname);
+    }
+
+    future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
+    handle_paxos_prepare(
+            const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            query::read_command cmd, partition_key key, utils::UUID ballot,
+            bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_ip, ballot);
+        }
+        if (!cmd.max_result_size) {
+            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+        }
+
+        return get_schema_for_read(cmd.schema_version, src_addr).then([&sp = _sp, cmd = std::move(cmd), key = std::move(key), ballot,
+                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
+            dht::token token = dht::get_token(*schema, key);
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == this_shard_id();
+            sp.get_stats().replica_cross_shard_ops += !local;
+            return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
+                                     ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
+                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
+                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
+                });
+            });
+        });
+    }
+
+    future<bool> handle_paxos_accept(
+            const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            paxos::proposal proposal, std::optional<tracing::trace_info> trace_info) {
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
+        }
+
+        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr).then([&sp = _sp, tr_state = std::move(tr_state),
+                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
+            dht::token token = proposal.update.decorated_key(*schema).token();
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == this_shard_id();
+            sp.get_stats().replica_cross_shard_ops += !local;
+            return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, proposal = std::move(proposal), timeout, token] (storage_proxy& sp) {
+                return paxos::paxos_state::accept(sp, gt, gs, token, proposal, *timeout);
+            });
+        });
+
+        if (tr_state) {
+            f = f.finally([tr_state, src_ip] {
+                tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_ip);
+            });
+        }
+
+        return f;
+    }
+
+    future<rpc::no_wait_type> handle_paxos_prune(
+            const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            table_schema_version schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+        static thread_local uint16_t pruning = 0;
+        static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_ip, ballot);
+        }
+
+        if (pruning >= pruning_limit) {
+            _sp.get_stats().cas_replica_dropped_prune++;
+            tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
+            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+        }
+
+        pruning++;
+        auto d = defer([] { pruning--; });
+        return get_schema_for_read(schema_id, src_addr).then([&sp = _sp, key = std::move(key), ballot,
+                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
+            dht::token token = dht::get_token(*schema, key);
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == this_shard_id();
+            sp.get_stats().replica_cross_shard_ops += !local;
+            return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
+                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
+                    return netw::messaging_service::no_wait();
+                });
+            });
+        });
+    }
+
+    void connection_dropped(gms::inet_address addr) {
+        slogger.debug("Drop hit rate info for {} because of disconnect", addr);
+        for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
+            cf->drop_hit_rate(addr);
+        }
+    }
+};
 
 thread_local uint64_t paxos_response_handler::next_id = 0;
 
@@ -265,11 +962,9 @@ public:
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
-                                    netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
-                                    std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                                    response_id, tracing::make_trace_info(tr_state),
-                                    rate_limit_info);
+            return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
+                    *m, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
+                    response_id, rate_limit_info);
         }
         sp.got_response(response_id, ep, std::nullopt);
         return make_ready_future<>();
@@ -313,11 +1008,9 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-        return ser::storage_proxy_rpc_verbs::send_mutation(&sp._messaging,
-                netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
-                std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                response_id, tracing::make_trace_info(tr_state),
-                rate_limit_info);
+        return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
+                *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
+                response_id, rate_limit_info);
     }
     virtual bool is_shared() override {
         return true;
@@ -343,11 +1036,9 @@ public:
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
-        tracing::trace(tr_state, "Sending a hint to /{}", ep);
-        return ser::storage_proxy_rpc_verbs::send_hint_mutation(&sp._messaging,
-                netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
-                std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                response_id, tracing::make_trace_info(tr_state));
+        return sp.remote().send_hint_mutation(
+                netw::messaging_service::msg_addr{ep, 0}, timeout, tr_state,
+                *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info);
     }
 };
 
@@ -374,9 +1065,9 @@ public:
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
         // TODO: Enforce per partition rate limiting in paxos
-        return ser::storage_proxy_rpc_verbs::send_paxos_learn(&sp._messaging, netw::messaging_service::msg_addr{ep, 0}, timeout,
-                                *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(),
-                                this_shard_id(), response_id, tracing::make_trace_info(tr_state));
+        return sp.remote().send_paxos_learn(
+                netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
+                *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id);
     }
     virtual bool is_shared() override {
         return true;
@@ -404,6 +1095,7 @@ protected:
     storage_proxy::response_id_type _id;
     promise<result<>> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     tracing::trace_state_ptr _trace_state;
     db::consistency_level _cl;
     size_t _total_block_for = 0;
@@ -438,17 +1130,21 @@ protected:
     }
 
 public:
-    abstract_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
+    abstract_write_response_handler(shared_ptr<storage_proxy> p,
+            locator::effective_replication_map_ptr erm,
+            db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, size_t pending_endpoints = 0,
             inet_address_vector_topology_change dead_endpoints = {})
-            : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+            : _id(p->get_next_response_id()), _proxy(std::move(p))
+            , _effective_replication_map_ptr(std::move(erm))
+            , _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
               _rate_limit_info(rate_limit_info) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
-        _total_block_for = db::block_for(ks, _cl) + pending_endpoints;
+        _total_block_for = db::block_for(*_effective_replication_map_ptr, _cl) + pending_endpoints;
         ++_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
@@ -589,7 +1285,7 @@ public:
             }
             if (_cl_achieved) { // For CL=ANY this can still be false
                 for (auto&& ep : get_targets()) {
-                    ++stats().background_replica_writes_failed.get_ep_stat(_proxy->get_token_metadata_ptr()->get_topology(), ep);
+                    ++stats().background_replica_writes_failed.get_ep_stat(_effective_replication_map_ptr->get_topology(), ep);
                 }
                 stats().background_writes_failed += int(!_targets.empty());
             }
@@ -688,17 +1384,21 @@ public:
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
     bool waited_for(gms::inet_address from) override {
-        return fbu::is_me(from) || db::is_local(from);
+        const auto& topo = _effective_replication_map_ptr->get_topology();
+        return fbu::is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
     }
 
 public:
-    datacenter_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
+    datacenter_write_response_handler(shared_ptr<storage_proxy> p,
+            locator::effective_replication_map_ptr ermp,
+            db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info, db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
-        _total_endpoints = db::count_local_endpoints(_targets);
+                abstract_write_response_handler(p, ermp, cl, type, std::move(mh), // can't move ermp, it's used below
+                        std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info,
+                        ermp->get_topology().count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+        _total_endpoints = _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets);
     }
 };
 
@@ -707,11 +1407,13 @@ class write_response_handler : public abstract_write_response_handler {
         return true;
     }
 public:
-    write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
+    write_response_handler(shared_ptr<storage_proxy> p,
+            locator::effective_replication_map_ptr ermp,
+            db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
+                abstract_write_response_handler(std::move(p), std::move(ermp), cl, type, std::move(mh),
                         std::move(targets), std::move(tr_state), stats, std::move(permit), rate_limit_info, pending_endpoints.size(), std::move(dead_endpoints)) {
         _total_endpoints = _targets.size();
     }
@@ -719,11 +1421,13 @@ public:
 
 class view_update_write_response_handler : public write_response_handler, public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
 public:
-    view_update_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl,
+    view_update_write_response_handler(shared_ptr<storage_proxy> p,
+            locator::effective_replication_map_ptr ermp,
+            db::consistency_level cl,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info):
-                write_response_handler(p, ks, cl, db::write_type::VIEW, std::move(mh),
+                write_response_handler(p, std::move(ermp), cl, db::write_type::VIEW, std::move(mh),
                         std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info) {
         register_in_intrusive_list(*p);
     }
@@ -788,7 +1492,7 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
     };
     std::unordered_map<sstring, dc_info> _dc_responses;
     bool waited_for(gms::inet_address from) override {
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        auto& topology = _effective_replication_map_ptr->get_topology();
         sstring data_center = topology.get_datacenter(from);
         auto dc_resp = _dc_responses.find(data_center);
 
@@ -799,12 +1503,13 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         return false;
     }
 public:
-    datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, replica::keyspace& ks, db::consistency_level cl, db::write_type type,
+    datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints,
             inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit,
             db::per_partition_rate_limit::info rate_limit_info) :
-        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), rate_limit_info, 0, dead_endpoints) {
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        abstract_write_response_handler(std::move(p), std::move(ermp), cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), rate_limit_info, 0, dead_endpoints) {
+        auto* erm = _effective_replication_map_ptr.get();
+        auto& topology = erm->get_topology();
 
         for (auto& target : targets) {
             auto dc = topology.get_datacenter(target);
@@ -816,13 +1521,13 @@ public:
                 size_t total_endpoints_for_dc = boost::range::count_if(targets, [&topology, &dc] (const gms::inet_address& ep){
                     return topology.get_datacenter(ep) == dc;
                 });
-                _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(ks, dc) + pending_for_dc, total_endpoints_for_dc, 0});
+                _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(*erm, dc) + pending_for_dc, total_endpoints_for_dc, 0});
                 _total_block_for += pending_for_dc;
             }
         }
     }
     bool failure(gms::inet_address from, size_t count, error err) override {
-        auto& topology = _proxy->get_token_metadata_ptr()->get_topology();
+        auto& topology = _effective_replication_map_ptr->get_topology();
         const sstring& dc = topology.get_datacenter(from);
         auto dc_resp = _dc_responses.find(dc);
 
@@ -1004,9 +1709,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
                     response = co_await paxos::paxos_state::prepare(*_proxy, tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
-                    tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
-                    response = co_await ser::storage_proxy_rpc_verbs::send_paxos_prepare(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *_cmd, _key.key(), ballot, only_digest, da,
-                            tracing::make_trace_info(tr_state));
+                    response = co_await _proxy->remote().send_paxos_prepare(netw::msg_addr(peer), _timeout, tr_state, *_cmd, _key.key(), ballot, only_digest, da);
                 }
             } catch (...) {
                 if (request_tracker.p) {
@@ -1165,8 +1868,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
                     accepted = co_await paxos::paxos_state::accept(*_proxy, tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
-                    tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
-                    accepted = co_await ser::storage_proxy_rpc_verbs::send_paxos_accept(&_proxy->_messaging, netw::msg_addr(peer), _timeout, *proposal, tracing::make_trace_info(tr_state));
+                    accepted = co_await _proxy->remote().send_paxos_accept(netw::msg_addr(peer), _timeout, tr_state, *proposal);
                 }
             } catch(...) {
                 if (request_tracker.p) {
@@ -1327,7 +2029,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
         } else {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
-            return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_proxy->_messaging, netw::msg_addr(peer), _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
+            return _proxy->remote().send_paxos_prune(netw::msg_addr(peer), _timeout, tr_state, _schema->version(), _key.key(), ballot);
         }
     }).then_wrapped([this, h = shared_from_this()] (future<> f) {
         h->_proxy->get_stats().cas_now_pruning--;
@@ -1357,7 +2059,7 @@ bool paxos_response_handler::learned(gms::inet_address ep) {
 }
 
 static inet_address_vector_replica_set
-replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<utils::UUID>& replica_ids) {
+replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<locator::host_id>& replica_ids) {
     inet_address_vector_replica_set endpoints;
     endpoints.reserve(replica_ids.size());
 
@@ -1370,9 +2072,9 @@ replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<ut
     return endpoints;
 }
 
-static std::vector<utils::UUID>
+static std::vector<locator::host_id>
 endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_vector_replica_set& endpoints) {
-    std::vector<utils::UUID> replica_ids;
+    std::vector<locator::host_id> replica_ids;
     replica_ids.reserve(endpoints.size());
 
     for (const auto& endpoint : endpoints) {
@@ -1397,6 +2099,14 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
     } else {
         return query::max_result_size(query::result_memory_limiter::maximum_result_size);
     }
+}
+
+query::tombstone_limit storage_proxy::get_tombstone_limit() const {
+    auto& db = _db.local();
+    if (!db.is_internal_query() && _features.empty_replica_pages) {
+        return query::tombstone_limit(db.get_config().query_tombstone_page_limit());
+    }
+    return query::tombstone_limit::max;
 }
 
 bool storage_proxy::need_throttle_writes() const {
@@ -1487,21 +2197,22 @@ future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id
         return _response_handlers.find(id)->second;
 }
 
-result<storage_proxy::response_id_type> storage_proxy::create_write_response_handler(replica::keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
+result<storage_proxy::response_id_type> storage_proxy::create_write_response_handler(locator::effective_replication_map_ptr ermp,
+                             db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
                              storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info)
 {
     shared_ptr<abstract_write_response_handler> h;
-    auto& rs = ks.get_replication_strategy();
+    auto& rs = ermp->get_replication_strategy();
 
     if (db::is_datacenter_local(cl)) {
-        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
+        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), std::move(ermp), cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
+        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), std::move(ermp), cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
     } else if (type == db::write_type::VIEW) {
-        h = ::make_shared<view_update_write_response_handler>(shared_from_this(), ks, cl, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
+        h = ::make_shared<view_update_write_response_handler>(shared_from_this(), std::move(ermp), cl, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
     } else {
-        h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
+        h = ::make_shared<write_response_handler>(shared_from_this(), std::move(ermp), cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info);
     }
     return bo::success(register_response_handler(std::move(h)));
 }
@@ -1537,9 +2248,10 @@ void storage_proxy_stats::write_stats::register_split_metrics_local() {
 void storage_proxy_stats::write_stats::register_stats() {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+            sm::make_summary("write_latency_summary", sm::description("Write latency summary"), [this] {return to_metrics_summary(write.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
             sm::make_histogram("write_latency", sm::description("The general write latency histogram"),
                     {storage_proxy_stats::current_scheduling_group_label()},
-                    [this]{return to_metrics_histogram(estimated_write);}),
+                    [this]{return to_metrics_histogram(write.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
             sm::make_queue_length("foreground_writes", [this] { return writes - background_writes; },
                            sm::description("number of currently pending foreground write requests"),
@@ -1559,40 +2271,40 @@ void storage_proxy_stats::write_stats::register_stats() {
 
             sm::make_total_operations("throttled_writes", throttled_writes,
                                       sm::description("number of throttled write requests"),
-                                      {storage_proxy_stats::current_scheduling_group_label()}),
+                                      {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_timeouts", write_timeouts._count,
+            sm::make_total_operations("write_timeouts", [this]{return write_timeouts.count();},
                            sm::description("number of write request failed due to a timeout"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_unavailable", write_unavailables._count,
+            sm::make_total_operations("write_unavailable", [this]{return write_unavailables.count();},
                            sm::description("number write requests failed due to an \"unavailable\" error"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_rate_limited", write_rate_limited_by_replicas._count,
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_replicas.count();},
                            sm::description("number of write requests which were rejected by replicas because rate limit for the partition was reached."),
-                           {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
+                           {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_rate_limited", write_rate_limited_by_coordinator._count,
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_coordinator.count();},
                            sm::description("number of write requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
-                           {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}),
+                           {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
             sm::make_total_operations("background_writes_failed", background_writes_failed,
                            sm::description("number of write requests that failed after CL was reached"),
-                           {storage_proxy_stats::current_scheduling_group_label()}),
+                           {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
             sm::make_total_operations("writes_coordinator_outside_replica_set", writes_coordinator_outside_replica_set,
                     sm::description("number of CQL write requests which arrived to a non-replica and had to be forwarded to a replica"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
             sm::make_total_operations("reads_coordinator_outside_replica_set", reads_coordinator_outside_replica_set,
                     sm::description("number of CQL read requests which arrived to a non-replica and had to be forwarded to a replica"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
             sm::make_total_operations("writes_failed_due_to_too_many_in_flight_hints", writes_failed_due_to_too_many_in_flight_hints,
                     sm::description("number of CQL write requests which failed because the hinted handoff mechanism is overloaded "
                     "and cannot store any more in-flight hints"),
-                    {storage_proxy_stats::current_scheduling_group_label()}),
+                    {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
         });
 }
 
@@ -1625,9 +2337,10 @@ void storage_proxy_stats::stats::register_stats() {
     namespace sm = seastar::metrics;
     write_stats::register_stats();
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+        sm::make_summary("read_latency_summary", sm::description("Read latency summary"), [this] {return to_metrics_summary(read.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{ return to_metrics_histogram(estimated_read);}),
+                [this]{ return to_metrics_histogram(read.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
@@ -1639,104 +2352,107 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_total_operations("read_retries", read_retries,
                        sm::description("number of read retry attempts"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("canceled_read_repairs", global_read_repairs_canceled_due_to_concurrent_write,
                        sm::description("number of global read repairs canceled due to a concurrent write"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("foreground_read_repairs", read_repair_repaired_blocking,
                       sm::description("number of foreground read repairs"),
-                      {storage_proxy_stats::current_scheduling_group_label()}),
+                      {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("background_read_repairs", read_repair_repaired_background,
                        sm::description("number of background read repairs"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_timeouts", read_timeouts._count,
+        sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
                        sm::description("number of read request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_unavailable", read_unavailables._count,
+        sm::make_total_operations("read_unavailable", [this]{return read_unavailables.count(); },
                        sm::description("number read requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_rate_limited", read_rate_limited_by_replicas._count,
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_replicas.count(); },
                        sm::description("number of read requests which were rejected by replicas because rate limit for the partition was reached."),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_rate_limited", read_rate_limited_by_coordinator._count,
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_coordinator.count(); },
                        sm::description("number of read requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
-        sm::make_total_operations("range_timeouts", range_slice_timeouts._count,
+        sm::make_total_operations("range_timeouts", [this]{return range_slice_timeouts.count(); },
                        sm::description("number of range read operations failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("range_unavailable", range_slice_unavailables._count,
+        sm::make_total_operations("range_unavailable", [this]{return range_slice_unavailables.count(); },
                        sm::description("number of range read operations failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("speculative_digest_reads", speculative_digest_reads,
                        sm::description("number of speculative digest read requests that were sent"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("speculative_data_reads", speculative_data_reads,
                        sm::description("number of speculative data read requests that were sent"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_summary("cas_read_latency_summary", sm::description("CAS read latency summary"), [this] {return to_metrics_summary(cas_read.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
+        sm::make_summary("cas_write_latency_summary", sm::description("CAS write latency summary"), [this] {return to_metrics_summary(cas_write.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
 
         sm::make_histogram("cas_read_latency", sm::description("Transactional read latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{ return to_metrics_histogram(estimated_cas_read);}),
+                [this]{ return to_metrics_histogram(cas_read.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
         sm::make_histogram("cas_write_latency", sm::description("Transactional write latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{return to_metrics_histogram(estimated_cas_write);}),
+                [this]{return to_metrics_histogram(cas_write.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_write_timeouts", cas_write_timeouts._count,
+        sm::make_total_operations("cas_write_timeouts", [this]{return cas_write_timeouts.count(); },
                        sm::description("number of transactional write request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_write_unavailable", cas_write_unavailables._count,
+        sm::make_total_operations("cas_write_unavailable", [this]{return cas_write_unavailables.count(); },
                        sm::description("number of transactional write requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_read_timeouts", cas_read_timeouts._count,
+        sm::make_total_operations("cas_read_timeouts", [this]{return cas_read_timeouts.count(); },
                        sm::description("number of transactional read request failed due to a timeout"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_read_unavailable", cas_read_unavailables._count,
+        sm::make_total_operations("cas_read_unavailable", [this]{return cas_read_unavailables.count(); },
                        sm::description("number of transactional read requests failed due to an \"unavailable\" error"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
 
         sm::make_total_operations("cas_read_unfinished_commit", cas_read_unfinished_commit,
                        sm::description("number of transaction commit attempts that occurred on read"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_write_unfinished_commit", cas_write_unfinished_commit,
                        sm::description("number of transaction commit attempts that occurred on write"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_write_condition_not_met", cas_write_condition_not_met,
                        sm::description("number of transaction preconditions that did not match current values"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_write_timeout_due_to_uncertainty", cas_write_timeout_due_to_uncertainty,
                        sm::description("how many times write timeout was reported because of uncertainty in the result"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_failed_read_round_optimization", cas_failed_read_round_optimization,
                        sm::description("CAS read rounds issued only if previous value is missing on some replica"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_histogram("cas_read_contention", sm::description("how many contended reads were encountered"),
                        {storage_proxy_stats::current_scheduling_group_label()},
-                       [this]{ return cas_read_contention.get_histogram(1, 8);}),
+                       [this]{ return cas_read_contention.get_histogram(1, 8);}).set_skip_when_empty(),
 
         sm::make_histogram("cas_write_contention", sm::description("how many contended writes were encountered"),
                        {storage_proxy_stats::current_scheduling_group_label()},
-                       [this]{ return cas_write_contention.get_histogram(1, 8);}),
+                       [this]{ return cas_write_contention.get_histogram(1, 8);}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_prune", cas_prune,
                        sm::description("how many times paxos prune was done after successful cas operation"),
@@ -1744,57 +2460,57 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_total_operations("cas_dropped_prune", cas_coordinator_dropped_prune,
                        sm::description("how many times a coordinator did not perfom prune after cas"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_total_operations", cas_total_operations,
                        sm::description("number of total paxos operations executed (reads and writes)"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_gauge("cas_foreground", cas_foreground,
                         sm::description("how many paxos operations that did not yet produce a result are running"),
-                        {storage_proxy_stats::current_scheduling_group_label()}),
+                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_gauge("cas_background", [this] { return cas_total_running - cas_foreground; },
                         sm::description("how many paxos operations are still running after a result was alredy returned"),
-                        {storage_proxy_stats::current_scheduling_group_label()}),
+                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
         sm::make_total_operations("received_counter_updates", received_counter_updates,
                        sm::description("number of counter updates received by this node acting as an update leader"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("received_mutations", received_mutations,
                        sm::description("number of mutations received by a replica Node"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("forwarded_mutations", forwarded_mutations,
                        sm::description("number of mutations forwarded to other replica Nodes"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("forwarding_errors", forwarding_errors,
                        sm::description("number of errors during forwarding mutations to other replica Nodes"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_data_reads,
                        sm::description("number of remote data read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("data")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("data")}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_mutation_data_reads,
                        sm::description("number of remote mutation data read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("mutation_data")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("mutation_data")}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_digest_reads,
                        sm::description("number of remote digest read requests this Node received"),
-                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("digest")}),
+                       {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("digest")}).set_skip_when_empty(),
 
         sm::make_total_operations("cross_shard_ops", replica_cross_shard_ops,
                        sm::description("number of operations that crossed a shard boundary"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
                        sm::description("how many times a coordinator did not perfom prune after cas"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
 }
 
@@ -1833,7 +2549,8 @@ void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, gms::ine
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
             sm::make_counter(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
-                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
+                            sm::description(seastar::format("{} when communicating with external Nodes in another DC", _long_description_prefix)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
+                                .set_skip_when_empty()
         });
     }
 }
@@ -1870,7 +2587,6 @@ storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms)
     : _db(db)
-    , _gossiper(gossiper)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1884,11 +2600,9 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
-    , _messaging(ms)
+    , _remote(std::make_unique<struct remote>(*this, ms, gossiper))
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
-    , _connection_dropped([this] (gms::inet_address addr) { connection_dropped(std::move(addr)); })
-    , _condrop_registration(_messaging.when_connection_drops(_connection_dropped))
     , _max_view_update_backlog(max_view_update_backlog)
     , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
     namespace sm = seastar::metrics;
@@ -1900,6 +2614,10 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
+}
+
+struct storage_proxy::remote& storage_proxy::remote() {
+    return *_remote;
 }
 
 const data_dictionary::database
@@ -1926,13 +2644,6 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     auto r = id;
     id = 0;
     return r;
-}
-
-void storage_proxy::connection_dropped(gms::inet_address addr) {
-    slogger.debug("Drop hit rate info for {} because of disconnect", addr);
-    for (auto&& cf : _db.local().get_non_system_column_families()) {
-        cf->drop_hit_rate(addr);
-    }
 }
 
 future<>
@@ -1985,11 +2696,12 @@ future<>
 storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state, service_permit permit) {
     get_stats().received_counter_updates += mutations.size();
-    return do_with(std::move(mutations), [this, cl, timeout, trace_state = std::move(trace_state), permit = std::move(permit)] (std::vector<frozen_mutation_and_schema>& update_ms) mutable {
-        return parallel_for_each(update_ms, [this, cl, timeout, trace_state, permit] (frozen_mutation_and_schema& fm_a_s) {
-            return mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit);
+    {
+        auto& update_ms = mutations;
+        co_await coroutine::parallel_for_each(update_ms, [&] (frozen_mutation_and_schema& fm_a_s) -> future<> {
+            co_await mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit);
         });
-    });
+    }
 }
 
 future<>
@@ -2055,7 +2767,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper));
+            std::back_inserter(dead_endpoints), std::bind_front(&storage_proxy::is_alive, this));
 
     db::per_partition_rate_limit::info rate_limit_info;
     if (allow_limit && _db.local().can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
@@ -2071,9 +2783,9 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
 
-    db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
+    db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
 
-    return create_write_response_handler(ks, cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
+    return create_write_response_handler(std::move(erm), cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
             std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info);
 }
 
@@ -2108,9 +2820,10 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
 
     auto keyspace_name = mh->schema()->ks_name();
     replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
+    auto ermp = ks.get_effective_replication_map();
 
     // No rate limiting for read repair
-    return create_write_response_handler(ks, cl, type, std::move(mh), std::move(endpoints), inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate());
+    return create_write_response_handler(std::move(ermp), cl, type, std::move(mh), std::move(endpoints), inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate());
 }
 
 result<storage_proxy::response_id_type>
@@ -2132,9 +2845,10 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
 
     auto keyspace_name = s->ks_name();
     replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
+    auto ermp = ks.get_effective_replication_map();
 
     // No rate limiting for paxos (yet)
-    return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
+    return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
                     inet_address_vector_topology_change(), inet_address_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate());
 }
 
@@ -2227,7 +2941,6 @@ future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids,
 future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
     assert(mutate_result.available());
     stats.write.mark(lc.stop().latency());
-    stats.estimated_write.add(lc.latency());
 
     return utils::result_futurize_try([&] {
         auto&& res = mutate_result.get();
@@ -2271,10 +2984,11 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
 
 gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& m, db::consistency_level cl) {
     auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-    auto live_endpoints = get_live_endpoints(ks, m.token());
+    auto erm = ks.get_effective_replication_map();
+    auto live_endpoints = get_live_endpoints(*erm, m.token());
 
     if (live_endpoints.empty()) {
-        throw exceptions::unavailable_exception(cl, block_for(ks, cl), 0);
+        throw exceptions::unavailable_exception(cl, block_for(*erm, cl), 0);
     }
 
     const auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -2284,14 +2998,12 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
         return my_address;
     }
 
-    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints | boost::adaptors::filtered([&] (auto&& ep) {
-        return db::is_local(ep);
-    }));
+    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
+        | boost::adaptors::filtered(erm->get_topology().get_local_dc_filter()));
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        snitch->sort_by_proximity(my_address, live_endpoints);
+        erm->get_topology().sort_by_proximity(my_address, live_endpoints);
         return live_endpoints[0];
     } else {
         static thread_local std::default_random_engine re{std::random_device{}()};
@@ -2303,7 +3015,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 template<typename Range>
 future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout) {
     if (boost::empty(mutations)) {
-        return make_ready_future<>();
+        co_return;
     }
 
     slogger.trace("mutate_counters cl={}", cl);
@@ -2320,29 +3032,14 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Forward mutations to the leaders chosen for them
     auto my_address = utils::fb_utilities::get_broadcast_address();
-    return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) {
+    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) -> future<> {
+      auto first_schema = endpoint_and_mutations.second[0].s;
+
+      try {
         auto endpoint = endpoint_and_mutations.first;
 
-        // The leader receives a vector of mutations and processes them together,
-        // so if there is a timeout we don't really know which one is to "blame"
-        // and what to put in ks and cf fields of write timeout exception.
-        // Let's just use the schema of the first mutation in a vector.
-        auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl, permit] (std::exception_ptr exp) {
-            auto& ks = _db.local().find_keyspace(s->ks_name());
-            try {
-                std::rethrow_exception(std::move(exp));
-            } catch (rpc::timeout_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
-            } catch (timed_out_error&) {
-                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
-            } catch (rpc::closed_error&) {
-                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(ks, cl), db::write_type::COUNTER));
-            }
-        };
-
-        auto f = make_ready_future<>();
         if (endpoint == my_address) {
-            f = this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit);
+            co_await this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
@@ -2353,11 +3050,31 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // that the query was non-token-aware and bump relevant metric.
             get_stats().writes_coordinator_outside_replica_set += fms.size();
 
-            auto msg_addr = netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
-            tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
-            f = ser::storage_proxy_rpc_verbs::send_counter_mutation(&_messaging, msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
+            co_await remote().send_counter_mutation(
+                    netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 }, timeout, tr_state,
+                    std::move(fms), cl);
         }
-        return f.handle_exception(std::move(handle_error));
+      } catch (...) {
+        // The leader receives a vector of mutations and processes them together,
+        // so if there is a timeout we don't really know which one is to "blame"
+        // and what to put in ks and cf fields of write timeout exception.
+        // Let's just use the schema of the first mutation in a vector.
+        auto s = first_schema;
+        auto exp = std::current_exception();
+        {
+            auto& ks = _db.local().find_keyspace(s->ks_name());
+            auto erm = ks.get_effective_replication_map();
+            try {
+                std::rethrow_exception(std::move(exp));
+            } catch (rpc::timeout_error&) {
+                throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
+            } catch (timed_out_error&) {
+                throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
+            } catch (rpc::closed_error&) {
+                throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
+            }
+        }
+      }
     });
 }
 
@@ -2369,9 +3086,10 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(db::is_local)));
+        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
         natural_endpoints.erase(itend, natural_endpoints.end());
-        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(db::is_local)));
+        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
         pending_endpoints.erase(itend, pending_endpoints.end());
     }
 
@@ -2390,7 +3108,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     live_endpoints.reserve(participants);
 
     boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
-            boost::adaptors::filtered(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)), std::back_inserter(live_endpoints));
+            boost::adaptors::filtered(std::bind_front(&storage_proxy::is_alive, this)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -2526,6 +3244,73 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             .then(utils::result_into_future<result<>>);
 }
 
+static inet_address_vector_replica_set endpoint_filter(const gms::gossiper& g, const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+    // special case for single-node data centers
+    if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
+        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
+    }
+
+    // strip out dead endpoints and localhost
+    std::unordered_multimap<sstring, gms::inet_address> validated;
+
+    auto is_valid = [&g] (gms::inet_address input) {
+        return input != utils::fb_utilities::get_broadcast_address()
+            && g.is_alive(input);
+    };
+
+    for (auto& e : endpoints) {
+        for (auto& a : e.second) {
+            if (is_valid(a)) {
+                validated.emplace(e.first, a);
+            }
+        }
+    }
+
+    typedef inet_address_vector_replica_set return_type;
+
+    if (validated.size() <= 2) {
+        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
+    }
+
+    if (validated.size() - validated.count(local_rack) >= 2) {
+        // we have enough endpoints in other racks
+        validated.erase(local_rack);
+    }
+
+    if (validated.bucket_count() == 1) {
+        // we have only 1 `other` rack
+        auto res = validated | boost::adaptors::map_values;
+        if (validated.size() > 2) {
+            return boost::copy_range<return_type>(
+                    boost::copy_range<std::vector<gms::inet_address>>(res)
+                            | boost::adaptors::sliced(0, 2));
+        }
+        return boost::copy_range<return_type>(res);
+    }
+
+    // randomize which racks we pick from if more than 2 remaining
+
+    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
+
+    static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+
+    if (validated.bucket_count() > 2) {
+        std::shuffle(racks.begin(), racks.end(), rnd_engine);
+        racks.resize(2);
+    }
+
+    inet_address_vector_replica_set result;
+
+    // grab a random member of up to two racks
+    for (auto& rack : racks) {
+        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
+        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
+        result.emplace_back(cpy[rdist(rnd_engine)]);
+    }
+
+    return result;
+}
+
 future<result<>>
 storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     utils::latency_counter lc;
@@ -2564,7 +3349,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
-                            auto chosen_endpoints = _p.gossiper().endpoint_filter(local_rack, local_endpoints);
+                            auto& gossiper = _p._remote->gossiper();
+                            auto chosen_endpoints = endpoint_filter(gossiper, local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
@@ -2581,7 +3367,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
-                return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate());
+                auto ermp = ks.get_effective_replication_map();
+                return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate());
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
@@ -2709,12 +3496,13 @@ future<> storage_proxy::send_to_endpoint(
                 boost::range::join(pending_endpoints, target),
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
-                [this] (gms::inet_address ep) { return _gossiper.is_alive(ep); });
+                std::bind_front(&storage_proxy::is_alive, this));
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
+        auto erm = ks.get_effective_replication_map();
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
-        db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
+        db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
-            ks,
+            std::move(erm),
             cl,
             type,
             std::move(m),
@@ -2827,7 +3615,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    auto& topology = get_token_metadata_ptr()->get_topology();
+    auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
     auto local_dc = topology.get_datacenter();
 
     for(auto dest: handler.get_targets()) {
@@ -2880,9 +3668,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             got_response(response_id, coordinator, std::nullopt);
         } else {
             if (!handler.read_repair_write()) {
-                ++stats.writes_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
+                ++stats.writes_attempts.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             } else {
-                ++stats.read_repair_write_attempts.get_ep_stat(get_token_metadata_ptr()->get_topology(), coordinator);
+                ++stats.read_repair_write_attempts.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             }
 
             if (coordinator == my_address) {
@@ -2894,7 +3682,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         // Waited on indirectly.
         (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(p->get_token_metadata_ptr()->get_topology(), coordinator);
+            ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
             if (try_catch<replica::rate_limit_exception>(eptr)) {
@@ -3026,12 +3814,23 @@ struct digest_read_result {
 };
 
 class digest_read_resolver : public abstract_read_resolver {
+    struct digest_and_last_pos {
+        query::result_digest digest;
+        std::optional<full_position> last_pos;
+
+        digest_and_last_pos(query::result_digest digest, std::optional<full_position> last_pos)
+            : digest(std::move(digest)), last_pos(std::move(last_pos))
+        { }
+    };
+private:
+    shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<result<digest_read_result>> _cl_promise; // cl is reached
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
-    utils::small_vector<query::result_digest, 3> _digest_results;
+    utils::small_vector<digest_and_last_pos, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
 
@@ -3046,16 +3845,23 @@ class digest_read_resolver : public abstract_read_resolver {
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
         _digest_results.clear();
     }
+public:
+    digest_read_resolver(shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+        : abstract_read_resolver(std::move(schema), cl, 0, timeout)
+        , _proxy(std::move(proxy))
+        , _effective_replication_map_ptr(std::move(ermp))
+        , _block_for(block_for)
+        , _target_count_for_cl(target_count_for_cl)
+    {}
     virtual size_t response_count() const override {
         return _digest_results.size();
     }
-public:
-    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout),
-                                _block_for(block_for),  _target_count_for_cl(target_count_for_cl) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_request_failed) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
-            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest());
+            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest(), result->last_position());
             _last_modified = std::max(_last_modified, result->last_modified());
             if (!_data_result) {
                 _data_result = std::move(result);
@@ -3063,9 +3869,9 @@ public:
             got_response(from);
         }
     }
-    void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type last_modified) {
+    void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos) {
         if (!_request_failed) {
-            _digest_results.emplace_back(std::move(digest));
+            _digest_results.emplace_back(std::move(digest), std::move(last_pos));
             _last_modified = std::max(_last_modified, last_modified);
             got_response(from);
         }
@@ -3076,10 +3882,21 @@ public:
             return true;
         }
         auto& first = *_digest_results.begin();
-        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
+        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (const digest_and_last_pos& digest) { return digest.digest != first.digest; }) == _digest_results.end();
     }
+    const std::optional<full_position>& min_position() const {
+        return std::min_element(_digest_results.begin(), _digest_results.end(), [this] (const digest_and_last_pos& a, const digest_and_last_pos& b) {
+            // last_pos can be disengaged when there are not results whatsoever
+            if (!a.last_pos || !b.last_pos) {
+                return bool(a.last_pos) < bool(b.last_pos);
+            }
+            return full_position::cmp(*_schema, *a.last_pos, *b.last_pos) < 0;
+        })->last_pos;
+    }
+private:
     bool waiting_for(gms::inet_address ep) {
-        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || db::is_local(ep) : true;
+        const auto& topo = _effective_replication_map_ptr->get_topology();
+        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_cl_reported) {
@@ -3118,6 +3935,8 @@ public:
             }
         }
     }
+
+public:
     future<result<digest_read_result>> has_cl() {
         return _cl_promise.get_future();
     }
@@ -3638,6 +4457,7 @@ protected:
 
     schema_ptr _schema;
     shared_ptr<storage_proxy> _proxy;
+    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     lw_shared_ptr<query::read_command> _cmd;
     lw_shared_ptr<query::read_command> _retry_cmd;
     dht::partition_range _partition_range;
@@ -3661,13 +4481,17 @@ private:
     }
 
     const locator::topology& get_topology() const noexcept {
-        return _proxy->get_token_metadata_ptr()->get_topology();
+        return _effective_replication_map_ptr->get_topology();
     }
 
 public:
-    abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+    abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
-                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                           _schema(std::move(s)), _proxy(std::move(proxy))
+                         , _effective_replication_map_ptr(std::move(ermp))
+                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
@@ -3692,15 +4516,7 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
-            tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> result_and_hit_rate) {
-                auto&& [result, hit_rate, opt_exception] = result_and_hit_rate;
-                if (opt_exception.has_value() && *opt_exception) {
-                    return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>((*opt_exception).into_exception_ptr());
-                }
-                tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
-            });
+            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *cmd, _partition_range);
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
@@ -3712,18 +4528,10 @@ protected:
             tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info));
         } else {
-            tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_read_data(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> result_hit_rate) {
-                auto&& [result, hit_rate, opt_exception] = result_hit_rate;
-                if (opt_exception.has_value() && *opt_exception) {
-                    return make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>((*opt_exception).into_exception_ptr());
-                }
-                tracing::trace(_trace_state, "read_data: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
-            });
+            return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info);
         }
     }
-    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
@@ -3731,16 +4539,7 @@ protected:
                         timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return ser::storage_proxy_rpc_verbs::send_read_digest(&_proxy->_messaging, netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
-                        _partition_range, digest_algorithm(*_proxy), _rate_limit_info).then([this, ep] (
-                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>, rpc::optional<replica::exception_variant>> digest_timestamp_hit_rate) {
-                auto&& [d, t, hit_rate, opt_exception] = digest_timestamp_hit_rate;
-                if (opt_exception.has_value() && *opt_exception) {
-                    return make_exception_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>((*opt_exception).into_exception_ptr());
-                }
-                tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
-            });
+            return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info);
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
@@ -3800,13 +4599,13 @@ protected:
         auto start = latency_clock::now();
         for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) {
+            (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
-                    resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
+                    resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
@@ -3956,8 +4755,8 @@ public:
             // Return an empty result in this case
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _effective_replication_map_ptr, _schema, _cl, _block_for,
+                db::is_datacenter_local(_cl) ? _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
@@ -3976,6 +4775,13 @@ public:
                 auto&& [result, digests_match] = res.value();
 
                 if (digests_match) {
+                    if (exec->_proxy->features().empty_replica_pages && digest_resolver->response_count() > 1) {
+                        auto& mp = digest_resolver->min_position();
+                        auto& lp = result->last_position();
+                        if (!mp || bool(lp) < bool(mp) || full_position::cmp(*exec->_schema, *mp, *lp) < 0) {
+                            result->set_last_position(mp);
+                        }
+                    }
                     exec->_result_promise.set_value(std::move(result));
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         background_repair_check = true;
@@ -3991,7 +4797,8 @@ public:
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
-                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(db::is_local)));
+                            auto local_dc_filter = exec->_effective_replication_map_ptr->get_topology().get_local_dc_filter();
+                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
@@ -4048,9 +4855,11 @@ private:
 
 class never_speculating_read_executor : public abstract_read_executor {
 public:
-    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
+    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
             db::per_partition_rate_limit::info rate_limit_info) :
-                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
+                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
         _block_for = _targets.size();
     }
 };
@@ -4148,10 +4957,11 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         service_permit permit) {
     const dht::token& token = pr.start()->value().token();
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
-    inet_address_vector_replica_set all_replicas = get_live_sorted_endpoints(ks, token);
+    inet_address_vector_replica_set all_replicas = get_live_sorted_endpoints(*erm, token);
     // Check for a non-local read before heat-weighted load balancing
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_live_sorted_endpoints()
@@ -4159,8 +4969,9 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
-            _gossiper,
+    auto& gossiper = _remote->gossiper();
+    inet_address_vector_replica_set target_replicas = db::filter_for_query(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
+            gossiper,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
@@ -4169,7 +4980,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     // Throw UAE early if we don't have enough replicas.
     try {
-        db::assure_sufficient_live_nodes(cl, ks, target_replicas);
+        db::assure_sufficient_live_nodes(cl, *erm, target_replicas);
     } catch (exceptions::unavailable_exception& ex) {
         slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
         get_stats().read_unavailables.mark();
@@ -4180,7 +4991,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         get_stats().read_repair_attempts++;
     }
 
-    size_t block_for = db::block_for(ks, cl);
+    size_t block_for = db::block_for(*erm, cl);
     auto p = shared_from_this();
 
     db::per_partition_rate_limit::info rate_limit_info;
@@ -4197,21 +5008,22 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     if (target_replicas.size() == all_replicas.size()) {
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
+        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+        if (is_datacenter_local(cl) && !local_dc_filter(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
             target_replicas.push_back(extra_replica);
             slogger.trace("creating read executor with extra target {}", extra_replica);
@@ -4219,17 +5031,17 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
-        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
-        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 }
 
-future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>
+future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>
 storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, db::per_partition_rate_limit::info rate_limit_info) {
     return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, rate_limit_info).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
         auto&& [result, hit_rate] = result_and_hit_rate;
-        return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate));
+        return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate, result->last_position()));
     });
 }
 
@@ -4389,6 +5201,32 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas), repair_decision);
 }
 
+bool storage_proxy::is_worth_merging_for_range_query(
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) const {
+    const auto& topo = get_token_metadata_ptr()->get_topology();
+    auto has_remote_node = [&topo, my_dc = topo.get_datacenter()] (inet_address_vector_replica_set& l) {
+        for (auto&& ep : l) {
+            if (my_dc != topo.get_datacenter(ep)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    //
+    // Querying remote DC is likely to be an order of magnitude slower than
+    // querying locally, so 2 queries to local nodes is likely to still be
+    // faster than 1 query involving remote ones
+    //
+
+    bool merged_has_remote = has_remote_node(merged);
+    return merged_has_remote
+        ? (has_remote_node(l1) || has_remote_node(l2))
+        : true;
+}
+
 future<result<query_partition_key_range_concurrent_result>>
 storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout,
         std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
@@ -4403,6 +5241,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         service_permit permit) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    auto erm = ks.get_effective_replication_map();
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
@@ -4429,11 +5268,12 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     // get stuck on 0 and never increased too much if the number of results remains small.
     concurrency_factor = std::max(size_t(1), ranges.size());
 
+    auto& gossiper = _remote->gossiper();
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
-        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
+        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(*erm, end_token(range));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, _gossiper, pcf);
+        inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, *erm, live_endpoints, merged_preferred_replicas, gossiper, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
         ++i;
 
@@ -4444,8 +5284,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
-            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, _gossiper, pcf);
+            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(*erm, end_token(next_range));
+            inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, *erm, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -4486,20 +5326,20 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
             // Check if there is enough endpoint for the merge to be possible.
-            if (!is_sufficient_live_nodes(cl, ks, merged)) {
+            if (!is_sufficient_live_nodes(cl, *erm, merged)) {
                 break;
             }
 
-            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, ks, merged, current_merged_preferred_replicas, _gossiper, pcf);
+            inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
 
             // Estimate whether merging will be a win or not
-            if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
+            if (!is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
-                auto find_min = [&g = _gossiper, pcf] (const inet_address_vector_replica_set& range) {
+                auto find_min = [&g = _remote->gossiper(), pcf] (const inet_address_vector_replica_set& range) {
                     struct {
-                        gms::gossiper& g;
+                        const gms::gossiper& g;
                         replica::column_family* cf = nullptr;
                         float operator()(const gms::inet_address& ep) const {
                             return float(cf->get_hit_rate(g, ep).rate);
@@ -4527,14 +5367,14 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         }
         slogger.trace("creating range read executor with targets {}", filtered_endpoints);
         try {
-            db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
+            db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
         } catch(exceptions::unavailable_exception& ex) {
             slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
             get_stats().range_slice_unavailables.mark();
             throw;
         }
 
-        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
         ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
@@ -4600,9 +5440,11 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
-    // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
-    // expensive in clusters with vnodes)
-    query_ranges_to_vnodes_generator ranges_to_vnodes(get_token_metadata_ptr(), schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
+    // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
+    // (which can be expensive in clusters with vnodes)
+    auto merge_tokens = !ks.get_replication_strategy().natural_endpoints_depend_on_token();
+
+    query_ranges_to_vnodes_generator ranges_to_vnodes(get_token_metadata_ptr(), schema, std::move(partition_ranges), merge_tokens);
 
     int result_rows_per_range = 0;
     int concurrency_factor = 1;
@@ -4733,7 +5575,6 @@ storage_proxy::do_query(schema_ptr s,
                         cl,
                         std::move(query_options)).finally([lc, p] () mutable {
                     p->get_stats().read.mark(lc.stop().latency());
-                    p->get_stats().estimated_read.add(lc.latency());
                 });
             } catch (const replica::no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
@@ -4746,7 +5587,6 @@ storage_proxy::do_query(schema_ptr s,
                 cl,
                 std::move(query_options)).finally([lc, p] () mutable {
             p->get_stats().range.mark(lc.stop().latency());
-            p->get_stats().estimated_range.add(lc.latency());
         });
     }
 }
@@ -4794,7 +5634,7 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
     // storage_proxy::query() returns immediately - without any networking.
     auto partition_slice = query::partition_slice({}, {}, {}, query::partition_slice::option_set());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
-            query::max_result_size(query::result_memory_limiter::unlimited_result_size));
+            query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
 }
 
 static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {
@@ -4898,8 +5738,6 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         auto update_stats = seastar::defer ([&] {
             get_stats().cas_foreground--;
             write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
-            write ? get_stats().estimated_cas_write.add(lc.latency()) :
-                    get_stats().estimated_cas_read.add(lc.latency());
             if (contentions > 0) {
                 write ? get_stats().cas_write_contention.add(contentions) : get_stats().cas_read_contention.add(contentions);
             }
@@ -5015,16 +5853,15 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     co_return condition_met;
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_endpoints(replica::keyspace& ks, const dht::token& token) const {
-    auto erm = ks.get_effective_replication_map();
-    inet_address_vector_replica_set eps = erm->get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
+inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
+    inet_address_vector_replica_set eps = erm.get_natural_endpoints_without_node_being_replaced(token);
+    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
     eps.erase(itend, eps.end());
     return eps;
 }
 
-void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) {
-    locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set& eps) const {
+    get_token_metadata_ptr()->get_topology().sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
     auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
     if (it != eps.end() && it != eps.begin()) {
@@ -5032,10 +5869,14 @@ void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set&
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(replica::keyspace& ks, const dht::token& token) const {
-    auto eps = get_live_endpoints(ks, token);
+inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
+    auto eps = get_live_endpoints(erm, token);
     sort_endpoints_by_proximity(eps);
     return eps;
+}
+
+bool storage_proxy::is_alive(const gms::inet_address& ep) const {
+    return _remote->is_alive(ep);
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {
@@ -5056,504 +5897,15 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
-    slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
-
-    if (!_gossiper.get_unreachable_token_owners().empty()) {
-        slogger.info("Cannot perform truncate, some hosts are down");
-        // Since the truncate operation is so aggressive and is typically only
-        // invoked by an admin, for simplicity we require that all nodes are up
-        // to perform the operation.
-        auto live_members = _gossiper.get_live_members().size();
-
-        return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
-                live_members + _gossiper.get_unreachable_members().size(),
-                live_members));
-    }
-
-    auto all_endpoints = _gossiper.get_live_token_owners();
-    auto& ms = _messaging;
-    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
-
-    slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
-
-    return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
-        return ser::storage_proxy_rpc_verbs::send_truncate(&ms, netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
-    }).handle_exception([cfname](auto ep) {
-       try {
-           std::rethrow_exception(ep);
-       } catch (rpc::timeout_error& e) {
-           slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
-           throw;
-       } catch (...) {
-           throw;
-       }
-    });
+    return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname));
 }
 
-void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
-    _mm = std::move(mm);
-    ser::storage_proxy_rpc_verbs::register_counter_mutation(&_messaging, std::bind_front(&storage_proxy::handle_counter_mutation, this));
-    ser::storage_proxy_rpc_verbs::register_mutation(&_messaging, std::bind_front(&storage_proxy::receive_mutation_handler, this, _write_smp_service_group));
-    ser::storage_proxy_rpc_verbs::register_hint_mutation(&_messaging, [this] <typename... Args>(Args&&... args) { return receive_mutation_handler(_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
-    ser::storage_proxy_rpc_verbs::register_paxos_learn(&_messaging, std::bind_front(&storage_proxy::handle_paxos_learn, this));
-    ser::storage_proxy_rpc_verbs::register_mutation_done(&_messaging, std::bind_front(&storage_proxy::handle_mutation_done, this));
-    ser::storage_proxy_rpc_verbs::register_mutation_failed(&_messaging, std::bind_front(&storage_proxy::handle_mutation_failed, this));
-    ser::storage_proxy_rpc_verbs::register_read_data(&_messaging, std::bind_front(&storage_proxy::handle_read_data, this));
-    ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_messaging, std::bind_front(&storage_proxy::handle_read_mutation_data, this));
-    ser::storage_proxy_rpc_verbs::register_read_digest(&_messaging, std::bind_front(&storage_proxy::handle_read_digest, this));
-    ser::storage_proxy_rpc_verbs::register_truncate(&_messaging, std::bind_front(&storage_proxy::handle_truncate, this));
-    // Register PAXOS verb handlers
-    ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_messaging, std::bind_front(&storage_proxy::handle_paxos_prepare, this));
-    ser::storage_proxy_rpc_verbs::register_paxos_accept(&_messaging, std::bind_front(&storage_proxy::handle_paxos_accept, this));
-    ser::storage_proxy_rpc_verbs::register_paxos_prune(&_messaging, std::bind_front(&storage_proxy::handle_paxos_prune, this));
-}
-
-future<>
-storage_proxy::handle_counter_mutation(const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-
-        tracing::trace_state_ptr trace_state_ptr;
-        if (trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
-        }
-
-        return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [this, cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [this, &mutations, src_addr] (frozen_mutation& fm) {
-                // FIXME: optimise for cases when all fms are in the same schema
-                auto schema_version = fm.schema_version();
-                return _mm->get_schema_for_write(schema_version, std::move(src_addr), _messaging).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
-                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
-                });
-            }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
-                auto sp = get_local_shared_storage_proxy();
-                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-            });
-        });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
-                      utils::UUID schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
-                      unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-                      auto&& apply_fn, auto&& forward_fn) {
-        tracing::trace_state_ptr trace_state_ptr;
-
-        if (trace_info) {
-            tracing::trace_info& tr_info = *trace_info;
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
-        }
-
-        storage_proxy::clock_type::time_point timeout;
-        if (!t) {
-            auto timeout_in_ms = get_local_shared_storage_proxy()->_db.local().get_config().write_request_timeout_in_ms();
-            timeout = clock_type::now() + std::chrono::milliseconds(timeout_in_ms);
-        } else {
-            timeout = *t;
-        }
-
-        struct errors_info {
-            size_t count = 0;
-            replica::exception_variant local;
-        };
-
-        return do_with(std::move(in), get_local_shared_storage_proxy(), errors_info{}, [this, src_addr = std::move(src_addr),
-                       forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout,
-                       schema_version, apply_fn = std::move(apply_fn), forward_fn = std::move(forward_fn)]
-                       (const auto& m, shared_ptr<storage_proxy>& p, errors_info& errors) mutable {
-            ++p->get_stats().received_mutations;
-            p->get_stats().forwarded_mutations += forward.size();
-            return when_all(
-                // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize_invoke([this, timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
-                                      apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
-                    // FIXME: get_schema_for_write() doesn't timeout
-                    return _mm->get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, p->_messaging)
-                                         .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
-                        return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
-                    });
-                }).then([&p, reply_to, shard, response_id, trace_state_ptr] () {
-                    // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
-                    // lots of unsent responses, which can OOM our shard.
-                    //
-                    // Usually we will return immediately, since this work only involves appending data to the connection
-                    // send buffer.
-                    tracing::trace(trace_state_ptr, "Sending mutation_done to /{}", reply_to);
-                    return ser::storage_proxy_rpc_verbs::send_mutation_done(&p->_messaging,
-                            netw::messaging_service::msg_addr{reply_to, shard},
-                            shard,
-                            response_id,
-                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
-                        f.ignore_ready_future();
-                    });
-                }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
-                    errors.count++;
-                    errors.local = replica::try_encode_replica_exception(eptr);
-                    seastar::log_level l = seastar::log_level::warn;
-                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
-                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
-                        // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
-                        l = seastar::log_level::debug;
-                    }
-                    slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
-                                  timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
-                    tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
-                                      tracing::make_trace_info(trace_state_ptr))
-                            .then_wrapped([&p, &errors] (future<> f) {
-                        if (f.failed()) {
-                            ++p->get_stats().forwarding_errors;
-                            errors.count++;
-                        };
-                        f.ignore_ready_future();
-                    });
-                })
-            ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors, &p] (future<std::tuple<future<>, future<>>>&& f) {
-                // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
-                auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-                if (errors.count) {
-                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors.count, reply_to);
-                    fut = ser::storage_proxy_rpc_verbs::send_mutation_failed(&p->_messaging,
-                            netw::messaging_service::msg_addr{reply_to, shard},
-                            shard,
-                            response_id,
-                            errors.count,
-                            p->get_view_update_backlog(),
-                            std::move(errors.local)).then_wrapped([] (future<> f) {
-                        f.ignore_ready_future();
-                        return netw::messaging_service::no_wait();
-                    });
-                }
-                return fut.finally([trace_state_ptr] {
-                    tracing::trace(trace_state_ptr, "Mutation handling is done");
-                });
-            });
-        });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::receive_mutation_handler(smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, inet_address_vector_replica_set forward,
-            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info,
-            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-
-        utils::UUID schema_version = in.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
-                trace_info ? *trace_info : std::nullopt,
-                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
-                        clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
-                },
-                /* forward_fn */ [rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
-                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                        std::optional<tracing::trace_info> trace_info) {
-                    return ser::storage_proxy_rpc_verbs::send_mutation(&p->_messaging,
-                                            addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info), rate_limit_info);
-                });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_paxos_learn(const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
-            inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-
-        utils::UUID schema_version = decision.update.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
-                response_id, trace_info,
-               /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
-                       const paxos::proposal& decision, clock_type::time_point timeout) {
-                     return paxos::paxos_state::learn(*this, std::move(s), decision, timeout, tr_state);
-              },
-              /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
-                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                      std::optional<tracing::trace_info> trace_info) {
-                    return ser::storage_proxy_rpc_verbs::send_paxos_learn(&p->_messaging, addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
-              });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_mutation_done(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
-        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_response(response_id, from, std::move(backlog));
-            return netw::messaging_service::no_wait();
-        });
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
-        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
-            error err = error::FAILURE;
-            if (exception) {
-                err = std::visit([] <typename Ex> (Ex&) {
-                    if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
-                        return error::RATE_LIMIT;
-                    } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
-                        return error::FAILURE;
-                    }
-                }, exception->reason);
-            }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
-            return netw::messaging_service::no_wait();
-        });
-}
-
-template<typename... Elements>
-future<rpc::tuple<Elements..., replica::exception_variant>> storage_proxy::encode_replica_exception_for_rpc(future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
-    using original_std_tuple_type = std::tuple<Elements...>;
-    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
-
-    if (!f.failed()) {
-        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
-    }
-
-    std::exception_ptr eptr = f.get_exception();
-    if (features().typed_errors_in_read_rpc) {
-        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
-        if (ex) {
-            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
-        }
-    }
-
-    return make_exception_future<final_tuple_type>(std::move(eptr));
-}
-
-future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>>
-storage_proxy::handle_read_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
-        }
-        auto da = oda.value_or(query::digest_algorithm::MD5);
-        auto sp = get_local_shared_storage_proxy();
-        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-        if (!cmd.max_result_size) {
-            auto& cfg = sp->local_db().get_config();
-            cmd.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
-        }
-        return do_with(std::move(pr), std::move(sp), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
-            p->get_stats().replica_data_reads++;
-            auto src_ip = src_addr.addr;
-            return _mm->get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, da, &pr, &p, &trace_state_ptr, t, rate_limit_info] (schema_ptr s) {
-                auto pr2 = ::compat::unwrap(std::move(pr), *s);
-                if (pr2.second) {
-                    // this function assumes singular queries but doesn't validate
-                    throw std::runtime_error("READ_DATA called with wrapping range");
-                }
-                query::result_options opts;
-                opts.digest_algo = da;
-                opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info);
-            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
-            });
-        });
-}
-
-future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
-storage_proxy::handle_read_mutation_data(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
-        }
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
-        }
-        return do_with(std::move(pr),
-                       get_local_shared_storage_proxy(),
-                       std::move(trace_state_ptr),
-                       ::compat::one_or_two_partition_ranges({}),
-                       [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), t] (
-                               ::compat::wrapping_partition_range& pr,
-                               shared_ptr<storage_proxy>& p,
-                               tracing::trace_state_ptr& trace_state_ptr,
-                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
-            p->get_stats().replica_mutation_data_reads++;
-            auto src_ip = src_addr.addr;
-            return _mm->get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
-                unwrapped = ::compat::unwrap(std::move(pr), *s);
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
-            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
-            });
-        });
-}
-
-future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant>>
-storage_proxy::handle_read_digest(const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
-        tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
-            tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
-        }
-        auto da = oda.value_or(query::digest_algorithm::MD5);
-        auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
-        }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [this, &cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t, rate_limit_info] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
-            p->get_stats().replica_digest_reads++;
-            auto src_ip = src_addr.addr;
-            return _mm->get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, &pr, &p, &trace_state_ptr, t, da, rate_limit_info] (schema_ptr s) {
-                auto pr2 = ::compat::unwrap(std::move(pr), *s);
-                if (pr2.second) {
-                    // this function assumes singular queries but doesn't validate
-                    throw std::runtime_error("READ_DIGEST called with wrapping range");
-                }
-                auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
-            }).then_wrapped([this, &trace_state_ptr, src_ip] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) mutable {
-                tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
-                return encode_replica_exception_for_rpc(std::move(f), [] { return std::make_tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid()); });
-            });
-        });
-}
-
-future<>
-storage_proxy::handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
-        return do_with(utils::make_joinpoint([] { return db_clock::now();}),
-                        [this, ksname, cfname](auto& tsf) {
-            return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
-                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
-            });
-        });
-}
-
-future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
-storage_proxy::handle_paxos_prepare(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
-                std::optional<tracing::trace_info> trace_info) {
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto src_ip = src_addr.addr;
-        tracing::trace_state_ptr tr_state;
-        if (trace_info) {
-            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(tr_state);
-            tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_ip, ballot);
-        }
-        if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
-        }
-
-        return _mm->get_schema_for_read(cmd.schema_version, src_addr, _messaging).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
-                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == this_shard_id();
-            get_stats().replica_cross_shard_ops += !local;
-            return container().invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                     ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
-                tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
-                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
-                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
-                });
-            });
-        });
-}
-
-future<bool>
-storage_proxy::handle_paxos_accept(const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
-            std::optional<tracing::trace_info> trace_info) {
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto src_ip = src_addr.addr;
-        tracing::trace_state_ptr tr_state;
-        if (trace_info) {
-            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(tr_state);
-            tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
-        }
-
-        auto f = _mm->get_schema_for_read(proposal.update.schema_version(), src_addr, _messaging).then([this, tr_state = std::move(tr_state),
-                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
-            dht::token token = proposal.update.decorated_key(*schema).token();
-            unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == this_shard_id();
-            get_stats().replica_cross_shard_ops += !local;
-            return container().invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, proposal = std::move(proposal), timeout, token] (storage_proxy& sp) {
-                return paxos::paxos_state::accept(sp, gt, gs, token, proposal, *timeout);
-            });
-        });
-
-        if (tr_state) {
-            f = f.finally([tr_state, src_ip] {
-                tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_ip);
-            });
-        }
-
-        return f;
-}
-
-future<rpc::no_wait_type>
-storage_proxy::handle_paxos_prune(const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-                utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
-        static thread_local uint16_t pruning = 0;
-        static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
-        auto src_addr = netw::messaging_service::get_source(cinfo);
-        auto src_ip = src_addr.addr;
-        tracing::trace_state_ptr tr_state;
-        if (trace_info) {
-            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
-            tracing::begin(tr_state);
-            tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_ip, ballot);
-        }
-
-        if (pruning >= pruning_limit) {
-            get_stats().cas_replica_dropped_prune++;
-            tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
-            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
-        }
-
-        pruning++;
-        auto d = defer([] { pruning--; });
-        return _mm->get_schema_for_read(schema_id, src_addr, _messaging).then([this, key = std::move(key), ballot,
-                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == this_shard_id();
-            get_stats().replica_cross_shard_ops += !local;
-            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
-                tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
-                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
-                    return netw::messaging_service::no_wait();
-                });
-            });
-        });
+void storage_proxy::init_messaging_service(migration_manager* mm) {
+    _remote->init_messaging_service(mm, this);
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    auto& ms = _messaging;
-    co_await ser::storage_proxy_rpc_verbs::unregister(&ms);
-    _mm = nullptr;
+    return _remote->uninit_messaging_service();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
@@ -5615,15 +5967,15 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
     co_return ret;
 }
 
-future<> storage_proxy::start_hints_manager() {
+future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> g) {
     future<> f = make_ready_future<>();
     if (!_hints_manager.is_disabled_for_all()) {
         f = _hints_resource_manager.register_manager(_hints_manager);
     }
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
-    }).then([this] {
-        return _hints_resource_manager.start(shared_from_this(), _gossiper.shared_from_this());
+    }).then([this, g = std::move(g)] () mutable {
+        return _hints_resource_manager.start(shared_from_this(), std::move(g));
     });
 }
 
@@ -5672,7 +6024,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
 }
 
 future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline) {
-    const utils::UUID my_host_id = _db.local().get_config().host_id;
+    const auto my_host_id = _db.local().get_config().host_id;
     if (spoint.host_id != my_host_id) {
         throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
                 spoint.host_id, my_host_id));

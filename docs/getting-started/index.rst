@@ -8,9 +8,6 @@ Getting Started
    install-scylla/index
    configure
    requirements
-   cql
-   cqlsh
-   Scylla Drivers </using-scylla/drivers/index>
    Migrate to Scylla </using-scylla/migrate-scylla>
    Integration Solutions </using-scylla/integrations/index>
    tutorials
@@ -42,8 +39,8 @@ Getting Started
 
   * :doc:`Scylla Drivers</using-scylla/drivers/index>`
   * `Get Started Lesson on Scylla University <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/quick-wins-install-and-run-scylla/>`_    
-  * :doc:`Apache Cassandra Query Language (CQL) Reference </getting-started/cql/>`
-  * :doc:`CQLSh: the CQL shell</getting-started/cqlsh/>`
+  * :doc:`CQL Reference </cql/index>`
+  * :doc:`cqlsh - the CQL shell </cql/cqlsh/>`
 
 .. panel-box::
   :title: Use Scylla with Third-party Solutions

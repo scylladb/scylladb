@@ -2,7 +2,7 @@ Compaction
 ==========
 
 
-This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </getting-started/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
+This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the :doc:`CQL syntax </cql/compaction>` for setting a compaction strategy. There is also another document, :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`, that covers how to decide which strategy works best.
 
 How Scylla Writes Data
 ----------------------
@@ -34,7 +34,7 @@ There are two types of compactions:
 View Compaction Statistics
 --------------------------
 
-Scylla has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the :ref:`logs <manager-2.1-logging-settings>`. 
+Scylla has tools you can use to see the status of your compactions. These include nodetool (:doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory>`  and :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats>`)  and the Grafana dashboards which are part of the `Scylla Monitoring Stack <https://monitoring.docs.scylladb.com/>`_ which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the `logs <https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html>`_. 
 
 Compaction strategy
 -------------------
@@ -50,7 +50,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 How to Set a Compaction Strategy
 ................................
 
-Compaction strategies are set as part of the ``CREATE`` or ``ALTER`` statement when creating or altering tables. Refer to the :doc:`CQL syntax </getting-started/compaction>` for details. 
+Compaction strategies are set as part of the ``CREATE`` or ``ALTER`` statement when creating or altering tables. Refer to the :doc:`CQL syntax </cql/compaction>` for details. 
 
 .. caution:: Changing the parameters for compaction strategies or changing from one strategy to another (using the ``ALTER`` statement) can create issues. See `Changing Compaction Strategies or Properties`_ for more information. 
 
@@ -238,7 +238,7 @@ Use the table in :ref:`Which strategy is best <which-strategy-is-best>` to deter
 
 References
 ----------
-* :doc:`CQL Reference for Compaction </getting-started/compaction>`
+* :doc:`CQL Reference for Compaction </cql/compaction>`
 
 * :doc:`How to Choose a Compaction Strategy </architecture/compaction/compaction-strategies>`.
 

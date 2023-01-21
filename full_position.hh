@@ -31,6 +31,15 @@ struct full_position {
     operator full_position_view() {
         return full_position_view(partition, position);
     }
+
+    static std::strong_ordering cmp(const schema& s, const full_position& a, const full_position& b) {
+        partition_key::tri_compare pk_cmp(s);
+        if (auto res = pk_cmp(a.partition, b.partition); res != 0) {
+            return res;
+        }
+        position_in_partition::tri_compare pos_cmp(s);
+        return pos_cmp(a.position, b.position);
+    }
 };
 
 inline full_position_view::full_position_view(const full_position& fp) : partition(fp.partition), position(fp.position) { }

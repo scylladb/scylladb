@@ -7,6 +7,7 @@
  */
 #include "server.hh"
 
+#include "utils/error_injection.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -19,6 +20,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
 
 #include "fsm.hh"
@@ -36,6 +38,11 @@ struct active_read {
 };
 
 struct awaited_index {
+    promise<> promise;
+    optimized_optional<abort_source::subscription> abort;
+};
+
+struct awaited_conf_change {
     promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
@@ -65,16 +72,16 @@ public:
     future<read_barrier_reply> execute_read_barrier(server_id, seastar::abort_source* as) override;
     future<add_entry_reply> execute_add_entry(server_id from, command cmd, seastar::abort_source* as) override;
     future<add_entry_reply> execute_modify_config(server_id from,
-        std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) override;
+        std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
 
 
     // server interface
     future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) override;
-    future<> set_configuration(server_address_set c_new, seastar::abort_source* as = nullptr) override;
+    future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
-    future<> abort() override;
+    future<> abort(sstring reason) override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as = nullptr) override;
     void wait_until_candidate() override;
@@ -85,8 +92,9 @@ public:
     bool is_leader() override;
     void tick() override;
     raft::server_id id() const override;
+    void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout) override;
-    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
+    future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
 private:
@@ -101,20 +109,26 @@ private:
     server::configuration _config;
     std::optional<promise<>> _stepdown_promise;
     std::optional<shared_promise<>> _leader_promise;
-    std::optional<promise<>> _non_joint_conf_commit_promise;
+    std::optional<awaited_conf_change> _non_joint_conf_commit_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
 
-    // Set to true when abort() is called
-    bool _aborted = false;
+    // Set to abort reason when abort() is called
+    std::optional<sstring> _aborted;
 
     // Signaled when apply index is changed
     condition_variable _applied_index_changed;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
-    queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>>(10);
+
+    struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
+    using applier_fiber_message = std::variant<
+        std::vector<log_entry_ptr>,
+        snapshot_descriptor,
+        removed_from_config>;
+    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -261,6 +275,9 @@ private:
     // term.
     future<> wait_for_apply(index_t idx, abort_source*);
 
+    void check_not_aborted();
+    void handle_background_error(const char* fiber_name);
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -271,8 +288,22 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
-    if (_config.snapshot_threshold > _config.max_log_size) {
-        throw config_error("snapshot_threshold has to be smaller than max_log_size");
+    if (_config.snapshot_threshold_log_size > _config.max_log_size) {
+        throw config_error(fmt::format("[{}] snapshot_threshold_log_size ({}) must not be greater than max_log_size ({})",
+            _id, _config.snapshot_threshold_log_size, _config.max_log_size));
+    }
+    if (_config.snapshot_trailing_size > _config.snapshot_threshold_log_size) {
+        throw config_error(fmt::format("[{}] snapshot_trailing_size ({}) must not be greater than snapshot_threshold_log_size ({})",
+                                       _id, _config.snapshot_trailing_size, _config.snapshot_threshold_log_size));
+    }
+    if (_config.max_command_size > _config.max_log_size - _config.snapshot_trailing_size) {
+        throw config_error(fmt::format(
+            "[{}] max_command_size ({}) must not be greater than "
+            "max_log_size - snapshot_trailing_size ({} - {} = {})",
+            _id,
+            _config.max_command_size,
+            _config.max_log_size, _config.snapshot_trailing_size,
+            _config.max_log_size - _config.snapshot_trailing_size));
     }
 }
 
@@ -280,7 +311,7 @@ future<> server_impl::start() {
     auto [term, vote] = co_await _persistence->load_term_and_vote();
     auto snapshot  = co_await _persistence->load_snapshot_descriptor();
     auto log_entries = co_await _persistence->load_log();
-    auto log = raft::log(snapshot, std::move(log_entries));
+    auto log = raft::log(snapshot, std::move(log_entries), _config.max_command_size);
     auto commit_idx = co_await _persistence->load_commit_idx();
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
@@ -307,9 +338,9 @@ future<> server_impl::start() {
         // Account both for current and previous configurations since
         // the last configuration idx can point to the joint configuration entry.
         rpc_config.current.merge(rpc_config.previous);
-        for (const auto& addr: rpc_config.current) {
-            add_to_rpc_config(addr);
-            _rpc->add_server(addr.id, addr.info);
+        for (const auto& s: rpc_config.current) {
+            add_to_rpc_config(s.addr);
+            _rpc->add_server(s.addr);
         }
     }
 
@@ -377,9 +408,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
         }
     }
 
-    if (_aborted) {
-        throw stopped_error();
-    }
+    check_not_aborted();
 
     if (as && as->abort_requested()) {
         throw request_aborted();
@@ -442,17 +471,24 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 }
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
-    // Wait for a new slot to become available
+    // Wait for sufficient memory to become available
+    semaphore_units<> memory_permit;
     try {
-        co_await _fsm->wait_max_log_size(as);
+        memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
     } catch (semaphore_aborted&) {
         throw request_aborted();
     }
-    logger.trace("[{}] adding entry after log size limit check", id());
+    logger.trace("[{}] adding entry after waiting for memory permit", id());
 
-    const log_entry& e = _fsm->add_entry(std::move(cmd));
-
-    co_return entry_id{.term = e.term, .idx = e.idx};
+    try {
+        const log_entry& e = _fsm->add_entry(std::move(cmd));
+        memory_permit.release();
+        co_return entry_id{.term = e.term, .idx = e.idx};
+    } catch (const not_a_leader&) {
+        // the semaphore is already destroyed, prevent memory_permit from accessing it
+        memory_permit.release();
+        throw;
+    }
 }
 
 future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd, seastar::abort_source* as) {
@@ -470,6 +506,11 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
 }
 
 future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as) {
+    if (command.size() > _config.max_command_size) {
+        logger.trace("[{}] add_entry command size exceeds the limit: {} > {}",
+                     id(), command.size(), _config.max_command_size);
+        throw command_is_too_big_error(command.size(), _config.max_command_size);
+    }
     _stats.add_command++;
     server_id leader = _fsm->current_leader();
     logger.trace("[{}] an entry is submitted", id());
@@ -484,6 +525,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
@@ -515,7 +557,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
 }
 
 future<add_entry_reply> server_impl::execute_modify_config(server_id from,
-    std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
+    std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
 
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
@@ -525,25 +567,29 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     try {
         // Wait for a new slot to become available
         auto cfg = get_configuration().current;
-        for (auto& addr : add) {
-            logger.trace("[{}] adding server {} as {}", id(), addr.id,
-                    addr.can_vote? "voter" : "non-voter");
-            auto it = cfg.find(addr);
+        for (auto& s : add) {
+            logger.trace("[{}] adding server {} as {}", id(), s.addr.id,
+                    s.can_vote? "voter" : "non-voter");
+            auto it = cfg.find(s);
             if (it == cfg.end()) {
-                cfg.insert(addr);
-            } else if (it->can_vote != addr.can_vote) {
-                cfg.erase(addr);
-                cfg.insert(addr);
+                cfg.insert(s);
+            } else if (it->can_vote != s.can_vote) {
+                cfg.erase(s);
+                cfg.insert(s);
                 logger.trace("[{}] server {} already in configuration now {}",
-                        id(), addr.id, addr.can_vote? "voter" : "non-voter");
+                        id(), s.addr.id, s.can_vote? "voter" : "non-voter");
             } else {
                 logger.warn("[{}] the server {} already exists in configuration as {}",
-                        id(), addr.id, addr.can_vote? "voter" : "non-voter");
+                        id(), s.addr.id, s.can_vote? "voter" : "non-voter");
             }
         }
         for (auto& to_remove: del) {
             logger.trace("[{}] removing server {}", id(), to_remove);
-            cfg.erase(server_address{.id = to_remove});
+            // erase(to_remove) only available from C++23
+            auto it = cfg.find(to_remove);
+            if (it != cfg.end()) {
+                cfg.erase(it);
+            }
         }
         co_await set_configuration(cfg, as);
 
@@ -563,7 +609,7 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
     co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
 }
 
-future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del, seastar::abort_source* as) {
+future<> server_impl::modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
     server_id leader = _fsm->current_leader();
     if (!_config.enable_forwarding) {
         if (leader != _id) {
@@ -579,6 +625,7 @@ future<> server_impl::modify_config(std::vector<server_address> add, std::vector
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
@@ -772,15 +819,20 @@ void server_impl::send_message(server_id id, Message m) {
     }, std::move(m));
 }
 
-static configuration_diff diff_address_sets(const server_address_set& prev, const server_address_set& current) {
-    configuration_diff result;
+// Like `configuration_diff` but with `can_vote` information forgotten.
+struct rpc_config_diff {
+    server_address_set joining, leaving;
+};
+
+static rpc_config_diff diff_address_sets(const server_address_set& prev, const config_member_set& current) {
+    rpc_config_diff result;
     for (const auto& s : current) {
-        if (!prev.contains(s)) {
-            result.joining.insert(s);
+        if (!prev.contains(s.addr)) {
+            result.joining.insert(s.addr);
         }
     }
     for (const auto& s : prev) {
-        if (!current.contains(s)) {
+        if (!current.contains(s.id)) {
             result.leaving.insert(s);
         }
     }
@@ -804,18 +856,20 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.snp) {
-                auto& [snp, is_local, old_id] = *batch.snp;
+                auto& [snp, is_local] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
                 co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
                 _stats.store_snapshot++;
-                // Drop previous snapshot since it is no longer used
-                 _state_machine->drop_snapshot(old_id);
                 // If this is locally generated snapshot there is no need to
                 // load it.
                 if (!is_local) {
                     co_await _apply_entries.push_eventually(std::move(snp));
                 }
+            }
+
+            for (const auto& snp_id: batch.snps_to_drop) {
+                _state_machine->drop_snapshot(snp_id);
             }
 
             if (batch.log_entries.size()) {
@@ -825,6 +879,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     co_await _persistence->truncate_log(entries[0]->idx);
                     _stats.truncate_persisted_log++;
                 }
+
+                utils::get_local_injector().inject("store_log_entries/test-failure",
+                    [] { throw std::runtime_error("store_log_entries/test-failure"); });
 
                 // Combine saving and truncating into one call?
                 // will require persistence to keep track of last idx
@@ -841,13 +898,12 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // It should be done prior to sending the messages since the RPC
             // module needs to know who should it send the messages to (actual
             // network addresses of the joining servers).
-            configuration_diff rpc_diff;
+            rpc_config_diff rpc_diff;
             if (batch.configuration) {
-                const server_address_set& current_rpc_config = get_rpc_config();
                 rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
-                    _rpc->add_server(addr.id, addr.info);
+                    _rpc->add_server(addr);
                 }
             }
 
@@ -875,7 +931,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     for (const auto& e: batch.committed) {
                         const auto* cfg = get_if<raft::configuration>(&e->data);
                         if (cfg != nullptr && !cfg->is_joint()) {
-                            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->set_value();
+                            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
                             break;
                         }
                     }
@@ -895,10 +951,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 if (_stepdown_promise) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_value();
                 }
-                if (!_current_rpc_config.contains(server_address{_id})) {
-                    // If the node is no longer part of a config and no longer the leader
-                    // it will never know the status of entries it submitted
-                    drop_waiters();
+                if (!_current_rpc_config.contains(_id)) {
+                    // - It's important we push this after we pushed committed entries above. It
+                    // will cause `applier_fiber` to drop waiters, which should be done after we
+                    // notify all waiters for entries committed in this batch.
+                    // - This may happen multiple times if `io_fiber` gets multiple batches when
+                    // we're outside the configuration, but it should eventually (and generally
+                    // quickly) stop happening (we're outside the config after all).
+                    co_await _apply_entries.push_eventually(removed_from_config{});
                 }
                 // request aborts of snapshot transfers
                 abort_snapshot_transfers();
@@ -921,7 +981,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
     } catch (stop_apply_fiber&) {
         // Log fiber is stopped explicitly
     } catch (...) {
-        logger.error("[{}] io fiber stopped because of the error: {}", _id, std::current_exception());
+        handle_background_error("io");
     }
     co_return;
 }
@@ -963,11 +1023,6 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
     } catch (...) {
         logger.error("apply_snapshot[{}] failed with {}", _id, std::current_exception());
     }
-    if (!reply.success) {
-        // Drop snapshot that failed to be applied
-        _state_machine->drop_snapshot(snp.snp.id);
-    }
-
     co_return reply;
 }
 
@@ -978,11 +1033,11 @@ future<> server_impl::applier_fiber() {
         while (true) {
             auto v = co_await _apply_entries.pop_eventually();
 
-            if (std::holds_alternative<std::vector<log_entry_ptr>>(v)) {
-                auto& batch = std::get<0>(v);
+            co_await std::visit(make_visitor(
+            [this] (std::vector<log_entry_ptr>& batch) -> future<> {
                 if (batch.empty()) {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
-                    continue;
+                    co_return;
                 }
 
                 // Completion notification code assumes that previous snapshot is applied
@@ -1009,6 +1064,9 @@ future<> server_impl::applier_fiber() {
                 if (size) {
                     try {
                         co_await _state_machine->apply(std::move(commands));
+                    } catch (abort_requested_exception& e) {
+                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
+                        co_return;
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
                     }
@@ -1023,7 +1081,11 @@ future<> server_impl::applier_fiber() {
                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                auto last_snap_idx = _fsm->log_last_snapshot_idx();
-               if (_applied_idx >= last_snap_idx && _applied_idx - last_snap_idx >= _config.snapshot_threshold) {
+
+               if (_applied_idx > last_snap_idx &&
+                   (_applied_idx - last_snap_idx >= _config.snapshot_threshold ||
+                   _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size))
+               {
                    snapshot_descriptor snp;
                    snp.term = last_term;
                    snp.idx = _applied_idx;
@@ -1033,15 +1095,14 @@ future<> server_impl::applier_fiber() {
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, true)) {
+                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, _config.snapshot_trailing_size, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                       _state_machine->drop_snapshot(snp.id);
                    }
                    _stats.snapshots_taken++;
                }
-            } else {
-                snapshot_descriptor& snp = std::get<1>(v);
+            },
+            [this] (snapshot_descriptor& snp) -> future<> {
                 assert(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
@@ -1050,13 +1111,21 @@ future<> server_impl::applier_fiber() {
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
                 _stats.sm_load_snapshot++;
+            },
+            [this] (const removed_from_config&) -> future<> {
+                // If the node is no longer part of a config and no longer the leader
+                // it may never know the status of entries it submitted.
+                drop_waiters();
+                co_return;
             }
+            ), v);
+
             signal_applied();
         }
     } catch(stop_apply_fiber& ex) {
         // the fiber is aborted
     } catch (...) {
-        logger.error("[{}] applier fiber stopped because of the error: {}", _id, std::current_exception());
+        handle_background_error("applier");
     }
     co_return;
 }
@@ -1085,9 +1154,7 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
 }
 
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
-    if (_aborted) {
-        throw stopped_error();
-    }
+    check_not_aborted();
 
     logger.trace("[{}] execute_read_barrier start", _id);
 
@@ -1136,13 +1203,26 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
         if (as && as->abort_requested()) {
             throw request_aborted();
         }
+        check_not_aborted();
         logger.trace("[{}] read_barrier forward to  {}", _id, leader);
         if (leader == server_id{}) {
             co_await wait_for_leader(as);
             leader = _fsm->current_leader();
         } else {
             auto applied = _applied_idx;
-            auto res = co_await get_read_idx(leader, as);
+            read_barrier_reply res;
+            bool need_retry = false;
+            try {
+                res = co_await get_read_idx(leader, as);
+            } catch (const intermittent_connection_error& e) {
+                logger.trace("[{}] read_barrier on {} resulted in raft::intermittent_connection_error; retrying", _id, leader);
+                need_retry = true;
+            }
+            if (need_retry) {
+                leader = server_id{};
+                co_await yield();
+                continue;
+            }
             if (std::holds_alternative<std::monostate>(res)) {
                 // the leader is not ready to answer because it did not
                 // committed any entries yet, so wait for any entry to be
@@ -1181,8 +1261,22 @@ void server_impl::abort_snapshot_transfers() {
     _snapshot_transfers.clear();
 }
 
-future<> server_impl::abort() {
-    _aborted = true;
+void server_impl::check_not_aborted() {
+    if (_aborted) {
+        throw stopped_error(*_aborted);
+    }
+}
+
+void server_impl::handle_background_error(const char* fiber_name) {
+    const auto e = std::current_exception();
+    logger.error("[{}] {} fiber stopped because of the error: {}", _id, fiber_name, e);
+    if (_config.on_background_error) {
+        _config.on_background_error(e);
+    }
+}
+
+future<> server_impl::abort(sstring reason) {
+    _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
 
@@ -1208,15 +1302,15 @@ future<> server_impl::abort() {
     // since the RPC implementation may wait for forwarded `modify_config` calls to finish
     // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
     for (auto& ac: _awaited_commits) {
-        ac.second.done.set_exception(stopped_error());
+        ac.second.done.set_exception(stopped_error(*_aborted));
     }
     for (auto& aa: _awaited_applies) {
-        aa.second.done.set_exception(stopped_error());
+        aa.second.done.set_exception(stopped_error(*_aborted));
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
     if (_non_joint_conf_commit_promise) {
-        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->set_exception(stopped_error());
+        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error(*_aborted));
     }
 
     // Complete all read attempts with not_a_leader
@@ -1227,14 +1321,14 @@ future<> server_impl::abort() {
 
     // Abort all read_barriers with an exception
     for (auto& i : _awaited_indexes) {
-        i.second.promise.set_exception(stopped_error());
+        i.second.promise.set_exception(stopped_error(*_aborted));
     }
     _awaited_indexes.clear();
 
     co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
 
     if (_leader_promise) {
-        _leader_promise->set_exception(stopped_error());
+        _leader_promise->set_exception(stopped_error(*_aborted));
     }
 
     abort_snapshot_transfers();
@@ -1248,7 +1342,8 @@ future<> server_impl::abort() {
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
-future<> server_impl::set_configuration(server_address_set c_new, seastar::abort_source* as) {
+future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_source* as) {
+    check_not_aborted();
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
@@ -1261,6 +1356,13 @@ future<> server_impl::set_configuration(server_address_set c_new, seastar::abort
     }
 
     _stats.add_config++;
+
+    if (_non_joint_conf_commit_promise) {
+        logger.warn("[{}] set_configuration: a configuration change is still in progress (at index: {}, config: {})",
+            _id, _fsm->log_last_conf_idx(), cfg);
+        throw conf_change_in_progress{};
+    }
+
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
     // We've just submitted a joint configuration to be committed.
@@ -1271,10 +1373,21 @@ future<> server_impl::set_configuration(server_address_set c_new, seastar::abort
     // would be the one corresponding to our joint configuration,
     // no matter if the leader changed in the meantime.
 
-    auto f = _non_joint_conf_commit_promise.emplace().get_future();
+    auto f = _non_joint_conf_commit_promise.emplace().promise.get_future();
+    if (as) {
+        _non_joint_conf_commit_promise->abort = as->subscribe([this] () noexcept {
+            // If we're inside this callback, the subscription wasn't destroyed yet.
+            // The subscription is destroyed when the field is reset, so if we're here, the field must be engaged.
+            assert(_non_joint_conf_commit_promise);
+            // Whoever resolves the promise must reset the field. Thus, if we're here, the promise is not resolved.
+            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(request_aborted{});
+        });
+    }
+
     try {
         co_await wait_for_entry({.term = e.term, .idx = e.idx}, wait_type::committed, as);
     } catch (...) {
+        _non_joint_conf_commit_promise.reset();
         // We need to 'observe' possible exceptions in f, otherwise they will be
         // considered unhandled and cause a warning.
         (void)f.handle_exception([id = _id] (auto e) {
@@ -1358,7 +1471,9 @@ void server_impl::register_metrics() {
              sm::description("how many time the user's state machine was snapshotted"), {server_id_label(_id)}),
 
         sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
-             sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
+                       sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
+        sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
+                       sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
     });
 }
 
@@ -1401,6 +1516,10 @@ void server_impl::tick() {
 
 raft::server_id server_impl::id() const {
     return _id;
+}
+
+void server_impl::set_applier_queue_max_size(size_t queue_max_size) {
+    _apply_entries.set_max_size(queue_max_size);
 }
 
 const server_address_set& server_impl::get_rpc_config() const {

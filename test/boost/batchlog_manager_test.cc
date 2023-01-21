@@ -50,7 +50,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             using namespace std::chrono_literals;
 
             auto version = netw::messaging_service::current_version;
-            auto bm = qp.proxy().get_batchlog_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
+            auto bm = qp.proxy().get_batchlog_mutation_for({ m }, s->id().uuid(), version, db_clock::now() - db_clock::duration(3h));
 
             return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr(), db::commitlog::force_sync::no).then([&bp] () mutable {
                 return bp.count_all_batches().then([](auto n) {

@@ -833,7 +833,8 @@ class string_view_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def to_string(self):
-        return str(self.val['_M_str'])[0:int(self.val['_M_len'])]
+        inf = gdb.selected_inferior()
+        return str(inf.read_memory(self.val['_M_str'], self.val['_M_len']), encoding='utf-8')
 
     def display_hint(self):
         return 'string'
@@ -1073,6 +1074,15 @@ class sharded:
         return self.instance()
 
 
+def get_lsa_segment_pool():
+    try:
+        tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'')
+        tracker_impl = std_unique_ptr(tracker["_impl"]).get().dereference()
+        return std_unique_ptr(tracker_impl["_segment_pool"]).get().dereference()
+    except gdb.error:
+        return gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+
+
 def find_db(shard=None):
     try:
         db = gdb.parse_and_eval('::debug::the_database')
@@ -1106,7 +1116,7 @@ def lookup_type(type_names):
     raise gdb.error('none of the types found')
 
 
-def get_text_range():
+def get_text_ranges():
     try:
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
         reactor_backend = gdb.parse_and_eval('seastar::local_engine->_backend')
@@ -1117,27 +1127,39 @@ def get_text_range():
             reactor_backend = gdb.parse_and_eval('&seastar::local_engine->_backend')
         known_vptr = int(reactor_backend.reinterpret_cast(vptr_type).dereference())
     except Exception as e:
-        gdb.write("get_text_range(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
+        gdb.write("get_text_ranges(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
         known_vptr = None
 
+    def section_bounds(line):
+        items = line.split()
+        start = int(items[0], 16)
+        end = int(items[2], 16)
+        return (start, end)
+
+    ret = []
     sections = gdb.execute('info files', False, True).split('\n')
     for line in sections:
-        if known_vptr:
-            if not " is ." in line:
-                continue
-            items = line.split()
-            start = int(items[0], 16)
-            end = int(items[2], 16)
-            if start <= known_vptr and known_vptr <= end:
-                return start, end
-        # vptrs are in .rodata section
+        # add .text for coroutines
+        if line.endswith("is .text"):
+            ret.append(section_bounds(line))
+        elif known_vptr and " is ." in line:
+            bounds = section_bounds(line)
+            if bounds[0] <= known_vptr and known_vptr <= bounds[1]:
+                ret.append(bounds)
+        # otherwise vptrs are in .rodata section
         elif line.endswith("is .rodata"):
-            items = line.split()
-            text_start = int(items[0], 16)
-            text_end = int(items[2], 16)
-            return text_start, text_end
+            ret.append(section_bounds(line))
 
-    raise Exception("Failed to find text start and end")
+    if len(ret) == 0:
+        raise Exception("Failed to find plausible text sections")
+    return ret
+
+
+def addr_in_ranges(ranges, addr):
+    for r in ranges:
+        if addr >= r[0] and addr <= r[1]:
+            return True
+    return False
 
 
 class histogram:
@@ -1255,6 +1277,8 @@ class histogram:
 
 class task_symbol_matcher:
     def __init__(self):
+        self._coro_pattern = re.compile(r'\)( \[clone \.\w+\])?$')
+
         # List of whitelisted symbol names. Each symbol is a tuple, where each
         # element is a component of the name, the last element being the class
         # name itself.
@@ -1271,6 +1295,7 @@ class task_symbol_matcher:
                 ("seastar", "internal", "repeat_until_value_state"),
                 ("seastar", "internal", "repeater"),
                 ("seastar", "internal", "when_all_state_component"),
+                ("seastar", "internal", "coroutine_traits_base", "promise_type"),
                 ("seastar", "lambda_task"),
                 ("seastar", "smp_message_queue", "async_work_item"),
         ])
@@ -1295,6 +1320,10 @@ class task_symbol_matcher:
         return matches_symbol
 
     def __call__(self, name):
+        name = name.strip()
+        if re.search(self._coro_pattern, name) is not None:
+            return True
+
         for matcher in self._whitelist:
             if matcher(name):
                 return True
@@ -1405,7 +1434,7 @@ class scylla_task_histogram(gdb.Command):
         nr_pages = int(cpu_mem['nr_pages'])
         page_samples = range(0, nr_pages) if args.all else random.sample(range(0, nr_pages), nr_pages)
 
-        text_start, text_end = get_text_range()
+        text_ranges = get_text_ranges()
 
         scheduling_group_names = {int(tq['_id']): str(tq['_name']) for tq in get_local_task_queues()}
 
@@ -1435,7 +1464,7 @@ class scylla_task_histogram(gdb.Command):
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
                 addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
-                if addr < text_start or addr > text_end:
+                if not addr_in_ranges(text_ranges, addr):
                     continue
                 if args.filter_tasks:
                     sym = resolve(addr)
@@ -1477,9 +1506,9 @@ def find_vptrs():
     pages = cpu_mem['pages']
     nr_pages = int(cpu_mem['nr_pages'])
 
-    text_start, text_end = get_text_range()
+    text_ranges = get_text_ranges()
     def is_vptr(addr):
-        return addr >= text_start and addr <= text_end
+        return addr_in_ranges(text_ranges, addr)
 
     idx = 0
     while idx < nr_pages:
@@ -2009,7 +2038,7 @@ class scylla_memory(gdb.Command):
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
                   .format(used_mem=total_mem - free_mem, free_mem=free_mem, total_mem=total_mem))
 
-        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        lsa = get_lsa_segment_pool()
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
         lsa_free = int(lsa['_free_segments']) * segment_size
         non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
@@ -2393,6 +2422,16 @@ class pointer_metadata(object):
 
         return msg
 
+def get_segment_base(segment_pool):
+    try:
+        segment_store = segment_pool["_store"]
+        try:
+            return int(std_unique_ptr(segment_store["_backend"]).get()["_segments_base"])
+        except gdb.error:
+            return int(segment_store["_segments_base"])
+    except gdb.error:
+        return int(segment_pool["_segments_base"])
+
 
 class scylla_ptr(gdb.Command):
     _is_seastar_allocator_used = None
@@ -2473,11 +2512,11 @@ class scylla_ptr(gdb.Command):
             ptr_meta.offset_in_object = ptr - span.start
 
         # FIXME: handle debug-mode build
-        try:
-            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._store._segments_base) / \'logalloc::segment\'::size' % (ptr))
-        except gdb.error:
-            index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr)) # Scylla 3.0 compatibility
-        desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
+        segment_pool = get_lsa_segment_pool()
+        segments_base = get_segment_base(segment_pool)
+        segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
+        index = int((int(ptr) - segments_base) / segment_size)
+        desc = std_vector(segment_pool["_segments"])[index]
         ptr_meta.is_lsa = bool(desc['_region'])
 
         return ptr_meta
@@ -2514,13 +2553,8 @@ class scylla_segment_descs(gdb.Command):
 
     def invoke(self, arg, from_tty):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
-        try:
-            base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
-        except gdb.error:
-            try:
-                base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
-            except gdb.error:
-                base = None
+        segment_pool = get_lsa_segment_pool()
+        base = get_segment_base(segment_pool)
 
         def print_desc(seg_addr, desc):
             if desc.is_lsa():
@@ -2532,15 +2566,15 @@ class scylla_segment_descs(gdb.Command):
                 gdb.write('0x%x: std\n' % (seg_addr))
 
         if base is None: # debug mode build
-            segs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments'))
-            descs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments'))
+            segs = std_vector(segment_pool["_store"]["_segments"])
+            descs = std_vector(segment_pool["_segments"])
 
             for seg, desc_ref in zip(segs, descs):
                 desc = segment_descriptor(desc_ref)
                 print_desc(int(seg), desc)
         else:
             addr = base
-            for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            for desc in std_vector(segment_pool["_segments"]):
                 desc = segment_descriptor(desc)
                 print_desc(addr, desc)
                 addr += segment_size
@@ -2575,10 +2609,11 @@ class scylla_lsa_check(gdb.Command):
         # Scan shard's segment_descriptor:s for anomalies:
         #  - detect segments owned by cache which are not in cache region's _segment_descs
         #  - compute segment occupancy statistics for comparison with region's stored ones
-        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
+        segment_pool = get_lsa_segment_pool()
+        base = get_segment_base(segment_pool)
         desc_free_space = 0
         desc_total_space = 0
-        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+        for desc in std_vector(segment_pool["_segments"]):
             desc = segment_descriptor(desc)
             if desc.is_lsa() and desc.region() == cache_region.impl():
                 if not int(desc.address) in in_buckets:
@@ -2609,7 +2644,7 @@ class scylla_lsa(gdb.Command):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        lsa = get_lsa_segment_pool()
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
 
         lsa_mem = int(lsa['_segments_in_use']) * segment_size
@@ -3625,12 +3660,12 @@ class scylla_fiber(gdb.Command):
             initial_task_ptr = int(gdb.parse_and_eval(args.task))
             this_task = self._probe_pointer(initial_task_ptr, args.scanned_region_size, using_seastar_allocator, args.verbose)
             if this_task is None:
-                gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
+                gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(initial_task_ptr))
                 return
 
             backwards_fiber = self._walk(self._walk_backward, this_task[0], args.max_depth, args.scanned_region_size, using_seastar_allocator, args.verbose)
 
-            for i, (tptr, vptr, name) in enumerate(backwards_fiber):
+            for i, (tptr, vptr, name) in enumerate(reversed(backwards_fiber)):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i - len(backwards_fiber), int(tptr), int(vptr), name))
 
             tptr, vptr, name = this_task
@@ -4025,7 +4060,8 @@ class scylla_memtables(gdb.Command):
         region_ptr_type = gdb.lookup_type('logalloc::region').pointer()
         for table in all_tables(db):
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
-            memtable_list = seastar_lw_shared_ptr(table['_memtables']).get()
+            compaction_group = std_unique_ptr(table["_compaction_group"]).get()
+            memtable_list = seastar_lw_shared_ptr(compaction_group['_memtables']).get()
             for mt_ptr in std_vector(memtable_list['_memtables']):
                 mt = seastar_lw_shared_ptr(mt_ptr).get()
                 reg = lsa_region(mt.cast(region_ptr_type))
@@ -4293,6 +4329,7 @@ class scylla_smp_queues(gdb.Command):
                 return '{:2} -> {:2}'.format(*q)
 
         h = histogram(formatter=formatter, print_indicators=not args.content)
+        empty_queues = 0
 
         def add_to_histogram(a, b, key=None, count=1):
             if not sg_id is None and int(key.dereference()['_sg']['_id']) != sg_id:
@@ -4330,9 +4367,15 @@ class scylla_smp_queues(gdb.Command):
                 for i in range(pending_start, pending_end):
                     add_to_histogram(a, b, key=buf[i % self._queue_size])
             else:
-                add_to_histogram(a, b, count=(len(tx_queue) + pending_end - pending_start))
+                count = len(tx_queue) + pending_end - pending_start
+                if count != 0:
+                    add_to_histogram(a, b, count=count)
+                else:
+                    empty_queues += 1
 
         gdb.write('{}\n'.format(h))
+        if empty_queues > 0:
+            gdb.write('omitted {} empty queues\n'.format(empty_queues))
 
 
 class scylla_small_objects(gdb.Command):
@@ -4391,7 +4434,7 @@ class scylla_small_objects(gdb.Command):
             self._small_pool = small_pool
             self._resolve_symbols = resolve_symbols
 
-            self._text_start, self._text_end = get_text_range()
+            self._text_ranges = get_text_ranges()
             self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
             self._free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
@@ -4443,7 +4486,7 @@ class scylla_small_objects(gdb.Command):
 
             if self._resolve_symbols:
                 addr = gdb.Value(obj).reinterpret_cast(self._vptr_type).dereference()
-                if addr >= self._text_start and addr <= self._text_end:
+                if addr_in_ranges(self._text_ranges, addr):
                     return (obj, resolve(addr))
                 else:
                     return (obj, None)
@@ -4598,7 +4641,12 @@ class scylla_compaction_tasks(gdb.Command):
 
     def invoke(self, arg, from_tty):
         db = find_db()
-        cm = std_unique_ptr(db['_compaction_manager']).get().dereference()
+        cm = db['_compaction_manager']
+        try:
+            aux = std_unique_ptr(db['_compaction_manager']).get().dereference()
+            cm = aux
+        except:
+            pass
         task_hist = histogram(print_indicators=False)
 
         task_list = list(std_list(cm['_tasks']))
@@ -4867,7 +4915,9 @@ class scylla_read_stats(gdb.Command):
             gdb.write("Scylla version doesn't seem to have the permits linked yet, cannot list reads.")
             raise
 
-        permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
+        if not permit_list.type.strip_typedefs().name.startswith('boost::intrusive::list'):
+            # 4.5 compatibility
+            permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
 
         state_prefix_len = len('reader_permit::state::')
 
@@ -5091,25 +5141,9 @@ class scylla_repairs(gdb.Command):
 
     Example:
 
-       (repair_meta*) for masters: addr = 0x600005abf830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.3->repair_state::get_sync_boundary_finished'], repair_meta = {
-         db = @0x7fffe538c9f0,
-         _messaging = @0x7fffe538ca90,
-         _cf = @0x6000066f0000,
-
-       ....
-
-       (repair_meta*) for masters: addr = 0x60000521f830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::get_sync_boundary_started'], repair_meta = {
-         _db = @0x7fffe538c9f0,
-         _messaging = @0x7fffe538ca90,
-        _cf = @0x6000066f0000,
-
-       ....
-
-      (repair_meta*) for follower: addr = 0x60000432a808, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::unknown'], repair_meta = {
-        db = @0x7fffe538c9f0,
-        messaging = @0x7fffe538ca90,
-        _cf = @0x6000066f0000,
-
+       (repair_meta*) for masters: addr = 0x600005abf830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.3->repair_state::get_sync_boundary_finished'], repair_meta = (repair_meta*) 0x60400af3f8e0
+       (repair_meta*) for masters: addr = 0x60000521f830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::get_sync_boundary_started'], repair_meta = (repair_meta*) 0x6040103df8e0
+       (repair_meta*) for follower: addr = 0x60000432a808, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::unknown'], repair_meta = (repair_meta*) 0x60400d73f8e0
     """
 
     def __init__(self):
@@ -5122,7 +5156,7 @@ class scylla_repairs(gdb.Command):
         ip = str(rm['_myip']).replace('"', '')
         for n in std_vector(rm['_all_node_states']):
             all_nodes_state.append(str(n['node']).replace('"', '') + "->" + str(n['state']))
-        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm))
+        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = (repair_meta*) %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm.address))
 
     def invoke(self, arg, for_tty):
         for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas'), link='_tracker_link'):

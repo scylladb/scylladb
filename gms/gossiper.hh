@@ -227,8 +227,6 @@ private:
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
-    std::default_random_engine _e1{std::random_device{}()};
-
     void run();
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
@@ -241,8 +239,6 @@ private:
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
-
-    void check_seen_seeds();
 
     /**
      * Register for interesting state changes.
@@ -258,19 +254,19 @@ public:
      */
     future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
-    std::set<inet_address> get_live_members();
+    std::set<inet_address> get_live_members() const;
 
-    std::set<inet_address> get_live_token_owners();
+    std::set<inet_address> get_live_token_owners() const;
 
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
-    std::set<inet_address> get_unreachable_members();
+    std::set<inet_address> get_unreachable_members() const;
 
     /**
      * @return a list of unreachable token owners
      */
-    std::set<inet_address> get_unreachable_token_owners();
+    std::set<inet_address> get_unreachable_token_owners() const;
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
@@ -335,7 +331,7 @@ public:
      * @param host_id      - the ID of the host being removed
      * @param local_host_id - my own host ID for replication coordination
      */
-    future<> advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
+    future<> advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id);
 
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
@@ -344,7 +340,7 @@ public:
      * @param endpoint
      * @param host_id
      */
-    future<> advertise_token_removed(inet_address endpoint, utils::UUID host_id);
+    future<> advertise_token_removed(inet_address endpoint, locator::host_id host_id);
 
     future<> unsafe_assassinate_endpoint(sstring address);
 
@@ -364,6 +360,7 @@ public:
 
     bool is_gossip_only_member(inet_address endpoint);
     bool is_safe_for_bootstrap(inet_address endpoint);
+    bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -400,7 +397,7 @@ public:
 
     bool uses_host_id(inet_address endpoint) const;
 
-    utils::UUID get_host_id(inet_address endpoint) const;
+    locator::host_id get_host_id(inet_address endpoint) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 
@@ -433,8 +430,6 @@ public:
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
-    // filter `endpoints` by `local_rack`
-    inet_address_vector_replica_set endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints);
 private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
@@ -513,9 +508,6 @@ private:
     void build_seeds_list();
 
 public:
-    // initialize local HB state if needed, i.e., if gossiper has never been started before.
-    void maybe_initialize_local_state(int generation_nbr);
-
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */

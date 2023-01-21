@@ -65,7 +65,7 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(2),
             .idx = raft::index_t(2),
-            .data = raft::configuration({raft::server_id::create_random_id()})}),
+            .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, true}}}}),
         // dummy
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(3),
@@ -97,9 +97,11 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
 
         raft::term_t snp_term(1);
         raft::index_t snp_idx(1);
-        raft::server_address srv_addr{raft::server_id::create_random_id()};
-        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
-        raft::configuration snp_cfg({std::move(srv_addr)});
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(),
+                ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+            }, true};
+        raft::configuration snp_cfg({std::move(srv)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot_descriptor snp{
@@ -162,9 +164,11 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
 
         raft::term_t snp_term(3);
         raft::index_t snp_idx(3);
-        raft::server_address srv_addr{raft::server_id::create_random_id()};
-        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
-        raft::configuration snp_cfg({std::move(srv_addr)});
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(),
+                ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+            }, true};
+        raft::configuration snp_cfg({std::move(srv)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot_descriptor snp{

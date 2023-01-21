@@ -8,6 +8,8 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <map>
+#include "db/view/view.hh"
+#include "timestamp.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
@@ -21,6 +23,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <type_traits>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "replica/database.hh"
@@ -161,7 +164,7 @@ bool schema::has_custom_partitioner() const {
 }
 
 lw_shared_ptr<cql3::column_specification>
-schema::make_column_specification(const column_definition& def) {
+schema::make_column_specification(const column_definition& def) const {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
     return make_lw_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
@@ -310,7 +313,7 @@ const column_mapping& schema::get_column_mapping() const {
     return _column_mapping;
 }
 
-schema::raw_schema::raw_schema(utils::UUID id)
+schema::raw_schema::raw_schema(table_id id)
     : _id(id)
     , _partitioner(::get_partitioner(default_partitioner_name))
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
@@ -431,7 +434,7 @@ schema::schema(const schema& o)
 
 schema::schema(reversed_tag, const schema& o)
     : schema(o, [] (schema& s) {
-        s._raw._version = utils::UUID_gen::negate(s._raw._version);
+        s._raw._version = reversed(s._raw._version);
         for (auto& col : s._raw._columns) {
             if (col.kind == column_kind::clustering_key) {
                 col.type = reversed(col.type);
@@ -441,7 +444,7 @@ schema::schema(reversed_tag, const schema& o)
 {
 }
 
-lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+lw_shared_ptr<const schema> make_shared_schema(std::optional<table_id> id, std::string_view ks_name,
     std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
     std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
     data_type regular_column_name_type, sstring comment) {
@@ -554,7 +557,7 @@ bool index_metadata::equals_noname(const index_metadata& other) const {
     return _kind == other._kind && _options == other._options;
 }
 
-const utils::UUID& index_metadata::id() const {
+const table_id& index_metadata::id() const {
     return _id;
 }
 
@@ -752,11 +755,11 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static bool is_global_index(replica::database& db, const utils::UUID& id, const schema& s) {
+static bool is_global_index(replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_global_index(s);
 }
 
-static bool is_index(replica::database& db, const utils::UUID& id, const schema& s) {
+static bool is_index(replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
@@ -910,9 +913,9 @@ bool operator==(const column_definition& x, const column_definition& y)
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
-utils::UUID
+table_id
 generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
-    return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
+    return table_id(utils::UUID_gen::get_name_UUID(ks_name + cf_name));
 }
 
 bool thrift_schema::has_compound_comparator() const {
@@ -944,8 +947,8 @@ schema_builder& schema_builder::with_null_sharder() {
 }
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
-        std::optional<utils::UUID> id, data_type rct)
-        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
+        std::optional<table_id> id, data_type rct)
+        : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()))
 {
     // Various schema-creation commands (creating tables, indexes, etc.)
     // usually place limits on which characters are allowed in keyspace or
@@ -989,7 +992,7 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
 }
 
 schema_builder::schema_builder(
-        std::optional<utils::UUID> id,
+        std::optional<table_id> id,
         std::string_view ks_name,
         std::string_view cf_name,
         std::vector<schema::column> partition_key,
@@ -1204,7 +1207,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     }
 }
 
-schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
+schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
     _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
@@ -1232,7 +1235,7 @@ schema_ptr schema_builder::build() {
     if (_version) {
         new_raw._version = *_version;
     } else {
-        new_raw._version = utils::UUID_gen::get_time_UUID();
+        new_raw._version = table_schema_version(utils::UUID_gen::get_time_UUID());
     }
 
     if (new_raw._is_counter) {
@@ -1670,12 +1673,12 @@ schema_ptr schema::make_reversed() const {
 }
 
 schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(utils::UUID_gen::negate(_raw._version), [this] (table_schema_version) {
+    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) {
         return frozen_schema(make_reversed());
     });
 }
 
-raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
+raw_view_info::raw_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause)
         : _base_id(std::move(base_id))
         , _base_name(std::move(base_name))
         , _include_all_columns(include_all_columns)
@@ -1691,11 +1694,23 @@ column_computation_ptr column_computation::deserialize(bytes_view raw) {
     if (!type_json || !type_json->IsString()) {
         throw std::runtime_error(format("Type {} is not convertible to string", *type_json));
     }
-    if (rjson::to_string_view(*type_json) == "token") {
+    const std::string_view type = rjson::to_string_view(*type_json);
+    if (type == "token") {
         return std::make_unique<legacy_token_column_computation>();
     }
-    if (rjson::to_string_view(*type_json) == "token_v2") {
+    if (type == "token_v2") {
         return std::make_unique<token_column_computation>();
+    }
+    if (type.starts_with("collection_")) {
+        const rjson::value* collection_name = rjson::find(parsed, "collection_name");
+
+        if (collection_name && collection_name->IsString()) {
+            auto collection = rjson::to_string_view(*collection_name);
+            auto collection_as_bytes = bytes(collection.begin(), collection.end());
+            if (auto collection = collection_column_computation::for_target_type(type, collection_as_bytes)) {
+                return collection->clone();
+            }
+        }
     }
     throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", *type_json, parsed));
 }
@@ -1706,8 +1721,8 @@ bytes legacy_token_column_computation::serialize() const {
     return to_bytes(rjson::print(serialized));
 }
 
-bytes_opt legacy_token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
-    return dht::get_token(schema, key).data();
+bytes legacy_token_column_computation::compute_value(const schema& schema, const partition_key& key) const {
+    return {dht::get_token(schema, key).data()};
 }
 
 bytes token_column_computation::serialize() const {
@@ -1716,9 +1731,159 @@ bytes token_column_computation::serialize() const {
     return to_bytes(rjson::print(serialized));
 }
 
-bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+bytes token_column_computation::compute_value(const schema& schema, const partition_key& key) const {
     auto long_value = dht::token::to_int64(dht::get_token(schema, key));
     return long_type->decompose(long_value);
+}
+
+bytes collection_column_computation::serialize() const {
+    rjson::value serialized = rjson::empty_object();
+    const char* type = nullptr;
+    switch (_kind) {
+        case kind::keys:
+            type = "collection_keys";
+            break;
+        case kind::values:
+            type = "collection_values";
+            break;
+        case kind::entries:
+            type = "collection_entries";
+            break;
+    }
+    rjson::add(serialized, "type", rjson::from_string(type));
+    rjson::add(serialized, "collection_name", rjson::from_string(sstring(_collection_name.begin(), _collection_name.end())));
+    return to_bytes(rjson::print(serialized));
+}
+
+column_computation_ptr collection_column_computation::for_target_type(std::string_view type, const bytes& collection_name) {
+    if (type == "collection_keys") {
+        return collection_column_computation::for_keys(collection_name).clone();
+    }
+    if (type == "collection_values") {
+        return collection_column_computation::for_values(collection_name).clone();
+    }
+    if (type == "collection_entries") {
+        return collection_column_computation::for_entries(collection_name).clone();
+    }
+    return {};
+}
+
+void collection_column_computation::operate_on_collection_entries(
+        std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
+        const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
+
+    const column_definition* cdef = schema.get_column_definition(_collection_name);
+
+    auto get_cell = [](auto& kv) -> collection_kv::second_type& { return kv->second; };
+
+    decltype(collection_mutation_view_description::cells) update_cells, existing_cells;
+
+    const auto* update_cell = update.cells().find_cell(cdef->id);
+    tombstone update_tombstone = update.tomb().tomb();
+    if (update_cell) {
+        collection_mutation_view update_col_view = update_cell->as_collection_mutation();
+        update_col_view.with_deserialized(*(cdef->type), [&update_cells, &update_tombstone] (collection_mutation_view_description descr) {
+            update_tombstone.apply(descr.tomb);
+            update_cells = descr.cells;
+        });
+    }
+    if (existing) {
+        const auto* existing_cell = existing->cells().find_cell(cdef->id);
+        if (existing_cell) {
+            collection_mutation_view existing_col_view = existing_cell->as_collection_mutation();
+            existing_col_view.with_deserialized(*(cdef->type), [&existing_cells] (collection_mutation_view_description descr) {
+                existing_cells = descr.cells;
+            });
+        }
+    }
+
+    auto compare = [](const collection_kv& p1, const collection_kv& p2) {
+        return p1.first <=> p2.first;
+    };
+
+    // Both collections are assumed to be sorted by the keys.
+    auto existing_it = existing_cells.begin();
+    auto update_it = update_cells.begin();
+
+    auto is_existing_end = [&] {
+        return existing_it == existing_cells.end();
+    };
+    auto is_update_end = [&] {
+        return update_it == update_cells.end();
+    };
+    while (!(is_existing_end() && is_update_end())) {
+        std::strong_ordering cmp = [&] {
+            if (is_existing_end()) {
+                return std::strong_ordering::greater;
+            } else if (is_update_end()) {
+                return std::strong_ordering::less;
+            }
+            return compare(*existing_it, *update_it);
+        }();
+
+        auto existing_ptr = [&] () -> collection_kv* {
+            return (!is_existing_end() && cmp <= 0) ? &*existing_it : nullptr;
+        };
+        auto update_ptr = [&] () -> collection_kv* {
+            return (!is_update_end() && cmp >= 0) ? &*update_it : nullptr;
+        };
+
+        old_and_new_row_func(existing_ptr(), update_ptr(), update_tombstone);
+        if (cmp <= 0) {
+            ++existing_it;
+        }
+        if (cmp >= 0) {
+            ++update_it;
+        }
+    }
+}
+
+bytes collection_column_computation::compute_value(const schema&, const partition_key&) const {
+    throw std::runtime_error(fmt::format("{}: not supported", __PRETTY_FUNCTION__));
+}
+
+std::vector<db::view::view_key_and_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key, const clustering_row& update, const std::optional<clustering_row>& existing) const {
+    using collection_kv = std::pair<bytes_view, atomic_cell_view>;
+    auto serialize_cell = [_kind = _kind](const collection_kv& kv) -> bytes {
+        using kind = collection_column_computation::kind;
+        auto& [key, value] = kv;
+        switch (_kind) {
+            case kind::keys:
+                return bytes(key);
+            case kind::values:
+                return value.value().linearize();
+            case kind::entries:
+                bytes_opt elements[] = {bytes(key), value.value().linearize()};
+                return tuple_type_impl::build_value(elements);
+        }
+    };
+
+    std::vector<db::view::view_key_and_action> ret;
+
+    auto compute_row_marker = [] (auto&& cell) -> row_marker {
+        return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
+    };
+
+    auto fn = [&ret, &compute_row_marker, &serialize_cell] (collection_kv* existing, collection_kv* update, tombstone tomb) {
+        api::timestamp_type operation_ts = tomb.timestamp;
+        if (existing && update && compare_atomic_cell_for_merge(existing->second, update->second) == 0) {
+            return;
+        }
+        if (update) {
+            operation_ts = update->second.timestamp();
+            if (update->second.is_live()) {
+                row_marker rm = compute_row_marker(update->second);
+                ret.push_back({serialize_cell(*update), {rm}});
+            }
+        }
+        operation_ts -= 1;
+        if (existing && existing->second.is_live()) {
+            db::view::view_key_and_action::shadowable_tombstone_tag tag{operation_ts};
+            ret.push_back({serialize_cell(*existing), {tag}});
+        }
+    };
+    operate_on_collection_entries(fn, schema, key, update, existing);
+    return ret;
 }
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {

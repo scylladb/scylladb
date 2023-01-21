@@ -847,12 +847,12 @@ future<> shard_reader_v2::do_fill_buffer() {
     }
 
     auto res = co_await(std::move(fill_buf_fut));
-    _end_of_stream = res.end_of_stream;
     reserve_additional(res.buffer->size());
     for (const auto& mf : *res.buffer) {
         push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, mf));
         co_await coroutine::maybe_yield();
     }
+    _end_of_stream = res.end_of_stream;
 }
 
 future<> shard_reader_v2::fill_buffer() {

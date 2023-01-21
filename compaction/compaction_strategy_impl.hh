@@ -13,6 +13,7 @@
 #include "compaction_strategy.hh"
 #include "db_clock.hh"
 #include "compaction_descriptor.hh"
+#include "tombstone_gc.hh"
 
 namespace compaction {
 class table_state;
@@ -67,7 +68,7 @@ public:
 
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
-    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time);
+    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const tombstone_gc_state& gc_state);
 
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
 

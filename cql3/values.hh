@@ -23,9 +23,11 @@
 namespace cql3 {
 
 struct null_value {
+    friend bool operator==(const null_value&, const null_value) { return true; }
 };
 
 struct unset_value {
+    friend bool operator==(const unset_value&, const unset_value) { return true; }
 };
 
 class raw_value;
@@ -238,10 +240,28 @@ public:
         return is_value();
     }
     bytes to_bytes() && {
-        switch (_data.index()) {
-        case 0:  return std::move(std::get<bytes>(_data));
-        default: return ::to_bytes(std::get<managed_bytes>(_data));
-        }
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return std::move(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return ::to_bytes(managed_bytes_val); },
+            [](null_value&&) -> bytes {
+                throw std::runtime_error("to_bytes() called on raw value that is null");
+            },
+            [](unset_value&&) -> bytes {
+                throw std::runtime_error("to_bytes() called on raw value that is unset_value");
+            }
+        }, std::move(_data));
+    }
+    bytes_opt to_bytes_opt() && {
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return bytes_opt(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return bytes_opt(::to_bytes(managed_bytes_val)); },
+            [](null_value&&) -> bytes_opt {
+                return std::nullopt;
+            },
+            [](unset_value&&) -> bytes_opt {
+                return std::nullopt;
+            }
+        }, std::move(_data));
     }
     managed_bytes to_managed_bytes() && {
         return std::visit(overloaded_functor{
@@ -269,6 +289,8 @@ public:
     }
     raw_value_view view() const;
     friend class raw_value_view;
+
+    friend bool operator==(const raw_value& v1, const raw_value& v2);
 };
 
 }

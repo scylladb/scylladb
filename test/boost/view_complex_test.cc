@@ -840,7 +840,7 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
         }});
     });
 
-    e.local_db().get_compaction_manager().perform_major_compaction(&e.local_db().find_column_family("ks", "vcf")).get();
+    e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "vcf").as_table_state()).get();
 }
 
 SEASTAR_TEST_CASE(test_commutative_row_deletion_without_flush) {
@@ -1076,7 +1076,7 @@ void test_update_with_column_timestamp_bigger_than_pk(cql_test_env& e, std::func
         }});
     });
 
-    e.local_db().get_compaction_manager().perform_major_compaction(&e.local_db().find_column_family("ks", "vcf")).get();
+    e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "vcf").as_table_state()).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf limit 1").get0();
         assert_that(msg).is_rows().with_rows({{

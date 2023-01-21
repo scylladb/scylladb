@@ -20,4 +20,4 @@ On each node, in parallel:
    
    .. include:: /rst_include/scylla-commands-stop-index.rst
 
-#. To start the nodes again safely, proceed to the `Start Clusters Cleanly <../safe-start>`_ procedure.
+#. To start the nodes again safely, proceed to the :doc:`Start Clusters Cleanly <safe-start>` procedure.

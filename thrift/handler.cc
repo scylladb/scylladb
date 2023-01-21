@@ -406,7 +406,7 @@ public:
         auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
                 std::move(specific_ranges), cql_serialization_format::internal());
         auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
-                query::row_limit(row_limit), query::partition_limit(partition_limit));
+                query::tombstone_limit(proxy.get_tombstone_limit()), query::row_limit(row_limit), query::partition_limit(partition_limit));
         cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
         return cmd;
     }
@@ -693,7 +693,7 @@ public:
             auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts, nullptr);
             auto& proxy = _proxy.local();
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.get_max_result_size(slice),
-                    query::row_limit(row_limit));
+                    query::tombstone_limit(proxy.get_tombstone_limit()), query::row_limit(row_limit));
             cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
             auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
             return f.then([this, &proxy, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level, permit = std::move(permit)] () mutable {
@@ -1310,7 +1310,7 @@ private:
         }
         return {};
     }
-    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<utils::UUID> id = { }) {
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<table_id> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
         schema_builder builder(ks_name, cf_def.name, id);
         schema_builder::default_names names(builder);
@@ -1614,7 +1614,8 @@ private:
         }
         auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts,
                 nullptr, cql_serialization_format::internal(), per_partition_row_limit);
-        auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice));
+        auto cmd = make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), proxy.get_max_result_size(slice),
+                query::tombstone_limit(proxy.get_tombstone_limit()));
         cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
         return cmd;
     }

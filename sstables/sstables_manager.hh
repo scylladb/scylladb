@@ -21,6 +21,8 @@
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
 #include "db/cache_tracker.hh"
+#include "locator/host_id.hh"
+#include "reader_concurrency_semaphore.hh"
 
 #include <boost/intrusive/list.hpp>
 
@@ -65,8 +67,10 @@ private:
     bool _closing = false;
     promise<> _done;
     cache_tracker& _cache_tracker;
+
+    reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory);
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
@@ -86,7 +90,9 @@ public:
     void set_format(sstable_version_types format) noexcept { _format = format; }
     sstables::sstable::version_types get_highest_supported_format() const noexcept { return _format; }
 
-    const utils::UUID& get_local_host_id() const;
+    const locator::host_id& get_local_host_id() const;
+
+    reader_concurrency_semaphore& sstable_metadata_concurrency_sem() noexcept { return _sstable_metadata_concurrency_sem; }
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
@@ -105,6 +111,10 @@ private:
     void deactivate(sstable* sst);
     void remove(sstable* sst);
     void maybe_done();
+
+    static constexpr size_t max_count_sstable_metadata_concurrent_reads{10};
+    // Allow at most 10% of memory to be filled with such reads.
+    size_t max_memory_sstable_metadata_concurrent_reads(size_t available_memory) { return available_memory * 0.1; }
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

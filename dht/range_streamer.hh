@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
@@ -76,45 +76,48 @@ public:
         }
     };
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
+            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
         : _db(db)
         , _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
         , _abort_source(abort_source)
         , _tokens(std::move(tokens))
         , _address(address)
+        , _dr(std::move(dr))
         , _description(std::move(description))
         , _reason(reason)
     {
         _abort_source.check();
     }
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, description, reason) {
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
+            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
         _source_filters.emplace(std::move(filter));
     }
 
-    future<> add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing);
+    future<> add_ranges(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing);
     void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
     void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
 private:
-    bool use_strict_sources_for_ranges(const sstring& keyspace_name);
+    bool use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::effective_replication_map_ptr& erm);
     /**
      * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
      * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.
      */
     std::unordered_map<dht::token_range, std::vector<inet_address>>
-    get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges);
+    get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges);
     /**
      * Get a map of all ranges and the source that will be cleaned up once this bootstrapped node is added for the given ranges.
      * For each range, the list should only contain a single source. This allows us to consistently migrate data without violating
      * consistency.
      */
     std::unordered_map<dht::token_range, std::vector<inet_address>>
-    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges, gms::gossiper& gossiper);
+    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges, gms::gossiper& gossiper);
 private:
     /**
      * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)
@@ -149,6 +152,7 @@ private:
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
     inet_address _address;
+    locator::endpoint_dc_rack _dr;
     sstring _description;
     streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
@@ -158,6 +162,7 @@ private:
     unsigned _nr_rx_added = 0;
     // Limit the number of nodes to stream in parallel to reduce memory pressure with large cluster.
     seastar::semaphore _limiter{16};
+    size_t _nr_total_ranges = 0;
 };
 
 } // dht

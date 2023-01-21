@@ -22,6 +22,7 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
     opts.smp_opts.mbind.set_value(false);
     opts.smp_opts.smp.set_value(1);
     opts.smp_opts.lock_memory.set_value(false);
+    opts.smp_opts.memory_allocator = memory_allocator::standard;
     opts.log_opts.default_log_level.set_value(log_level::error);
     if (!logger_name.empty()) {
         opts.log_opts.logger_log_level.set_value({});

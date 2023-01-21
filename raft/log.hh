@@ -22,9 +22,10 @@ namespace raft {
 class log {
     // Snapshot of the prefix of the log.
     snapshot_descriptor _snapshot;
-    // We need something that can be truncated from both sides.
-    // std::deque move constructor is not nothrow hence cannot be used
+    // In-memory log data.
     log_entries _log;
+    // Max command size, is used to calculate memory usage.
+    size_t _max_command_size;
     // Raft log index of the first entry in the log.
     // Usually it's simply _snapshot.idx + 1,
     // but if apply_snapshot() with non-zero trailing was used,
@@ -57,6 +58,7 @@ class log {
     // The previous value of _last_conf_idx, to avoid scanning
     // the log backwards after truncate().
     index_t _prev_conf_idx = index_t{0};
+    size_t _memory_usage;
 private:
     // Drop uncommitted log entries not present on the leader.
     void truncate_uncommitted(index_t i);
@@ -65,9 +67,10 @@ private:
     void init_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
     const log_entry_ptr& get_entry(index_t) const;
+    size_t range_memory_usage(log_entries::iterator first, log_entries::iterator last) const;
 public:
-    explicit log(snapshot_descriptor snp, log_entries log = {})
-            : _snapshot(std::move(snp)), _log(std::move(log)) {
+    explicit log(snapshot_descriptor snp, log_entries log = {}, size_t max_command_size = sizeof(log_entry))
+            : _snapshot(std::move(snp)), _log(std::move(log)), _max_command_size(max_command_size) {
         if (_log.empty()) {
             _first_idx = _snapshot.idx + index_t{1};
         } else {
@@ -77,6 +80,7 @@ public:
             // perform an initial state transfer.
             assert(_first_idx <= _snapshot.idx + 1);
         }
+        _memory_usage = range_memory_usage(_log.begin(), _log.end());
         // The snapshot index is at least 0, so _first_idx
         // is at least 1
         assert(_first_idx > 0);
@@ -116,16 +120,21 @@ public:
     size_t in_memory_size() const {
         return _log.size();
     }
+    // Returns memory usage of the log entries in bytes
+    size_t memory_usage() const {
+        return _memory_usage;
+    }
 
     // The function returns current snapshot state of the log
     const snapshot_descriptor& get_snapshot() const {
         return _snapshot;
     }
 
-    // This call will update the log to point to the new snaphot
-    // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry. Return value specifies how many log entries were dropped
-    size_t apply_snapshot(snapshot_descriptor&& snp, size_t trailing);
+    // This call will update the log to point to the new snapshot
+    // and will truncate the log prefix so that the number of
+    // remaining applied entries is <= max_trailing_entries and their total size is <= max_trailing_bytes.
+    // Return value specifies the size in bytes of the dropped log entries.
+    size_t apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries, size_t max_trailing_bytes);
 
     // 3.5
     // Raft maintains the following properties, which
@@ -177,6 +186,32 @@ public:
     index_t maybe_append(std::vector<log_entry_ptr>&& entries);
 
     friend std::ostream& operator<<(std::ostream& os, const log& l);
+
+    // The log keeps track of the memory it uses. This function returns the number
+    // of bytes that will be marked as used when a log_entry is added to the log.
+    // This logic should match the handling of log_limiter_semaphore,
+    // which is currently incremented only for command, but not for configuration and log_entry::dummy.
+    // This is why zero is returned for other log_entry elements
+    // and why this function has been kept separate from entry_size,
+    // which returns non-zero for configuration.
+    template <typename T>
+    requires std::is_same_v<T, log_entry> ||
+             std::is_same_v<T, command> || std::is_same_v<T, configuration> || std::is_same_v<T, log_entry::dummy>
+    static inline size_t memory_usage_of(const T& v, size_t max_command_size) {
+        if constexpr(std::is_same_v<T, command>) {
+            // We account for sizeof(log_entry) for "small" commands,
+            // since the overhead of log_entries can take up significant memory.
+            return max_command_size > sizeof(log_entry) && v.size() < max_command_size - sizeof(log_entry)
+                ? v.size() + sizeof(log_entry)
+                : v.size();
+        }
+        if constexpr(std::is_same_v<T, log_entry>) {
+            if (const auto* c = get_if<command>(&v.data); c != nullptr) {
+                return memory_usage_of(*c, max_command_size);
+            }
+        }
+        return 0;
+    }
 };
 
 }

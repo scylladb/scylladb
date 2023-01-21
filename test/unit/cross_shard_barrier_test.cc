@@ -81,6 +81,11 @@ public:
         }
     }
 
+    future<> error() {
+        _barrier.abort();
+        return make_ready_future<>();
+    }
+
     unsigned get_phase() const noexcept { return _phase.load(); }
 };
 
@@ -115,6 +120,16 @@ int main(int argc, char **argv) {
                 }
                 w.stop().get();
             }
+
+            std::vector<int> count(64);
+            parallel_for_each(count, [] (auto& cnt) -> future<> {
+                std::vector<sharded<worker>> w(32);
+                co_await parallel_for_each(w, [] (auto &sw) -> future<> {
+                    co_await sw.start(utils::cross_shard_barrier());
+                    co_await sw.invoke_on_all(&worker::error);
+                    co_await sw.stop();
+                });
+            }).get();
         });
     });
 }

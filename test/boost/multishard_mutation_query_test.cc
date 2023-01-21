@@ -72,8 +72,18 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, "test_abandoned_read");
         (void)_;
 
-        auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
-                utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size), 0);
+        auto cmd = query::read_command(
+                s->id(),
+                s->version(),
+                s->full_slice(),
+                query::max_result_size(query::result_memory_limiter::unlimited_result_size),
+                query::tombstone_limit::max,
+                query::row_limit(7),
+                query::partition_limit::max,
+                gc_clock::now(),
+                std::nullopt,
+                query_id::create_random_id(),
+                query::is_first_page::yes);
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
 
@@ -97,7 +107,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica:
         const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (replica::database& db) {
             return async([s = gs.get(), &pkey, &slice, &db] () mutable {
                 const auto cmd = query::read_command(s->id(), s->version(), slice,
-                        query::max_result_size(query::result_memory_limiter::unlimited_result_size));
+                        query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
                     std::get<0>(db.query_mutations(std::move(s), cmd, range, nullptr, db::no_timeout).get0())));
@@ -121,10 +131,20 @@ template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
 read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
-    const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
+    const auto query_uuid = is_stateful ? query_id::create_random_id() : query_id::create_null_id();
     ResultBuilder res_builder(s, slice);
-    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
-            query::is_first_page::yes, query::max_result_size(max_size), 0);
+    auto cmd = query::read_command(
+            s->id(),
+            s->version(),
+            slice,
+            query::max_result_size(max_size),
+            query::tombstone_limit::max,
+            query::row_limit(page_size),
+            query::partition_limit::max,
+            gc_clock::now(),
+            std::nullopt,
+            query_uuid,
+            query::is_first_page::yes);
 
     bool has_more = true;
 

@@ -136,26 +136,26 @@ void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
 }
 
 future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
-    auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
+    auto non_system_filter = [&] (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
         return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
     };
 
     auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {
-        return boost::copy_range<std::unordered_map<utils::UUID, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
-                boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<replica::column_family>>& cf) {
+        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
+                boost::adaptors::transformed([]  (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
             return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
         }));
     };
 
-    auto sum_stats_per_cf = [] (std::unordered_map<utils::UUID, stat> a, std::unordered_map<utils::UUID, stat> b) {
+    auto sum_stats_per_cf = [] (std::unordered_map<table_id, stat> a, std::unordered_map<table_id, stat> b) {
         for (auto& r : b) {
             a[r.first] += r.second;
         }
         return a;
     };
 
-    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<utils::UUID, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<utils::UUID, stat> rates) mutable {
+    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<table_id, stat> rates) mutable {
         _diff = 0;
         _gstate.reserve(_slen); // assume length did not change from previous iteration
         _slen = 0;
@@ -184,14 +184,38 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
     }).then([this] {
         _slen = _gstate.size();
         using namespace std::chrono_literals;
-        return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
-            // if max difference during this round is big schedule next recalculate earlier
-            if (_diff < 0.01) {
-                return lowres_clock::duration(2000ms);
-            } else {
-                return lowres_clock::duration(500ms);
-            }
-        });
+        auto now = lowres_clock::now();
+        // Publish CACHE_HITRATES in case:
+        //
+        // - We haven't published it at all
+        // - The diff is bigger than 1% and we haven't published in the last 5 seconds
+        // - The diff is really big 10%
+        //
+        // Note: A peer node can know the cache hitrate through read_data
+        // read_mutation_data and read_digest RPC verbs which have
+        // cache_temperature in the response. So there is no need to update
+        // CACHE_HITRATES through gossip in high frequency.
+        bool do_publish = (_published_nr == 0) ||
+                          (_diff > 0.1) ||
+                          ( _diff > 0.01 && (now - _published_time) > 5000ms);
+
+        // We do the recalculation faster if the diff is bigger than 0.01. It
+        // is useful to do the calculation even if we do not publish the
+        // CACHE_HITRATES though gossip, since the recalculation will call the
+        // table->set_global_cache_hit_rate to set the hitrate.
+        auto recalculate_duration = _diff > 0.01 ? lowres_clock::duration(500ms) : lowres_clock::duration(2000ms);
+        if (do_publish) {
+            llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+            ++_published_nr;
+            _published_time = now;
+            return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
+                    gms::versioned_value::cache_hitrates(_gstate)).then([this, recalculate_duration] {
+                return recalculate_duration;
+            });
+        } else {
+            llogger.debug("Skip CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+            return make_ready_future<lowres_clock::duration>(recalculate_duration);
+        }
     }).finally([this] {
         _gstate = std::string(); // free memory, do not trust clear() to do that for string
         _rates.clear();

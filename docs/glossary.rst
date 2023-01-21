@@ -32,10 +32,10 @@ Glossary
       Determines which of the SSTables will be compacted, and when. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Consistency Level (CL)
-      A dynamic value which dictates the number of replicas (in a cluster) that must acknowledge a read or write operation. This value is set by the client on a per operation basis. For the CQL Shell, the consistency level defaults to ONE for read and write operations. See :doc:`Consistency Levels </getting-started/consistency>`.
+      A dynamic value which dictates the number of replicas (in a cluster) that must acknowledge a read or write operation. This value is set by the client on a per operation basis. For the CQL Shell, the consistency level defaults to ONE for read and write operations. See :doc:`Consistency Levels </cql/consistency>`.
 
     Quorum
-      Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </getting-started/consistency>`.
+      Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </cql/consistency>`.
 
     Date-tiered compaction strategy (DTCS)
       :abbr:`DTCS (Date-tiered compaction strategy)` is designed for time series data, but should not be used. Use :term:`Time-Window Compaction Strategy`. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
@@ -176,3 +176,7 @@ Glossary
 
     Dummy Rows
        Cache dummy rows are entries in the row set, which have a clustering position, although they do not represent CQL rows written by users.  Scylla cache uses them to mark boundaries of population ranges, to represent the information that the whole range is complete, and there is no need to go to sstables to read the gaps between existing row entries when scanning.
+      
+    Workload
+      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, you can prioritize one workload over another (e.g., user requests over administrative activities). See :doc:`Workload Prioritization </using-scylla/workload-prioritization>`.
+

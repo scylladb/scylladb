@@ -72,7 +72,7 @@ class HostRegistry:
             self.next_host_id += 1
             return Host(self.subnet.format(self.next_host_id))
 
-        self.pool = Pool(254, create_host)
+        self.pool = Pool[Host](254, create_host)
 
         async def cleanup() -> None:
             if self.lock_filename:

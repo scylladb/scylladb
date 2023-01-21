@@ -6,7 +6,7 @@ In cases where you needed to shut down your cluster, use this procedure to bring
 
 **Before you begin**
 
-* Confirm that the cluster was shut down using the `shutdown procedure <../safe-shutdown>`_.
+* Confirm that the cluster was shut down using the :doc:`shutdown procedure <safe-shutdown>`.
 * (Only for versions prior to Scylla Open Source 4.3 and Scylla Enterprise 2021.1) Confirm that you know which nodes are the seed nodes. Seed nodes are specified in the ``scylla.yaml`` file.
 
 **Procedure**

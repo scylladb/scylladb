@@ -953,7 +953,7 @@ void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& sem
     for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
-        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time);
+        copy.partition().compact_for_compaction(*copy.schema(), always_gc, copy.decorated_key(), query_time, tombstone_gc_state(nullptr));
         assert_that(ms.make_reader_v2(m.schema(), semaphore.make_permit())).produces_compacted(copy, query_time);
     });
 }
@@ -1584,7 +1584,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         const auto query_time = gc_clock::now();
 
         mutation m_compacted(m);
-        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time);
+        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, m_compacted.decorated_key(), query_time, tombstone_gc_state(nullptr));
 
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
@@ -1963,8 +1963,8 @@ private:
         return gc_clock::time_point() + std::chrono::seconds(dist(gen));
     }
 
-    schema_ptr do_make_schema(data_type type) {
-        auto builder = schema_builder("ks", "cf")
+    schema_ptr do_make_schema(data_type type, const char* ks_name, const char* cf_name) {
+        auto builder = schema_builder(ks_name, cf_name)
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key);
@@ -1981,9 +1981,9 @@ private:
         return builder.build();
     }
 
-    schema_ptr make_schema() {
-        return _generate_counters ? do_make_schema(counter_type)
-                                  : do_make_schema(bytes_type);
+    schema_ptr make_schema(const char* ks_name, const char* cf_name) {
+        return _generate_counters ? do_make_schema(counter_type, ks_name, cf_name)
+                                  : do_make_schema(bytes_type, ks_name, cf_name);
     }
 
     api::timestamp_type gen_timestamp(timestamp_level l) {
@@ -2001,16 +2001,21 @@ private:
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
+            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf") : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
         auto seed = seed_opt.value_or(tests::random::get_int<uint32_t>());
         std::cout << "random_mutation_generator seed: " << seed << "\n";
         _gen = std::mt19937(seed);
 
-        _schema = make_schema();
+        _schema = make_schema(ks_name, cf_name);
 
         auto keys = _local_shard_only ? make_local_keys(n_blobs, _schema, _external_blob_size) : make_keys(n_blobs, _schema, _external_blob_size);
         _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (sstring& k) { return to_bytes(k); }));
+    }
+
+    void set_key_cardinality(size_t n_keys) {
+        assert(n_keys <= n_blobs);
+        _ck_index_dist = std::uniform_int_distribution<size_t>{0, n_keys - 1};
     }
 
     bytes random_blob() {
@@ -2134,7 +2139,7 @@ public:
 
         std::map<counter_id, std::set<int64_t>> counter_used_clock_values;
         std::vector<counter_id> counter_ids;
-        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::generate_random);
+        std::generate_n(std::back_inserter(counter_ids), 8, counter_id::create_random_id);
 
         auto random_counter_cell = [&] {
             std::uniform_int_distribution<size_t> shard_count_dist(1, counter_ids.size());
@@ -2242,6 +2247,11 @@ public:
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
                 row.apply(random_row_marker());
+                if (!row.marker().is_missing() && !row.marker().is_live()) {
+                    // Mutations are not associative if dead marker is not matched with a dead row
+                    // due to shadowable tombstone merging rules. See #11307.
+                    row.apply(tombstone(row.marker().timestamp(), row.marker().deletion_time()));
+                }
                 if (_bool_dist(_gen)) {
                     set_random_cells(row.cells(), column_kind::regular_column);
                 } else {
@@ -2300,8 +2310,8 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt))
+random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt, const char* ks_name, const char* cf_name)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt,  ks_name, cf_name))
 { }
 
 mutation random_mutation_generator::operator()() {
@@ -2330,6 +2340,10 @@ clustering_key random_mutation_generator::make_random_key() {
 
 std::vector<query::clustering_range> random_mutation_generator::make_random_ranges(unsigned n_ranges) {
     return _impl->make_random_ranges(n_ranges);
+}
+
+void random_mutation_generator::set_key_cardinality(size_t n_keys) {
+    _impl->set_key_cardinality(n_keys);
 }
 
 void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,

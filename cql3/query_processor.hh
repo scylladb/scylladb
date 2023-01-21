@@ -21,7 +21,9 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
+#include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
@@ -97,6 +99,7 @@ private:
     service::migration_manager& _mm;
     memory_config _mcfg;
     const cql_config& _cql_config;
+    service::raft_group0_client& _group0_client;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -122,6 +125,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
+    wasm::instance_cache* _wasm_instance_cache;
 public:
     static const sstring CQL_VERSION;
 
@@ -136,7 +140,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client);
 
     ~query_processor();
 
@@ -161,6 +165,14 @@ public:
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
+    }
+
+    wasm::instance_cache* get_wasm_instance_cache() {
+        return _wasm_instance_cache;
+    }
+
+    void set_wasm_instance_cache(wasm::instance_cache* cache) {
+        _wasm_instance_cache = cache;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
@@ -190,6 +202,10 @@ public:
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         return _prepared_cache.find(key);
+    }
+
+    service::raft_group0_client& get_group0_client() {
+        return _group0_client;
     }
 
     inline

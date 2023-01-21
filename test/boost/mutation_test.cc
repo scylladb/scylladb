@@ -43,6 +43,7 @@
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "service/storage_proxy.hh"
+#include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
@@ -487,7 +488,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -539,7 +540,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
@@ -621,7 +622,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
 
-    replica::column_family::config cfg = column_family_test_config(env.semaphore());
+    replica::column_family::config cfg = env.make_table_config();
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -1237,7 +1238,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now);
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state(nullptr));
     return result;
 }
 
@@ -1631,7 +1632,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now());
+    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
@@ -1823,8 +1824,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             if (s != m2.schema()) {
                 return;
             }
-            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now);
-            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now);
+            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, tombstone_gc_state(nullptr));
+            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, tombstone_gc_state(nullptr));
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
@@ -1847,6 +1848,29 @@ SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
     mutation m3 = m1 + m2;
 
     assert_that(m3).is_continuous(position_range::all_clustered_rows(), is_continuous::yes);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_commutativity_and_associativity) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    gen.set_key_cardinality(7);
+
+    for (int i = 0; i < 10; ++i) {
+        mutation m1 = gen();
+        m1.partition().make_fully_continuous();
+        mutation m2 = gen();
+        m2.partition().make_fully_continuous();
+        mutation m3 = gen();
+        m3.partition().make_fully_continuous();
+
+        assert_that(m1 + m2 + m3)
+            .is_equal_to(m1 + m3 + m2)
+            .is_equal_to(m2 + m1 + m3)
+            .is_equal_to(m2 + m3 + m1)
+            .is_equal_to(m3 + m1 + m2)
+            .is_equal_to(m3 + m2 + m1);
+    }
 
     return make_ready_future<>();
 }
@@ -2291,7 +2315,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         std::vector<mutation> mutations) {
     auto never_gc = std::function<bool(tombstone)>([] (tombstone) { return false; });
     for (auto& mut : mutations) {
-        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time);
+        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }
 
     auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
@@ -2304,6 +2328,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             schema,
             query_time,
             get_max_purgeable,
+            tombstone_gc_state(nullptr),
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
@@ -2552,37 +2577,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(1, 1)).get();
 
-    class validating_consumer {
-        mutation_fragment_stream_validator _validator;
-
-    public:
-        explicit validating_consumer(const schema& s) : _validator(s) { }
-
-        void consume_new_partition(const dht::decorated_key&) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
-        }
-        void consume(tombstone) { }
-        stop_iteration consume(static_row&& sr) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::static_row, sr.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume(clustering_row&& cr) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::clustering_row, cr.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume(range_tombstone_change&& rtc) {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position()));
-            return stop_iteration::no;
-        }
-        stop_iteration consume_end_of_partition() {
-            BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
-            return stop_iteration::no;
-        }
-        void consume_end_of_stream() {
-            BOOST_REQUIRE(_validator.on_end_of_stream());
-        }
-    };
-
     BOOST_TEST_MESSAGE("Forward");
     {
         auto mut = muts.front();
@@ -2595,7 +2589,63 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
         validating_consumer consumer(*reverse_schema);
         std::move(mut).consume(consumer, consume_in_reverse::yes);
     }
+
+    BOOST_TEST_MESSAGE("Forward gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*forward_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::no).get();
+    }
+    BOOST_TEST_MESSAGE("Reverse gently");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*reverse_schema);
+        std::move(mut).consume_gently(consumer, consume_in_reverse::yes).get();
+    }
 }
+
+SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        schema_ptr s = schema_builder{"ks", "cf"}
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck1", bytes_type, column_kind::clustering_key)
+            .build();
+
+        clustering_key ck_e{std::vector<bytes>{}};
+        clustering_key ck_0{{serialized((int32_t)0)}};
+        clustering_key ck_1{{serialized((int32_t)1)}};
+        clustering_key ck_2{{serialized((int32_t)2)}};
+        clustering_key ck_3{{serialized((int32_t)3)}};
+        mutation m{s, dht::decorate_key(*s, partition_key{{"pk"}})};
+        reader_permit p = semaphore.make_permit();
+        api::timestamp_type ts = api::min_timestamp;
+        gc_clock::time_point tp{};
+        m.partition().apply(tombstone{api::min_timestamp + 2, gc_clock::time_point{}});
+        range_tombstone rt1{ck_e, bound_kind::incl_start, ck_1, bound_kind::incl_end, tombstone{ts + 0, tp}};
+        range_tombstone rt2{ck_1, bound_kind::excl_start, ck_e, bound_kind::incl_end, tombstone{ts + 1, tp}};
+        clustering_row cr1{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_0}, is_dummy::no, is_continuous::no}};
+        clustering_row cr2{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_2}, is_dummy::no, is_continuous::no}};
+        clustering_row cr3{*s, rows_entry{*s, position_in_partition{partition_region::clustered, bound_weight::equal, ck_3}, is_dummy::no, is_continuous::no}};
+        m.apply(mutation_fragment(*s, p, std::move(rt1)));
+        m.apply(mutation_fragment(*s, p, std::move(rt2)));
+        m.apply(mutation_fragment(*s, p, std::move(cr1)));
+        m.apply(mutation_fragment(*s, p, std::move(cr2)));
+        m.apply(mutation_fragment(*s, p, std::move(cr3)));
+        m.partition().ensure_last_dummy(*s);
+        mutation m1{m};
+        {
+            schema_ptr reverse_schema = s->make_reversed();
+            validating_consumer consumer{*reverse_schema};
+            std::move(m).consume(consumer, consume_in_reverse::yes);
+        }
+        {
+            validating_consumer consumer{*s};
+            std::move(m1).consume(consumer, consume_in_reverse::no);
+        }
+    });
+}
+
 
 SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
     using p_i_p = position_in_partition;

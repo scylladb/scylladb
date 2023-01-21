@@ -14,11 +14,21 @@
 #include <variant>
 #include <seastar/core/smp.hh>
 #include <seastar/core/file.hh>
-#include "sstables/shared_sstable.hh"
+#include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
 #include "compaction_weight_registration.hh"
+
+namespace compaction {
+
+using owned_ranges_ptr = lw_shared_ptr<const dht::token_range_vector>;
+
+inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) {
+    return make_lw_shared<const dht::token_range_vector>(std::move(ranges));
+}
+
+} // namespace compaction
 
 namespace sstables {
 
@@ -54,10 +64,10 @@ public:
     struct regular {
     };
     struct cleanup {
-        dht::token_range_vector owned_ranges;
+        compaction::owned_ranges_ptr owned_ranges;
     };
     struct upgrade {
-        dht::token_range_vector owned_ranges;
+        compaction::owned_ranges_ptr owned_ranges;
     };
     struct scrub {
         enum class mode {
@@ -102,11 +112,11 @@ public:
         return compaction_type_options(regular{});
     }
 
-    static compaction_type_options make_cleanup(dht::token_range_vector&& owned_ranges) {
+    static compaction_type_options make_cleanup(compaction::owned_ranges_ptr owned_ranges) {
         return compaction_type_options(cleanup{std::move(owned_ranges)});
     }
 
-    static compaction_type_options make_upgrade(dht::token_range_vector&& owned_ranges) {
+    static compaction_type_options make_upgrade(compaction::owned_ranges_ptr owned_ranges) {
         return compaction_type_options(upgrade{std::move(owned_ranges)});
     }
 
@@ -143,8 +153,10 @@ struct compaction_descriptor {
     int level;
     // Threshold size for sstable(s) to be created.
     uint64_t max_sstable_bytes;
+    // Can split large partitions at clustering boundary.
+    bool can_split_large_partition = false;
     // Run identifier of output sstables.
-    utils::UUID run_identifier;
+    sstables::run_id run_identifier;
     // The options passed down to the compaction code.
     // This also selects the kind of compaction to do.
     compaction_type_options options = compaction_type_options::make_regular();
@@ -166,7 +178,7 @@ struct compaction_descriptor {
                                    ::io_priority_class io_priority,
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
-                                   utils::UUID run_identifier = utils::make_random_uuid(),
+                                   run_id run_identifier = run_id::create_random_id(),
                                    compaction_type_options options = compaction_type_options::make_regular())
         : sstables(std::move(sstables))
         , level(level)
@@ -182,7 +194,7 @@ struct compaction_descriptor {
         : sstables(std::move(sstables))
         , level(default_level)
         , max_sstable_bytes(default_max_sstable_bytes)
-        , run_identifier(utils::make_random_uuid())
+        , run_identifier(run_id::create_random_id())
         , options(compaction_type_options::make_regular())
         , io_priority(io_priority)
         , has_only_fully_expired(has_only_fully_expired)

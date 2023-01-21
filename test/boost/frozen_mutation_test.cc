@@ -20,6 +20,7 @@
 #include "test/lib/mutation_source_test.hh"
 
 #include <seastar/core/thread.hh>
+#include <seastar/core/coroutine.hh>
 #include "readers/from_mutations_v2.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
@@ -168,4 +169,47 @@ SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
             BOOST_REQUIRE_THROW(freeze(m).unfreeze(s), schema_mismatch_error);
         }
     });
+}
+
+SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
+    random_mutation_generator gen{random_mutation_generator::generate_counters::no};
+    mutation m = gen();
+    auto& s = m.schema();
+    frozen_mutation fm{m};
+
+    auto validate_consume = [] (schema_ptr s, const frozen_mutation& fm, const mutation& m) {
+        testlog.info("Validating frozen_mutation::consume");
+        auto c = validating_consumer(*s);
+        fm.consume(s, c);
+
+        testlog.info("Validating frozen_mutation::consume: rebuilding mutation");
+        mutation_rebuilder_v2 rebuilder(s);
+        auto rebuilt_mut = fm.consume(s, rebuilder).result;
+        assert_that(rebuilt_mut).has_mutation();
+        assert_that(std::move(*rebuilt_mut)).is_equal_to(m);
+    };
+
+    auto validate_consume_gently = [] (schema_ptr s, const frozen_mutation& fm, const mutation& m) -> future<> {
+        testlog.info("Validating frozen_mutation::consume_gently");
+        auto c = validating_consumer(*s);
+        auto adaptor = frozen_mutation_consumer_adaptor(s, c);
+        co_await fm.consume_gently(s, adaptor);
+
+        testlog.info("Validating frozen_mutation::consume_gently: rebuilding mutation");
+        mutation_rebuilder_v2 rebuilder(s);
+        auto rebuilt_mut = fm.consume(s, rebuilder).result;
+        assert_that(rebuilt_mut).has_mutation();
+        assert_that(std::move(*rebuilt_mut)).is_equal_to(m);
+    };
+
+    validate_consume(s, fm, m);
+    co_await validate_consume_gently(s, fm, m);
+
+    // Add another random mutation and re-test
+    testlog.info("Adding another random partition to mutation");
+    m += gen();
+    fm = freeze(m);
+
+    validate_consume(s, fm, m);
+    co_await validate_consume_gently(s, fm, m);
 }

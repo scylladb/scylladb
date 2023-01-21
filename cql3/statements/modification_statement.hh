@@ -33,6 +33,7 @@ class operation;
 
 namespace statements {
 
+class strongly_consistent_modification_statement;
 
 namespace raw { class modification_statement; }
 
@@ -69,10 +70,11 @@ public:
 protected:
     std::vector<::shared_ptr<operation>> _column_operations;
     cql_stats& _stats;
-private:
+
     // Separating normal and static conditions makes things somewhat easier
     std::vector<lw_shared_ptr<column_condition>> _regular_conditions;
     std::vector<lw_shared_ptr<column_condition>> _static_conditions;
+private:
     const ks_selector _ks_sel;
 
     // True if this statement has _if_exists or _if_not_exists or other
@@ -162,7 +164,7 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    void process_where_clause(data_dictionary::database db, std::vector<expr::expression> where_clause, prepare_context& ctx);
+    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
 
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.
@@ -256,6 +258,9 @@ public:
     future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
+
+    virtual ::shared_ptr<strongly_consistent_modification_statement> prepare_for_broadcast_tables() const;
+
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager
+from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager, Final
 
 T = TypeVar('T')
 
@@ -13,35 +13,72 @@ class Pool(Generic[T]):
     builder async function to build a new object.
 
     Usage example:
-    async def start_server():
-        return Server()
-    pool = Pool(4, start_server)
-    ...
-    async with pool.instance() as server:
-        await run_test(test, server)
-    """
+        async def start_server():
+            return Server()
+        pool = Pool(4, start_server)
 
-    def __init__(self, size: int, build: Callable[[], Awaitable[T]]):
-        assert(size >= 0)
-        self.pool: asyncio.Queue[T] = asyncio.Queue(size)
-        self.build = build
-        self.total = 0
+        server = await pool.get()
+        try:
+            await run_test(test, server)
+        finally:
+            await pool.put(server)
+
+    Alternatively:
+        async with pool.instance() as server:
+            await run_test(test, server)
+
+    If the object is considered no longer usable by other users of the pool
+    you can 'steal' it, which frees up space in the pool.
+        server = await.pool.get()
+        dirty = True
+        try:
+            dirty = await run_test(test, server)
+        finally:
+            if dirty:
+                await pool.steal()
+            else:
+                await pool.put(server)
+    """
+    def __init__(self, max_size: int, build: Callable[[], Awaitable[T]]):
+        assert(max_size >= 0)
+        self.max_size: Final[int] = max_size
+        self.build: Final[Callable[[], Awaitable[T]]] = build
+        self.cond: Final[asyncio.Condition] = asyncio.Condition()
+        self.pool: list[T] = []
+        self.total: int = 0 # len(self.pool) + leased objects
 
     async def get(self) -> T:
-        if self.pool.empty() and self.total < self.pool.maxsize:
-            # Increment the total first to avoid a race
-            # during self.build()
-            self.total += 1
-            try:
-                await self.pool.put(await self.build())
-            except:     # noqa: E722
-                self.total -= 1
-                raise
+        """Borrow an object from the pool."""
+        async with self.cond:
+            await self.cond.wait_for(lambda: self.pool or self.total < self.max_size)
+            if self.pool:
+                return self.pool.pop()
 
-        return await self.pool.get()
+            # No object in pool, but total < max_size so we can construct one
+            self.total += 1
+
+        try:
+            obj = await self.build()
+        except:
+            async with self.cond:
+                self.total -= 1
+                self.cond.notify()
+            raise
+        return obj
+
+    async def steal(self) -> None:
+        """Take ownership of a previously borrowed object.
+           Frees up space in the pool.
+        """
+        async with self.cond:
+            self.total -= 1
+            self.cond.notify()
 
     async def put(self, obj: T):
-        await self.pool.put(obj)
+        """Return a previously borrowed object to the pool."""
+        async with self.cond:
+            self.pool.append(obj)
+            self.cond.notify()
 
     def instance(self) -> AsyncContextManager[T]:
         class Instance:

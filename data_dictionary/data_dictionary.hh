@@ -14,7 +14,7 @@
 #include <vector>
 #include <seastar/core/shared_ptr.hh>
 #include "seastarx.hh"
-#include "utils/UUID.hh"
+#include "schema_fwd.hh"
 
 namespace replica {
 class database; // For transition; remove
@@ -62,9 +62,9 @@ public:
 
 class no_such_column_family : public std::runtime_error {
 public:
-    no_such_column_family(const utils::UUID& uuid);
+    no_such_column_family(const table_id& uuid);
     no_such_column_family(std::string_view ks_name, std::string_view cf_name);
-    no_such_column_family(std::string_view ks_name, const utils::UUID& uuid);
+    no_such_column_family(std::string_view ks_name, const table_id& uuid);
 };
 
 class table {
@@ -105,13 +105,13 @@ public:
     std::vector<keyspace> get_keyspaces() const;
     std::vector<table> get_tables() const;
     table find_table(std::string_view ks, std::string_view table) const;  // throws no_such_column_family
-    table find_column_family(utils::UUID uuid) const;  // throws no_such_column_family
+    table find_column_family(table_id uuid) const;  // throws no_such_column_family
     schema_ptr find_schema(std::string_view ks, std::string_view table) const;  // throws no_such_column_family
-    schema_ptr find_schema(utils::UUID uuid) const;  // throws no_such_column_family
+    schema_ptr find_schema(table_id uuid) const;  // throws no_such_column_family
     table find_column_family(schema_ptr s) const;
     bool has_schema(std::string_view ks_name, std::string_view cf_name) const;
     std::optional<table> try_find_table(std::string_view ks, std::string_view table) const;
-    std::optional<table> try_find_table(utils::UUID id) const;
+    std::optional<table> try_find_table(table_id id) const;
     const db::config& get_config() const;
     std::set<sstring> existing_index_names(std::string_view ks_name, std::string_view cf_to_exclude = sstring()) const;
     schema_ptr find_indexed_table(std::string_view ks_name, std::string_view index_name) const;

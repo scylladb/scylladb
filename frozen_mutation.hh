@@ -48,25 +48,26 @@ private:
     Consumer& _consumer;
     stop_iteration _stop_consuming = stop_iteration::no;
 
-    void flush_rows_and_tombstones(position_in_partition_view pos) {
+    stop_iteration flush_rows_and_tombstones(position_in_partition_view pos) {
         if (!_static_row.empty()) {
             auto row = std::move(_static_row.get_existing());
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(static_row(std::move(row)));
+            _stop_consuming = _consumer.consume(static_row(std::move(row)));
+            if (_stop_consuming) {
+                return _stop_consuming;
             }
         }
-        _rt_gen.flush(pos, [this] (range_tombstone_change rt) {
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(std::move(rt));
-            }
-        });
         if (_current_row) {
             auto row_entry = std::move(_current_row_entry);
             _current_row = nullptr;
-            if (!_stop_consuming) {
-                _stop_consuming = _consumer.consume(clustering_row(std::move(*row_entry)));
+            _stop_consuming = _consumer.consume(clustering_row(std::move(*row_entry)));
+            if (_stop_consuming) {
+                return _stop_consuming;
             }
         }
+        _rt_gen.flush(pos, [this] (range_tombstone_change rtc) {
+            _stop_consuming = _consumer.consume(std::move(rtc));
+        });
+        return _stop_consuming;
     }
 
 public:
@@ -101,18 +102,22 @@ public:
         r.append_cell(id, collection_mutation(*_schema.static_column_at(id).type, std::move(collection)));
     }
 
-    virtual void accept_row_tombstone(range_tombstone rt) override {
+    virtual stop_iteration accept_row_tombstone(range_tombstone rt) override {
         flush_rows_and_tombstones(rt.position());
         _rt_gen.consume(std::move(rt));
+        return _stop_consuming;
     }
 
-    virtual void accept_row(position_in_partition_view key, row_tombstone deleted_at, row_marker rm, is_dummy dummy, is_continuous continuous) override {
-        flush_rows_and_tombstones(key);
+    virtual stop_iteration accept_row(position_in_partition_view key, row_tombstone deleted_at, row_marker rm, is_dummy dummy, is_continuous continuous) override {
+        if (flush_rows_and_tombstones(key)) {
+            return stop_iteration::yes;
+        }
         _current_row_entry = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, key, dummy, continuous));
         deletable_row& r = _current_row_entry->row();
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;
+        return stop_iteration::no;
     }
 
     void accept_row_cell(column_id id, atomic_cell cell) override {
@@ -166,8 +171,8 @@ public:
     frozen_mutation& operator=(frozen_mutation&&) = default;
     frozen_mutation& operator=(const frozen_mutation&) = default;
     const bytes_ostream& representation() const { return _bytes; }
-    utils::UUID column_family_id() const;
-    utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
+    table_id column_family_id() const;
+    table_schema_version schema_version() const; // FIXME: Should replace column_family_id()
     partition_key_view key() const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
@@ -285,7 +290,7 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        partition().accept(s->get_column_mapping(), adaptor);
+        partition().accept_ordered(*s, adaptor);
         return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
@@ -304,13 +309,9 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
     check_schema_version(schema_version(), *s);
     try {
         adaptor.on_new_partition(_pk);
-        return partition().accept_gently(s->get_column_mapping(), adaptor).then_wrapped([this, s, &adaptor] (future<> f) {
-            if (f.failed()) {
-                std::throw_with_nested(std::runtime_error(format(
-                        "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));
-            }
-            return adaptor.on_end_of_partition();
-        });
+        auto p = partition();
+        co_await p.accept_gently_ordered(*s, adaptor);
+        co_return adaptor.on_end_of_partition();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
                 "frozen_mutation::consume_gently(): failed consuming mutation {} of {}.{}", key(), s->ks_name(), s->cf_name())));

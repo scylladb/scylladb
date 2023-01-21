@@ -281,7 +281,7 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-static int64_t timestamp_from_string(sstring_view s) {
+int64_t timestamp_from_string(sstring_view s) {
     try {
         std::string str;
         str.resize(s.size());
@@ -441,7 +441,7 @@ template <typename T>
 struct float_type_traits {
     static constexpr size_t serialized_size = sizeof(typename int_of_size<T>::itype);
     static double read_nonempty(managed_bytes_view v) {
-        return bit_cast<T>(read_simple_exactly<typename int_of_size<T>::itype>(v));
+        return std::bit_cast<T>(read_simple_exactly<typename int_of_size<T>::itype>(v));
     }
 };
 template<> struct simple_type_traits<float> : public float_type_traits<float> {};

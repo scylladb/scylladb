@@ -444,7 +444,7 @@ public:
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         maybe_advance_to(lower_bound);
-        return no_clustering_row_between(_schema, lower_bound, position());
+        return no_clustering_row_between_weak(_schema, lower_bound, position());
     }
 
     // Call only when valid.
@@ -605,8 +605,8 @@ public:
         auto latest_i = get_iterator_in_latest_version();
         auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
             is_continuous(latest_i && latest_i->continuous())));
-        _snp.tracker()->insert(*e);
         auto e_i = rows.insert_before(latest_i, std::move(e));
+        _snp.tracker()->insert(*e_i);
         return ensure_result{*e_i, true};
     }
 

@@ -11,7 +11,6 @@
 #include <seastar/core/sleep.hh>
 #include "dht/range_streamer.hh"
 #include "utils/fb_utilities.hh"
-#include "locator/snitch_base.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
@@ -21,7 +20,6 @@
 #include "db/config.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
-#include "locator/abstract_replication_strategy.hh"
 
 namespace dht {
 
@@ -82,18 +80,14 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
 // Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
+range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
-
-    auto range_addresses = erm->get_range_addresses();
+    auto range_addresses = erm->get_range_addresses().get0();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
@@ -102,8 +96,8 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
             }
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
-                inet_address_vector_replica_set& addresses = x.second;
-                auto preferred = snitch->get_sorted_list_by_proximity(_address, addresses);
+                inet_address_vector_replica_set preferred(x.second.begin(), x.second.end());
+                get_token_metadata().get_topology().sort_by_proximity(_address, preferred);
                 for (inet_address& p : preferred) {
                     range_sources[desired_range].push_back(p);
                 }
@@ -121,19 +115,18 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
 
 // Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
+range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
 
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto& strat = ks.get_replication_strategy();
-    auto erm = ks.get_effective_replication_map();
+    auto& strat = erm->get_replication_strategy();
 
     //Active ranges
     auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
     auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
     //Pending ranges
+    metadata_clone.update_topology(_address, _dr);
     metadata_clone.update_normal_tokens(_tokens, _address).get();
     auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
     metadata_clone.clear_gently().get();
@@ -190,12 +183,10 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     return range_sources;
 }
 
-bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name) {
-    auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
+bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::effective_replication_map_ptr& erm) {
     auto rf = erm->get_replication_factor();
     auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
-    bool everywhere_topology = ks.get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
+    bool everywhere_topology = erm->get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
     auto strict = _db.local().get_config().consistent_rangemovement()
            && !_tokens.empty()
@@ -223,15 +214,15 @@ void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_
 }
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
-future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing) {
-  return seastar::async([this, keyspace_name, ranges= std::move(ranges), &gossiper, is_replacing] () mutable {
+future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing) {
+  return seastar::async([this, keyspace_name, erm = std::move(erm), ranges= std::move(ranges), &gossiper, is_replacing] () mutable {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_rx_added++;
-    auto ranges_for_keyspace = !is_replacing && use_strict_sources_for_ranges(keyspace_name)
-        ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges, gossiper)
-        : get_all_ranges_with_sources_for(keyspace_name, ranges);
+    auto ranges_for_keyspace = !is_replacing && use_strict_sources_for_ranges(keyspace_name, erm)
+        ? get_all_ranges_with_strict_sources_for(keyspace_name, erm, ranges, gossiper)
+        : get_all_ranges_with_sources_for(keyspace_name, erm, ranges);
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : ranges_for_keyspace) {
@@ -252,6 +243,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_ran
 
 future<> range_streamer::stream_async() {
     auto nr_ranges_remaining = nr_ranges_to_stream();
+    _nr_total_ranges = nr_ranges_remaining;
     logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
     auto start = lowres_clock::now();
     return do_for_each(_to_stream, [this, start, description = _description] (auto& stream) {
@@ -288,6 +280,12 @@ future<> range_streamer::stream_async() {
                     }
                     sp.execute().discard_result().get();
                     ranges_to_stream.clear();
+                    // Update finished percentage
+                    auto remaining = nr_ranges_to_stream();
+                    float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - remaining) / (float)_nr_total_ranges;
+                    _stream_manager.local().update_finished_percentage(_reason, percentage);
+                    logger.info("Finished {} out of {} ranges for {}, finished percentage={}",
+                            _nr_total_ranges - remaining, _nr_total_ranges, _reason, percentage);
                 };
                 try {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {

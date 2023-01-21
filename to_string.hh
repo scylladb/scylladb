@@ -100,8 +100,8 @@ std::ostream& operator<<(std::ostream& os, const std::tuple<T...>& p) {
     return print_tuple(os, p, std::make_index_sequence<sizeof...(T)>());
 }
 
-template <typename T>
-std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
+template <typename T, typename... Args>
+std::ostream& operator<<(std::ostream& os, const std::unordered_set<T, Args...>& items) {
     os << "{" << join(", ", items) << "}";
     return os;
 }

@@ -1,4 +1,4 @@
-scylla-types
+Scylla Types
 ==============
 
 .. versionadded:: 5.0
@@ -26,7 +26,7 @@ The command syntax is as follows:
 * Provide the values in the hex form without a leading 0x prefix.
 * You must specify the type of the provided values. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * The number of provided values depends on the operation. See :ref:`Supported Operations <scylla-types-operations>` for details.
-* The scylla-types operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
+* The ``scylla types`` operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
 
 .. _scylla-types-type:
 
@@ -35,7 +35,7 @@ Specifying the Value Type
 
 You must specify the type of the value(s) you want to examine by adding the ``-t [type name]`` option to the operation. 
 Specify the type by providing its Cassandra class name (the prefix can be omitted, for example, you can provide ``Int32Type`` 
-instead of ``org.apache.cassandra.db.marshal.Int32Type``). See https://github.com/scylladb/scylla/blob/master/docs/design-notes/cql3-type-mapping.md for a mapping of cql3 types to Cassandra type class names.
+instead of ``org.apache.cassandra.db.marshal.Int32Type``). See `CQL3 Type Mapping <https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md>`_ for a mapping of cql3 types to Cassandra type class names.
 
 If you provide more than one value, all of the values must share the same type. For example:
 

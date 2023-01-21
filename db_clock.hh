@@ -33,13 +33,13 @@ public:
     static constexpr time_point from_time_t(std::time_t t) {
         return time_point(std::chrono::duration_cast<duration>(std::chrono::seconds(t)));
     }
-    static time_point now() {
+    static time_point now() noexcept {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
 };
 
 static inline
-gc_clock::time_point to_gc_clock(db_clock::time_point tp) {
+gc_clock::time_point to_gc_clock(db_clock::time_point tp) noexcept {
     // Converting time points through `std::time_t` means that we don't have to make any assumptions about the epochs
     // of `gc_clock` and `db_clock`, though we require that that the period of `gc_clock` is also 1 s like
     // `std::time_t` to avoid loss of information.

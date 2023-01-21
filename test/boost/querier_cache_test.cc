@@ -112,8 +112,8 @@ private:
             nullptr);
     }
 
-    static utils::UUID make_cache_key(unsigned key) {
-        return utils::UUID{key, 1};
+    static query_id make_cache_key(unsigned key) {
+        return query_id(utils::UUID{key, 1});
     }
 
     const dht::decorated_key* find_key(const dht::partition_range& range, unsigned partition_offset) const {
@@ -205,7 +205,7 @@ public:
     }
 
     template <typename Querier>
-    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(utils::UUID, Querier&&, tracing::trace_state_ptr), unsigned key,
+    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(query_id, Querier&&, tracing::trace_state_ptr), unsigned key,
             const dht::partition_range& range, const query::partition_slice& slice, uint64_t row_limit) {
         const auto cache_key = make_cache_key(key);
 
@@ -324,11 +324,6 @@ public:
             querier_opt->close().get();
         }
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
-        return *this;
-    }
-
-    test_querier_cache& evict_all_for_table() {
-        _cache.evict_all_for_table(get_schema()->id()).get();
         return *this;
     }
 
@@ -658,14 +653,14 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         auto cmd1 = query::read_command(s->id(),
                 s->version(),
                 slice,
-                1,
+                query::max_result_size(1024 * 1024),
+                query::tombstone_limit::max,
+                query::row_limit(1),
+                query::partition_limit(1),
                 gc_clock::now(),
                 std::nullopt,
-                1,
-                utils::make_random_uuid(),
-                query::is_first_page::yes,
-                query::max_result_size(1024 * 1024),
-                0);
+                query_id::create_random_id(),
+                query::is_first_page::yes);
 
         // Should save the querier in cache.
         db.query_mutations(s,
@@ -688,14 +683,14 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
                 slice,
-                1,
+                query::max_result_size(1024 * 1024),
+                query::tombstone_limit::max,
+                query::row_limit(1),
+                query::partition_limit(1),
                 gc_clock::now(),
                 std::nullopt,
-                1,
-                utils::make_random_uuid(),
-                query::is_first_page::no,
-                query::max_result_size(1024 * 1024),
-                0);
+                query_id::create_random_id(),
+                query::is_first_page::no);
 
         // Should evict the already cached querier.
         db.query_mutations(s,
@@ -725,21 +720,6 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 db::no_timeout).get();
         return make_ready_future<>();
     }, std::move(db_cfg_ptr)).get();
-}
-
-SEASTAR_THREAD_TEST_CASE(test_evict_all_for_table) {
-    test_querier_cache t;
-
-    const auto entry = t.produce_first_page_and_save_mutation_querier();
-
-    t.evict_all_for_table();
-    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .misses()
-        .no_drops()
-        .no_evictions();
-
-    // Check that the querier was removed from the semaphore too.
-    BOOST_CHECK(!t.get_semaphore().try_evict_one_inactive_read());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {

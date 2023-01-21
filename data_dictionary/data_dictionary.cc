@@ -100,12 +100,12 @@ database::find_table(std::string_view ks, std::string_view table) const {
 }
 
 std::optional<table>
-database::try_find_table(utils::UUID id) const {
+database::try_find_table(table_id id) const {
     return _ops->try_find_table(*this, id);
 }
 
 table
-database::find_column_family(utils::UUID uuid) const {
+database::find_column_family(table_id uuid) const {
     auto t = try_find_table(uuid);
     if (!t) {
         throw no_such_column_family(uuid);
@@ -119,7 +119,7 @@ database::find_schema(std::string_view ks, std::string_view table) const {
 }
 
 schema_ptr
-database::find_schema(utils::UUID uuid) const {
+database::find_schema(table_id uuid) const {
     return find_column_family(uuid).schema();
 }
 
@@ -326,7 +326,7 @@ no_such_keyspace::no_such_keyspace(std::string_view ks_name)
 {
 }
 
-no_such_column_family::no_such_column_family(const utils::UUID& uuid)
+no_such_column_family::no_such_column_family(const table_id& uuid)
     : runtime_error{format("Can't find a column family with UUID {}", uuid)}
 {
 }
@@ -336,7 +336,7 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, std::stri
 {
 }
 
-no_such_column_family::no_such_column_family(std::string_view ks_name, const utils::UUID& uuid)
+no_such_column_family::no_such_column_family(std::string_view ks_name, const table_id& uuid)
     : runtime_error{format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
 {
 }

@@ -7,7 +7,7 @@ It is is a fork of the `GoCQL Driver <https://github.com/gocql/gocql>`_ but has 
 Using this policy, the driver can select a connection to a particular shard based on the shard’s token. 
 As a result, latency is significantly reduced because there is no need to pass data between the shards. 
 
-The protocol extension spec is `available here <https://scylla.docs.scylladb.com/master/design-notes/protocol-extensions>`_. 
+The protocol extension spec is `available here <https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md>`_. 
 The Scylla Go Driver is a drop-in replacement for gocql. 
 As such, no code changes are needed to use this driver. 
 All you need to do is rebuild using the ``replace`` directive in your ``mod`` file.

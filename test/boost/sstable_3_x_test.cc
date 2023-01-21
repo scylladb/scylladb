@@ -3023,7 +3023,7 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, column_family_test_config(env.semaphore()), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 
@@ -5189,8 +5189,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
     cache_tracker tracker;
-    test_db_config.host_id = ::utils::make_random_uuid();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
+    test_db_config.host_id = locator::host_id::create_random_id();
+    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
     auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(
@@ -5249,8 +5249,8 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
     cache_tracker tracker;
-    test_db_config.host_id = ::utils::make_random_uuid();
-    sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
+    test_db_config.host_id = locator::host_id::create_random_id();
+    sstables_manager manager(handler, test_db_config, test_feature_service, tracker, memory::stats().total_memory());
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(sc, dir.path().string(), generation_from_value(1), version, sstables::sstable::format_types::big);

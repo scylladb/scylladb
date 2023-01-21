@@ -16,7 +16,6 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
-#include <boost/heap/binomial_heap.hpp>
 #include "seastarx.hh"
 #include "db/timeout_clock.hh"
 #include "utils/entangled.hh"
@@ -41,374 +40,16 @@ constexpr size_t max_zone_segments = 256;
 //
 using eviction_fn = std::function<memory::reclaiming_result()>;
 
-//
-// Users of a region_group can pass an instance of the class region_group_reclaimer, and specialize
-// its methods start_reclaiming() and stop_reclaiming(). Those methods will be called when the LSA
-// see relevant changes in the memory pressure conditions for this region_group. By specializing
-// those methods - which are a nop by default - the callers can take action to aid the LSA in
-// alleviating pressure.
-class region_group_reclaimer {
-protected:
-    size_t _threshold;
-    size_t _soft_limit;
-    bool _under_pressure = false;
-    bool _under_soft_pressure = false;
-    // The following restrictions apply to implementations of start_reclaiming() and stop_reclaiming():
-    //
-    //  - must not use any region or region_group objects, because they're invoked synchronously
-    //    with operations on those.
-    //
-    //  - must be noexcept, because they're called on the free path.
-    //
-    //  - the implementation may be called synchronously with any operation
-    //    which allocates memory, because these are called by memory reclaimer.
-    //    In particular, the implementation should not depend on memory allocation
-    //    because that may fail when in reclaiming context.
-    //
-    virtual void start_reclaiming() noexcept {}
-    virtual void stop_reclaiming() noexcept {}
+// Listens for events from a region
+class region_listener {
 public:
-    bool under_pressure() const {
-        return _under_pressure;
-    }
-
-    bool over_soft_limit() const {
-        return _under_soft_pressure;
-    }
-
-    void notify_soft_pressure() noexcept {
-        if (!_under_soft_pressure) {
-            _under_soft_pressure = true;
-            start_reclaiming();
-        }
-    }
-
-    void notify_soft_relief() noexcept {
-        if (_under_soft_pressure) {
-            _under_soft_pressure = false;
-            stop_reclaiming();
-        }
-    }
-
-    void notify_pressure() noexcept {
-        _under_pressure = true;
-    }
-
-    void notify_relief() noexcept {
-        _under_pressure = false;
-    }
-
-    region_group_reclaimer()
-        : _threshold(std::numeric_limits<size_t>::max()), _soft_limit(std::numeric_limits<size_t>::max()) {}
-    region_group_reclaimer(size_t threshold)
-        : _threshold(threshold), _soft_limit(threshold) {}
-    region_group_reclaimer(size_t threshold, size_t soft)
-        : _threshold(threshold), _soft_limit(soft) {
-        assert(_soft_limit <= _threshold);
-    }
-
-    virtual ~region_group_reclaimer() {}
-
-    size_t throttle_threshold() const {
-        return _threshold;
-    }
-    size_t soft_limit_threshold() const {
-        return _soft_limit;
-    }
-};
-
-// Groups regions for the purpose of statistics.  Can be nested.
-class region_group {
-    static region_group_reclaimer no_reclaimer;
-
-    struct region_evictable_occupancy_ascending_less_comparator {
-        bool operator()(region_impl* r1, region_impl* r2) const;
-    };
-
-    // We want to sort the subgroups so that we can easily find the one that holds the biggest
-    // region for freeing purposes. Please note that this is not the biggest of the region groups,
-    // since a big region group can have a big collection of very small regions, and freeing them
-    // won't achieve anything. An example of such scenario is a ScyllaDB region with a lot of very
-    // small memtables that add up, versus one with a very big memtable. The small memtables are
-    // likely still growing, and freeing the big memtable will guarantee that the most memory is
-    // freed up, while maximizing disk throughput.
-    //
-    // As asynchronous reclaim will likely involve disk operation, and those tend to be more
-    // efficient when bulk done, this behavior is not ScyllaDB memtable specific.
-    //
-    // The maximal score is recursively defined as:
-    //
-    //      max(our_biggest_region, our_subtree_biggest_region)
-    struct subgroup_maximal_region_ascending_less_comparator {
-        bool operator()(region_group* rg1, region_group* rg2) const {
-            return rg1->maximal_score() < rg2->maximal_score();
-        }
-    };
-    friend struct subgroup_maximal_region_ascending_less_comparator;
-
-    using region_heap = boost::heap::binomial_heap<region_impl*,
-          boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
-          boost::heap::allocator<std::allocator<region_impl*>>,
-          //constant_time_size<true> causes corruption with boost < 1.60
-          boost::heap::constant_time_size<false>>;
-
-    using subgroup_heap = boost::heap::binomial_heap<region_group*,
-          boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
-          boost::heap::allocator<std::allocator<region_group*>>,
-          //constant_time_size<true> causes corruption with boost < 1.60
-          boost::heap::constant_time_size<false>>;
-
-    region_group* _parent = nullptr;
-    size_t _total_memory = 0;
-    region_group_reclaimer& _reclaimer;
-
-    subgroup_heap _subgroups;
-    subgroup_heap::handle_type _subgroup_heap_handle;
-    region_heap _regions;
-    region_group* _maximal_rg = nullptr;
-    // We need to store the score separately, otherwise we'd have to have an extra pass
-    // before we update the region occupancy.
-    size_t _maximal_score = 0;
-
-    struct allocating_function {
-        virtual ~allocating_function() = default;
-        virtual void allocate() = 0;
-        virtual void fail(std::exception_ptr) = 0;
-    };
-
-    template <typename Func>
-    struct concrete_allocating_function : public allocating_function {
-        using futurator = futurize<std::result_of_t<Func()>>;
-        typename futurator::promise_type pr;
-        Func func;
-    public:
-        void allocate() override {
-            futurator::invoke(func).forward_to(std::move(pr));
-        }
-        void fail(std::exception_ptr e) override {
-            pr.set_exception(e);
-        }
-        concrete_allocating_function(Func&& func) : func(std::forward<Func>(func)) {}
-        typename futurator::type get_future() {
-            return pr.get_future();
-        }
-    };
-
-    class on_request_expiry {
-        class blocked_requests_timed_out_error : public timed_out_error {
-            const sstring _msg;
-        public:
-            explicit blocked_requests_timed_out_error(sstring name)
-                : _msg(std::move(name) + ": timed out") {}
-            virtual const char* what() const noexcept override {
-                return _msg.c_str();
-            }
-        };
-
-        sstring _name;
-    public:
-        explicit on_request_expiry(sstring name) : _name(std::move(name)) {}
-        void operator()(std::unique_ptr<allocating_function>&) noexcept;
-    };
-
-    // It is a more common idiom to just hold the promises in the circular buffer and make them
-    // ready. However, in the time between the promise being made ready and the function execution,
-    // it could be that our memory usage went up again. To protect against that, we have to recheck
-    // if memory is still available after the future resolves.
-    //
-    // But we can greatly simplify it if we store the function itself in the circular_buffer, and
-    // execute it synchronously in release_requests() when we are sure memory is available.
-    //
-    // This allows us to easily provide strong execution guarantees while keeping all re-check
-    // complication in release_requests and keep the main request execution path simpler.
-    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, db::timeout_clock> _blocked_requests;
-
-    uint64_t _blocked_requests_counter = 0;
-
-    condition_variable _relief;
-    future<> _releaser;
-    bool _shutdown_requested = false;
-
-    bool reclaimer_can_block() const;
-    future<> start_releaser(scheduling_group deferered_work_sg);
-    void notify_relief();
-    friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
-public:
-    // When creating a region_group, one can specify an optional throttle_threshold parameter. This
-    // parameter won't affect normal allocations, but an API is provided, through the region_group's
-    // method run_when_memory_available(), to make sure that a given function is only executed when
-    // the total memory for the region group (and all of its parents) is lower or equal to the
-    // region_group's throttle_treshold (and respectively for its parents).
-    //
-    // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
-    // (given to run_when_memory_available()) when they must be deferred due to lack of memory
-    // at the time the call to run_when_memory_available() was made.
-    region_group(sstring name = "(unnamed region_group)",
-            region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group())
-        : region_group(name, nullptr, reclaimer, deferred_work_sg) {}
-    region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
-            scheduling_group deferred_work_sg = default_scheduling_group());
-    region_group(region_group&& o) = delete;
-    region_group(const region_group&) = delete;
-    ~region_group() {
-        // If we set a throttle threshold, we'd be postponing many operations. So shutdown must be
-        // called.
-        if (reclaimer_can_block()) {
-            assert(_shutdown_requested);
-        }
-        if (_parent) {
-            _parent->del(this);
-        }
-    }
-    region_group& operator=(const region_group&) = delete;
-    region_group& operator=(region_group&&) = delete;
-    size_t memory_used() const {
-        return _total_memory;
-    }
-    void update(ssize_t delta);
-
-    // It would be easier to call update, but it is unfortunately broken in boost versions up to at
-    // least 1.59.
-    //
-    // One possibility would be to just test for delta sigdness, but we adopt an explicit call for
-    // two reasons:
-    //
-    // 1) it save us a branch
-    // 2) some callers would like to pass delta = 0. For instance, when we are making a region
-    //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
-    //    the full update cycle even then.
-    void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) {
-        _regions.increase(r_handle);
-        update(delta);
-    }
-
-    void decrease_evictable_usage(region_heap::handle_type& r_handle) {
-        _regions.decrease(r_handle);
-    }
-
-    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
-        decrease_evictable_usage(r_handle);
-        update(delta);
-    }
-
-    //
-    // Make sure that the function specified by the parameter func only runs when this region_group,
-    // as well as each of its ancestors have a memory_used() amount of memory that is lesser or
-    // equal the throttle_threshold, as specified in the region_group's constructor.
-    //
-    // region_groups that did not specify a throttle_threshold will always allow for execution.
-    //
-    // In case current memory_used() is over the threshold, a non-ready future is returned and it
-    // will be made ready at some point in the future, at which memory usage in the offending
-    // region_group (either this or an ancestor) falls below the threshold.
-    //
-    // Requests that are not allowed for execution are queued and released in FIFO order within the
-    // same region_group, but no guarantees are made regarding release ordering across different
-    // region_groups.
-    //
-    // When timeout is reached first, the returned future is resolved with timed_out_error exception.
-    template <typename Func>
-    // We disallow future-returning functions here, because otherwise memory may be available
-    // when we start executing it, but no longer available in the middle of the execution.
-    requires (!is_future<std::invoke_result_t<Func>>::value)
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-        auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-            return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
-        });
-
-        if (!blocked_at) {
-            return futurize_invoke(func);
-        }
-
-        auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
-        auto fut = fn->get_future();
-        _blocked_requests.push_back(std::move(fn), timeout);
-        ++_blocked_requests_counter;
-
-        return fut;
-    }
-
-    // returns a pointer to the largest region (in terms of memory usage) that sits below this
-    // region group. This includes the regions owned by this region group as well as all of its
-    // children.
-    region* get_largest_region();
-
-    // Shutdown is mandatory for every user who has set a threshold
-    // Can be called at most once.
-    future<> shutdown() {
-        _shutdown_requested = true;
-        _relief.signal();
-        return std::move(_releaser);
-    }
-
-    size_t blocked_requests() {
-        return _blocked_requests.size();
-    }
-
-    uint64_t blocked_requests_counter() const {
-        return _blocked_requests_counter;
-    }
-private:
-    // Returns true if and only if constraints of this group are not violated.
-    // That's taking into account any constraints imposed by enclosing (parent) groups.
-    bool execution_permitted() noexcept;
-
-    // Executes the function func for each region_group upwards in the hierarchy, starting with the
-    // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
-    // the next ancestor in the hierarchy, or stop_iteration::yes, in which case it stops at this
-    // level.
-    //
-    // This method returns a pointer to the region_group that was processed last, or nullptr if the
-    // root was reached.
-    template <typename Func>
-    static region_group* do_for_each_parent(region_group *node, Func&& func) {
-        auto rg = node;
-        while (rg) {
-            if (func(rg) == stop_iteration::yes) {
-                return rg;
-            }
-            rg = rg->_parent;
-        }
-        return nullptr;
-    }
-
-    inline bool under_pressure() const {
-        return _reclaimer.under_pressure();
-    }
-
-    uint64_t top_region_evictable_space() const;
-
-    uint64_t maximal_score() const {
-        return _maximal_score;
-    }
-
-    void update_maximal_rg() {
-        auto my_score = top_region_evictable_space();
-        auto children_score = _subgroups.empty() ? 0 : _subgroups.top()->maximal_score();
-        auto old_maximal_score = _maximal_score;
-        if (children_score > my_score) {
-            _maximal_rg = _subgroups.top()->_maximal_rg;
-        } else {
-            _maximal_rg = this;
-        }
-
-        _maximal_score = _maximal_rg->top_region_evictable_space();
-        if (_parent) {
-            // binomial heap update boost bug.
-            if (_maximal_score > old_maximal_score) {
-                _parent->_subgroups.increase(_subgroup_heap_handle);
-            } else if (_maximal_score < old_maximal_score) {
-                _parent->_subgroups.decrease(_subgroup_heap_handle);
-            }
-        }
-    }
-
-    void add(region_group* child);
-    void del(region_group* child);
-    void add(region_impl* child);
-    void del(region_impl* child);
-    friend class region_impl;
+    virtual ~region_listener();
+    virtual void add(region* r) = 0;
+    virtual void del(region* r) = 0;
+    virtual void moved(region* old_address, region* new_address) = 0;
+    virtual void increase_usage(region* r, ssize_t delta) = 0;
+    virtual void decrease_evictable_usage(region* r) = 0;
+    virtual void decrease_usage(region* r, ssize_t delta) = 0;
 };
 
 // Controller for all LSA regions. There's one per shard.
@@ -424,6 +65,44 @@ public:
         scheduling_group background_reclaim_sched_group;
     };
 
+    struct stats {
+        size_t segments_compacted;
+        size_t lsa_buffer_segments;
+        uint64_t memory_allocated;
+        uint64_t memory_freed;
+        uint64_t memory_compacted;
+        uint64_t memory_evicted;
+
+        friend stats operator+(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result += s2;
+            return result;
+        }
+        friend stats operator-(const stats& s1, const stats& s2) {
+            stats result(s1);
+            result -= s2;
+            return result;
+        }
+        stats& operator+=(const stats& other) {
+            segments_compacted += other.segments_compacted;
+            lsa_buffer_segments += other.lsa_buffer_segments;
+            memory_allocated += other.memory_allocated;
+            memory_freed += other.memory_freed;
+            memory_compacted += other.memory_compacted;
+            memory_evicted += other.memory_evicted;
+            return *this;
+        }
+        stats& operator-=(const stats& other) {
+            segments_compacted -= other.segments_compacted;
+            lsa_buffer_segments -= other.lsa_buffer_segments;
+            memory_allocated -= other.memory_allocated;
+            memory_freed -= other.memory_freed;
+            memory_compacted -= other.memory_compacted;
+            memory_evicted -= other.memory_evicted;
+            return *this;
+        }
+    };
+
     void configure(const config& cfg);
     future<> stop();
 
@@ -437,6 +116,8 @@ private:
 public:
     tracker();
     ~tracker();
+
+    stats statistics() const;
 
     //
     // Tries to reclaim given amount of bytes in total using all compactible
@@ -455,24 +136,34 @@ public:
 
     void reclaim_all_free_segments();
 
+    occupancy_stats global_occupancy() const noexcept;
+
     // Returns aggregate statistics for all pools.
-    occupancy_stats region_occupancy();
+    occupancy_stats region_occupancy() const noexcept;
 
     // Returns statistics for all segments allocated by LSA on this shard.
-    occupancy_stats occupancy();
+    occupancy_stats occupancy() const noexcept;
 
     // Returns amount of allocated memory not managed by LSA
-    size_t non_lsa_used_space() const;
+    size_t non_lsa_used_space() const noexcept;
 
-    impl& get_impl() { return *_impl; }
+    impl& get_impl() noexcept { return *_impl; }
 
     // Returns the minimum number of segments reclaimed during single reclamation cycle.
-    size_t reclamation_step() const;
+    size_t reclamation_step() const noexcept;
 
-    bool should_abort_on_bad_alloc();
+    bool should_abort_on_bad_alloc() const noexcept;
 };
 
-tracker& shard_tracker();
+class tracker_reclaimer_lock {
+    tracker::impl& _tracker_impl;
+public:
+    tracker_reclaimer_lock(tracker::impl& impl) noexcept;
+    tracker_reclaimer_lock(tracker& t) noexcept : tracker_reclaimer_lock(t.get_impl()) { }
+    ~tracker_reclaimer_lock();
+};
+
+tracker& shard_tracker() noexcept;
 
 class segment_descriptor;
 
@@ -526,11 +217,11 @@ public:
 
     /// Returns a pointer to the first element of the buffer.
     /// Valid only when engaged.
-    char_type* get() { return _buf; }
-    const char_type* get() const { return _buf; }
+    char_type* get() noexcept { return _buf; }
+    const char_type* get() const noexcept { return _buf; }
 
     /// Returns the number of bytes in the buffer.
-    size_t size() const { return _size; }
+    size_t size() const noexcept { return _size; }
 
     /// Returns true iff the pointer is engaged.
     explicit operator bool() const noexcept { return bool(_link); }
@@ -543,56 +234,56 @@ class occupancy_stats {
     size_t _free_space;
     size_t _total_space;
 public:
-    occupancy_stats() : _free_space(0), _total_space(0) {}
+    occupancy_stats() noexcept : _free_space(0), _total_space(0) {}
 
-    occupancy_stats(size_t free_space, size_t total_space)
+    occupancy_stats(size_t free_space, size_t total_space) noexcept
         : _free_space(free_space), _total_space(total_space) { }
 
-    bool operator<(const occupancy_stats& other) const {
+    bool operator<(const occupancy_stats& other) const noexcept {
         return used_fraction() < other.used_fraction();
     }
 
-    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator+(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result += s2;
         return result;
     }
 
-    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) {
+    friend occupancy_stats operator-(const occupancy_stats& s1, const occupancy_stats& s2) noexcept {
         occupancy_stats result(s1);
         result -= s2;
         return result;
     }
 
-    occupancy_stats& operator+=(const occupancy_stats& other) {
+    occupancy_stats& operator+=(const occupancy_stats& other) noexcept {
         _total_space += other._total_space;
         _free_space += other._free_space;
         return *this;
     }
 
-    occupancy_stats& operator-=(const occupancy_stats& other) {
+    occupancy_stats& operator-=(const occupancy_stats& other) noexcept {
         _total_space -= other._total_space;
         _free_space -= other._free_space;
         return *this;
     }
 
-    size_t used_space() const {
+    size_t used_space() const noexcept {
         return _total_space - _free_space;
     }
 
-    size_t free_space() const {
+    size_t free_space() const noexcept {
         return _free_space;
     }
 
-    size_t total_space() const {
+    size_t total_space() const noexcept {
         return _total_space;
     }
 
-    float used_fraction() const {
+    float used_fraction() const noexcept {
         return _total_space ? float(used_space()) / total_space() : 0;
     }
 
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return _total_space > 0;
     }
 
@@ -601,15 +292,21 @@ public:
 
 class basic_region_impl : public allocation_strategy {
 protected:
+    tracker& _tracker;
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
-    void set_reclaiming_enabled(bool enabled) {
+    basic_region_impl(tracker& tracker) : _tracker(tracker)
+    { }
+
+    tracker& get_tracker() { return _tracker; }
+
+    void set_reclaiming_enabled(bool enabled) noexcept {
         assert(this_shard_id() == _cpu);
         _reclaiming_enabled = enabled;
     }
 
-    bool reclaiming_enabled() const {
+    bool reclaiming_enabled() const noexcept {
         return _reclaiming_enabled;
     }
 };
@@ -635,17 +332,23 @@ public:
 private:
     shared_ptr<basic_region_impl> _impl;
 private:
-    region_impl& get_impl();
-    const region_impl& get_impl() const;
+    region_impl& get_impl() noexcept;
+    const region_impl& get_impl() const noexcept;
 public:
     region();
-    explicit region(region_group& group);
     ~region();
-    region(region&& other);
-    region& operator=(region&& other);
+    region(region&& other) noexcept;
+    region& operator=(region&& other) noexcept;
     region(const region& other) = delete;
 
-    occupancy_stats occupancy() const;
+    void listen(region_listener* listener);
+    void unlisten();
+
+    occupancy_stats occupancy() const noexcept;
+
+    tracker& get_tracker() const {
+        return _impl->get_tracker();
+    }
 
     allocation_strategy& allocator() noexcept {
         return *_impl;
@@ -653,8 +356,6 @@ public:
     const allocation_strategy& allocator() const noexcept {
         return *_impl;
     }
-
-    region_group* group();
 
     // Allocates a buffer of a given size.
     // The buffer's pointer will be aligned to 4KB.
@@ -675,15 +376,15 @@ public:
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is
     // reclaimable after construction.
-    void set_reclaiming_enabled(bool e) { _impl->set_reclaiming_enabled(e); }
+    void set_reclaiming_enabled(bool e) noexcept { _impl->set_reclaiming_enabled(e); }
 
     // Returns the reclaimability state of this region.
-    bool reclaiming_enabled() const { return _impl->reclaiming_enabled(); }
+    bool reclaiming_enabled() const noexcept { return _impl->reclaiming_enabled(); }
 
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
-    uint64_t reclaim_counter() const {
+    uint64_t reclaim_counter() const noexcept {
         return allocator().invalidate_counter();
     }
 
@@ -692,16 +393,17 @@ public:
 
     // Follows region's occupancy in the parent region group. Less fine-grained than occupancy().
     // After ground_evictable_occupancy() is called returns 0.
-    occupancy_stats evictable_occupancy();
+    occupancy_stats evictable_occupancy() const noexcept;
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.
-    void make_evictable(eviction_fn);
+    void make_evictable(eviction_fn) noexcept;
 
-    const eviction_fn& evictor() const;
+    const eviction_fn& evictor() const noexcept;
 
-    friend class region_group;
+    uint64_t id() const noexcept;
+
     friend class allocating_section;
 };
 
@@ -711,7 +413,7 @@ public:
 struct reclaim_lock {
     region& _region;
     bool _prev;
-    reclaim_lock(region& r)
+    reclaim_lock(region& r) noexcept
         : _region(r)
         , _prev(r.reclaiming_enabled())
     {
@@ -738,17 +440,18 @@ class allocating_section {
     int _remaining_lsa_segments_until_decay = s_segments_per_decay;
 private:
     struct guard {
+        tracker::impl& _tracker;
         size_t _prev;
-        guard();
+        explicit guard(tracker::impl& tracker) noexcept;
         ~guard();
     };
-    void reserve();
-    void maybe_decay_reserve();
+    void reserve(tracker::impl& tracker);
+    void maybe_decay_reserve() noexcept;
     void on_alloc_failure(logalloc::region&);
 public:
 
-    void set_lsa_reserve(size_t);
-    void set_std_reserve(size_t);
+    void set_lsa_reserve(size_t) noexcept;
+    void set_std_reserve(size_t) noexcept;
 
     //
     // Reserves standard allocator and LSA memory for subsequent operations that
@@ -757,13 +460,13 @@ public:
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
-    decltype(auto) with_reserve(Func&& fn) {
+    decltype(auto) with_reserve(region& r, Func&& fn) {
         auto prev_lsa_reserve = _lsa_reserve;
         auto prev_std_reserve = _std_reserve;
         try {
-            guard g;
+            guard g(r.get_tracker().get_impl());
             _minimum_lsa_emergency_reserve = g._prev;
-            reserve();
+            reserve(r.get_tracker().get_impl());
             return fn();
         } catch (const std::bad_alloc&) {
             // roll-back limits to protect against pathological requests
@@ -814,7 +517,7 @@ public:
     //
     template<typename Func>
     decltype(auto) operator()(logalloc::region& r, Func&& func) {
-        return with_reserve([this, &r, &func] {
+        return with_reserve(r, [this, &r, &func] {
             return with_reclaiming_disabled(r, func);
         });
     }
@@ -822,11 +525,10 @@ public:
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
-uint64_t memory_allocated();
-uint64_t memory_freed();
-uint64_t memory_compacted();
-uint64_t memory_evicted();
-
-occupancy_stats lsa_global_occupancy_stats();
+// Use the segment pool appropriate for the standard allocator.
+//
+// In debug mode, this will use the release standard allocator store.
+// Call once, when initializing the application, before any LSA allocation takes place.
+future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }

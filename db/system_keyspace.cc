@@ -40,7 +40,6 @@
 #include "hashers.hh"
 #include "release.hh"
 #include "log.hh"
-#include "serializer.hh"
 #include <seastar/core/enum.hh>
 #include <seastar/net/inet_address.hh>
 #include "index/secondary_index.hh"
@@ -61,7 +60,6 @@
 #include "utils/build_id.hh"
 #include "query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
-#include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
@@ -87,11 +85,11 @@ api::timestamp_type system_keyspace::schema_creation_timestamp() {
 // FIXME: Make automatic by calculating from schema structure.
 static const uint16_t version_sequence_number = 1;
 
-table_schema_version system_keyspace::generate_schema_version(utils::UUID table_id, uint16_t offset) {
+table_schema_version system_keyspace::generate_schema_version(::table_id table_id, uint16_t offset) {
     md5_hasher h;
     feed_hash(h, table_id);
     feed_hash(h, version_sequence_number + offset);
-    return utils::UUID_gen::get_name_UUID(h.finalize());
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 // Currently, the type variables (uuid_type, etc.) are thread-local reference-
@@ -954,6 +952,20 @@ schema_ptr system_keyspace::discovery() {
     return schema;
 }
 
+schema_ptr system_keyspace::broadcast_kv_store() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, BROADCAST_KV_STORE);
+        return schema_builder(NAME, BROADCAST_KV_STORE, id)
+            .with_column("key", utf8_type, column_kind::partition_key)
+            .with_column("value", utf8_type)
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -1243,24 +1255,22 @@ schema_ptr system_keyspace::legacy::aggregates() {
 
 future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
     auto& cfg = _db.local().get_config();
-    return utils::resolve(cfg.rpc_address).then([this, &cfg, &ms](gms::inet_address a) {
-        sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        , db::system_keyspace::LOCAL);
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    , db::system_keyspace::LOCAL);
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        return execute_cql(req, sstring(db::system_keyspace::LOCAL),
-                             version::release(),
-                             cql3::query_processor::CQL_VERSION,
-                             ::cassandra::thrift_version,
-                             to_sstring(cql_serialization_format::latest_version),
-                             snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
-                             snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(cfg.partitioner()),
-                             a.addr(),
-                             utils::fb_utilities::get_broadcast_address().addr(),
-                             ms.local().listen_address().addr()
-        ).discard_result();
-    });
+    return execute_cql(req, sstring(db::system_keyspace::LOCAL),
+                            version::release(),
+                            cql3::query_processor::CQL_VERSION,
+                            ::cassandra::thrift_version,
+                            to_sstring(cql_serialization_format::latest_version),
+                            snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
+                            snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
+                            sstring(cfg.partitioner()),
+                            utils::fb_utilities::get_broadcast_rpc_address().addr(),
+                            utils::fb_utilities::get_broadcast_address().addr(),
+                            ms.local().listen_address().addr()
+    ).discard_result();
 }
 
 future<> system_keyspace::save_local_supported_features(const std::set<std::string_view>& feats) {
@@ -1279,6 +1289,7 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 // updates are propagated correctly.
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
+    locator::endpoint_dc_rack _local_dc_rack_info;
     system_keyspace::bootstrap_state _state;
 };
 
@@ -1335,10 +1346,14 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(_qp.local(), NAME);
     co_await cache_truncation_record();
-    auto preferred_ips = co_await get_preferred_ips();
-    co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
-        return ms.init_local_preferred_ip_cache(preferred_ips);
-    });
+
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    if (snitch->prefer_local()) {
+        auto preferred_ips = co_await get_preferred_ips();
+        co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
+            return ms.init_local_preferred_ip_cache(preferred_ips);
+        });
+    }
 }
 
 struct truncation_record {
@@ -1383,12 +1398,6 @@ std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
 
 }
 
-#include "idl/replay_position.dist.hh"
-#include "idl/truncation_record.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/replay_position.dist.impl.hh"
-#include "idl/truncation_record.dist.impl.hh"
-
 namespace db {
 
 typedef utils::UUID truncation_key;
@@ -1396,13 +1405,13 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 static constexpr uint8_t current_version = 1;
 
-future<truncation_record> system_keyspace::get_truncation_record(utils::UUID cf_id) {
+future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
     if (qctx->qp().db().get_config().ignore_truncation_record.is_set()) {
         truncation_record r{truncation_record::current_magic};
         return make_ready_future<truncation_record>(std::move(r));
     }
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return qctx->qp().execute_internal(req, {cf_id}, cql3::query_processor::cache_internal::yes).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+    return qctx->qp().execute_internal(req, {cf_id.uuid()}, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
 
         for (const cql3::untyped_result_set_row& row : *rs) {
@@ -1426,7 +1435,7 @@ future<> system_keyspace::cache_truncation_record() {
     sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
     return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
         return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
-            auto table_uuid = row.get_as<utils::UUID>("table_uuid");
+            auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
             auto ts = row.get_as<db_clock::time_point>("truncated_at");
 
             return _db.invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
@@ -1441,9 +1450,9 @@ future<> system_keyspace::cache_truncation_record() {
     });
 }
 
-future<> system_keyspace::save_truncation_record(utils::UUID id, db_clock::time_point truncated_at, db::replay_position rp) {
+future<> system_keyspace::save_truncation_record(table_id id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
-    return qctx->qp().execute_internal(req, {id, int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes).discard_result().then([] {
+    return qctx->qp().execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes).discard_result().then([] {
         return force_blocking_flush(TRUNCATED);
     });
 }
@@ -1452,7 +1461,7 @@ future<> system_keyspace::save_truncation_record(const replica::column_family& c
     return save_truncation_record(cf.schema()->id(), truncated_at, rp);
 }
 
-future<db::replay_position> system_keyspace::get_truncated_position(utils::UUID cf_id, uint32_t shard) {
+future<db::replay_position> system_keyspace::get_truncated_position(table_id cf_id, uint32_t shard) {
     return get_truncated_position(std::move(cf_id)).then([shard](replay_positions positions) {
        for (auto& rp : positions) {
            if (shard == rp.shard_id()) {
@@ -1463,13 +1472,13 @@ future<db::replay_position> system_keyspace::get_truncated_position(utils::UUID 
     });
 }
 
-future<replay_positions> system_keyspace::get_truncated_position(utils::UUID cf_id) {
+future<replay_positions> system_keyspace::get_truncated_position(table_id cf_id) {
     return get_truncation_record(cf_id).then([](truncation_record e) {
         return make_ready_future<replay_positions>(e.positions);
     });
 }
 
-future<db_clock::time_point> system_keyspace::get_truncated_at(utils::UUID cf_id) {
+future<db_clock::time_point> system_keyspace::get_truncated_at(table_id cf_id) {
     return get_truncation_record(cf_id).then([](truncation_record e) {
         return make_ready_future<db_clock::time_point>(e.time_stamp);
     });
@@ -1524,18 +1533,29 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> sy
     });
 }
 
-future<std::unordered_map<gms::inet_address, utils::UUID>> system_keyspace::load_host_ids() {
+future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace::load_host_ids() {
     sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        std::unordered_map<gms::inet_address, utils::UUID> ret;
+        std::unordered_map<gms::inet_address, locator::host_id> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("host_id")) {
-                ret.emplace(peer, row.get_as<utils::UUID>("host_id"));
+                ret.emplace(peer, locator::host_id(row.get_as<utils::UUID>("host_id")));
             }
         }
         return ret;
     });
+}
+
+future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
+    auto res = co_await execute_cql(format("SELECT peer FROM system.{}", PEERS));
+    assert(res);
+
+    std::vector<gms::inet_address> ret;
+    for (auto& row: *res) {
+        ret.emplace_back(row.get_as<net::inet_address>("peer"));
+    }
+    co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
@@ -1549,13 +1569,6 @@ future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_pee
             }
         }
         return ret;
-    });
-}
-
-future<> system_keyspace::update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
-    sstring req = format("INSERT INTO system.{} (peer, preferred_ip) VALUES (?, ?)", PEERS);
-    return qctx->execute_cql(req, ep.addr(), preferred_ip.addr()).discard_result().then([] {
-        return force_blocking_flush(PEERS);
     });
 }
 
@@ -1643,9 +1656,9 @@ future<std::optional<sstring>> system_keyspace::get_scylla_local_param(const sst
     return get_scylla_local_param_as<sstring>(key);
 }
 
-future<> system_keyspace::update_schema_version(utils::UUID version) {
+future<> system_keyspace::update_schema_version(table_schema_version version) {
     sstring req = format("INSERT INTO system.{} (key, schema_version) VALUES (?, ?)", LOCAL);
-    return execute_cql(req, sstring(LOCAL), version).discard_result();
+    return execute_cql(req, sstring(LOCAL), version.uuid()).discard_result();
 }
 
 /**
@@ -1737,13 +1750,13 @@ future<std::unordered_set<dht::token>> system_keyspace::get_local_tokens() {
 
 future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
     co_await std::visit(make_visitor(
-    [] (cdc::generation_id_v1 id) -> future<> {
-        co_await qctx->execute_cql(
+    [this] (cdc::generation_id_v1 id) -> future<> {
+        co_await execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
                 sstring(v3::CDC_LOCAL), id.ts);
     },
-    [] (cdc::generation_id_v2 id) -> future<> {
-        co_await qctx->execute_cql(
+    [this] (cdc::generation_id_v2 id) -> future<> {
+        co_await execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp, uuid) VALUES (?, ?, ?)", v3::CDC_LOCAL),
                 sstring(v3::CDC_LOCAL), id.ts, id.id);
     }
@@ -1753,7 +1766,7 @@ future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
 }
 
 future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id() {
-    auto msg = co_await qctx->execute_cql(
+    auto msg = co_await execute_cql(
             format("SELECT streams_timestamp, uuid FROM system.{} WHERE key = ?", v3::CDC_LOCAL),
             sstring(v3::CDC_LOCAL));
 
@@ -1780,12 +1793,12 @@ static const sstring CDC_REWRITTEN_KEY = "rewritten";
 
 future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1> gen_id) {
     if (gen_id) {
-        return qctx->execute_cql(
+        return execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
                 CDC_REWRITTEN_KEY, gen_id->ts).discard_result();
     } else {
         // Insert just the row marker.
-        return qctx->execute_cql(
+        return execute_cql(
                 format("INSERT INTO system.{} (key) VALUES (?)", v3::CDC_LOCAL),
                 CDC_REWRITTEN_KEY).discard_result();
     }
@@ -1793,7 +1806,7 @@ future<> system_keyspace::cdc_set_rewritten(std::optional<cdc::generation_id_v1>
 
 future<bool> system_keyspace::cdc_is_rewritten() {
     // We don't care about the actual timestamp; it's additional information for debugging purposes.
-    return qctx->execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
+    return execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
             .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         return !msg->empty();
     });
@@ -1875,9 +1888,9 @@ public:
                 set_cell(cr, "status", _gossiper.get_gossip_status(endpoint));
                 set_cell(cr, "load", _gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                std::optional<utils::UUID> hostid = tm.get_host_id_if_known(endpoint);
+                auto hostid = tm.get_host_id_if_known(endpoint);
                 if (hostid) {
-                    set_cell(cr, "host_id", hostid);
+                    set_cell(cr, "host_id", hostid->uuid());
                 }
 
                 if (tm.get_topology().has_endpoint(endpoint)) {
@@ -2648,7 +2661,7 @@ public:
 };
 
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
-static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
+static thread_local std::map<table_id, std::unique_ptr<virtual_table>> virtual_tables;
 
 void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
@@ -2687,6 +2700,10 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     });
     if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
+
+        if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+            r.insert(r.end(), {broadcast_kv_store()});
+        }
     }
     // legacy schema
     r.insert(r.end(), {
@@ -2763,23 +2780,23 @@ future<> system_keyspace::make(distributed<replica::database>& db, distributed<s
     return system_keyspace_make(db, ss, g, cfg, tables);
 }
 
-future<utils::UUID> system_keyspace::load_local_host_id() {
+future<locator::host_id> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
-        co_return co_await set_local_host_id(utils::make_random_uuid());
+        co_return co_await set_local_host_id(locator::host_id::create_random_id());
     } else {
-        auto host_id = msg->one().get_as<utils::UUID>("host_id");
+        auto host_id = locator::host_id(msg->one().get_as<utils::UUID>("host_id"));
         slogger.info("Loaded local host id: {}", host_id);
         co_return host_id;
     }
 }
 
-future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
+future<locator::host_id> system_keyspace::set_local_host_id(locator::host_id host_id) {
     slogger.info("Setting local host id to {}", host_id);
 
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    co_await execute_cql(req, sstring(LOCAL), host_id);
+    co_await execute_cql(req, sstring(LOCAL), host_id.uuid());
     co_await force_blocking_flush(LOCAL);
     co_return host_id;
 }
@@ -2789,12 +2806,16 @@ system_keyspace::load_dc_rack_info() {
     return _cache->_cached_dc_rack_info;
 }
 
+locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {
+    return _cache->_local_dc_rack_info;
+}
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     replica::database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(ks_name, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice));
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
     return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), query::full_partition_range, db::no_timeout)
             .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
 }
@@ -2804,7 +2825,7 @@ system_keyspace::query(distributed<service::storage_proxy>& proxy, const sstring
     replica::database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(ks_name, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice));
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
     return proxy.local().query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE,
             {db::no_timeout, empty_service_permit(), service::client_state::for_internal_calls(), nullptr}).then([schema, cmd] (auto&& qr) {
         return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, cmd->slice, *qr.query_result));
@@ -2819,7 +2840,7 @@ system_keyspace::query(distributed<service::storage_proxy>& proxy, const sstring
     auto slice = partition_slice_builder(*schema)
         .with_range(std::move(row_range))
         .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice));
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
 
     return proxy.local().query(schema, cmd, {dht::partition_range::make_singular(key)}, db::consistency_level::ONE,
             {db::no_timeout, empty_service_permit(), service::client_state::for_internal_calls(), nullptr}).then([schema, cmd] (auto&& qr) {
@@ -2882,15 +2903,15 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer&& f
 
 future<> system_keyspace::update_repair_history(repair_history_entry entry) {
     sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)", REPAIR_HISTORY);
-    co_await execute_cql(req, entry.table_uuid, entry.ts, entry.id, entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
+    co_await execute_cql(req, entry.table_uuid.uuid(), entry.ts, entry.id, entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
 }
 
-future<> system_keyspace::get_repair_history(utils::UUID table_id, repair_history_consumer f) {
+future<> system_keyspace::get_repair_history(::table_id table_id, repair_history_consumer f) {
     sstring req = format("SELECT * from system.{} WHERE table_uuid = {}", REPAIR_HISTORY, table_id);
     co_await _qp.local().query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
         repair_history_entry ent;
         ent.id = row.get_as<utils::UUID>("repair_uuid");
-        ent.table_uuid = row.get_as<utils::UUID>("table_uuid");
+        ent.table_uuid = ::table_id(row.get_as<utils::UUID>("table_uuid"));
         ent.range_start = row.get_as<int64_t>("range_start");
         ent.range_end = row.get_as<int64_t>("range_end");
         ent.ks = row.get_as<sstring>("keyspace_name");
@@ -3042,7 +3063,7 @@ future<service::paxos::paxos_state> system_keyspace::load_paxos_state(partition_
     static auto cql = format("SELECT * FROM system.{} WHERE row_key = ? AND cf_id = ?", PAXOS);
     // FIXME: we need execute_cql_with_now()
     (void)now;
-    auto f = qctx->execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id());
+    auto f = qctx->execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id().uuid());
     return f.then([s, key = std::move(key)] (shared_ptr<cql3::untyped_result_set> results) mutable {
         if (results->empty()) {
             return service::paxos::paxos_state();
@@ -3087,7 +3108,7 @@ future<> system_keyspace::save_paxos_promise(const schema& s, const partition_ke
             paxos_ttl_sec(s),
             ballot,
             to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id()
+            s.id().uuid()
         ).discard_result();
 }
 
@@ -3102,7 +3123,7 @@ future<> system_keyspace::save_paxos_proposal(const schema& s, const service::pa
             proposal.ballot,
             ser::serialize_to_buffer<bytes>(proposal.update),
             to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id()
+            s.id().uuid()
         ).discard_result();
 }
 
@@ -3123,7 +3144,7 @@ future<> system_keyspace::save_paxos_decision(const schema& s, const service::pa
             decision.ballot,
             ser::serialize_to_buffer<bytes>(decision.update),
             to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id()
+            s.id().uuid()
         ).discard_result();
 }
 
@@ -3137,7 +3158,7 @@ future<> system_keyspace::delete_paxos_decision(const schema& s, const partition
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id()
+            s.id().uuid()
         ).discard_result();
 }
 
@@ -3147,7 +3168,7 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
         co_return;
     }
     gms::feature_service& local_feat_srv = feat.local();
-    const auto known_features = local_feat_srv.known_feature_set();
+    const auto known_features = local_feat_srv.supported_feature_set();
     const auto& registered_features = local_feat_srv.registered_features();
     const auto persisted_features = gms::feature_service::to_feature_set(*pre_enabled_features);
     for (auto&& f : persisted_features) {
@@ -3268,6 +3289,56 @@ future<mutation> system_keyspace::get_group0_history(distributed<service::storag
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
+static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";
+
+future<service::group0_upgrade_state> system_keyspace::load_group0_upgrade_state() {
+    auto s = co_await get_scylla_local_param_as<sstring>(GROUP0_UPGRADE_STATE_KEY);
+
+    if (!s || *s == "use_pre_raft_procedures") {
+        co_return service::group0_upgrade_state::use_pre_raft_procedures;
+    } else if (*s == "synchronize") {
+        co_return service::group0_upgrade_state::synchronize;
+    } else if (*s == "use_post_raft_procedures") {
+        co_return service::group0_upgrade_state::use_post_raft_procedures;
+    } else if (*s == "recovery") {
+        co_return service::group0_upgrade_state::recovery;
+    }
+
+    slogger.error(
+            "load_group0_upgrade_state(): unknown value '{}' for key 'group0_upgrade_state' in Scylla local table."
+            " Did you change the value manually?"
+            " Correct values are: 'use_pre_raft_procedures', 'synchronize', 'use_post_raft_procedures', 'recovery'."
+            " Assuming 'recovery'.", *s);
+    // We don't call `on_internal_error` which would probably prevent the node from starting, but enter `recovery`
+    // allowing the user to fix their cluster.
+    co_return service::group0_upgrade_state::recovery;
+}
+
+future<> system_keyspace::save_group0_upgrade_state(service::group0_upgrade_state s) {
+    auto value = [s] () constexpr {
+        switch (s) {
+            case service::group0_upgrade_state::use_post_raft_procedures:
+                return "use_post_raft_procedures";
+            case service::group0_upgrade_state::synchronize:
+                return "synchronize";
+            case service::group0_upgrade_state::recovery:
+                // It should not be necessary to ever save this state internally - the user sets it manually
+                // (e.g. from cqlsh) if recovery is needed - but handle the case anyway.
+                return "recovery";
+            case service::group0_upgrade_state::use_pre_raft_procedures:
+                // It should not be necessary to ever save this state, but handle the case anyway.
+                return "use_pre_raft_procedures";
+        }
+
+        on_internal_error(slogger, format(
+                "save_group0_upgrade_state: given value is outside the set of possible values (integer value: {})."
+                " This may have been caused by undefined behavior; best restart your system.",
+                static_cast<uint8_t>(s)));
+    }();
+
+    return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value);
+}
+
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
@@ -3288,6 +3359,14 @@ future<> system_keyspace::start() {
     if (this_shard_id() == 0) {
         qctx = std::make_unique<query_context>(_qp);
     }
+
+    // FIXME
+    // This should be coupled with setup_version()'s part committing these values into
+    // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
+    // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    _cache->_local_dc_rack_info.dc = snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+    _cache->_local_dc_rack_info.rack = snitch->get_rack(utils::fb_utilities::get_broadcast_address());
 
     co_return;
 }

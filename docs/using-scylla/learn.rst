@@ -12,7 +12,7 @@ Learn To Use Scylla
    Basic Data Modeling <https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/>
    Advanced Data Modeling <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/>
    MMS - Learn by Example <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/>
-   Care-Pet an IoT Use Case and Example <https://scylladb.github.io/care-pet/master/>
+   Care-Pet an IoT Use Case and Example <https://iot.scylladb.com/>
 
 .. panel-box::
   :title: Scylla University
@@ -66,7 +66,7 @@ Learn To Use Scylla
   :class: my-panel
 
   * MMS Course: Mutants have emerged from the shadows and are wreaking havoc on Earth! `Learn Scylla step by step <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/>`_ though examples based on a "true story".
-  * Care-Pet: an IoT Use case example. `Learn to Use Scylla <https://scylladb.github.io/care-pet/master/>`_ using this use case.
+  * Care-Pet: an IoT Use case example. `Learn to Use Scylla <https://iot.scylladb.com/>`_ using this use case.
 
 .. panel-box::
   :title: Tech Talks and Scylla Summit Sessions

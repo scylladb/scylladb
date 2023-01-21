@@ -118,7 +118,15 @@ raft::server_id id() {
 raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     raft::server_address_set set;
     for (auto id : ids) {
-        set.emplace(raft::server_address{.id = id});
+        set.emplace(server_addr_from_id(id));
+    }
+    return set;
+}
+
+raft::config_member_set config_set(std::vector<raft::server_id> ids) {
+    raft::config_member_set set;
+    for (auto id : ids) {
+        set.emplace(config_member_from_id(id));
     }
     return set;
 }
@@ -138,9 +146,12 @@ raft::server_id to_raft_id(size_t int_id) {
     return raft::server_id{to_raft_uuid(int_id)};
 }
 
-// NOTE: can_vote = true
 raft::server_address to_server_address(size_t int_id) {
-    return raft::server_address{raft::server_id{to_raft_uuid(int_id)}};
+    return server_addr_from_id(raft::server_id{to_raft_uuid(int_id)});
+}
+
+raft::config_member to_config_member(size_t int_id) {
+    return {to_server_address(int_id), true};
 }
 
 size_t to_int_id(utils::UUID uuid) {
@@ -195,4 +206,16 @@ future<> invoke_abortable_on(unsigned shard, noncopyable_function<future<>(abort
     }
 
     std::rethrow_exception(ep);
+}
+
+raft::server_address server_addr_from_id(raft::server_id id) {
+    return raft::server_address{id, {}};
+}
+
+raft::config_member config_member_from_id(raft::server_id id) {
+    return raft::config_member{server_addr_from_id(id), true};
+}
+
+raft::configuration config_from_ids(std::vector<raft::server_id> ids) {
+    return raft::configuration{config_set(std::move(ids))};
 }

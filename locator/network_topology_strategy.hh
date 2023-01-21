@@ -20,7 +20,6 @@ namespace locator {
 class network_topology_strategy : public abstract_replication_strategy {
 public:
     network_topology_strategy(
-        snitch_ptr& snitch,
         const replication_strategy_config_options& config_options);
 
     virtual size_t get_replication_factor(const token_metadata&) const override {
@@ -45,7 +44,7 @@ protected:
      * calculate endpoints in one pass through the tokens by tracking our
      * progress in each DC, rack etc.
      */
-    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(
+    virtual future<endpoint_set> calculate_natural_endpoints(
         const token& search_token, const token_metadata& tm) const override;
 
     virtual void validate_options() const override;

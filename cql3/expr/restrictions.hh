@@ -17,12 +17,5 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
                                                      data_dictionary::database db,
                                                      schema_ptr schema,
                                                      prepare_context& ctx);
-
-
-// Converts a prepared binary operator to an instance of the restriction class.
-// Doesn't perform any any validation checks.
-::shared_ptr<restrictions::restriction> convert_to_restriction(const binary_operator& prepared_binop,
-                                                               const schema_ptr& schema);
-
 } // namespace expr
 } // namespace cql3

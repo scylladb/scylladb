@@ -134,15 +134,15 @@ isolation policy for a specific table can be overridden by tagging the table
 This section provides only a very brief introduction to Alternator's
 design. A much more detailed document about the features of the DynamoDB
 API and how they are, or could be, implemented in Scylla can be found in:
-https://docs.google.com/document/d/1i4yjF5OSAazAY_-T8CBce9-2ykW4twx_E_Nt2zDoOVs
+<https://docs.google.com/document/d/1i4yjF5OSAazAY_-T8CBce9-2ykW4twx_E_Nt2zDoOVs>
 
 Almost all of Alternator's source code (except some initialization code)
 can be found in the alternator/ subdirectory of Scylla's source code.
-Extensive functional tests can be found in the alternator-test/
+Extensive functional tests can be found in the test/alternator
 subdirectory. These tests are written in Python, and can be run against
 both Alternator and Amazon's DynamoDB; This allows verifying that
 Alternator's behavior matches the one observed on DynamoDB.
-See alternator-test/README.md for more information about the tests and
+See test/alternator/README.md for more information about the tests and
 how to run them.
 
 With Alternator enabled on port 8000 (for example), every Scylla node

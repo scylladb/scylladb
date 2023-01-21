@@ -81,11 +81,22 @@ public:
     static future<> init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector&);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
+    /**
+     * Marks a keyspace (by name) as "prioritized" on bootstrap.
+     * This will effectively let it bypass concurrency control.
+     * The only real use for this is to avoid certain chicken and
+     * egg issues.
+     *
+     * May only be called pre-bootstrap on main shard.
+     * Required for enterprise. Do _not_ remove.
+     */
+    static void mark_keyspace_as_load_prio(const sstring&);
+
     // Scan sstables under upload directory. Return a vector with smp::count entries.
     // Each entry with index of idx should be accessed on shard idx only.
     // Each entry contains a vector of sstables for this shard.
     // The table UUID is returned too.
-    static future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
+    static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf);
     static future<> process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
             distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);

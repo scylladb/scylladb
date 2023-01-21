@@ -32,6 +32,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <chrono>
 #include "db/config.hh"
+#include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/count_if.hpp>
@@ -994,23 +995,6 @@ void gossiper::run() {
   });
 }
 
-void gossiper::check_seen_seeds() {
-    auto seen = std::any_of(_endpoint_state_map.begin(), _endpoint_state_map.end(), [this] (auto& entry) {
-        if (_seeds.contains(entry.first)) {
-            return true;
-        }
-        auto* internal_ip = entry.second.get_application_state_ptr(application_state::INTERNAL_IP);
-        return internal_ip && _seeds.contains(inet_address(internal_ip->value));
-    });
-    logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
-        boost::copy_range<std::list<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys),
-        _seeds, _gcfg.seeds, seen);
-    if (!seen) {
-        dump_endpoint_state_map();
-        throw std::runtime_error("Unable to contact any seeds!");
-    }
-}
-
 bool gossiper::is_seed(const gms::inet_address& endpoint) const {
     return _seeds.contains(endpoint);
 }
@@ -1023,7 +1007,7 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members() {
+std::set<inet_address> gossiper::get_live_members() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
@@ -1035,7 +1019,7 @@ std::set<inet_address> gossiper::get_live_members() {
     return live_members;
 }
 
-std::set<inet_address> gossiper::get_live_token_owners() {
+std::set<inet_address> gossiper::get_live_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {
         auto es = get_endpoint_state_for_endpoint_ptr(member);
@@ -1046,7 +1030,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
     return token_owners;
 }
 
-std::set<inet_address> gossiper::get_unreachable_token_owners() {
+std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
@@ -1083,7 +1067,7 @@ future<> gossiper::convict(inet_address endpoint) {
     }
 }
 
-std::set<inet_address> gossiper::get_unreachable_members() {
+std::set<inet_address> gossiper::get_unreachable_members() const {
     std::set<inet_address> ret;
     for (auto&& x : _unreachable_endpoints) {
         ret.insert(x.first);
@@ -1177,7 +1161,7 @@ future<> gossiper::replicate(inet_address ep, application_state key, const versi
     });
 }
 
-future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
+future<> gossiper::advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id) {
     auto& state = get_endpoint_state(endpoint);
     // remember this node's generation
     int generation = state.get_heart_beat_state().get_generation();
@@ -1201,7 +1185,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
     co_await replicate(endpoint, eps);
 }
 
-future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
+future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_id host_id) {
     auto& eps = get_endpoint_state(endpoint);
     eps.update_timestamp(); // make sure we don't evict it too soon
     eps.get_heart_beat_state().force_newer_generation_unsafe();
@@ -1394,7 +1378,7 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
     return ready;
 }
 
-utils::UUID gossiper::get_host_id(inet_address endpoint) const {
+locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(format("Host {} does not use new-style tokens!", endpoint));
     }
@@ -1402,7 +1386,7 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) const {
     if (!app_state) {
         throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
-    return utils::UUID(app_state->value);
+    return locator::host_id(utils::UUID(app_state->value));
 }
 
 std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
@@ -1961,7 +1945,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 }
             }
         }
-        logger.info("Gossip shadow round finisehd with nodes_talked={}", nodes_talked);
+        logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
     });
 }
 
@@ -1971,16 +1955,6 @@ void gossiper::build_seeds_list() {
             continue;
         }
         _seeds.emplace(seed);
-    }
-}
-
-void gossiper::maybe_initialize_local_state(int generation_nbr) {
-    heart_beat_state hb_state(generation_nbr);
-    endpoint_state local_state(hb_state);
-    local_state.mark_alive();
-    inet_address ep = get_broadcast_address();
-    if (!_endpoint_state_map.contains(ep)) {
-        _endpoint_state_map.emplace(ep, local_state);
     }
 }
 
@@ -2389,6 +2363,35 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return allowed;
 }
 
+bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_id) {
+    // Reject to restart a node in case:
+    // *) if the node has been removed from the cluster by nodetool decommission or
+    //    nodetool removenode
+    std::unordered_set<std::string_view> not_allowed_statuses{
+        versioned_value::STATUS_LEFT,
+        versioned_value::REMOVED_TOKEN,
+    };
+    bool allowed = true;
+    for (auto& x : _endpoint_state_map) {
+        auto node = x.first;
+        try {
+            auto status = get_gossip_status(node);
+            auto id = get_host_id(node);
+            logger.debug("is_safe_for_restart: node={}, host_id={}, status={}, my_ip={}, my_host_id={}",
+                    node, id, status, endpoint, host_id);
+            if (host_id == id && not_allowed_statuses.contains(status)) {
+                allowed = false;
+                logger.error("is_safe_for_restart: node={}, host_id={}, status={}, my_ip={}, my_host_id={}",
+                        node, id, status, endpoint, host_id);
+                break;
+            }
+        } catch (...) {
+            logger.info("is_safe_for_restart: node={} doest not have status or host_id yet in gossip", node);
+        }
+    }
+    return allowed;
+}
+
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
     auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
     if (!app_state) {
@@ -2520,72 +2523,6 @@ future<> gossiper::maybe_enable_features() {
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
-}
-
-inet_address_vector_replica_set gossiper::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
-    // special case for single-node data centers
-    if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
-    }
-
-    // strip out dead endpoints and localhost
-    std::unordered_multimap<sstring, gms::inet_address> validated;
-
-    auto is_valid = [this ](gms::inet_address input) {
-        return input != utils::fb_utilities::get_broadcast_address()
-            && is_alive(input)
-            ;
-    };
-
-    for (auto& e : endpoints) {
-        for (auto& a : e.second) {
-            if (is_valid(a)) {
-                validated.emplace(e.first, a);
-            }
-        }
-    }
-
-    typedef inet_address_vector_replica_set return_type;
-
-    if (validated.size() <= 2) {
-        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
-    }
-
-    if (validated.size() - validated.count(local_rack) >= 2) {
-        // we have enough endpoints in other racks
-        validated.erase(local_rack);
-    }
-
-    if (validated.bucket_count() == 1) {
-        // we have only 1 `other` rack
-        auto res = validated | boost::adaptors::map_values;
-        if (validated.size() > 2) {
-            return boost::copy_range<return_type>(
-                    boost::copy_range<std::vector<gms::inet_address>>(res)
-                            | boost::adaptors::sliced(0, 2));
-        }
-        return boost::copy_range<return_type>(res);
-    }
-
-    // randomize which racks we pick from if more than 2 remaining
-
-    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
-
-    if (validated.bucket_count() > 2) {
-        std::shuffle(racks.begin(), racks.end(), _e1);
-        racks.resize(2);
-    }
-
-    inet_address_vector_replica_set result;
-
-    // grab a random member of up to two racks
-    for (auto& rack : racks) {
-        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
-        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
-        result.emplace_back(cpy[rdist(_e1)]);
-    }
-
-    return result;
 }
 
 future<> gossiper::direct_fd_pinger::update_generation_number(int64_t n) {

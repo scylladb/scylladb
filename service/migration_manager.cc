@@ -31,14 +31,6 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/user_function.hh"
 
-#include "serialization_visitors.hh"
-#include "serializer.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/uuid.dist.hh"
-#include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.impl.hh"
-#include "idl/uuid.dist.impl.hh"
-
 namespace service {
 
 static logging::logger mlogger("migration_manager");
@@ -150,7 +142,7 @@ void migration_manager::init_messaging_service()
         co_return rpc::tuple(std::move(fm), std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
-        return make_ready_future<utils::UUID>(_storage_proxy.get_db().local().get_version());
+        return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
     });
     _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
@@ -187,7 +179,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
         // FIXME: discarded future
-        (void)maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint).handle_exception([endpoint] (auto ep) {
+        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
         });
     }
@@ -213,7 +205,7 @@ bool migration_manager::have_schema_agreement() {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             return false;
         }
-        utils::UUID remote_version{schema->value};
+        auto remote_version = table_schema_version(utils::UUID{schema->value});
         if (our_version != remote_version) {
             mlogger.debug("Schema mismatch for {} ({} != {}).", endpoint, our_version, remote_version);
             return false;
@@ -228,7 +220,7 @@ bool migration_manager::have_schema_agreement() {
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
  */
-future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint)
+future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint)
 {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
@@ -259,7 +251,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 mlogger.debug("application_state::SCHEMA does not exist for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
             }
-            utils::UUID current_version{value->value};
+            auto current_version = table_schema_version(utils::UUID{value->value});
             if (db.get_version() == current_version) {
                 mlogger.debug("not submitting migration task for {} because our versions match", endpoint);
                 return make_ready_future<>();
@@ -735,14 +727,14 @@ future<std::vector<mutation>> migration_manager::prepare_function_drop_announcem
 future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, ts);
+    auto mutations = db::schema_tables::make_create_aggregate_mutations(db.features().cluster_schema_features(), aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, ts);
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(db.features().cluster_schema_features(), aggregate, ts);
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -902,7 +894,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
     co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as);
 }
 
-future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
+future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
     auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
 
     try {
@@ -925,14 +917,15 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema) 
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
-    if (is_raft_enabled()) {
-        co_await announce_with_raft(std::move(schema), std::move(guard), std::move(description));
+    if (guard.with_raft()) {
+        return announce_with_raft(std::move(schema), std::move(guard), std::move(description));
     } else {
-        co_await announce_without_raft(std::move(schema));
+        return announce_without_raft(std::move(schema), std::move(guard));
     }
 }
 
 future<group0_guard> migration_manager::start_group0_operation() {
+    assert(this_shard_id() == 0);
     return _group0_client.start_operation(&_as);
 }
 
@@ -942,7 +935,7 @@ future<group0_guard> migration_manager::start_group0_operation() {
  *
  * @param version The schema version to announce
  */
-void migration_manager::passive_announce(utils::UUID version) {
+void migration_manager::passive_announce(table_schema_version version) {
     _schema_version_to_publish = version;
     (void)_schema_push.trigger().handle_exception([version = std::move(version)] (std::exception_ptr ex) {
         mlogger.warn("Passive announcing of version {} failed: {}. Ignored.", version);
@@ -1110,10 +1103,10 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
 }
 
 future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {
-    using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
-    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
+    using schema_and_hosts = std::unordered_map<table_schema_version, std::vector<gms::inet_address>>;
+    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, table_schema_version& my_version) {
         return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
-            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
+            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (table_schema_version remote_version) {
                 if (my_version != remote_version) {
                     schema_map[remote_version].emplace_back(node);
                 }
@@ -1128,7 +1121,7 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
     });
 }
 
-future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v) {
+future<column_mapping> get_column_mapping(table_id table_id, table_schema_version v) {
     schema_ptr s = local_schema_registry().get_or_null(v);
     if (s) {
         return make_ready_future<column_mapping>(s->get_column_mapping());

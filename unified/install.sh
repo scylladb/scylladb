@@ -27,6 +27,7 @@ Options:
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --supervisor             enable supervisor to manage scylla processes
   --supervisor-log-to-stdout logging to stdout on supervisor
+  --without-systemd         skip installing systemd units
   --help                   this helpful message
 EOF
     exit 1
@@ -42,6 +43,7 @@ housekeeping=false
 nonroot=false
 supervisor=false
 supervisor_log_to_stdout=false
+without_systemd=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -75,6 +77,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--supervisor-log-to-stdout")
             supervisor_log_to_stdout=true
+            shift 1
+            ;;
+        "--without-systemd")
+            without_systemd=true
             shift 1
             ;;
         "--help")
@@ -148,6 +154,10 @@ if $supervisor; then
 fi
 if $supervisor_log_to_stdout; then
     scylla_args+=(--supervisor-log-to-stdout)
+fi
+if $without_systemd; then
+    scylla_args+=(--without-systemd)
+    jmx_args+=(--without-systemd)
 fi
 
 (cd $(readlink -f scylla); ./install.sh --root "$root" --prefix "$prefix" --python3 "$python3" --sysconfdir "$sysconfdir" ${scylla_args[@]})

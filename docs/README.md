@@ -1,78 +1,71 @@
-# Scylla documentation
+# ScyllaDB Documentation
 
-This is the repository for [Scylla documentation site](http://docs.scylladb.com/)
+This repository contains the source files for ScyllaDB Open Source documentation.
 
-To report an issue with the documentation, please use GitHub issues.
+- The `dev` folder contains developer-oriented documentation related to the ScyllaDB code base. It is not published and is only available via GitHub.
+- All other folders and files contain user-oriented documentation related to ScyllaDB Open Source and are sources for [docs.scylladb.com](https://docs.scylladb.com/).
 
-This repository accepts GitHub pull requests.
+To report a documentation bug or suggest an improvement, open an issue in [GitHub issues](https://github.com/scylladb/scylla/issues) for this project.
 
-**Send pull requests to the master branch, not gh-pages.  gh-pages will be overwritten by deploy without warning.**
+To contribute to the documentation, open a GitHub pull request.
+
+## Key Guidelines for Contributors
+
+- Follow the [ScyllaDB Style Guide](https://docs.google.com/document/d/1lyHp1MKdyj0Hh3NprNFvEczA4dFSZIFoukGUvFJb9yE/edit?usp=sharing).
+- The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
+- The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
 
 
-## Prerequisites
+## Creating Knowledge Base Articles
 
-* Python 3. Check your version with `$ python --version`
-* Vale CLI (optional to lint docs). [Install Vale](https://docs.errata.ai/vale/install) for your operative system.
+The `kb/` directory holds source files for knowledge base articles in the [Knowledge Base section](https://docs.scylladb.com/stable/kb/index.html) of the ScyllaDB documentation. 
 
-### Prerequisites: Mac OS X
+The `kb/kb_common` subdirectory contains a template for knowledge base articles to help you create new articles.
+
+To create a new knowledge base article (KB):
+
+1. Copy the `kb-article-template.rst` file from `/kb/kb_common` to `/kb` and rename it with a unique name.
+1. Open the new file and fill in the required information. 
+1. Remove what is not needed. 
+1. Run `make preview` to build the docs and preview them locally.
+1. Send a PR with "KB" in its title. 
+
+
+## Building User Documentation
+
+### Prerequisites
+
+* Python 3. Check your version with `$ python --version`.
+* [poetry](https://python-poetry.org/) 1.12 or later
+* make
+
+#### Mac OS X
 
 You must have a working [Homebrew](http://brew.sh/) in order to install the needed tools.
 
-You also need the standard utility `make`.  (I don't know if this comes with Mac OS X.)
+You also need the standard utility `make`.
 
-Check if you have these two items with
+Check if you have these two items with the following commands:
 
 ```sh
 brew help
 make -h
 ```
 
-### Prerequisites: Fedora 29/Debian-based Linux Distributions
+#### Linux Distributions
 
-This should work out of the box with Fedora 29.
+Building the user docs should work out of the box  on most Linux distributions.
 
-### Prerequisites: Windows
+#### Windows
 
-Use "Bash on Ubuntu on Windows", everything should be same as on a debian-based Linux.
-Note: livereload seems not working on Windows.
+Use "Bash on Ubuntu on Windows" for the same tools and capabilities as on Linux distributions.
 
-## Prerequisites: other systems
+### Building the Docs 
 
-FIXME
+1. Run `make preview` to build the documentation.
+1. Preview the built documentation locally at http://127.0.0.1:5500/.
 
-# Working on the docs
-
-Work on a task branch and send pull requests for
-master.  Master is the default branch.
-
-Run `make preview` to make the docs and preview locally.
-
-
-# Deploy
-
-If you have the rights to push to the live site, run `make deploy` to deploy.
-
-# Lint
-
-Lint all:
-
-```sh
-make proofread
-```
-
-Lint one file (e.g. README.md):
-
-```sh
-make proofread path=README.md
-```
-
-Lint one folder (e.g. getting-started):
-
-```sh
-make proofread path=getting-started
-```
-
-# Cleanup
+### Cleanup
 
 You can clean up all the build products and auto-installed Python stuff with:
 
@@ -80,30 +73,21 @@ You can clean up all the build products and auto-installed Python stuff with:
 make pristine
 ```
 
-# Contributor info
+## Information for Contributors
 
 If you are interested in contributing to Scylla
 docs, please read the Scylla open source page at
 http://www.scylladb.com/opensource/ and complete
 a Scylla contributor agreement if needed.  We can
 only accept documentation pull requests if we have
-a contributor agreement on file for you
+a contributor agreement on file for you.
 
-# Submitting a KB Article
 
-If you are submitting a Knowledgebase Article (KBA), use the following guidelines:
-* In the `/kb_common` directory there is a template for KBAs. It is called `kb-article-template.rst`.
-* Make a copy of this file in the `/kb directory`, saving it with a unique name.
-* Open the template and fill in the required inforation. 
-* Remove what is not needed. 
-* Run`make preview` to make the docs and preview locally.
-* Send a PR - add KBA in the title. 
-
-# Third-party documentation
+## Third-party Documentation
 
  * Do any copying as a separate commit.  Always commit an unmodified version first and then do any editing in a separate commit.
 
- * We already have a copy of the Apache license in our tree so you do not need to commit a copy of the license.
+ * We already have a copy of the Apache license in our tree, so you do not need to commit a copy of the license.
 
  * Include the copyright header from the source file in the edited version.  If you are copying an Apache Cassandra document with no copyright header, use:
 

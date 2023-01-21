@@ -171,27 +171,8 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             local_s->set_my_dc_and_rack(_my_dc, _my_rack);
             local_s->set_prefer_local(_prefer_local);
         }).then([this] {
-            // FIXME -- tests don't start gossiper
-            if (!local().get_gossiper().local_is_initialized()) {
-                return make_ready_future<>();
-            }
-
             return seastar::async([this] {
-                // reload Gossiper state (executed on CPU0 only)
-                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    return local_snitch_ptr->reload_gossiper_state();
-                }).get();
-
                 _reconfigured();
-
-                // spread the word...
-                container().invoke_on(0, [] (snitch_ptr& local_snitch_ptr) {
-                    auto& gossiper = local_snitch_ptr.get_local_gossiper();
-                    if (gossiper.is_enabled()) {
-                        return gossiper.add_local_application_state(local_snitch_ptr->get_app_states());
-                    }
-                    return make_ready_future<>();
-                }).get();
             });
         });
     }
@@ -255,23 +236,6 @@ future<> gossiping_property_file_snitch::pause_io() {
     _state = snitch_state::io_pausing;
 
     return stop_io();
-}
-
-// should be invoked of CPU0 only
-future<> gossiping_property_file_snitch::reload_gossiper_state() {
-    future<> ret = make_ready_future<>();
-    if (_reconnectable_helper) {
-        ret = local().get_local_gossiper().unregister_(_reconnectable_helper);
-    }
-
-    if (!_prefer_local) {
-        return ret;
-    }
-
-    return ret.then([this] {
-        _reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(_my_dc);
-        local().get_local_gossiper().register_(_reconnectable_helper);
-    });
 }
 
 using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;

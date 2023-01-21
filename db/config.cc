@@ -277,9 +277,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
     , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Unused, false,
         "true: auto-adjust memtable shares for flush processes")
-    , memtable_flush_static_shares(this, "memtable_flush_static_shares", value_status::Used, 0,
+    , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
-    , compaction_static_shares(this, "compaction_static_shares", value_status::Used, 0,
+    , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
@@ -371,7 +371,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
     /* Common compaction settings */
-    , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Unused, 0,
+    , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "Related information: Configuring compaction")
     , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", value_status::Used, 1000,
@@ -484,6 +484,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Throttles all outbound streaming file transfers on a node to the specified throughput. Cassandra does mostly sequential I/O when streaming data during bootstrap or repair, which can lead to saturating the network connection and degrading client (RPC) performance.")
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
+    , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling")
     , trickle_fsync(this, "trickle_fsync", value_status::Unused, false,
         "When doing sequential writing, enabling this option tells fsync to force the operating system to flush the dirty buffers at a set interval trickle_fsync_interval_in_kb. Enable this parameter to avoid sudden dirty buffer flushing from impacting read latencies. Recommended to use on SSDs, but not on HDDs.")
     , trickle_fsync_interval_in_kb(this, "trickle_fsync_interval_in_kb", value_status::Unused, 10240,
@@ -555,10 +557,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Tombstone settings */
     /* When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean. */
     /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */
-    , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Unused, 1000,
+    , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Used, 1000,
         "The maximum number of tombstones a query can scan before warning.")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
+    , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
+        "The number of tombstones after which a query cuts a page, even if not full or even empty.")
     /* Network timeout settings */
     , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")
@@ -836,6 +840,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , max_memory_for_unlimited_query_hard_limit(this, "max_memory_for_unlimited_query_hard_limit", "max_memory_for_unlimited_query", liveness::LiveUpdate, value_status::Used, (uint64_t(100) << 20),
             "Maximum amount of memory a query, whose memory consumption is not naturally limited, is allowed to consume, e.g. non-paged and reverse queries. "
             "This is the hard limit, queries violating this limit will be aborted.")
+    , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,
+            "The maximum number of compaction windows allowed when making use of TimeWindowCompactionStrategy. A setting of 0 effectively disables the restriction.")
     , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
             "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this")
     , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
@@ -892,11 +898,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , flush_schema_tables_after_modification(this, "flush_schema_tables_after_modification", liveness::LiveUpdate, value_status::Used, true,
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
     , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
-    , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::TRUE, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
+    , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
     , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
         "Ignore truncation record stored in system tables as if tables were never truncated.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Used, false,
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
+    , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 10, "Time for which information about finished task stays in memory.")
+    , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
+        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
@@ -1010,7 +1020,8 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 bool db::config::check_experimental(experimental_features_t::feature f) const {
     if (experimental()
         && f != experimental_features_t::feature::UNUSED
-        && f != experimental_features_t::feature::RAFT) {
+        && f != experimental_features_t::feature::RAFT
+        && f != experimental_features_t::feature::BROADCAST_TABLES) {
             return true;
     }
     const auto& optval = experimental_features();
@@ -1027,12 +1038,13 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
         return opt.get_value();
     };
 
-    return logging::settings{ value(logger_log_level, opts.logger_log_level)
-        , value(default_log_level, opts.default_log_level)
-        , value(log_to_stdout, opts.log_to_stdout)
-        , value(log_to_syslog, opts.log_to_syslog)
-        , opts.logger_stdout_timestamps.get_value()
-        , opts.logger_ostream_type.get_value()
+    return logging::settings{
+        .logger_levels = value(logger_log_level, opts.logger_log_level),
+        .default_level = value(default_log_level, opts.default_log_level),
+        .stdout_enabled = value(log_to_stdout, opts.log_to_stdout),
+        .syslog_enabled = value(log_to_syslog, opts.log_to_syslog),
+        .stdout_timestamp_style =  opts.logger_stdout_timestamps.get_value(),
+        .logger_ostream = opts.logger_ostream_type.get_value(),
     };
 }
 
@@ -1040,7 +1052,7 @@ const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
 
-std::unordered_map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
+std::map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
     // We decided against using the construct-on-first-use idiom here:
     // https://github.com/scylladb/scylla/pull/5369#discussion_r353614807
     // Features which are no longer experimental are mapped
@@ -1053,6 +1065,7 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
         {"alternator-streams", feature::ALTERNATOR_STREAMS},
         {"alternator-ttl", feature::ALTERNATOR_TTL},
         {"raft", feature::RAFT},
+        {"broadcast-tables", feature::BROADCAST_TABLES},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
     };
 }

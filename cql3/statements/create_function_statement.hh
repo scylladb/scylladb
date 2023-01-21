@@ -25,7 +25,7 @@ class create_function_statement final : public create_function_statement_base {
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
 
-    virtual shared_ptr<functions::function> create(query_processor& qp, functions::function* old) const override;
+    virtual shared_ptr<db::functions::function> create(query_processor& qp, db::functions::function* old) const override;
     sstring _language;
     sstring _body;
     std::vector<shared_ptr<column_identifier>> _arg_names;

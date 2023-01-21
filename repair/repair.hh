@@ -151,7 +151,7 @@ public:
     sstring keyspace;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
-    std::vector<utils::UUID> table_ids;
+    std::vector<table_id> table_ids;
     repair_uniq_id id;
     shard_id shard;
     std::vector<sstring> data_centers;
@@ -173,7 +173,7 @@ public:
     repair_info(repair_service& repair,
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
-            std::vector<utils::UUID> table_ids_,
+            std::vector<table_id> table_ids_,
             repair_uniq_id id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
@@ -200,7 +200,7 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    future<> repair_range(const dht::token_range& range, utils::UUID table_id);
+    future<> repair_range(const dht::token_range& range, table_id);
 
     size_t ranges_size();
 };
@@ -386,14 +386,14 @@ struct node_ops_cmd_request {
     // Optional field, map bootstrapping nodes to bootstrap tokens, set by bootstrap cmd
     std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
     // Optional field, list uuids of tables being repaired, set by repair cmd
-    std::list<utils::UUID> repair_tables;
+    std::list<table_id> repair_tables;
     node_ops_cmd_request(node_ops_cmd command,
             utils::UUID uuid,
             std::list<gms::inet_address> ignore = {},
             std::list<gms::inet_address> leaving = {},
             std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
             std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap = {},
-            std::list<utils::UUID> tables = {})
+            std::list<table_id> tables = {})
         : cmd(command)
         , ops_uuid(std::move(uuid))
         , ignore_nodes(std::move(ignore))
@@ -418,7 +418,7 @@ struct node_ops_cmd_response {
 
 struct repair_update_system_table_request {
     utils::UUID repair_uuid;
-    utils::UUID table_uuid;
+    table_id table_uuid;
     sstring keyspace_name;
     sstring table_name;
     dht::token_range range;

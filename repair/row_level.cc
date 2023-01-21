@@ -2101,8 +2101,8 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
     co_await db.invoke_on_all([&req] (replica::database& local_db) {
-        auto& table = local_db.find_column_family(req.table_uuid);
-        return ::update_repair_time(table.schema(), req.range, req.repair_time);
+        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+        return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
     });
     db::system_keyspace::repair_history_entry ent;
     ent.id = req.repair_uuid;
@@ -2370,7 +2370,7 @@ static void add_to_repair_meta_for_followers(repair_meta& rm) {
 class row_level_repair {
     repair_info& _ri;
     sstring _cf_name;
-    utils::UUID _table_id;
+    table_id _table_id;
     dht::token_range _range;
     inet_address_vector_replica_set _all_live_peer_nodes;
     replica::column_family& _cf;
@@ -2419,7 +2419,7 @@ class row_level_repair {
 public:
     row_level_repair(repair_info& ri,
             sstring cf_name,
-            utils::UUID table_id,
+            table_id table_id,
             dht::token_range range,
             std::vector<gms::inet_address> all_live_peer_nodes)
         : _ri(ri)
@@ -2441,9 +2441,8 @@ private:
 
     inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
         auto myip = utils::fb_utilities::get_broadcast_address();
-        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
-        snitch->sort_by_proximity(myip, sorted_nodes);
+        _ri.db.local().get_token_metadata().get_topology().sort_by_proximity(myip, sorted_nodes);
         return sorted_nodes;
     }
 
@@ -2844,7 +2843,7 @@ public:
 };
 
 future<> repair_cf_range_row_level(repair_info& ri,
-        sstring cf_name, utils::UUID table_id, dht::token_range range,
+        sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes) {
     return seastar::futurize_invoke([&ri, cf_name = std::move(cf_name), table_id = std::move(table_id), range = std::move(range), &all_peer_nodes] () mutable {
         auto repair = row_level_repair(ri, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes);
@@ -2962,7 +2961,7 @@ static shard_id repair_id_to_shard(utils::UUID& repair_id) {
 }
 
 future<std::optional<gc_clock::time_point>>
-repair_service::update_history(utils::UUID repair_id, utils::UUID table_id, dht::token_range range, gc_clock::time_point repair_time) {
+repair_service::update_history(utils::UUID repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id, table_id, range, repair_time] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
         repair_history& rh = rs._finished_ranges_history[repair_id];
@@ -2996,7 +2995,7 @@ future<> repair_service::load_history() {
     for (const auto& x : tables) {
         auto& table_uuid = x.first;
         auto& table = x.second;
-        auto shard = unsigned(table_uuid.get_most_significant_bits()) % smp::count;
+        auto shard = unsigned(table_uuid.uuid().get_most_significant_bits()) % smp::count;
         if (shard != this_shard_id()) {
             continue;
         }
@@ -3009,18 +3008,15 @@ future<> repair_service::load_history() {
             auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
-            co_await get_db().invoke_on_all([entry, range, repair_time] (replica::database& local_db) -> future<> {
-                try {
-                    auto& table = local_db.find_column_family(entry.table_uuid);
-                    ::update_repair_time(table.schema(), range, repair_time);
-                } catch (replica::no_such_column_family&) {
-                    rlogger.trace("Table {}.{} with {} does not exist", entry.ks, entry.cf, entry.table_uuid);
-                } catch (...) {
-                    rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
-                            entry.ks, entry.cf, range, repair_time);
-                }
-                co_return;
-            });
+            try {
+                co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
+                    auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+                    gc_state.update_repair_time(table_uuid, range, repair_time);
+                });
+            } catch (...) {
+                rlogger.warn("Failed to update repair history time for keyspace={}, table={}, range={}, repair_time={}",
+                        entry.ks, entry.cf, range, repair_time);
+            }
         });
     }
     co_return;

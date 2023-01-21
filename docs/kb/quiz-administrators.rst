@@ -30,5 +30,5 @@ A: The acknowledgment will be sent to the user when two **local** replicas respo
 In this case, floor(local_RF/2 +1) = 2 , so LOCAL\_QUORUM is equal to RF per DC, which is why RF of 3 is usually better.
 
 
-`Knowledge Base 
-</kb/>`_
+:doc:`Knowledge Base </kb/index>`
+

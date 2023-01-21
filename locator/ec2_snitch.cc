@@ -17,11 +17,11 @@ ec2_snitch::ec2_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {
  *
  * @return
  */
-future<> ec2_snitch::load_config() {
+future<> ec2_snitch::load_config(bool prefer_local) {
     using namespace boost::algorithm;
 
     if (this_shard_id() == io_cpu_id()) {
-        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ).then([this](sstring az) {
+        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ).then([this, prefer_local](sstring az) {
             assert(az.size());
 
             std::vector<std::string> splits;
@@ -38,12 +38,15 @@ future<> ec2_snitch::load_config() {
                 _my_dc = az.substr(0, az.size() - 3);
             }
 
-            return read_property_file().then([this] (sstring datacenter_suffix) {
+            _prefer_local = prefer_local;
+
+            return read_property_file().then([this, prefer_local] (sstring datacenter_suffix) {
                 _my_dc += datacenter_suffix;
                 logger().info("Ec2Snitch using region: {}, zone: {}.", _my_dc, _my_rack);
 
-                return container().invoke_on_others([this] (snitch_ptr& local_s) {
+                return container().invoke_on_others([this, prefer_local] (snitch_ptr& local_s) {
                     local_s->set_my_dc_and_rack(_my_dc, _my_rack);
+                    local_s->set_prefer_local(prefer_local);
                 });
             });
         });
@@ -55,7 +58,7 @@ future<> ec2_snitch::load_config() {
 future<> ec2_snitch::start() {
     _state = snitch_state::initializing;
 
-    return load_config().then([this] {
+    return load_config(false).then([this] {
         set_snitch_ready();
     });
 }

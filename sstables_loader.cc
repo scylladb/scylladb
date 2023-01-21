@@ -115,7 +115,7 @@ public:
 } // anonymous namespace
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
-        utils::UUID table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
+        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
     const auto full_token_range = dht::token_range::make_open_ended_both_sides();
     auto& table = _db.local().find_column_family(table_id);
@@ -127,7 +127,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
     while (!sstables.empty()) {
-        auto ops_uuid = utils::make_random_uuid();
+        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
         size_t batch_sst_nr = 16;
         std::vector<sstring> sst_names;
@@ -249,7 +249,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             ks_name, cf_name, load_and_stream, primary_replica_only);
     try {
         if (load_and_stream) {
-            utils::UUID table_id;
+            ::table_id table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
             std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name);
             co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary_replica_only] (sstables_loader& loader) mutable -> future<> {

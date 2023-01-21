@@ -1,4 +1,5 @@
 import pytest
+import re
 
 # Convenience function to execute a scylla command in gdb, returning its
 # output as a string - or a gdb.error exception.
@@ -89,6 +90,11 @@ def test_task_queues(gdb):
 def test_task_histogram(gdb):
     scylla(gdb, 'task_histogram')
 
+def test_task_histogram_coro(gdb):
+    h = scylla(gdb, 'task_histogram -a')
+    if re.search(r'\) \[clone \.\w+\]', h) is None:
+        raise gdb.error('no coroutine entries in task histogram')
+
 def test_tasks(gdb):
     scylla(gdb, 'tasks')
 
@@ -149,5 +155,8 @@ def test_sstable_summary(gdb, sstable):
 
 def test_sstable_summary(gdb, sstable):
     scylla(gdb, f'sstable-index-cache {sstable}')
+
+def test_read_stats(gdb, sstable):
+    scylla(gdb, f'read-stats')
 
 # FIXME: need a simple test for lsa-segment

@@ -195,6 +195,87 @@ make_from_json_function(data_dictionary::database db, const sstring& keyspace, d
     });
 }
 
+static shared_ptr<function> get_dynamic_aggregate(const function_name &name, const std::variant<std::vector<data_type>, std::vector<shared_ptr<assignment_testable>>>& provided_args) {
+    static const function_name MIN_NAME = function_name::native_function("min");
+    static const function_name MAX_NAME = function_name::native_function("max");
+    static const function_name COUNT_NAME = function_name::native_function("count");
+    static const function_name COUNT_ROWS_NAME = function_name::native_function("countRows");
+
+    auto get_arguments = [&] (const sstring& function_name) {
+        return std::visit(overloaded_functor {
+            [&] (const std::vector<data_type>& args) {
+                return args;
+            },
+            [&] (const std::vector<shared_ptr<assignment_testable>>& args) {
+                std::vector<data_type> arg_types;
+                for (const auto& arg : args) {
+                    selection::selector *sp = dynamic_cast<selection::selector*>(arg.get());
+                    if (!sp) {
+                        throw exceptions::invalid_request_exception(format("{}() function is only valid in SELECT clause", function_name));
+                    }
+                    arg_types.push_back(sp->get_type());
+                }
+                return arg_types;
+            }
+        }, provided_args);
+    };
+
+    if (name.has_keyspace()
+                ? name == MIN_NAME
+                : name.name == MIN_NAME.name) {
+        auto arg_types = get_arguments(MIN_NAME.name);
+        if (arg_types.size() != 1) {
+            throw std::runtime_error("min() function requires only 1 argument");
+        }
+
+        auto& arg = arg_types[0];
+        if (arg->is_collection() || arg->is_tuple() || arg->is_user_type()) {
+            return aggregate_fcts::make_min_dynamic_function(arg);
+        }
+
+    } else if (name.has_keyspace()
+                ? name == MAX_NAME
+                : name.name == MAX_NAME.name) {
+        auto arg_types = get_arguments(MAX_NAME.name);
+        if (arg_types.size() != 1) {
+            throw std::runtime_error("max() function requires only 1 argument");
+        }
+
+        auto& arg = arg_types[0];
+        if (arg->is_collection() || arg->is_tuple() || arg->is_user_type()) {
+            return aggregate_fcts::make_max_dynamic_function(arg);
+        }
+    } else if (name.has_keyspace()
+                ? name == COUNT_NAME
+                : name.name == COUNT_NAME.name) {
+        auto arg_types = get_arguments(COUNT_NAME.name);
+        if (arg_types.size() != 1) {
+            throw std::runtime_error("count() function requires only 1 argument");
+        }
+
+        auto& arg = arg_types[0];
+        if (arg->is_collection() || arg->is_tuple() || arg->is_user_type()) {
+            return aggregate_fcts::make_count_rows_function();
+        }
+    } else if (name.has_keyspace()
+                ? name == COUNT_ROWS_NAME
+                : name.name == COUNT_ROWS_NAME.name) {
+        auto arg_types = get_arguments(COUNT_ROWS_NAME.name);
+        if (arg_types.size() != 1 && arg_types.size() != 0) {
+            throw std::runtime_error(format("countRows() function requires 0 or 1 argument, proveded {}", arg_types.size()));
+        }
+
+        if (arg_types.size() == 0) {
+            return aggregate_fcts::make_count_rows_function();
+        }
+        auto& arg = arg_types[0];
+        if (arg->is_collection() || arg->is_tuple() || arg->is_user_type()) {
+            return aggregate_fcts::make_count_rows_function();
+        }
+    } 
+    return {};
+}
+
 shared_ptr<function>
 functions::get(data_dictionary::database db,
         const sstring& keyspace,
@@ -207,8 +288,6 @@ functions::get(data_dictionary::database db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
-    static const function_name MIN_FUNCTION_NAME = function_name::native_function("min");
-    static const function_name MAX_FUNCTION_NAME = function_name::native_function("max");
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
@@ -241,38 +320,9 @@ functions::get(data_dictionary::database db,
         return make_from_json_function(db, keyspace, receiver->type);
     }
 
-    if (name.has_keyspace()
-                ? name == MIN_FUNCTION_NAME
-                : name.name == MIN_FUNCTION_NAME.name) {
-        if (provided_args.size() != 1) {
-            throw exceptions::invalid_request_exception("min() operates on 1 argument at a time");
-        }
-        selection::selector *sp = dynamic_cast<selection::selector*>(provided_args[0].get());
-        if (!sp) {
-            throw exceptions::invalid_request_exception("min() is only valid in SELECT clause");
-        }
-        const data_type arg_type = sp->get_type();
-        if (arg_type->is_collection() || arg_type->is_tuple() || arg_type->is_user_type()) {
-            // `min()' function is created on demand for arguments of compound types.
-            return aggregate_fcts::make_min_dynamic_function(arg_type);
-        }
-    }
-
-    if (name.has_keyspace()
-                ? name == MAX_FUNCTION_NAME
-                : name.name == MAX_FUNCTION_NAME.name) {
-        if (provided_args.size() != 1) {
-            throw exceptions::invalid_request_exception("max() operates on 1 argument at a time");
-        }
-        selection::selector *sp = dynamic_cast<selection::selector*>(provided_args[0].get());
-        if (!sp) {
-            throw exceptions::invalid_request_exception("max() is only valid in SELECT clause");
-        }
-        const data_type arg_type = sp->get_type();
-        if (arg_type->is_collection() || arg_type->is_tuple() || arg_type->is_user_type()) {
-            // `max()' function is created on demand for arguments of compound types.
-            return aggregate_fcts::make_max_dynamic_function(arg_type);
-        }
+    auto aggr_fun = get_dynamic_aggregate(name, provided_args);
+    if (aggr_fun) {
+        return aggr_fun;
     }
 
     std::vector<shared_ptr<function>> candidates;
@@ -358,6 +408,24 @@ functions::find(const function_name& name, const std::vector<data_type>& arg_typ
         return i->second;
     }
     return {};
+}
+
+// This function is created only for forward_service use, thus it only checks for
+// aggregate functions if no declared function was found.
+//
+// The reason for this function is, there is no serialization of `cql3::selection::selection`,
+// so functions lying underneath these selections has to be refound.
+//
+// Most of this code is copied from `functions::get()`, however `functions::get()` requires to 
+// mock or serialize expressions and `functions::find()` is not enough,
+// because it does not search for dynamic aggregate functions
+shared_ptr<function>
+functions::mock_get(const function_name &name, const std::vector<data_type>& arg_types) {
+    auto func = find(name, arg_types);
+    if (!func) {
+        func = get_dynamic_aggregate(name, arg_types);
+    }
+    return func;
 }
 
 // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common

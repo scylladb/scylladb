@@ -14,10 +14,11 @@
 
 #include "bytes.hh"
 #include "keys.hh"
-#include "utils/UUID.hh"
+#include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include "db/read_repair_decision.hh"
 #include "position_in_partition.hh"
+#include "locator/host_id.hh"
 
 namespace service {
 
@@ -25,13 +26,13 @@ namespace pager {
 
 class paging_state final {
 public:
-    using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
+    using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 
 private:
     partition_key _partition_key;
     std::optional<clustering_key> _clustering_key;
     uint32_t _remaining_low_bits;
-    utils::UUID _query_uuid;
+    query_id _query_uuid;
     replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint32_t _rows_fetched_for_last_partition_low_bits;
@@ -45,7 +46,7 @@ public:
     paging_state(partition_key pk,
             std::optional<clustering_key> ck,
             uint32_t rem,
-            utils::UUID reader_recall_uuid,
+            query_id reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
             uint32_t rows_fetched_for_last_partition,
@@ -57,7 +58,7 @@ public:
     paging_state(partition_key pk,
             position_in_partition_view pos,
             uint64_t rem,
-            utils::UUID reader_recall_uuid,
+            query_id reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
             uint64_t rows_fetched_for_last_partition);
@@ -143,7 +144,7 @@ public:
      * the client got this paging_state from a coordinator running an older
      * version of Scylla.
      */
-    utils::UUID get_query_uuid() const {
+    query_id get_query_uuid() const {
         return _query_uuid;
     }
 

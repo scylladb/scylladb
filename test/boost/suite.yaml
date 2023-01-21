@@ -14,6 +14,7 @@ run_first:
 # some test-cases depend on each other
 no_parallel_cases:
     - logalloc_test
+    - logalloc_standard_allocator_segment_pool_backend_test
     - memtable_test
 # Custom command line arguments for some of the tests
 custom_args:
@@ -31,3 +32,5 @@ custom_args:
         - '-c2 -m2G --fail-on-abandoned-failed-futures=true'
     reader_concurrency_semaphore_test:
         - '-c1 -m1G'
+run_in_debug:
+    - logalloc_standard_allocator_segment_pool_backend_test

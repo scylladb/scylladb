@@ -6,12 +6,15 @@
 # Tests for the tools hosted by scylla
 #############################################################################
 
+import contextlib
 import glob
 import json
 import nodetool
 import os
 import pytest
 import subprocess
+import tempfile
+import random
 import util
 
 # To run the Scylla tools, we need to run Scylla executable itself, so we
@@ -56,12 +59,21 @@ def scylla_data_dir(cql):
 
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY , v int)"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
-        cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+        x = random.randrange(0, 4)
+        if x == 0:
+            # partition tombstone
+            cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk}")
+        else:
+            # live row
+            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -70,13 +82,34 @@ def simple_no_clustering_table(cql, keyspace):
 
 def simple_clustering_table(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, s int STATIC, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
         for ck in range(0, 10):
-            cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0)")
+            x = random.randrange(0, 8)
+            if x == 0:
+                # ttl
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0) USING TTL 6000")
+            elif x == 1:
+                # row tombstone
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk} AND ck = {ck}")
+            elif x == 2:
+                # cell tombstone
+                cql.execute(f"DELETE v FROM {keyspace}.{table} WHERE pk = {pk} AND ck = {ck}")
+            elif x == 3:
+                # range tombstone
+                l = ck * 10
+                u = ck * 11
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk} AND ck > {l} AND ck < {u}")
+            else:
+                # live row
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, 0)")
+
+        if pk == 5:
+            cql.execute(f"UPDATE {keyspace}.{table} SET s = 10 WHERE pk = {pk}")
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -85,7 +118,7 @@ def simple_clustering_table(cql, keyspace):
 
 def clustering_table_with_collection(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v map<int, text>, PRIMARY KEY (pk, ck))"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v map<int, text>, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
@@ -94,6 +127,8 @@ def clustering_table_with_collection(cql, keyspace):
             map_vals = {f"{p}: '{c}'" for p in range(0, pk) for c in range(0, ck)}
             map_str = ", ".join(map_vals)
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{{map_str}}})")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -103,7 +138,7 @@ def clustering_table_with_collection(cql, keyspace):
 def clustering_table_with_udt(cql, keyspace):
     table = util.unique_name()
     create_type_schema = f"CREATE TYPE IF NOT EXISTS {keyspace}.type1 (f1 int, f2 text)"
-    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck))"
+    create_table_schema = f" CREATE TABLE {keyspace}.{table} (pk int, ck int, v type1, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(create_type_schema)
     cql.execute(create_table_schema)
@@ -111,6 +146,8 @@ def clustering_table_with_udt(cql, keyspace):
     for pk in range(0, 10):
         for ck in range(0, 10):
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {{f1: 100, f2: 'asd'}})")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
@@ -119,56 +156,53 @@ def clustering_table_with_udt(cql, keyspace):
 
 def table_with_counters(cql, keyspace):
     table = util.unique_name()
-    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v counter)"
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v counter) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
     for pk in range(0, 10):
         for c in range(0, 4):
             cql.execute(f"UPDATE {keyspace}.{table} SET v = v + 1 WHERE pk = {pk};")
+        if pk == 5:
+            nodetool.flush(cql, f"{keyspace}.{table}")
 
     nodetool.flush(cql, f"{keyspace}.{table}")
 
     return table, schema
 
 
-@pytest.fixture(scope="module", params=[
-        simple_no_clustering_table,
-        simple_clustering_table,
-        clustering_table_with_collection,
-        clustering_table_with_udt,
-        table_with_counters,
-])
-def scylla_sstable(request, cql, test_keyspace, scylla_path, scylla_data_dir):
-    table, schema = request.param(cql, test_keyspace)
+@contextlib.contextmanager
+def scylla_sstable(table_factory, cql, ks, data_dir):
+    table, schema = table_factory(cql, ks)
 
-    schema_file = os.path.join(scylla_data_dir, "..", "test_tools_schema.cql")
+    schema_file = os.path.join(data_dir, "..", "test_tools_schema.cql")
     with open(schema_file, "w") as f:
         f.write(schema)
 
-    sstables = glob.glob(os.path.join(scylla_data_dir, test_keyspace, table + '-*', '*-Data.db'))
+    sstables = glob.glob(os.path.join(data_dir, ks, table + '-*', '*-Data.db'))
 
     try:
-        yield (scylla_path, schema_file, sstables)
+        yield (schema_file, sstables)
     finally:
-        cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+        cql.execute(f"DROP TABLE {ks}.{table}")
         os.unlink(schema_file)
 
 
 def one_sstable(sstables):
+    assert len(sstables) > 1
     return [sstables[0]]
 
 
 def all_sstables(sstables):
+    assert len(sstables) > 1
     return sstables
 
 
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
 @pytest.mark.parametrize("which_sstables", [one_sstable, all_sstables])
-def test_scylla_sstable_dump(scylla_sstable, what, which_sstables):
-    (scylla_path, schema_file, sstables) = scylla_sstable
-
-    out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
+def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_data_dir, what, which_sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
 
     print(out)
 
@@ -176,18 +210,52 @@ def test_scylla_sstable_dump(scylla_sstable, what, which_sstables):
     assert json.loads(out)
 
 
+@pytest.mark.parametrize("table_factory", [
+        simple_no_clustering_table,
+        simple_clustering_table,
+        clustering_table_with_collection,
+        clustering_table_with_udt,
+        table_with_counters,
+])
 @pytest.mark.parametrize("merge", [True, False])
 @pytest.mark.parametrize("output_format", ["text", "json"])
-def test_scylla_sstable_dump_merge(scylla_sstable, merge, output_format):
-    (scylla_path, schema_file, sstables) = scylla_sstable
-
-    args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
-    if merge:
-        args.append("--merge")
-    out = subprocess.check_output(args + sstables)
+def test_scylla_sstable_dump_data(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, merge, output_format):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
+        if merge:
+            args.append("--merge")
+        out = subprocess.check_output(args + sstables)
 
     print(out)
 
     assert out
     if output_format == "json":
         assert json.loads(out)
+
+
+@pytest.mark.parametrize("table_factory", [
+        simple_no_clustering_table,
+        simple_clustering_table,
+])
+def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json", "--merge"]
+            generation = util.unique_key_int()
+
+            original_out = subprocess.check_output(dump_common_args + sstables)
+            original_json = json.loads(original_out)["sstables"]["anonymous"]
+
+            input_file = os.path.join(tmp_dir, 'input.json')
+
+            with open(input_file, 'w') as f:
+                json.dump(original_json, f)
+
+            subprocess.check_call([scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-file", input_file, "--output-dir", tmp_dir, "--generation", str(generation), '--logger-log-level', 'scylla-sstable=trace'])
+
+            sstable_file = os.path.join(tmp_dir, f"me-{generation}-big-Data.db")
+
+            actual_out = subprocess.check_output(dump_common_args + [sstable_file])
+            actual_json = json.loads(actual_out)["sstables"]["anonymous"]
+
+            assert actual_json == original_json

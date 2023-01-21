@@ -20,7 +20,7 @@
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
-#include "utils/UUID.hh"
+#include "locator/host_id.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
 
@@ -81,11 +81,12 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    // NOTE: RAFT feature is not enabled via `experimental` umbrella flag.
-    // This option should be enabled explicitly.
+    // NOTE: RAFT and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
+    // These options should be enabled explicitly.
+    // RAFT feature has to be enabled if BROADCAST_TABLES is enabled.
     enum class feature { UNUSED, UDF, ALTERNATOR_STREAMS, ALTERNATOR_TTL, RAFT,
-            KEYSPACE_STORAGE_OPTIONS };
-    static std::unordered_map<sstring, feature> map(); // See enum_option.
+            BROADCAST_TABLES, KEYSPACE_STORAGE_OPTIONS };
+    static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
 };
 
@@ -200,6 +201,7 @@ public:
     named_value<double> reduce_cache_sizes_at;
     named_value<uint32_t> stream_throughput_outbound_megabits_per_sec;
     named_value<uint32_t> inter_dc_stream_throughput_outbound_megabits_per_sec;
+    named_value<uint32_t> stream_io_throughput_mb_per_sec;
     named_value<bool> trickle_fsync;
     named_value<uint32_t> trickle_fsync_interval_in_kb;
     named_value<bool> auto_bootstrap;
@@ -224,6 +226,7 @@ public:
     named_value<uint32_t> counter_cache_keys_to_save;
     named_value<uint32_t> tombstone_warn_threshold;
     named_value<uint32_t> tombstone_failure_threshold;
+    named_value<uint64_t> query_tombstone_page_limit;
     named_value<uint32_t> range_request_timeout_in_ms;
     named_value<uint32_t> read_request_timeout_in_ms;
     named_value<uint32_t> counter_write_request_timeout_in_ms;
@@ -333,6 +336,7 @@ public:
     named_value<uint32_t> max_clustering_key_restrictions_per_query;
     named_value<uint64_t> max_memory_for_unlimited_query_soft_limit;
     named_value<uint64_t> max_memory_for_unlimited_query_hard_limit;
+    named_value<uint32_t> twcs_max_window_count;
     named_value<unsigned> initial_sstable_loading_concurrency;
     named_value<bool> enable_3_1_0_compatibility_mode;
     named_value<bool> enable_user_defined_functions;
@@ -355,7 +359,7 @@ public:
     named_value<sstring> alternator_write_isolation;
     named_value<uint32_t> alternator_streams_time_window_s;
     named_value<uint32_t> alternator_timeout_in_ms;
-    named_value<uint32_t> alternator_ttl_period_in_seconds;
+    named_value<double> alternator_ttl_period_in_seconds;
 
     named_value<bool> abort_on_ebadf;
 
@@ -374,15 +378,20 @@ public:
     // enjoy:
     named_value<tri_mode_restriction> restrict_replication_simplestrategy;
     named_value<tri_mode_restriction> restrict_dtcs;
+    named_value<tri_mode_restriction> restrict_twcs_without_default_ttl;
 
     named_value<bool> ignore_truncation_record;
     named_value<bool> force_schema_commit_log;
+
+    named_value<uint32_t> task_ttl_seconds;
+
+    named_value<bool> cache_index_pages;
 
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
 
-    utils::UUID host_id;
+    locator::host_id host_id;
 
     static const sstring default_tls_priority;
 private:

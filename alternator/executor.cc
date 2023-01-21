@@ -41,7 +41,8 @@
 #include "collection_mutation.hh"
 #include "db/query_context.hh"
 #include "schema.hh"
-#include "alternator/tags_extension.hh"
+#include "db/tags/extension.hh"
+#include "db/tags/utils.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
@@ -437,6 +438,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
     rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
     rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
+    // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
+    rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
+    rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
+    rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
     std::unordered_map<std::string,std::string> key_attribute_types;
     // Add base table's KeySchema and collect types for AttributeDefinitions:
@@ -638,34 +644,6 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     }
 }
 
-const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema) {
-    auto it = schema->extensions().find(tags_extension::NAME);
-    if (it == schema->extensions().end()) {
-        throw api_error::validation(format("Table {} does not have valid tagging information", schema->ks_name()));
-    }
-    auto tags_extension = static_pointer_cast<alternator::tags_extension>(it->second);
-    return tags_extension->tags();
-}
-
-// find_tag() returns the value of a specific tag, or nothing if it doesn't
-// exist. Unlike get_tags_of_table() above, if the table is missing the
-// tags extension (e.g., is not an Alternator table) it's not an error -
-// we return nothing, as in the case that tags exist but not this tag.
-std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
-    auto it1 = s.extensions().find(tags_extension::NAME);
-    if (it1 == s.extensions().end()) {
-        return std::nullopt;
-    }
-    const std::map<sstring, sstring>& tags_map =
-        static_pointer_cast<alternator::tags_extension>(it1->second)->tags();
-    auto it2 = tags_map.find(tag);
-    if (it2 == tags_map.end()) {
-        return std::nullopt;
-    } else {
-        return it2->second;
-    }
-}
-
 static bool is_legal_tag_char(char c) {
     // FIXME: According to docs, unicode strings should also be accepted.
     // Alternator currently uses a simplified ASCII approach
@@ -760,22 +738,13 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
     validate_tags(tags_map);
 }
 
-// FIXME: Updating tags currently relies on updating schema, which may be subject
-// to races during concurrent updates of the same table. Once Scylla schema updates
-// are fixed, this issue will automatically get fixed as well.
-future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
-    co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
-        // FIXME: the following needs to be in a loop. If mm.announce() below
-        // fails, we need to retry the whole thing.
-        auto group0_guard = co_await mm.start_group0_operation();
-
-        schema_builder builder(s);
-        builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
-
-        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), group0_guard.write_timestamp());
-
-        co_await mm.announce(std::move(m), std::move(group0_guard));
-    });
+const std::map<sstring, sstring>& get_tags_of_table_or_throw(schema_ptr schema) {
+    auto tags_ptr = db::get_tags_of_table(schema);
+    if (tags_ptr) {
+        return *tags_ptr;
+    } else {
+        throw api_error::validation(format("Table {} does not have valid tagging information", schema->ks_name()));
+    }
 }
 
 future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -786,7 +755,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::access_denied("Incorrect resource identifier");
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     const rjson::value* tags = rjson::find(request, "Tags");
     if (!tags || !tags->IsArray()) {
         co_return api_error::validation("Cannot parse tags");
@@ -795,7 +764,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
     update_tags_map(*tags, tags_map,  update_tags_action::add_tags);
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
 
@@ -813,9 +782,9 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
-    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_await db::update_tags(_mm, schema, std::move(tags_map));
     co_return json_string("");
 }
 
@@ -827,7 +796,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    auto tags_map = get_tags_of_table(schema);
+    auto tags_map = get_tags_of_table_or_throw(schema);
     rjson::value ret = rjson::empty_object();
     rjson::add(ret, "Tags", rjson::empty_array());
 
@@ -1046,7 +1015,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     if (tags && tags->IsArray()) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
-    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
+    builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
@@ -1061,7 +1030,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
+        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
         ++where_clause_it;
     }
 
@@ -1291,6 +1260,22 @@ put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schem
     check_key(key, schema);
 }
 
+// find_attribute() checks whether the named attribute is stored in the
+// schema as a real column (we do this for key attribute, and for a GSI key)
+// and if so, returns that column. If not, the function returns nullptr,
+// telling the caller that the attribute is stored serialized in the
+// ATTRS_COLUMN_NAME map - not in a stand-alone column in the schema.
+static inline const column_definition* find_attribute(const schema& schema, const bytes& attribute_name) {
+    const column_definition* cdef = schema.get_column_definition(attribute_name);
+    // Although ATTRS_COLUMN_NAME exists as an actual column, when used as an
+    // attribute name it should refer to an attribute inside ATTRS_COLUMN_NAME
+    // not to ATTRS_COLUMN_NAME itself. This if() is needed for #5009.
+    if (cdef && cdef->name() == executor::ATTRS_COLUMN_NAME) {
+        return nullptr;
+    }
+    return cdef;
+}
+
 put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
@@ -1298,7 +1283,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
-        const column_definition* cdef = schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*schema, column_name);
         if (!cdef) {
             bytes value = serialize_item(it->value);
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
@@ -1330,7 +1315,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     auto& row = m.partition().clustered_row(*schema, _ck);
     attribute_collector attrs_collector;
     for (auto& c : *_cells) {
-        const column_definition* cdef = schema->get_column_definition(c.column_name);
+        const column_definition* cdef = find_attribute(*schema, c.column_name);
         if (!cdef) {
             attrs_collector.put(c.column_name, c.value, ts);
         } else {
@@ -1395,7 +1380,8 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(proxy.get_tombstone_limit()));
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -1455,7 +1441,7 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
-    const auto& tags = get_tags_of_table(schema);
+    const auto& tags = get_tags_of_table_or_throw(schema);
     auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
     if (it == tags.end() || it->second.empty()) {
         return default_write_isolation;
@@ -2784,7 +2770,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 }
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
@@ -2806,7 +2792,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
         }
-        const column_definition* cdef = _schema->get_column_definition(column_name);
+        const column_definition* cdef = find_attribute(*_schema, column_name);
         if (cdef) {
             row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
         } else {
@@ -3099,7 +3085,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+            query::tombstone_limit(_proxy.get_tombstone_limit()));
 
     std::unordered_set<std::string> used_attribute_names;
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
@@ -3253,7 +3240,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
+            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                    query::tombstone_limit(_proxy.get_tombstone_limit()));
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
@@ -3654,7 +3642,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         if (schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, schema);
         }
-        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
@@ -3665,7 +3653,8 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 

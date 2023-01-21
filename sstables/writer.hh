@@ -270,12 +270,17 @@ inline void write(sstable_version_types v, W& out, bool i) {
 }
 
 inline void write(sstable_version_types v, file_writer& out, double d) {
-    unsigned long tmp = net::hton(bit_cast<unsigned long>(d));
+    unsigned long tmp = net::hton(std::bit_cast<unsigned long>(d));
     out.write(reinterpret_cast<const char*>(&tmp), sizeof(unsigned long));
 }
 
 inline void write(sstable_version_types v, file_writer& out, const utils::UUID& uuid) {
     out.write(uuid.serialize());
+}
+
+template <typename Tag>
+inline void write(sstable_version_types v, file_writer& out, const utils::tagged_uuid<Tag>& id) {
+    write(v, out, id.uuid());
 }
 
 template <typename W>
@@ -584,7 +589,7 @@ void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v,
         write<int16_t>(v, out, std::numeric_limits<int16_t>::min() + i);
     }
     auto write_shard = [&] (auto&& s) {
-        auto uuid = s.id().to_uuid();
+        auto uuid = s.id().uuid();
         write(v, out, int64_t(uuid.get_most_significant_bits()),
             int64_t(uuid.get_least_significant_bits()),
             int64_t(s.logical_clock()), int64_t(s.value()));

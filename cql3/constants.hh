@@ -11,11 +11,16 @@
 #pragma once
 
 #include "cql3/abstract_marker.hh"
+#include "cql3/query_options.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/operation.hh"
 #include "cql3/values.hh"
 #include "mutation.hh"
 #include <seastar/core/shared_ptr.hh>
+
+namespace service::broadcast_tables {
+    class update_query;
+}
 
 namespace cql3 {
 
@@ -44,6 +49,8 @@ public:
                 m.set_cell(prefix, column, params.make_cell(*column.type, value));
             }
         }
+
+        virtual void prepare_for_broadcast_tables(service::broadcast_tables::update_query& query) const override;
     };
 
     struct adder final : operation {

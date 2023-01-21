@@ -15,7 +15,6 @@
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
-#include "cql3/restrictions/multi_column_restriction.hh"
 
 using namespace cql3;
 
@@ -31,7 +30,7 @@ query::clustering_row_ranges slice(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT,
-            where_clause,
+            expr::conjunction{where_clause},
             ctx,
             /*contains_only_static_columns=*/false,
             /*for_view=*/false,
@@ -44,7 +43,7 @@ query::clustering_row_ranges slice(
 query::clustering_row_ranges slice_parse(
         sstring_view where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
-    return slice(cql3::util::where_clause_to_relations(where_clause), env, table_name, keyspace_name);
+    return slice(boolean_factors(cql3::util::where_clause_to_relations(where_clause)), env, table_name, keyspace_name);
 }
 
 auto I(int32_t x) { return int32_type->decompose(x); }
@@ -95,6 +94,18 @@ auto both_closed(std::vector<bytes> lb, std::vector<bytes> ub) {
     return query::clustering_range({{cklb, inclusive}}, {{ckub, inclusive}});
 }
 
+expr::tuple_constructor
+column_definitions_as_tuple_constructor(const std::vector<const column_definition*>& defs) {
+    std::vector<expr::expression> columns;
+    std::vector<data_type> column_types;
+    columns.reserve(defs.size());
+    for (auto& def : defs) {
+        columns.push_back(expr::column_value{def});
+        column_types.push_back(def->type);
+    }
+    data_type ttype = tuple_type_impl::get_instance(std::move(column_types));
+    return expr::tuple_constructor{std::move(columns), std::move(ttype)};
+}
 } // anonymous namespace
 
 SEASTAR_TEST_CASE(slice_empty_restriction) {
@@ -420,7 +431,7 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     expression r2_restriction(binary_operator(column_value(&col_r2), oper_t::EQ, zero_value));
 
     auto make_multi_column_restriction = [](std::vector<const column_definition*> columns, oper_t oper) -> expression {
-        tuple_constructor column_tuple(cql3::restrictions::column_definitions_as_tuple_constructor(columns));
+        tuple_constructor column_tuple(column_definitions_as_tuple_constructor(columns));
 
         std::vector<managed_bytes_opt> zeros_tuple_elems(columns.size(), managed_bytes_opt(I(0)));
         data_type tup_type = tuple_type_impl::get_instance(std::vector<data_type>(columns.size(), int32_type));

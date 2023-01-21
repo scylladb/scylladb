@@ -31,7 +31,7 @@ Apply the following procedure **serially** on each node. Do not move to the next
 **During** the rolling upgrade it is highly recommended:
 
 * Not to use new |NEW_VERSION| features
-* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See :doc:`here </operating-scylla/manager/2.1/sctool>` for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/index.html>`_ for suspending Scylla Manager (only available Scylla Enterprise) scheduled or running repairs.
 * Not to apply schema changes
 
 .. note:: Before upgrading, make sure to use the latest `Scylla Montioring <https://monitoring.docs.scylladb.com/>`_ stack.
@@ -95,30 +95,6 @@ Answer ‘y’ to the first two questions.
 .. note::
 
    Alternator users upgrading from Scylla 4.0 to 4.1, need to set :doc:`default isolation level </upgrade/upgrade-opensource/upgrade-guide-from-4.0-to-4.1/alternator>`
-
-Update 3rd party and OS packages
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. versionadded:: Scylla 5.0
-.. versionadded:: Scylla Enterprise 2021.1.10
-
-This step is optional. It is recommended if you run a Scylla official image (EC2 AMI, GCP, and Azure images) based on Ubuntu 20.04.
-
-Run the following command:
-
-.. code:: sh 
-
-   cat scylla-packages-xxx-x86_64.txt | sudo xargs -n1 apt-get -y
-
-
-Where xxx is the relevant Scylla version ( |NEW_VERSION| ). The file is included in the Scylla packages downloaded in the previous step.
-
-For example
-
-.. code:: sh 
-   
-   cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get -y
-
 
 Start the node
 --------------

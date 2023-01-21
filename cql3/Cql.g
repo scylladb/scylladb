@@ -383,6 +383,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::REGULAR;
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
+        expression wclause = conjunction{};
     }
     : K_SELECT (
                 ( K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; } )?
@@ -390,7 +391,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
                 sclause=selectClause
                )
       K_FROM cf=columnFamilyName
-      ( K_WHERE wclause=whereClause )?
+      ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
       ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = rows; } )?
@@ -445,8 +446,10 @@ countArgument
                 } }
     ;
 
-whereClause returns [std::vector<expression> clause]
-    : e1=relation { $clause.push_back(std::move(e1)); } (K_AND en=relation { $clause.push_back(std::move(en)); })*
+whereClause returns [expression clause]
+    @init { std::vector<expression> terms; }
+    : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
+        { clause = conjunction{std::move(terms)}; }
     ;
 
 orderByClause[raw::select_statement::parameters::orderings_type& orderings]
@@ -595,8 +598,9 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
         raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::PRUNE_MATERIALIZED_VIEW;
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
+        expression wclause = conjunction{};
     }
-	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE wclause=whereClause)? ( usingClause[attrs] )?
+	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingClause[attrs] )?
 	  {
 	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
 	        return std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -681,6 +685,7 @@ createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggre
         std::vector<shared_ptr<cql3_type::raw>> arg_types;
         std::optional<sstring> ffunc;
         std::optional<expr::expression> ival;
+        std::optional<sstring> rfunc;
     }
     : K_CREATE (K_OR K_REPLACE { or_replace = true; })?
       K_AGGREGATE
@@ -695,12 +700,15 @@ createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggre
       K_SFUNC sfunc = allowedFunctionName
       K_STYPE stype = comparatorType
       (
+        K_REDUCEFUNC reduce_name = allowedFunctionName { rfunc = reduce_name; }
+      )?
+      (
         K_FINALFUNC final_func = allowedFunctionName { ffunc = final_func; }
       )?
       (
         K_INITCOND init_val = term { ival = init_val; }
       )?
-      { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
+      { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(rfunc), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
     ;
 
 createFunctionStatement returns [std::unique_ptr<cql3::statements::create_function_statement> expr]
@@ -849,7 +857,8 @@ indexIdent returns [::shared_ptr<index_target::raw> id]
     @init {
         std::vector<::shared_ptr<cql3::column_identifier::raw>> columns;
     }
-    : c=cident                   { $id = index_target::raw::values_of(c); }
+    : c=cident                   { $id = index_target::raw::regular_values_of(c); }
+    | K_VALUES '(' c=cident ')'  { $id = index_target::raw::collection_values_of(c); }
     | K_KEYS '(' c=cident ')'    { $id = index_target::raw::keys_of(c); }
     | K_ENTRIES '(' c=cident ')' { $id = index_target::raw::keys_and_values_of(c); }
     | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }
@@ -870,10 +879,11 @@ createViewStatement returns [std::unique_ptr<create_view_statement> expr]
         bool if_not_exists = false;
         std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys;
         std::vector<::shared_ptr<cql3::column_identifier::raw>> composite_keys;
+        expression wclause = conjunction{};
     }
     : K_CREATE K_MATERIALIZED K_VIEW (K_IF K_NOT K_EXISTS { if_not_exists = true; })? cf=columnFamilyName K_AS
         K_SELECT sclause=selectClause K_FROM basecf=columnFamilyName
-        (K_WHERE wclause=whereClause)?
+        (K_WHERE w=whereClause { wclause = std::move(w); } )?
         K_PRIMARY K_KEY (
         '(' '(' k1=cident { partition_keys.push_back(k1); } ( ',' kn=cident { partition_keys.push_back(kn); } )* ')' ( ',' c1=cident { composite_keys.push_back(c1); } )* ')'
     |   '(' k1=cident { partition_keys.push_back(k1); } ( ',' cn=cident { composite_keys.push_back(cn); } )* ')'
@@ -1899,6 +1909,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_AGGREGATE
         | K_SFUNC
         | K_STYPE
+        | K_REDUCEFUNC
         | K_FINALFUNC
         | K_INITCOND
         | K_RETURNS
@@ -2077,6 +2088,7 @@ K_FUNCTION:    F U N C T I O N;
 K_AGGREGATE:   A G G R E G A T E;
 K_SFUNC:       S F U N C;
 K_STYPE:       S T Y P E;
+K_REDUCEFUNC:  R E D U C E F U N C;
 K_FINALFUNC:   F I N A L F U N C;
 K_INITCOND:    I N I T C O N D;
 K_RETURNS:     R E T U R N S;

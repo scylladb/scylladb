@@ -1165,7 +1165,13 @@ static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
 
 static
 table_config read_config(cql_test_env& env, const sstring& name) {
-    auto msg = env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
+    auto msg = std::invoke([&] {
+        try {
+            return env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
+        } catch (const exceptions::invalid_request_exception& e) {
+            throw std::runtime_error(fmt::format("Could not read config (exception: `{}`). Did you run --populate ?", e.what()));
+        }
+    });
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     const auto& rs = rows->rs().result_set();
     if (rs.size() < 1) {
@@ -1758,7 +1764,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
 
         output_mgr->set_test_param_names({{"flush@ (MiB)", "{:<12}"}}, test_result::stats_names());
 
-        db.get_compaction_manager().run_with_compaction_disabled(&cf, [&] {
+        db.get_compaction_manager().run_with_compaction_disabled(cf.as_table_state(), [&] {
             return seastar::async([&] {
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
@@ -1864,7 +1870,7 @@ auto make_compaction_disabling_guard(replica::database& db, std::vector<replica:
     shared_promise<> pr;
     for (auto&& t : tables) {
         // FIXME: discarded future.
-        (void)db.get_compaction_manager().run_with_compaction_disabled(t, [f = shared_future<>(pr.get_shared_future())] {
+        (void)db.get_compaction_manager().run_with_compaction_disabled(t->as_table_state(), [f = shared_future<>(pr.get_shared_future())] {
             return f.get_future();
         });
     }

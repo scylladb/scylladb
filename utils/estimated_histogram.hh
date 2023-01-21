@@ -313,6 +313,10 @@ public:
         }
         return *this;
     }
+
+    uint64_t& operator[](size_t b) noexcept {
+        return _buckets[b];
+    }
 };
 
 template<uint64_t Min, uint64_t Max, size_t NumBuckets>

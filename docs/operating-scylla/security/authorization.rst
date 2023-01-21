@@ -519,7 +519,7 @@ Show any permissions granted to ``carlos``, limited to ``SELECT`` permissions on
 Related Topics
 ```````````````
 
-* :doc:`Apache Cassandra Query Language </getting-started/cql/>`
+* :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 * :doc:`Role Based Access Control (RBAC) </operating-scylla/security/rbac-usecase>`
 
 

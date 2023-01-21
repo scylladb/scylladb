@@ -38,8 +38,21 @@ static const std::unordered_set<std::string_view> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
 
+// Not super nice. Adding statefulness to the file. 
+static std::unordered_set<sstring> load_prio_keyspaces;
+static bool population_started = false;
+
+void replica::distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
+    assert(!population_started);
+    load_prio_keyspaces.insert(ks);
+}
+
 bool is_system_keyspace(std::string_view name) {
     return system_keyspaces.contains(name);
+}
+
+bool is_load_prio_keyspace(const sstring& name) {
+    return load_prio_keyspaces.contains(name);
 }
 
 static const std::unordered_set<std::string_view> internal_keyspaces = {
@@ -70,7 +83,7 @@ io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy)
 // global_column_family_ptr provides a way to easily retrieve local instance of a given column family.
 class global_column_family_ptr {
     distributed<replica::database>& _db;
-    utils::UUID _id;
+    table_id _id;
 private:
     replica::column_family& get() const { return _db.local().find_column_family(_id); }
 public:
@@ -96,7 +109,7 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
     co_await dir.invoke_on_all([&dir, sort_sstables_according_to_owner] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
-        co_await d.process_sstable_dir(service::get_local_streaming_priority(), sort_sstables_according_to_owner);
+        co_await d.process_sstable_dir(sort_sstables_according_to_owner);
         co_await d.move_foreign_sstables(dir);
     });
 
@@ -198,8 +211,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
         auto& cm = db.local().get_compaction_manager();
         auto max_threshold = table.schema()->max_compaction_threshold();
-        auto& iop = service::get_local_streaming_priority();
-        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop);
+        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator);
         co_await d.move_foreign_sstables(dir);
     });
 
@@ -243,8 +255,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
     auto total_size = co_await dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = db.local().get_compaction_manager();
-        auto& iop = service::get_local_streaming_priority();
-        return d.reshape(cm, table, creator, iop, mode, filter);
+        return d.reshape(cm, table, creator, mode, filter);
     }, uint64_t(0), std::plus<uint64_t>());
 
     if (total_size > 0) {
@@ -300,7 +311,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 
         sharded<sstables::sstable_directory> directory;
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
-        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(upload, service::get_local_streaming_priority(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -358,7 +370,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     });
 }
 
-future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
+future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf)] {
         global_column_family_ptr global_table(db, ks, cf);
@@ -366,7 +378,8 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         auto table_id = global_table->schema()->id();
         auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
 
-        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(upload, service::get_local_streaming_priority(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -458,7 +471,8 @@ future<> distributed_loader::populate_column_family(distributed<replica::databas
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
+        directory.start(fs::path(sstdir), default_priority_class(),
+            db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::no,
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -538,7 +552,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     auto& column_families = db.local().get_column_families();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
-        utils::UUID uuid = s->id();
+        auto uuid = s->id();
         lw_shared_ptr<replica::column_family> cf = column_families[uuid];
         sstring cfname = cf->schema()->cf_name();
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
@@ -568,6 +582,8 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 }
 
 future<> distributed_loader::init_system_keyspace(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, db::config& cfg, db::table_selector& tables) {
+    population_started = true;
+
     return seastar::async([&db, &ss, &cfg, &g, &tables] {
         db.invoke_on_all([&db, &ss, &cfg, &g, &tables] (replica::database&) {
             return db::system_keyspace::make(db, ss, g, cfg, tables);
@@ -637,33 +653,46 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
             }
         }).get();
 
-        std::vector<future<>> futures;
+        for (bool prio_only : { true, false}) {
+            std::vector<future<>> futures;
 
-        // treat "dirs" as immutable to avoid modifying it while still in 
-        // a range-iteration. Also to simplify the "finally"
-        for (auto i = dirs.begin(); i != dirs.end();) {
-            auto& ks_name = i->first;
-            auto e = dirs.equal_range(ks_name).second;
-            auto j = i++;
-            // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-            // somehow someone placed sstables in more than one of them for a given ks. (import?) 
-            futures.emplace_back(parallel_for_each(j, e, [&](const std::pair<sstring, sstring>& p) {
-                auto& datadir = p.second;
-                return distributed_loader::populate_keyspace(db, datadir, ks_name);
-            }).finally([&] {
-                return db.invoke_on_all([ks_name] (replica::database& db) {
-                    // can be false if running test environment
-                    // or ks_name was just a borked directory not representing
-                    // a keyspace in schema tables.
-                    if (db.has_keyspace(ks_name)) {
-                        db.find_keyspace(ks_name).mark_as_populated();
-                    }
-                    return make_ready_future<>();
-                });
-            }));
+            // treat "dirs" as immutable to avoid modifying it while still in
+            // a range-iteration. Also to simplify the "finally"
+            for (auto i = dirs.begin(); i != dirs.end();) {
+                auto& ks_name = i->first;
+                auto j = i++;
+
+                /**
+                 * Must process in two phases: Prio and non-prio.
+                 * This looks like it is not needed. And it is not
+                 * in open-source version. But essential for enterprise.
+                 * Do _not_ remove or refactor away.
+                 */
+                if (prio_only != is_load_prio_keyspace(ks_name)) {
+                    continue;
+                }
+
+                auto e = dirs.equal_range(ks_name).second;
+                // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+                // somehow someone placed sstables in more than one of them for a given ks. (import?)
+                futures.emplace_back(parallel_for_each(j, e, [&](const std::pair<sstring, sstring>& p) {
+                    auto& datadir = p.second;
+                    return distributed_loader::populate_keyspace(db, datadir, ks_name);
+                }).finally([&] {
+                    return db.invoke_on_all([ks_name] (replica::database& db) {
+                        // can be false if running test environment
+                        // or ks_name was just a borked directory not representing
+                        // a keyspace in schema tables.
+                        if (db.has_keyspace(ks_name)) {
+                            db.find_keyspace(ks_name).mark_as_populated();
+                        }
+                        return make_ready_future<>();
+                    });
+                }));
+            }
+
+            when_all_succeed(futures.begin(), futures.end()).discard_result().get();
         }
-
-        when_all_succeed(futures.begin(), futures.end()).discard_result().get();
 
         db.invoke_on_all([] (replica::database& db) {
             return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<replica::table> table) {

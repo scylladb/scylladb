@@ -72,7 +72,7 @@ future<> snapshot_ctl::do_take_snapshot(sstring tag, std::vector<sstring> keyspa
         return check_snapshot_not_exist(ks_name, tag);
     });
     co_await coroutine::parallel_for_each(keyspace_names, [this, tag = std::move(tag), sf] (const auto& ks_name) {
-        return _db.local().snapshot_on_all(ks_name, tag, bool(sf));
+        return replica::database::snapshot_keyspace_on_all_shards(_db, ks_name, tag, bool(sf));
     });
 }
 
@@ -101,7 +101,7 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
             throw std::invalid_argument("Do not take a snapshot of a materialized view or a secondary index by itself. Run snapshot on the base table instead.");
         }
     }
-    co_await _db.local().snapshot_on_all(ks_name, std::move(tables), std::move(tag), bool(sf));
+    co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), bool(sf));
 }
 
 future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf, allow_view_snapshots av) {
