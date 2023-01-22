@@ -145,6 +145,23 @@ def test_item_operations_nonexistent_table(dynamodb):
         dynamodb.meta.client.put_item(TableName='non_existent_table',
             Item={'a':{'S':'b'}})
 
+# DynamoDB documentation specifies that table names must be 3-255 characters,
+# and match the regex [a-zA-Z0-9._-]+. If an item operation like PutItem
+# is given a TableName not matching these rules, it would make sense to treat
+# it as just another case of a non-existent table (ResourceNotFoundException),
+# but it turns out that DynamoDB returns a ValidationError in that case.
+# Saying for example that "Value 'non!existent!table' at 'tableName' failed
+# to satisfy constraint: Member must satisfy regular expression pattern:
+# [a-zA-Z0-9_.-]+".".
+# This test suggests that issue #12538 should not be done.
+def test_item_operations_improper_named_table(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.meta.client.put_item(TableName='non!existent!table',
+            Item={'a':{'S':'b'}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.meta.client.put_item(TableName='xx',
+            Item={'a':{'S':'b'}})
+
 # Fetching a non-existent item. According to the DynamoDB doc, "If there is no
 # matching item, GetItem does not return any data and there will be no Item
 # element in the response."
