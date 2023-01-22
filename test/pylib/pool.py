@@ -91,14 +91,18 @@ class Pool(Generic[T]):
         class Instance:
             def __init__(self, pool):
                 self.pool = pool
+                self._discard = False
 
             async def __aenter__(self):
                 self.obj = await self.pool.get(*args, **kwargs)
                 return self.obj
 
             async def __aexit__(self, exc_type, exc, obj):
-                if self.obj:
+                if not self._discard and self.obj:
                     await self.pool.put(self.obj)
                     self.obj = None
+
+            def discard(self):
+                self._discard = True
 
         return Instance(self)

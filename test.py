@@ -842,7 +842,7 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        async with self.suite.clusters.instance(logger) as cluster:
+        async with (cm := self.suite.clusters.instance(logger)) as cluster:
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -860,8 +860,16 @@ class PythonTest(Test):
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
-                    raise
-            logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+                    cm.discard()
+                if self.is_after_test_ok is False:
+                    print("Test {} post-check failed: {}".format(self.name, str(e)))
+                    print("Server log of the first server:\n{}".format(self.server_log))
+                    logger.info(f"Discarding cluster after failed test %s...", self.name)
+                    await self.suite.clusters.steal()
+                    await cluster.stop()
+                    await cluster.release_ips()
+                    cm.discard()
+        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
