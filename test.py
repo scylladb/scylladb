@@ -842,36 +842,33 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        async with (cm := self.suite.clusters.instance(logger)) as cluster:
-            try:
-                cluster.before_test(self.uname)
-                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-                self.args.insert(0, "--host={}".format(cluster.endpoint()))
-                self.is_before_test_ok = True
-                cluster.take_log_savepoint()
-                status = await run_test(self, options)
-                cluster.after_test(self.uname)
-                self.is_after_test_ok = True
-                self.success = status
-            except Exception as e:
-                self.server_log = cluster.read_server_log()
-                self.server_log_filename = cluster.server_log_filename()
-                if self.is_before_test_ok is False:
-                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
-                    logger.info(f"Discarding cluster after failed start for test %s...", self.name)
-                    await self.suite.clusters.steal()
-                    await cluster.stop()
-                    await cluster.release_ips()
-                    cm.discard()
-                elif self.is_after_test_ok is False:
-                    print("Test {} post-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
-                    logger.info(f"Discarding cluster after failed test %s...", self.name)
-                    await self.suite.clusters.steal()
-                    await cluster.stop()
-                    await cluster.release_ips()
-                    cm.discard()
+        cluster = await self.suite.clusters.get(logger)
+        try:
+            cluster.before_test(self.uname)
+            logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            self.args.insert(0, "--host={}".format(cluster.endpoint()))
+            self.is_before_test_ok = True
+            cluster.take_log_savepoint()
+            status = await run_test(self, options)
+            cluster.after_test(self.uname)
+            self.is_after_test_ok = True
+            self.success = status
+        except Exception as e:
+            self.server_log = cluster.read_server_log()
+            self.server_log_filename = cluster.server_log_filename()
+            if self.is_before_test_ok is False:
+                print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                logger.info(f"Discarding cluster after failed start for test %s...", self.name)
+            elif self.is_after_test_ok is False:
+                print("Test {} post-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                logger.info(f"Discarding cluster after failed test %s...", self.name)
+            await self.suite.clusters.steal()
+            await cluster.stop()
+            await cluster.release_ips()
+        else:
+            await self.suite.clusters.put(cluster)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
