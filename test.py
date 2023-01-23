@@ -861,7 +861,7 @@ class PythonTest(Test):
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     cm.discard()
-                if self.is_after_test_ok is False:
+                elif self.is_after_test_ok is False:
                     print("Test {} post-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
                     logger.info(f"Discarding cluster after failed test %s...", self.name)
