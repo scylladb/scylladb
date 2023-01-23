@@ -298,7 +298,7 @@ int64_t timestamp_from_string(sstring_view s) {
             return v;
         }
 
-        std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
+        static const std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
         std::smatch dsm;
         if (!std::regex_search(str, dsm, date_re)) {
             throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
@@ -306,7 +306,7 @@ int64_t timestamp_from_string(sstring_view s) {
         auto t = get_time(dsm);
 
         auto tz = dsm.suffix().str();
-        std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
+        static const std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
         std::smatch tsm;
         if (std::regex_match(tz, tsm, tz_re)) {
             t -= get_utc_offset(tsm.str());
@@ -360,7 +360,7 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
     if (end == s.begin() + s.size()) {
         return v;
     }
-    static std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
+    static const std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
     std::smatch dsm;
     if (!std::regex_match(str, dsm, date_re)) {
         throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
