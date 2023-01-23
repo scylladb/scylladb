@@ -757,11 +757,14 @@ class ScyllaCluster:
         if server_id not in self.running:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
-        server = self.running.pop(server_id)
+        server = self.running[server_id]
+        # Remove the server from `running` only after we successfully stop it.
+        # Stopping may fail and if we removed it from `running` now it might leak.
         if gracefully:
             await server.stop_gracefully()
         else:
             await server.stop()
+        self.running.pop(server_id)
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} stopped")
 
@@ -781,8 +784,10 @@ class ScyllaCluster:
         self.is_dirty = True
         server = self.stopped.pop(server_id)
         server.seeds = self._seeds()
-        await server.start(self.api)
+        # Put the server in `running` before starting it.
+        # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+        await server.start(self.api)
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} started")
 
     async def server_restart(self, server_id: ServerNum) -> ActionReturn:
