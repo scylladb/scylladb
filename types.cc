@@ -352,14 +352,12 @@ static uint32_t serialize(const std::string& input, int64_t days) {
     return static_cast<uint32_t>(days);
 }
 uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
-    std::string str;
-    str.resize(s.size());
-    std::transform(s.begin(), s.end(), str.begin(), ::tolower);
     char* end;
     auto v = std::strtoll(s.begin(), &end, 10);
     if (end == s.begin() + s.size()) {
         return v;
     }
+    auto str = std::string(s); // FIXME: this copy probably can be avoided
     static const std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
     std::smatch dsm;
     if (!std::regex_match(str, dsm, date_re)) {
