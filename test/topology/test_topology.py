@@ -25,9 +25,16 @@ logger = logging.getLogger(__name__)
 
 
 async def get_token_ring_host_ids(manager: ManagerClient, srv: ServerInfo) -> set[str]:
-    """Get the host IDs of token ring members known by `srv`."""
+    """Get the host IDs of normal token owners known by `srv`."""
+    token_endpoint_map = await manager.api.client.get_json("/storage_service/tokens_endpoint", srv.ip_addr)
+    normal_endpoints = {e["value"] for e in token_endpoint_map}
+    logger.info(f"Normal endpoints' IPs by {srv}: {normal_endpoints}")
     host_id_map = await manager.api.client.get_json('/storage_service/host_id', srv.ip_addr)
-    return {e['value'] for e in host_id_map}
+    all_host_ids = {e["value"] for e in host_id_map}
+    logger.info(f"All host IDs by {srv}: {all_host_ids}")
+    normal_host_ids = {e["value"] for e in host_id_map if e["key"] in normal_endpoints}
+    logger.info(f"Normal endpoints' host IDs by {srv}: {normal_host_ids}")
+    return normal_host_ids
 
 
 async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> set[tuple[str, bool]]:
@@ -43,7 +50,41 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
     config = await manager.cql.run_async(
         f"select server_id, can_vote from system.raft_state where group_id = {group0_id} and disposition = 'CURRENT'",
         host=host)
-    return {(str(m.server_id), bool(m.can_vote)) for m in config}
+    result = {(str(m.server_id), bool(m.can_vote)) for m in config}
+    logger.info(f"Group 0 members by {srv}: {result}")
+    return result
+
+
+async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
+    """Ensure that the normal token owners and group 0 members match
+       according to each currently running server.
+    """
+    servers = await manager.running_servers()
+    for srv in servers:
+        group0_members = await get_current_group0_config(manager, srv)
+        group0_ids = {m[0] for m in group0_members}
+        token_ring_ids = await get_token_ring_host_ids(manager, srv)
+        assert token_ring_ids == group0_ids
+
+
+async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
+    """Weaker version of the above check; the token ring is not immediately updated
+       after bootstrap/replace - the normal tokens of the new node propagate through gossip.
+       Take this into account and wait for the equality condition to hold, with a timeout.
+    """
+    servers = await manager.running_servers()
+    for srv in servers:
+        group0_members = await get_current_group0_config(manager, srv)
+        group0_ids = {m[0] for m in group0_members}
+        async def token_ring_matches():
+            token_ring_ids = await get_token_ring_host_ids(manager, srv)
+            diff = token_ring_ids ^ group0_ids
+            if diff:
+                logger.warning(f"Group 0 members and token ring members don't yet match" \
+                               f" according to {srv}, symmetric difference: {diff}")
+                return None
+            return True
+        await wait_for(token_ring_matches, deadline, period=.5)
 
 
 @pytest.mark.asyncio
@@ -51,6 +92,7 @@ async def test_add_server_add_column(manager, random_tables):
     """Add a node and then add a column to a table and verify"""
     table = await random_tables.add_table(ncolumns=5)
     await manager.server_add()
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     await table.add_column()
     await random_tables.verify_schema()
 
@@ -84,9 +126,9 @@ async def test_remove_node_add_column(manager, random_tables):
     await manager.server_add()
     await manager.server_stop_gracefully(servers[1].server_id)              # stop     [1]
     await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove   [1]
+    await check_token_ring_and_group0_consistency(manager)
     await table.add_column()
     await random_tables.verify_schema()
-    # TODO: check that group 0 no longer contains the removed node (#12153)
 
 
 @pytest.mark.asyncio
@@ -117,9 +159,9 @@ async def test_decommission_node_add_column(manager, random_tables):
     await manager.api.enable_injection(
         bootstrapped_server.ip_addr, 'storage_service_decommission_prepare_handler_sleep', one_shot=True)
     await manager.decommission_node(decommission_target.server_id)
+    await check_token_ring_and_group0_consistency(manager)
     await table.add_column()
     await random_tables.verify_schema()
-    # TODO: check that group 0 no longer contains the decommissioned node (#12153)
 
 @pytest.mark.asyncio
 async def test_replace_different_ip(manager: ManagerClient, random_tables) -> None:
@@ -127,7 +169,7 @@ async def test_replace_different_ip(manager: ManagerClient, random_tables) -> No
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node (#12153)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 @pytest.mark.asyncio
 async def test_replace_different_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
@@ -135,7 +177,7 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient, random
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node (#12153)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 @pytest.mark.asyncio
 async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
@@ -143,7 +185,7 @@ async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node (#12153)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 @pytest.mark.asyncio
 async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
@@ -151,7 +193,7 @@ async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, random_tab
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
     await manager.server_add(replace_cfg)
-    # TODO: check that group 0 no longer contains the replaced node (#12153)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 
 # Checks basic functionality on the cluster with different values of the --smp parameter on the nodes.
@@ -189,6 +231,8 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     await manager.server_add(cmdline=['--smp', '4'])
     logger.info(f'Adding --smp=5 server')
     await manager.server_add(cmdline=['--smp', '5'])
+
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logger.info(f'Creating new tables')
     await random_tables.add_tables(ntables=4, ncolumns=5)
@@ -301,11 +345,7 @@ async def test_remove_garbage_group0_members(manager: ManagerClient, random_tabl
     logging.info(f'removenode {servers[2]} using {servers[3]}')
     await manager.remove_node(servers[3].server_id, servers[2].server_id)
 
-    group0_members = await get_current_group0_config(manager, servers[3])
-    logging.info(f'group 0 members: {group0_members}')
-    group0_ids = {m[0] for m in group0_members}
-
-    assert token_ring_ids == group0_ids
+    await check_token_ring_and_group0_consistency(manager)
 
 
 @pytest.mark.asyncio
