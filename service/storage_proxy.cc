@@ -143,6 +143,12 @@ static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replic
     return make_exception_future<final_tuple_type>(std::move(eptr));
 }
 
+static inline
+const dht::token& end_token(const dht::partition_range& r) {
+    static const dht::token max_token = dht::maximum_token();
+    return r.end() ? r.end()->value().token() : max_token;
+}
+
 // This class handles all communication with other nodes in `storage_proxy`:
 // sending and receiving RPCs, checking the state of other nodes (e.g. by accessing gossiper state), fetching schema.
 //
@@ -159,6 +165,26 @@ class storage_proxy::remote {
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
 
+    future<std::optional<replica::stale_topology_exception>> try_apply_fence(fencing_token fence,
+        lowres_clock::time_point timeout)
+    {
+        const auto current_version = _sp._shared_token_metadata.get()->get_topology_version();
+        if (fence.topology_version > current_version) {
+            throw std::runtime_error(format("fencing_token topology_version {} is greater "
+                                            "than the current topology version {}",
+                fence.topology_version, current_version));
+        }
+
+        if (fence.topology_version == current_version ||
+            (fence.allow_previous && (fence.topology_version + 1 == current_version)))
+        {
+            co_return std::nullopt;
+        }
+        slogger.trace("Stale topology fenced, caller version {}, callee version {}",
+            fence.topology_version, current_version);
+        co_return replica::stale_topology_exception(fence.topology_version, current_version);
+    }
+
 public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g)
         : _sp(sp), _ms(ms), _gossiper(g)
@@ -171,7 +197,7 @@ public:
 
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, sp->_write_smp_service_group));
-        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this, sp] <typename... Args>(Args&&... args) { return receive_mutation_handler(sp->_hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate()); });
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, std::bind_front(&remote::receive_hint_mutation_handler, this));
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
@@ -201,31 +227,34 @@ public:
     future<> send_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
             frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
+            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
+            std::optional<fencing_token> fence) {
         return ser::storage_proxy_rpc_verbs::send_mutation(
                 &_ms, std::move(addr), timeout,
                 std::move(m), std::move(forward), std::move(reply_to), shard,
-                response_id, std::move(trace_info), rate_limit_info);
+                response_id, std::move(trace_info), rate_limit_info,
+                fence);
     }
 
     future<> send_hint_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
+            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) {
         tracing::trace(tr_state, "Sending a hint to /{}", addr.addr);
         return ser::storage_proxy_rpc_verbs::send_hint_mutation(
                 &_ms, std::move(addr), timeout,
                 std::move(m), std::move(forward), std::move(reply_to), shard,
-                response_id, tracing::make_trace_info(tr_state));
+                response_id, tracing::make_trace_info(tr_state), fence);
     }
 
     future<> send_counter_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            std::vector<frozen_mutation> fms, db::consistency_level cl) {
+            std::vector<frozen_mutation> fms, db::consistency_level cl, fencing_token fence) {
         tracing::trace(tr_state, "Enqueuing counter update to {}", addr);
         return ser::storage_proxy_rpc_verbs::send_counter_mutation(
                 &_ms, std::move(addr), timeout,
-                std::move(fms), cl, tracing::make_trace_info(tr_state));
+                std::move(fms), cl, tracing::make_trace_info(tr_state), fence);
     }
 
     future<> send_mutation_done(
@@ -249,9 +278,9 @@ public:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
     send_read_mutation_data(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            const query::read_command& cmd, const dht::partition_range& pr) {
+            const query::read_command& cmd, const dht::partition_range& pr, fencing_token fence) {
         tracing::trace(tr_state, "read_mutation_data: sending a message to /{}", addr.addr);
-        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr);
+        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -264,10 +293,10 @@ public:
     send_read_data(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
-            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) {
         tracing::trace(tr_state, "read_data: sending a message to /{}", addr.addr);
         auto&& [result, hit_rate, opt_exception] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -280,10 +309,10 @@ public:
     send_read_digest(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
-            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) {
         tracing::trace(tr_state, "read_digest: sending a message to /{}", addr.addr);
         auto&& [d, t, hit_rate, opt_exception, opt_last_pos] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -316,9 +345,9 @@ public:
     future<> send_paxos_learn(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
             const service::paxos::proposal& decision, inet_address_vector_replica_set&& forward,
-            gms::inet_address reply_to, unsigned shard, uint64_t response_id) {
+            gms::inet_address reply_to, unsigned shard, uint64_t response_id, std::optional<fencing_token> fence) {
         return ser::storage_proxy_rpc_verbs::send_paxos_learn(
-                &_ms, addr, timeout, decision, std::move(forward), reply_to, shard, response_id, std::move(trace_info));
+                &_ms, addr, timeout, decision, std::move(forward), reply_to, shard, response_id, std::move(trace_info), fence);
     }
 
     future<> send_paxos_prune(
@@ -370,7 +399,8 @@ private:
 
     future<> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<fencing_token> fence) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -380,8 +410,17 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
 
-        std::vector<frozen_mutation_and_schema> mutations;
         auto timeout = *t;
+        if (fence && !fms.empty()) {
+            const auto& fm = fms[0];
+            auto stale_topology = co_await try_apply_fence(*fence, timeout);
+            if (stale_topology) {
+                // todo: do it right
+                throw *stale_topology;
+            }
+        }
+
+        std::vector<frozen_mutation_and_schema> mutations;
         co_await coroutine::parallel_for_each(std::move(fms), [&] (frozen_mutation& fm) {
             // Note: not a coroutine, since get_schema_for_write() rarely blocks.
             // FIXME: optimise for cases when all fms are in the same schema
@@ -398,7 +437,9 @@ private:
             netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
             auto schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-            auto&& apply_fn1, auto&& forward_fn1) {
+            std::optional<fencing_token> fence,
+            auto&& apply_fn1, auto&& forward_fn1)
+    {
         auto apply_fn = std::move(apply_fn1);
         auto forward_fn = std::move(forward_fn1);
 
@@ -433,51 +474,62 @@ private:
         errors_info errors;
         ++p->get_stats().received_mutations;
         p->get_stats().forwarded_mutations += forward.size();
-        co_await coroutine::all(
-            [&] () -> future<> {
-                try {
-                    // FIXME: get_schema_for_write() doesn't timeout
-                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
-                    // Note: blocks due to execution_stage in replica::database::apply()
-                    co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
-                    // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
-                    // lots of unsent responses, which can OOM our shard.
-                    //
-                    // Usually we will return immediately, since this work only involves appending data to the connection
-                    // send buffer.
-                    auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                            shard, response_id, p->get_view_update_backlog()));
-                    f.ignore_ready_future();
-                } catch (...) {
-                    std::exception_ptr eptr = std::current_exception();
-                    errors.count++;
-                    errors.local = replica::try_encode_replica_exception(eptr);
-                    seastar::log_level l = seastar::log_level::warn;
-                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
-                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
-                        // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
-                        l = seastar::log_level::debug;
-                    }
-                    slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                }
-            },
-            [&] {
-                // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
-                return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
-                    // Note: not a coroutine, since forward_fn() typically returns a ready future
-                    tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
-                                        tracing::make_trace_info(trace_state_ptr))
-                            .then_wrapped([&] (future<> f) {
-                        if (f.failed()) {
-                            ++p->get_stats().forwarding_errors;
-                            errors.count++;
-                        };
-                        f.ignore_ready_future();
-                    });
-                });
+
+        if (fence) {
+            auto stale_topology = co_await try_apply_fence(*fence, timeout);
+            if (stale_topology) {
+                errors.count += (forward.size() + 1);
+                errors.local = std::move(*stale_topology);
             }
-        );
+        }
+
+        if (errors.count == 0) {
+            co_await coroutine::all(
+                [&] () -> future<> {
+                    try {
+                        // FIXME: get_schema_for_write() doesn't timeout
+                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
+                        // Note: blocks due to execution_stage in replica::database::apply()
+                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
+                        // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
+                        // lots of unsent responses, which can OOM our shard.
+                        //
+                        // Usually we will return immediately, since this work only involves appending data to the connection
+                        // send buffer.
+                        auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
+                            shard, response_id, p->get_view_update_backlog()));
+                        f.ignore_ready_future();
+                    } catch (...) {
+                        std::exception_ptr eptr = std::current_exception();
+                        errors.count++;
+                        errors.local = replica::try_encode_replica_exception(eptr);
+                        seastar::log_level l = seastar::log_level::warn;
+                        if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
+                            // ignore timeouts and rate limit exceptions so that logs are not flooded.
+                            // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
+                            l = seastar::log_level::debug;
+                        }
+                        slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                    }
+                },
+                [&] {
+                    // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
+                    return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
+                        // Note: not a coroutine, since forward_fn() typically returns a ready future
+                        tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
+                        return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
+                            tracing::make_trace_info(trace_state_ptr), fence)
+                            .then_wrapped([&] (future<> f) {
+                                if (f.failed()) {
+                                    ++p->get_stats().forwarding_errors;
+                                    errors.count++;
+                                };
+                                f.ignore_ready_future();
+                            });
+                    });
+                }
+            );
+        }
         // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
         if (errors.count) {
             auto f = co_await coroutine::as_future(send_mutation_failed(
@@ -493,11 +545,24 @@ private:
         co_return netw::messaging_service::no_wait();
     }
 
+    future<rpc::no_wait_type> receive_hint_mutation_handler(
+        const rpc::client_info& cinfo, rpc::opt_time_point t,
+        frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+        unsigned shard, storage_proxy::response_id_type response_id,
+        rpc::optional<std::optional<tracing::trace_info>> trace_info,
+        rpc::optional<std::optional<fencing_token>> fence) {
+        return receive_mutation_handler(_sp._hints_write_smp_service_group, cinfo, t, std::move(in),
+            std::move(forward), std::move(reply_to), shard, response_id, std::move(trace_info),
+            std::monostate(), std::move(fence));
+    }
+
     future<rpc::no_wait_type> receive_mutation_handler(
             smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t,
             frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id,
-            rpc::optional<std::optional<tracing::trace_info>> trace_info, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<std::optional<tracing::trace_info>> trace_info,
+            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<std::optional<fencing_token>> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
@@ -505,35 +570,38 @@ private:
         auto schema_version = in.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
+                fence ? *fence : std::nullopt,
                 /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
                     return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                        std::optional<tracing::trace_info> trace_info) {
-                    return send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
+                        std::optional<tracing::trace_info> trace_info, std::optional<fencing_token> fence) {
+                    return send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info, fence);
                 });
     }
 
     future<rpc::no_wait_type> handle_paxos_learn(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<std::optional<fencing_token>> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         auto schema_version = decision.update.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
                 response_id, trace_info,
+                fence ? *fence : std::nullopt,
                /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
                        const paxos::proposal& decision, clock_type::time_point timeout) {
                      return paxos::paxos_state::learn(*p, std::move(s), decision, timeout, tr_state);
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                      std::optional<tracing::trace_info> trace_info) {
-                    return send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
+                      std::optional<tracing::trace_info> trace_info, std::optional<fencing_token> fence) {
+                    return send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, fence);
               });
     }
 
@@ -558,16 +626,21 @@ private:
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
                 [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
             error err = error::FAILURE;
+            std::optional<sstring> msg;
             if (exception) {
-                err = std::visit([] <typename Ex> (Ex&) {
+                err = std::visit([&] <typename Ex> (Ex& e) {
                     if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
+                        msg = e.what();
                         return error::RATE_LIMIT;
                     } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
+                        return error::FAILURE;
+                    } else if constexpr(std::is_same_v<Ex, replica::stale_topology_exception>) {
+                        msg = e.what();
                         return error::FAILURE;
                     }
                 }, exception->reason);
             }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::move(msg));
             return netw::messaging_service::no_wait();
         });
     }
@@ -576,7 +649,8 @@ private:
     handle_read_data(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             query::read_command cmd1, ::compat::wrapping_partition_range pr,
-            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<fencing_token> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd1.trace_info) {
@@ -605,7 +679,13 @@ private:
         opts.digest_algo = da;
         opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
         auto timeout = t ? *t : db::no_timeout;
-        future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info));
+
+        auto stale_topology = fence
+            ? co_await try_apply_fence(*fence, timeout)
+            : std::nullopt;
+        auto f = stale_topology
+            ? make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(std::move(*stale_topology))
+            : co_await coroutine::as_future(p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
         co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
     }
@@ -613,7 +693,8 @@ private:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
     handle_read_mutation_data(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd1, ::compat::wrapping_partition_range pr) {
+            query::read_command cmd1, ::compat::wrapping_partition_range pr,
+            rpc::optional<fencing_token> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd1.trace_info) {
@@ -632,7 +713,13 @@ private:
         auto s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
         unwrapped = ::compat::unwrap(std::move(pr), *s);
         auto timeout = t ? *t : db::no_timeout;
-        future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr));
+
+        auto stale_topology = fence
+            ? co_await try_apply_fence(*fence, timeout)
+            : std::nullopt;
+        auto f = stale_topology
+            ? make_exception_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(std::move(*stale_topology))
+            : co_await coroutine::as_future(p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr));
         tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
         co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
     }
@@ -641,7 +728,8 @@ private:
     handle_read_digest(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             query::read_command cmd1, ::compat::wrapping_partition_range pr,
-            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<query::digest_algorithm> oda, rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<fencing_token> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd1.trace_info) {
@@ -665,7 +753,13 @@ private:
             throw std::runtime_error("READ_DIGEST called with wrapping range");
         }
         auto timeout = t ? *t : db::no_timeout;
-        future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f = co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
+
+        auto stale_topology = fence
+            ? co_await try_apply_fence(*fence, timeout)
+            : std::nullopt;
+        auto f = stale_topology
+            ? make_exception_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>(std::move(*stale_topology))
+            : co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
 
         using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
@@ -817,12 +911,6 @@ query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
             : query::digest_algorithm::legacy_xxHash_without_null_digest;
 }
 
-static inline
-const dht::token& end_token(const dht::partition_range& r) {
-    static const dht::token max_token = dht::maximum_token();
-    return r.end() ? r.end()->value().token() : max_token;
-}
-
 unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
     return dht::shard_of(s, token);
 }
@@ -891,7 +979,8 @@ public:
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) = 0;
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) = 0;
     virtual bool is_shared() = 0;
     size_t size() const {
         return _size;
@@ -942,13 +1031,14 @@ public:
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) override {
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
             return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
                     *m, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                    response_id, rate_limit_info);
+                    response_id, rate_limit_info, fence);
         }
         sp.got_response(response_id, ep, std::nullopt);
         return make_ready_future<>();
@@ -990,11 +1080,12 @@ public:
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
         return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
                 *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
-                response_id, rate_limit_info);
+                response_id, rate_limit_info, fence);
     }
     virtual bool is_shared() override {
         return true;
@@ -1019,10 +1110,11 @@ public:
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) override {
         return sp.remote().send_hint_mutation(
                 netw::messaging_service::msg_addr{ep, 0}, timeout, tr_state,
-                *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info);
+                *_mutation, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info, fence);
     }
 };
 
@@ -1139,12 +1231,14 @@ public:
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
         // TODO: Enforce per partition rate limiting in paxos
         return sp.remote().send_paxos_learn(
                 netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
-                *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id);
+                *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id,
+                fence);
     }
     virtual bool is_shared() override {
         return true;
@@ -1436,7 +1530,7 @@ public:
     future<> apply_remotely(gms::inet_address ep, inet_address_vector_replica_set&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) {
-        return _mutation_holder->apply_remotely(*_proxy, ep, std::move(forward), response_id, timeout, std::move(tr_state), _rate_limit_info);
+        return _mutation_holder->apply_remotely(*_proxy, ep, std::move(forward), response_id, timeout, std::move(tr_state), _rate_limit_info, fencing_token{_effective_replication_map_ptr->get_token_metadata_ptr()->get_topology_version(), false});
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
@@ -3141,6 +3235,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     // The interface doesn't preclude multiple keyspaces (and thus effective_replication_maps),
     // so we need a container for them. std::set<> will result in the fewest allocations if there is just one.
     std::set<locator::effective_replication_map_ptr> erms;
+    fencing_token fence{_shared_token_metadata.get()->get_topology_version(), false};
 
     for (auto& m : mutations) {
         auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
@@ -3153,7 +3248,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Forward mutations to the leaders chosen for them
     auto my_address = utils::fb_utilities::get_broadcast_address();
-    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) -> future<> {
+    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address, fence] (auto& endpoint_and_mutations) -> future<> {
       auto first_schema = endpoint_and_mutations.second[0].s;
 
       try {
@@ -3173,7 +3268,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
             co_await remote().send_counter_mutation(
                     netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 }, timeout, tr_state,
-                    std::move(fms), cl);
+                    std::move(fms), cl, fence);
         }
       } catch (...) {
         // The leader receives a vector of mutations and processes them together,
@@ -4608,6 +4703,10 @@ private:
         return _effective_replication_map_ptr->get_topology();
     }
 
+    fencing_token get_fence() const {
+        return fencing_token{_effective_replication_map_ptr->get_token_metadata_ptr()->get_topology_version(), false};
+    }
+
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
@@ -4640,7 +4739,7 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
-            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *cmd, _partition_range);
+            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *cmd, _partition_range, get_fence());
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
@@ -4652,7 +4751,7 @@ protected:
             tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info));
         } else {
-            return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info);
+            return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info, get_fence());
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
@@ -4663,7 +4762,7 @@ protected:
                         timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info);
+            return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info, get_fence());
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {

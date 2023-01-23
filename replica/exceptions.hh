@@ -18,6 +18,7 @@
 
 #include "utils/exception_container.hh"
 #include "utils/result.hh"
+#include "seastarx.hh"
 
 namespace replica {
 
@@ -43,10 +44,34 @@ public:
     virtual const char* what() const noexcept override { return "rate limit exceeded"; }
 };
 
+class stale_topology_exception final : public replica_exception {
+    int64_t _caller_version;
+    int64_t _callee_version;
+    sstring _message;
+public:
+    stale_topology_exception(int64_t caller_version, int64_t callee_version)
+        : _caller_version(caller_version)
+        , _callee_version(callee_version)
+        , _message(format("stale topology exception, caller version {}, callee version {}", caller_version, callee_version))
+    {
+    }
+
+    int64_t caller_version() const {
+        return _caller_version;
+    }
+
+    int64_t callee_version() const {
+        return _callee_version;
+    }
+
+    virtual const char* what() const noexcept override { return _message.c_str(); }
+};
+
 struct exception_variant {
     std::variant<unknown_exception,
             no_exception,
-            rate_limit_exception
+            rate_limit_exception,
+            stale_topology_exception
     > reason;
 
     exception_variant()

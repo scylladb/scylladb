@@ -20,8 +20,10 @@ namespace replica {
 exception_variant try_encode_replica_exception(std::exception_ptr eptr) {
     try {
         std::rethrow_exception(std::move(eptr));
-    } catch (rate_limit_exception&) {
+    } catch (const rate_limit_exception&) {
         return rate_limit_exception();
+    } catch (const stale_topology_exception& e) {
+        return e;
     } catch (...) {
         return no_exception{};
     }

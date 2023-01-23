@@ -30,6 +30,7 @@
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "service/raft_topology.hh"
 #include <seastar/core/circular_buffer.hh>
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"

@@ -275,6 +275,9 @@ public:
     long get_ring_version() const;
     void invalidate_cached_rings();
 
+    int64_t get_topology_version() const;
+    void set_topology_version(int64_t version);
+
     friend class token_metadata_impl;
 };
 
