@@ -449,14 +449,17 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    assert(_group0);
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info);
-
     auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
         _migration_manager.local().passive_announce(std::move(schema_version));
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
+
+    // Setup Raft group 0 after wait_for_gossip_to_settle which enables features internally.
+    // We want features to be enabled before we start applying schema mutations from the Raft
+    // group 0 log. See #12590.
+    assert(_group0);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info);
 
     set_mode(mode::JOINING);
 
