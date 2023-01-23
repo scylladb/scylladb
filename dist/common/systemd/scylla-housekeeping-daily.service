@@ -3,10 +3,12 @@ Description=Scylla Housekeeping daily mode
 After=network.target
 
 [Service]
+PermissionsStartOnly=true
 Type=simple
 User=scylla
 Group=scylla
 EnvironmentFile=/etc/sysconfig/scylla-housekeeping
+ExecStartPre=/bin/bash -c '/usr/bin/chmod 644 $REPO_FILES'
 ExecStart=/opt/scylladb/scripts/scylla-housekeeping --uuid-file $UUID_FILE -q -c $CONFIG_FILE --repo-files $REPO_FILES version --mode d
 Slice=scylla-helper.slice
 
