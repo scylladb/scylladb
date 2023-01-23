@@ -11,7 +11,7 @@ import urllib.request
 
 from botocore.exceptions import ClientError
 from util import list_tables, unique_table_name, create_test_table, random_string, freeze
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 from boto3.dynamodb.types import TypeDeserializer
 
@@ -151,6 +151,44 @@ def test_list_streams_paged(dynamodb, dynamodbstreams):
                         break
                     streams = dynamodbstreams.list_streams(Limit=1, ExclusiveStartStreamArn=streams['LastEvaluatedStreamArn'])
 
+# ListStreams with paging should be able correctly return a full list of
+# pre-existing streams even if additional tables were added between pages
+# and caused Scylla's hash table of tables to be reorganized.
+# Reproduces something similar to what we saw in #12601. Unfortunately to
+# reproduce the failure, we needed to create a fairly large number of tables
+# below to reproduce the situation that the internal hash table got
+# reshuffled. It's also not exactly the situation of issue #12601 - there
+# we suspect the hash table got different order for different pages for
+# other reasons - not because of added tables.
+def test_list_streams_paged_with_new_table(dynamodb, dynamodbstreams):
+    N1    = 4  # Number of tables to create initially
+    LIMIT = 2  # Number of tables out of N1 to list in the first page
+    N2    = 30 # Number of additional tables to create later
+    N1_tables = []
+    with ExitStack() as created_tables:
+        for i in range(N1):
+            table = created_tables.enter_context(create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY'))
+            wait_for_active_stream(dynamodbstreams, table)
+            N1_tables.append(table.name)
+        streams = dynamodbstreams.list_streams(Limit=LIMIT)
+        assert streams
+        assert 'Streams' in streams
+        assert len(streams['Streams']) == LIMIT
+        first_tables = [s['TableName'] for s in streams['Streams']]
+        last_arn = streams['LastEvaluatedStreamArn']
+        for i in range(N2):
+            table = created_tables.enter_context(create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY'))
+            wait_for_active_stream(dynamodbstreams, table)
+        # Get the rest of the streams (no limit, assuming we don't have
+        # a huge number of streams)
+        streams = dynamodbstreams.list_streams(ExclusiveStartStreamArn=last_arn)
+        assert 'Streams' in streams
+        tables = first_tables + [s['TableName'] for s in streams['Streams']]
+        # Each of the N1 tables must have been returned from the paged
+        # iteration, and only once. The tables in N2 may or may not be
+        # returned. Tables not related to this test may also be returned.
+        for t in N1_tables:
+            assert tables.count(t) == 1
 
 def test_list_streams_zero_limit(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
@@ -1492,6 +1530,24 @@ def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams):
             assert len(response['Records']) == 0
             assert not 'NextShardIterator' in response
     assert nrecords == 1
+
+# When streams are enabled for a table, we get a unique ARN which should be
+# unique but not change unless streams are eventually disabled for this table.
+# If this ARN changes unexpectedly, it can confuse existing readers who are
+# still using this to read from the stream. We (incorrectly) suspected in
+# issue #12601 that changes to the version of the schema lead to a change of
+# the ARN. In this test we show that it doesn't happen.
+def test_stream_arn_unchanging(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+        # Change a tag on the table. This changes its schema.
+        table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        table.meta.client.tag_resource(ResourceArn=table_arn, Tags=[{'Key': 'animal', 'Value': 'dog' }])
+        # The change in the table's schema should not change its stream ARN
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        assert 'Streams' in streams
+        assert len(streams['Streams']) == 1
+        assert streams['Streams'][0]['StreamArn'] == arn
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
