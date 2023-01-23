@@ -133,7 +133,7 @@ Scylla versions 1.1 and greater support encryption between nodes and between cli
 Networking
 ----------
 
-The Scylla ports are detailed in the table below. For Scylla Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com/>`_.
+The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, see the `Scylla Manager Documentation <https://manager.docs.scylladb.com/>`_.
 
 .. image:: /operating-scylla/security/Scylla-Ports2.png
 
