@@ -859,7 +859,10 @@ class PythonTest(Test):
                 if self.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
-                    # Don't try to continue if the cluster is broken
+                    logger.info(f"Discarding cluster after failed start for test %s...", self.name)
+                    await self.suite.clusters.steal()
+                    await cluster.stop()
+                    await cluster.release_ips()
                     cm.discard()
                 elif self.is_after_test_ok is False:
                     print("Test {} post-check failed: {}".format(self.name, str(e)))
