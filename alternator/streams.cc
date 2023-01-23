@@ -143,19 +143,24 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
     auto cfs = db.get_tables();
-    auto i = cfs.begin();
-    auto e = cfs.end();
 
     if (limit < 1) {
         throw api_error::validation("Limit must be 1 or more");
     }
 
-    // TODO: the unordered_map here is not really well suited for partial
-    // querying - we're sorting on local hash order, and creating a table
-    // between queries may or may not miss info. But that should be rare,
-    // and we can probably expect this to be a single call.
+    // # 12601 (maybe?) - sort the set of tables on ID. This should ensure we never
+    // generate duplicates in a paged listing here. Can obviously miss things if they 
+    // are added between paged calls and end up with a "smaller" UUID/ARN, but that 
+    // is to be expected.
+    std::sort(cfs.begin(), cfs.end(), [](const data_dictionary::table& t1, const data_dictionary::table& t2) {
+        return t1.schema()->id() < t2.schema()->id();
+    });
+
+    auto i = cfs.begin();
+    auto e = cfs.end();
+
     if (streams_start) {
-        i = std::find_if(i, e, [&](data_dictionary::table t) {
+        i = std::find_if(i, e, [&](const data_dictionary::table& t) {
             return t.schema()->id() == streams_start 
                 && cdc::get_base_table(db.real_database(), *t.schema())
                 && is_alternator_keyspace(t.schema()->ks_name())
