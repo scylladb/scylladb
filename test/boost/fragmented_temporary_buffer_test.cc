@@ -7,7 +7,7 @@
  */
 
 #include <seastar/core/thread.hh>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "utils/fragmented_temporary_buffer.hh"
 

@@ -7,7 +7,7 @@
  */
 
 #include <filesystem>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "utils/lister.hh"

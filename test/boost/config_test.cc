@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <iostream>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "db/config.hh"

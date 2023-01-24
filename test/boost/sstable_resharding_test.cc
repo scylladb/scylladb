@@ -2,14 +2,13 @@
 #include <memory>
 #include <utility>
 
-#include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
 #include "types/map.hh"
 #include "sstables/sstables.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "schema.hh"
 #include "replica/database.hh"
 #include "dht/murmur3_partitioner.hh"

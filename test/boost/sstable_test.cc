@@ -19,7 +19,7 @@
 #include "sstables/key.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "schema.hh"
 #include "compress.hh"
 #include "replica/database.hh"

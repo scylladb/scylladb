@@ -1,7 +1,7 @@
 #ifdef SEASTAR_DEFAULT_ALLOCATOR
 
 #include "utils/logalloc.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 using namespace logalloc;
 

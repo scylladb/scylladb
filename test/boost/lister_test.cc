@@ -13,7 +13,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/file.hh>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "test/lib/tmpdir.hh"

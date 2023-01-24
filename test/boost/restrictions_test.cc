@@ -9,7 +9,7 @@
 #include <boost/range/adaptors.hpp>
 #include <source_location>
 #include <fmt/format.h>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "cql3/cql_config.hh"
 #include "cql3/values.hh"

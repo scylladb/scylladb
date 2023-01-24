@@ -15,7 +15,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/random_shuffle.hpp>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
 #include "schema_builder.hh"
 #include "keys.hh"

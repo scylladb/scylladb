@@ -10,7 +10,7 @@
 #include "lang/wasm_instance_cache.hh"
 #include "rust/wasmtime_bindings.hh"
 #include "seastar/core/reactor.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
 
 // This test file can contain only a single test case which uses the wasmtime

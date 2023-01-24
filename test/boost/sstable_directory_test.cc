@@ -7,8 +7,7 @@
  */
 
 
-#include <seastar/testing/thread_test_case.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/sstring.hh>
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_directory.hh"

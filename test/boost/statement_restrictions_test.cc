@@ -7,7 +7,7 @@
  */
 
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include <vector>
 

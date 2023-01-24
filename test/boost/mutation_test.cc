@@ -32,7 +32,7 @@
 #include "test/lib/tmpdir.hh"
 #include "compaction/compaction_manager.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/result_set_assertions.hh"

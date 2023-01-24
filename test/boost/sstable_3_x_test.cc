@@ -14,7 +14,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 

@@ -12,7 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/file.hh>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "test/lib/cql_test_env.hh"

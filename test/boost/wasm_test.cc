@@ -12,7 +12,7 @@
 #include "seastar/coroutine/maybe_yield.hh"
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
 
 SEASTAR_TEST_CASE(test_long_udf_yields) {

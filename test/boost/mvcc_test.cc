@@ -19,7 +19,7 @@
 #include "partition_snapshot_reader.hh"
 #include "clustering_interval_set.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"

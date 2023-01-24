@@ -13,7 +13,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include <seastar/core/thread.hh>
 

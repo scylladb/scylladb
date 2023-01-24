@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "transport/request.hh"
 #include "transport/response.hh"

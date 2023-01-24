@@ -13,7 +13,7 @@
 
 #include "test/lib/mutation_source_test.hh"
 
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 class memtable_filling_test_vt : public db::memtable_filling_virtual_table {
     std::vector<mutation> _mutations;

@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include "utils/exception_container.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/sstring.hh>
 
 using namespace seastar;

@@ -15,7 +15,7 @@
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"

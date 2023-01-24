@@ -16,7 +16,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
 // Helper mutation_fragment_queue that stores the received stream of

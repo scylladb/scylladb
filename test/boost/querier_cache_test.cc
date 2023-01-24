@@ -15,7 +15,7 @@
 
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/util/closeable.hh>
 
 #include <boost/range/algorithm/sort.hpp>

@@ -11,7 +11,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema_builder.hh"
 #include <seastar/util/closeable.hh>

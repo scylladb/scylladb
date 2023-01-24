@@ -8,7 +8,7 @@
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/combine.hpp>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"

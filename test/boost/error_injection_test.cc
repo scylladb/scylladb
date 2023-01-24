@@ -8,7 +8,7 @@
 
 #include "test/lib/cql_test_env.hh"
 #include <seastar/core/manual_clock.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
