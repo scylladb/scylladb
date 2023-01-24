@@ -300,6 +300,11 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_return new_sstables.size();
 }
 
+sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, int64_t generation_value) {
+    auto& sstm = table.get_sstables_manager();
+    return sstm.make_sstable(table.schema(), dir.native(), sstables::generation_from_value(generation_value), sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
+}
+
 future<>
 distributed_loader::process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sstring ks, sstring cf) {
@@ -341,18 +346,12 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-
-            return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
-                    global_table->get_sstables_manager().get_highest_supported_format(),
-                    sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
+            return make_sstable(*global_table, upload, gen);
         }).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return global_table->make_sstable(upload.native(), sstables::generation_from_value(gen),
-                  global_table->get_sstables_manager().get_highest_supported_format(),
-                  sstables::sstable::format_types::big,
-                  &error_handler_gen_for_upload_dir);
+            return make_sstable(*global_table, upload, gen);
         }, [] (const sstables::shared_sstable&) { return true; }).get();
 
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
@@ -580,16 +579,20 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     _highest_generation = std::max(generation, _highest_generation);
 }
 
+sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
+    return table.get_sstables_manager().make_sstable(table.schema(), dir.native(), generation, v, sstables::sstable_format_types::big);
+}
+
 future<> distributed_loader::populate_column_family(table_population_metadata& metadata, sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
     auto& db = metadata.db();
     const auto& ks = metadata.ks();
     const auto& cf = metadata.cf();
-    auto sstdir = metadata.get_path(subdir).native();
+    auto sstdir = metadata.get_path(subdir);
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
 
     assert(this_shard_id() == 0);
 
-    if (!co_await file_exists(sstdir)) {
+    if (!co_await file_exists(sstdir.native())) {
         if (dir_must_exist) {
             throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
         }
@@ -608,7 +611,7 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
             return global_table->calculate_generation_for_new_table();
         }).get0();
 
-        return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+        return make_sstable(*global_table, sstdir, gen, sst_version);
     });
 
     // The node is offline at this point so we are very lenient with what we consider
@@ -625,7 +628,7 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
 
     co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
         auto gen = global_table->calculate_generation_for_new_table();
-        return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+        return make_sstable(*global_table, sstdir, gen, sst_version);
     }, eligible_for_reshape_on_boot);
 
     co_await directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
