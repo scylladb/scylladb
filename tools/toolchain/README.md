@@ -26,7 +26,7 @@ command to be executed, separating the flags and the command with `--`.
 This can be useful to attach more volumes (for data or ccache) and to
 set environment variables. For example, to use ccache:
 
-    ./tools/toolchain/dbuild -e PATH=/usr/lib64/ccache:/usr/bin -v $HOME/.ccache:$HOME/.ccache:z -- ninja
+    ./tools/toolchain/dbuild -e PATH=/usr/lib64/ccache:/usr/bin:/usr/local/bin -v $HOME/.ccache:$HOME/.ccache:z -- ninja
 
 The above command works as follows:
 1. Ccache comes pre-installed in the container, and the setting of PATH
@@ -42,7 +42,7 @@ The above command works as follows:
 To pass the same options to every run of dbuild, put them in the file
 ~/.config/scylladb/dbuild, which should contain a bash array assignment:
 
-SCYLLADB_DBUILD=(-e PATH=/usr/lib64/ccache:/usr/bin -v /home/nyh/.ccache:/home/nyh/.ccache:z)
+SCYLLADB_DBUILD=(-e PATH=/usr/lib64/ccache:/usr/bin:/usr/local/bin -v $HOME/.ccache:$HOME/.ccache:z)
 
 The script also works from other directories, so if you have `scylla-ccm` checked
 out alongside scylla, you can write
