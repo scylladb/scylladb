@@ -140,7 +140,7 @@ namespace alternator {
 future<alternator::executor::request_return_type> alternator::executor::list_streams(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.list_streams++;
 
-    auto limit = rjson::get_opt<int>(request, "Limit").value_or(std::numeric_limits<int>::max());
+    auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
     auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
     auto table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
