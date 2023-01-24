@@ -113,7 +113,7 @@ private:
     }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view tab) const override {
         auto& tables = unwrap(db).tables;
-        auto it = std::find_if(tables.begin(), tables.end(), [tab] (const table& tbl) { return tbl.schema->cf_name() == tab; });
+        auto it = std::find_if(tables.begin(), tables.end(), [ks, tab] (const table& tbl) { return tbl.schema->ks_name() == ks && tbl.schema->cf_name() == tab; });
         if (it == tables.end()) {
             return {};
         }
