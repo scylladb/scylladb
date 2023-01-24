@@ -91,8 +91,12 @@ def dynamodb(request):
 
 @pytest.fixture(scope="session")
 def dynamodbstreams(request):
+    # Disable boto3's client-side validation of parameters. This validation
+    # only makes it impossible for us to test various error conditions,
+    # because boto3 checks them before we can get the server to check them.
+    boto_config = botocore.client.Config(parameter_validation=False)
     if request.config.getoption('aws'):
-        return boto3.client('dynamodbstreams')
+        return boto3.client('dynamodbstreams', config=boto_config)
     else:
         # Even though we connect to the local installation, Boto3 still
         # requires us to specify dummy region and credential parameters,
@@ -106,7 +110,7 @@ def dynamodbstreams(request):
         verify = not request.config.getoption('https')
         return boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
-            config=botocore.client.Config(retries={"max_attempts": 3}))
+            config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
 
 # A function-scoped autouse=True fixture allows us to test after every test
 # that the server is still alive - and if not report the test which crashed

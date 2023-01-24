@@ -152,7 +152,6 @@ def test_list_streams_paged(dynamodb, dynamodbstreams):
                     streams = dynamodbstreams.list_streams(Limit=1, ExclusiveStartStreamArn=streams['LastEvaluatedStreamArn'])
 
 
-@pytest.mark.skip(reason="Python driver validates Limit, so trying to test it is pointless")
 def test_list_streams_zero_limit(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
         with pytest.raises(ClientError, match='ValidationException'):
