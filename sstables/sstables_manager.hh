@@ -77,10 +77,18 @@ public:
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
-            sstring dir,
+            fs::path path,
             generation_type generation,
             sstable_version_types v,
             sstable_format_types f,
+            gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
+            size_t buffer_size = default_sstable_buffer_size);
+    shared_sstable make_sstable(schema_ptr schema,
+            generation_type generation,
+            sstable_version_types v,
+            sstable_format_types f,
+            sstring location,
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);

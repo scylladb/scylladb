@@ -75,7 +75,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        return _impl->mgr.make_sstable(std::move(schema), dir, generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
+        return _impl->mgr.make_sstable(std::move(schema), fs::path(dir), generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     struct sst_not_found : public std::runtime_error {

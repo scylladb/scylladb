@@ -262,13 +262,13 @@ table::make_reader_v2(schema_ptr s,
 }
 
 sstables::shared_sstable table::make_streaming_sstable_for_write() {
-    auto newtab = make_sstable(_config.datadir);
+    auto newtab = make_sstable(_config.location);
     tlogger.debug("Created sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
 
 sstables::shared_sstable table::make_streaming_staging_sstable() {
-    auto newtab = make_sstable(_config.datadir + "/" + sstables::staging_dir);
+    auto newtab = make_sstable(_config.location + "/" + sstables::staging_dir);
     tlogger.debug("Created staging sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
@@ -387,13 +387,13 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir) {
+sstables::shared_sstable table::make_sstable(sstring location) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, dir, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big);
+    return sstm.make_sstable(_schema, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big, location);
 }
 
 sstables::shared_sstable table::make_sstable() {
-    return make_sstable(_config.datadir);
+    return make_sstable(_config.location);
 }
 
 future<> table::make_directory_for_column_family() {
