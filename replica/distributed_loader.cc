@@ -574,8 +574,8 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     _highest_generation = std::max(generation, _highest_generation);
 }
 
-sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), dir.native(), generation, v, sstables::sstable_format_types::big);
+sstables::shared_sstable make_sstable(replica::table& table, sstring location, sstables::generation_type generation, sstables::sstable_version_types v) {
+    return table.get_sstables_manager().make_sstable(table.schema(), generation, v, sstables::sstable_format_types::big, table.location() + "/" + location);
 }
 
 future<> distributed_loader::populate_column_family(table_population_metadata& metadata, sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
@@ -601,12 +601,12 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
     auto& directory = *metadata.sstable_directories().at(subdir);
     auto sst_version = metadata.highest_version();
 
-    co_await reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
+    co_await reshard(directory, db, ks, cf, [&global_table, subdir, sst_version] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [&global_table] () {
             return global_table->calculate_generation_for_new_table();
         }).get0();
 
-        return make_sstable(*global_table, sstdir, gen, sst_version);
+        return make_sstable(*global_table, subdir, gen, sst_version);
     });
 
     // The node is offline at this point so we are very lenient with what we consider
@@ -621,9 +621,9 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
         return sst->get_origin() != sstables::repair_origin;
     };
 
-    co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
+    co_await reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, subdir, sst_version] (shard_id shard) {
         auto gen = global_table->calculate_generation_for_new_table();
-        return make_sstable(*global_table, sstdir, gen, sst_version);
+        return make_sstable(*global_table, subdir, gen, sst_version);
     }, eligible_for_reshape_on_boot);
 
     co_await directory.invoke_on_all([global_table, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
