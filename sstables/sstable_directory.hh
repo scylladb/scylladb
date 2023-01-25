@@ -132,6 +132,9 @@ private:
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
 
+    future<> handle_sstables_pending_delete(fs::path pending_delete_dir);
+    future<> cleanup_column_family_temp_sst_dirs();
+
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
     sstable_directory(sstables_manager& manager,
@@ -208,6 +211,7 @@ public:
     sstable_info_vector retrieve_shared_sstables();
 
     future<> verify() const;
+    future<> garbage_collect();
 
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
