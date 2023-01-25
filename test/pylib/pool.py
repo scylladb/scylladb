@@ -1,5 +1,5 @@
 import asyncio
-from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager, Final
+from typing import Generic, Callable, Awaitable, TypeVar, AsyncContextManager, Final, Optional
 
 T = TypeVar('T')
 
@@ -10,12 +10,15 @@ class Pool(Generic[T]):
     on demand, so that if you use less, you don't create anything upfront.
     If there is no object in the pool and all N objects are in use, you want
     to wait until one of the object is returned to the pool. Expects a
-    builder async function to build a new object.
+    builder async function to build a new object and a destruction async
+    function to clean up after a 'dirty' object (see below).
 
     Usage example:
         async def start_server():
             return Server()
-        pool = Pool(4, start_server)
+        async def destroy_server(server):
+            await server.free_resources()
+        pool = Pool(4, start_server, destroy_server)
 
         server = await pool.get()
         try:
@@ -24,25 +27,33 @@ class Pool(Generic[T]):
             await pool.put(server)
 
     Alternatively:
-        async with pool.instance() as server:
+        async with pool.instance(dirty_on_exception=False) as server:
             await run_test(test, server)
 
+
     If the object is considered no longer usable by other users of the pool
-    you can 'steal' it, which frees up space in the pool.
+    you can pass `is_dirty=True` flag to `put`, which will cause the object
+    to be 'destroyed' (by calling the provided `destroy` function on it) and
+    will free up space in the pool.
         server = await.pool.get()
         dirty = True
         try:
             dirty = await run_test(test, server)
         finally:
-            if dirty:
-                await pool.steal()
-            else:
-                await pool.put(server)
+            await pool.put(server, is_dirty=dirty)
+
+    Alternatively:
+        async with (cm := pool.instance(dirty_on_exception=True)) as server:
+            cm.dirty = await run_test(test, server)
+            # It will also be considered dirty if run_test throws an exception
     """
-    def __init__(self, max_size: int, build: Callable[..., Awaitable[T]]):
+    def __init__(self, max_size: int,
+                 build: Callable[..., Awaitable[T]],
+                 destroy: Callable[[T], Awaitable[None]]):
         assert(max_size >= 0)
         self.max_size: Final[int] = max_size
         self.build: Final[Callable[..., Awaitable[T]]] = build
+        self.destroy: Final[Callable[[T], Awaitable]] = destroy
         self.cond: Final[asyncio.Condition] = asyncio.Condition()
         self.pool: list[T] = []
         self.total: int = 0 # len(self.pool) + leased objects
@@ -73,24 +84,27 @@ class Pool(Generic[T]):
             raise
         return obj
 
-    async def steal(self) -> None:
-        """Take ownership of a previously borrowed object.
-           Frees up space in the pool.
+    async def put(self, obj: T, is_dirty: bool):
+        """Return a previously borrowed object to the pool
+           if it's not dirty, otherwise destroy the object
+           and free up space in the pool.
         """
+        if is_dirty:
+            await self.destroy(obj)
+
         async with self.cond:
-            self.total -= 1
+            if is_dirty:
+                self.total -= 1
+            else:
+                self.pool.append(obj)
             self.cond.notify()
 
-    async def put(self, obj: T):
-        """Return a previously borrowed object to the pool."""
-        async with self.cond:
-            self.pool.append(obj)
-            self.cond.notify()
-
-    def instance(self, *args, **kwargs) -> AsyncContextManager[T]:
+    def instance(self, dirty_on_exception: bool, *args, **kwargs) -> AsyncContextManager[T]:
         class Instance:
-            def __init__(self, pool):
+            def __init__(self, pool: Pool[T], dirty_on_exception: bool):
                 self.pool = pool
+                self.dirty = False
+                self.dirty_on_exception = dirty_on_exception
 
             async def __aenter__(self):
                 self.obj = await self.pool.get(*args, **kwargs)
@@ -98,7 +112,8 @@ class Pool(Generic[T]):
 
             async def __aexit__(self, exc_type, exc, obj):
                 if self.obj:
-                    await self.pool.put(self.obj)
+                    self.dirty |= self.dirty_on_exception and exc is not None
+                    await self.pool.put(self.obj, is_dirty=self.dirty)
                     self.obj = None
 
-        return Instance(self)
+        return Instance(self, dirty_on_exception)

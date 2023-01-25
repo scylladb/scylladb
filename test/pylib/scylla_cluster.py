@@ -868,9 +868,7 @@ class ScyllaClusterManager:
         self.logger.info("Setting up %s", self.current_test_case_full_name)
         if self.cluster.is_dirty:
             self.logger.info(f"Current cluster %s is dirty after last test, stopping...", self.cluster.name)
-            await self.clusters.steal()
-            await self.cluster.stop()
-            await self.cluster.release_ips()
+            await self.clusters.put(self.cluster, is_dirty=True)
             self.logger.info(f"Waiting for new cluster for test %s...", self.current_test_case_full_name)
             await self._get_cluster()
         self.cluster.setLogger(self.logger)
@@ -888,13 +886,11 @@ class ScyllaClusterManager:
             del self.site
         if not self.cluster.is_dirty:
             self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster)
+            await self.clusters.put(self.cluster, is_dirty=False)
         else:
             self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
-            await self.cluster.stop()
-            await self.cluster.release_ips()
-            await self.clusters.steal()
+            await self.clusters.put(self.cluster, is_dirty=True)
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
