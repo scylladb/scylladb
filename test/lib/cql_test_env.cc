@@ -488,6 +488,7 @@ public:
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<compaction_manager> cm;
+            sharded<tasks::task_manager> task_manager;
             sharded<replica::database> db;
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
@@ -682,6 +683,16 @@ public:
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
             dbcfg.sstables_format = sstables::from_string(cfg->sstable_format());
 
+            auto get_tm_cfg = sharded_parameter([&] {
+                return tasks::task_manager::config {
+                    .task_ttl = cfg->task_ttl_seconds,
+                };
+            });
+            task_manager.start(std::move(get_tm_cfg), std::ref(abort_sources)).get();
+            auto stop_task_manager = defer([&task_manager] {
+                task_manager.stop().get();
+            });
+
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
             auto get_cm_cfg = sharded_parameter([&] {
@@ -693,7 +704,7 @@ public:
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                 };
             });
-            cm.start(std::move(get_cm_cfg), std::ref(abort_sources)).get();
+            cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(task_manager)).get();
             auto stop_cm = deferred_stop(cm);
 
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
