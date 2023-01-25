@@ -586,7 +586,7 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
 
     assert(this_shard_id() == 0);
 
-    if (!co_await file_exists(sstdir.native())) {
+    if (!metadata.sstable_directories().contains(subdir)) {
         if (dir_must_exist) {
             throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
         }
@@ -594,9 +594,6 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
     }
 
     auto& global_table = metadata.global_table();
-    if (!metadata.sstable_directories().contains(subdir)) {
-        dblog.error("Could not find sstables directory {}.{}/{}", ks, cf, subdir);
-    }
     auto& directory = *metadata.sstable_directories().at(subdir);
     auto sst_version = metadata.highest_version();
 
