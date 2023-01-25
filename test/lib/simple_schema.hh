@@ -23,32 +23,6 @@
 #include "test/lib/key_utils.hh"
 #include "atomic_cell_or_collection.hh"
 
-//
-// Make set of keys sorted by token for current or remote shard.
-//
-std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size, std::optional<shard_id> shard);
-std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1, local_shard_only lso = local_shard_only::yes);
-
-inline std::vector<sstring> make_keys_for_shard(shard_id shard, unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, shard);
-}
-
-inline sstring make_key_for_shard(shard_id shard, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(1, s, min_key_size, shard).front();
-}
-
-inline std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, local_shard_only::yes);
-}
-
-inline sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(1, s, min_key_size, local_shard_only::yes).front();
-}
-
-inline std::vector<sstring> make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
-    return do_make_keys(n, s, min_key_size, local_shard_only::no);
-}
-
 // Helper for working with the following table:
 //
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
