@@ -47,7 +47,8 @@ private:
     task_map _all_tasks;
     modules _modules;
     config _cfg;
-    seastar::abort_source& _as;
+    seastar::abort_source _as;
+    optimized_optional<abort_source::subscription> _abort_subscription;
     serialized_action _update_task_ttl_action;
     utils::observer<uint32_t> _task_ttl_observer;
     uint32_t _task_ttl;
@@ -190,6 +191,7 @@ public:
     };
 public:
     task_manager(config cfg, abort_source& as) noexcept;
+    task_manager() noexcept;
 
     modules& get_modules() noexcept;
     const modules& get_modules() const noexcept;

@@ -278,10 +278,18 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
 
 task_manager::task_manager(config cfg, class abort_source& as) noexcept
     : _cfg(std::move(cfg))
-    , _as(as)
     , _update_task_ttl_action([this] { return update_task_ttl(); })
     , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
     , _task_ttl(_cfg.task_ttl.get())
+{
+    _abort_subscription = as.subscribe([this] () noexcept {
+        _as.request_abort();
+    });
+}
+
+task_manager::task_manager() noexcept
+    : _update_task_ttl_action([this] { return update_task_ttl(); })
+    , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
 {}
 
 task_manager::modules& task_manager::get_modules() noexcept {
