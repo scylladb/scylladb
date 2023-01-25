@@ -16,6 +16,11 @@ no_parallel_cases:
     - logalloc_test
     - logalloc_standard_allocator_segment_pool_backend_test
     - memtable_test
+# Enable compaction groups on tests except on a few, listed below
+all_can_run_compaction_groups_except:
+    - exceptions_optimized_test
+    - rate_limiter_test
+    - exceptions_fallback_test
 # Custom command line arguments for some of the tests
 custom_args:
     mutation_reader_test:
