@@ -46,6 +46,24 @@ class Pool(Generic[T]):
         async with (cm := pool.instance(dirty_on_exception=True)) as server:
             cm.dirty = await run_test(test, server)
             # It will also be considered dirty if run_test throws an exception
+
+
+    To atomically return a dirty object and use the freed space to obtain
+    another object, you can use `replace_dirty`. This is different from a
+    `put(is_dirty=True)` call followed by a `get` call, where a concurrent
+    waiter might take the space freed up by `put`.
+        server = await.pool.get()
+        dirty = False
+        try:
+            for _ in range(num_runs):
+                if dirty:
+                    srv = server
+                    server = None
+                    server = await pool.replace_dirty(srv)
+                dirty = await run_test(test, server)
+        finally:
+            if server:
+                await pool.put(is_dirty=dirty)
     """
     def __init__(self, max_size: int,
                  build: Callable[..., Awaitable[T]],
@@ -75,14 +93,7 @@ class Pool(Generic[T]):
             # No object in pool, but total < max_size so we can construct one
             self.total += 1
 
-        try:
-            obj = await self.build(*args, **kwargs)
-        except:
-            async with self.cond:
-                self.total -= 1
-                self.cond.notify()
-            raise
-        return obj
+        return await self._build_and_get(*args, **kwargs)
 
     async def put(self, obj: T, is_dirty: bool):
         """Return a previously borrowed object to the pool
@@ -98,6 +109,28 @@ class Pool(Generic[T]):
             else:
                 self.pool.append(obj)
             self.cond.notify()
+
+    async def replace_dirty(self, obj: T, *args, **kwargs) -> T:
+        """Atomically `put` a previously borrowed dirty object and `get` another one.
+           The 'atomicity' guarantees that the space freed up by the returned object
+           is used to return another object to the caller. The caller doesn't need
+           to wait for space to be freed by another user of the pool.
+
+           Note: the returned object might have been constructed earlier or it might
+           be built right now, as in `get`.
+           *args and **kwargs are used as in `get`.
+        """
+        await self.destroy(obj)
+
+        async with self.cond:
+            if self.pool:
+                self.total -= 1
+                return self.pool.pop()
+
+            # Need to construct a new object.
+            # The space for this object is already accounted for in self.total.
+
+        return await self._build_and_get(*args, **kwargs)
 
     def instance(self, dirty_on_exception: bool, *args, **kwargs) -> AsyncContextManager[T]:
         class Instance:
@@ -117,3 +150,16 @@ class Pool(Generic[T]):
                     self.obj = None
 
         return Instance(self, dirty_on_exception)
+
+    async def _build_and_get(self, *args, **kwargs) -> T:
+        """Precondition: we allocated space for this object
+           (it's included in self.total).
+        """
+        try:
+            obj = await self.build(*args, **kwargs)
+        except:
+            async with self.cond:
+                self.total -= 1
+                self.cond.notify()
+            raise
+        return obj
