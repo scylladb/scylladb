@@ -139,7 +139,7 @@ private:
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
-            std::filesystem::path sstable_dir,
+            sstring location,
             ::io_priority_class io_prio,
             io_error_handler_gen error_handler_gen);
 

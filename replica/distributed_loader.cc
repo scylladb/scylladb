@@ -314,11 +314,10 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
-            upload, service::get_local_streaming_priority(),
+            global_table->location() + "/" + sstables::upload_dir, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
 
@@ -370,12 +369,11 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         global_column_family_ptr global_table(db, ks, cf);
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
-        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
 
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
-            upload, service::get_local_streaming_priority(),
+            global_table->location() + "/" + sstables::upload_dir, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
 
@@ -494,7 +492,7 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
     co_await directory.start(
         sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
         sharded_parameter([&global_table] { return global_table->schema(); }),
-        fs::path(sstdir), default_priority_class(),
+        global_table->location() + "/" + subdir, default_priority_class(),
         default_io_error_handler_gen()
     );
 

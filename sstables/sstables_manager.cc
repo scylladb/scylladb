@@ -74,6 +74,9 @@ future<> sstables_manager::initialize_storage(sstring location) {
     return sstable_directory::initialize_storage(std::move(dirs));
 }
 
+fs::path sstables_manager::sstable_directory(sstring location) {
+    return fs::path(format("{}/{}", _db_config.data_file_directories()[0], location));
+}
 
 future<> sstables_manager::initialize_keyspace_storage(sstring location) {
     auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
