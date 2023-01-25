@@ -51,12 +51,12 @@ future<> sstable_directory::components_lister::close() {
 
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
-        fs::path sstable_dir,
+        sstring location,
         ::io_priority_class io_prio,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
-    , _sstable_dir(std::move(sstable_dir))
+    , _sstable_dir(_manager.sstable_directory(location))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
     , _unshared_remote_sstables(smp::count)

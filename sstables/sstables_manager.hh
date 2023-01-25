@@ -108,6 +108,7 @@ public:
     const locator::host_id& get_local_host_id() const;
 
     reader_concurrency_semaphore& sstable_metadata_concurrency_sem() noexcept { return _sstable_metadata_concurrency_sem; }
+    fs::path sstable_directory(sstring location); // ATTN: for sstable_directory only!
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
