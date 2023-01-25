@@ -20,10 +20,8 @@
 #include "schema_builder.hh"
 #include "reader_permit.hh"
 #include "types/map.hh"
+#include "test/lib/key_utils.hh"
 #include "atomic_cell_or_collection.hh"
-
-struct local_shard_only_tag { };
-using local_shard_only = bool_class<local_shard_only_tag>;
 
 //
 // Make set of keys sorted by token for current or remote shard.
