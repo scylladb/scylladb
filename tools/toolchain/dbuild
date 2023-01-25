@@ -192,6 +192,7 @@ docker_common_args+=(
        --security-opt label=disable \
        --network host \
        --cap-add SYS_PTRACE \
+       --ulimit nofile=$(ulimit -Sn):$(ulimit -Hn) \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
