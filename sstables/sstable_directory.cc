@@ -20,6 +20,7 @@
 #include "utils/lister.hh"
 #include "utils/disk-error-handler.hh"
 #include "replica/database.hh"
+#include "utils/directories.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -60,6 +61,10 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _error_handler_gen(error_handler_gen)
     , _unshared_remote_sstables(smp::count)
 {}
+
+future<> sstable_directory::verify() const {
+    return utils::directories::verify_owner_and_mode(_sstable_dir);
+}
 
 void
 sstable_directory::handle_component(scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
