@@ -33,6 +33,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/lib/fragment_scatterer.hh"
+#include "test/lib/key_utils.hh"
 
 #include "dht/sharder.hh"
 #include "schema_builder.hh"
@@ -1099,7 +1100,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
         auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
 
-        mutation m1 = ss.new_mutation(make_local_key(s));
+        mutation m1(ss.schema(), tests::generate_partition_key(ss.schema()));
         m1.partition().apply_delete(*s, rt1);
         mutation m2 = m1;
         m2.partition().apply_delete(*s, rt2);
@@ -3682,10 +3683,10 @@ struct clustering_order_merger_test_generator {
     };
 
     schema_ptr _s;
-    partition_key _pk;
+    dht::decorated_key _pk;
 
-    clustering_order_merger_test_generator(std::optional<sstring> pk = std::nullopt)
-        : _s(make_schema()), _pk(partition_key::from_single_value(*_s, utf8_type->decompose(pk ? *pk : make_local_key(make_schema()))))
+    clustering_order_merger_test_generator(std::optional<dht::decorated_key> pk = std::nullopt)
+        : _s(make_schema()), _pk(pk ? *pk : tests::generate_partition_key(_s))
     {}
 
     static schema_ptr make_schema() {
@@ -3830,7 +3831,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 
 static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
   return sstables::test_env::do_with_async([reversed] (sstables::test_env& env) {
-    auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema());
+    auto pkeys = tests::generate_partition_keys(2, clustering_order_merger_test_generator::make_schema());
     clustering_order_merger_test_generator g(pkeys[0]);
     auto query_schema = g._s;
     auto table_schema = g._s;
@@ -3846,7 +3847,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         return make_flat_mutation_reader_from_mutations_v2(query_schema, env.make_reader_permit(), {std::move(mut)}, query_slice, fwd);
     };
 
-    auto pr = dht::partition_range::make_singular(dht::ring_position(dht::decorate_key(*query_schema, g._pk)));
+    auto pr = dht::partition_range::make_singular(dht::ring_position(g._pk));
     auto make_tested = [&env, query_schema, pk = g._pk, &pr, &query_slice, reversed]
             (const time_series_sstable_set& sst_set,
                 const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
@@ -3857,7 +3858,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                                           query_slice, seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(generation_value(sst.generation())); },
-            pk, query_schema, permit, fwd, reversed);
+            pk.key(), query_schema, permit, fwd, reversed);
         return make_clustering_combined_reader(query_schema, permit, fwd, std::move(q));
     };
 
@@ -3894,8 +3895,8 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                 // We want to have an sstable that won't return any fragments when we query it
                 // for our partition (not even `partition_start`). For that we create an sstable
                 // with a different partition.
-                auto pk = partition_key::from_single_value(*table_schema, utf8_type->decompose(pkeys[1]));
-                assert(pk != g._pk);
+                auto pk = pkeys[1];
+                assert(!pk.equal(*g._s, g._pk));
 
                 sst_set.insert(make_sstable_containing(std::move(sst_factory), {mutation(table_schema, pk)}));
             }

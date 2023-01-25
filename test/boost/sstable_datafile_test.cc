@@ -578,9 +578,10 @@ SEASTAR_TEST_CASE(test_counter_write) {
     });
 }
 
-static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key, uint32_t level = 0) {
+static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen,
+        const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
     auto sst = env.make_sstable(schema, "", gen, la, big);
-    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, std::move(first_key), std::move(last_key));
+    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
     return sst;
 }
 
@@ -2111,13 +2112,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
-    auto key_and_token_pair = token_generation_for_current_shard(8);
-    auto decorated_keys = boost::copy_range<std::vector<dht::decorated_key>>(
-            key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
-                auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
-                auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
-                return dht::decorate_key(*s, std::move(pk));
-            }));
+    const auto decorated_keys = tests::generate_partition_keys(8, s);
 
     auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
         auto sstables = selector.select(key).sstables;
@@ -2129,11 +2124,11 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
 
     {
         sstable_set set = cs.make_sstable_set(s);
-        set.insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+        set.insert(sstable_for_overlapping_test(env, s, 1, decorated_keys[0].key(), decorated_keys[1].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 2, decorated_keys[0].key(), decorated_keys[1].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 3, decorated_keys[3].key(), decorated_keys[4].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 4, decorated_keys[4].key(), decorated_keys[4].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 5, decorated_keys[4].key(), decorated_keys[5].key(), 1));
 
         sstable_set::incremental_selector sel = set.make_incremental_selector();
         check(sel, decorated_keys[0], {1, 2});
@@ -2148,12 +2143,12 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
 
     {
         sstable_set set = cs.make_sstable_set(s);
-        set.insert(sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
-        set.insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
-        set.insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+        set.insert(sstable_for_overlapping_test(env, s, 0, decorated_keys[0].key(), decorated_keys[1].key(), 0));
+        set.insert(sstable_for_overlapping_test(env, s, 1, decorated_keys[0].key(), decorated_keys[1].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 2, decorated_keys[0].key(), decorated_keys[1].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 3, decorated_keys[3].key(), decorated_keys[4].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 4, decorated_keys[4].key(), decorated_keys[4].key(), 1));
+        set.insert(sstable_for_overlapping_test(env, s, 5, decorated_keys[4].key(), decorated_keys[5].key(), 1));
 
         sstable_set::incremental_selector sel = set.make_incremental_selector();
         check(sel, decorated_keys[0], {0, 1, 2});
@@ -2174,19 +2169,19 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
   return test_env::do_with([] (test_env& env) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
-    auto key_and_token_pair = token_generation_for_current_shard(1);
+    const auto key = tests::generate_partition_key(s).key();
 
     // check that sstable_set::erase is capable of working properly when a non-existing element is given.
     {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
         sstable_set set = cs.make_sstable_set(s);
 
-        auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
+        auto sst = sstable_for_overlapping_test(env, s, 0, key, key, 0);
         set.insert(sst);
         BOOST_REQUIRE(set.all()->size() == 1);
 
-        auto unleveled_sst = sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
-        auto leveled_sst = sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
+        auto unleveled_sst = sstable_for_overlapping_test(env, s, 1, key, key, 0);
+        auto leveled_sst = sstable_for_overlapping_test(env, s, 2, key, key, 1);
         set.erase(unleveled_sst);
         set.erase(leveled_sst);
         BOOST_REQUIRE(set.all()->size() == 1);
@@ -2199,12 +2194,12 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
         // triggers use-after-free, described in #4572, by operating on interval that relies on info of a destroyed sstable object.
         {
-            auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
+            auto sst = sstable_for_overlapping_test(env, s, 0, key, key, 1);
             set.insert(sst);
             BOOST_REQUIRE(set.all()->size() == 1);
         }
 
-        auto sst2 = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
+        auto sst2 = sstable_for_overlapping_test(env, s, 0, key, key, 1);
         set.insert(sst2);
         BOOST_REQUIRE(set.all()->size() == 2);
 
@@ -2215,11 +2210,11 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
         sstable_set set = cs.make_sstable_set(s);
 
-        auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
+        auto sst = sstable_for_overlapping_test(env, s, 0, key, key, 0);
         set.insert(sst);
         BOOST_REQUIRE(set.all()->size() == 1);
 
-        auto sst2 = sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
+        auto sst2 = sstable_for_overlapping_test(env, s, 1, key, key, 0);
         set.erase(sst2);
         BOOST_REQUIRE(set.all()->size() == 1);
         BOOST_REQUIRE(set.all()->contains(sst));
@@ -2297,18 +2292,16 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
         auto s = builder.build();
 
         auto tmp = tmpdir();
-        auto make_insert = [&] (auto p) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+        auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1);
-            BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
         };
         auto gen = make_lw_shared<unsigned>(1);
         auto make_shared_sstable = [&] (std::unordered_set<unsigned> shards, unsigned ignore_msb, unsigned smp_count) {
+            auto key_schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
             auto mut = [&] (auto shard) {
-                auto tokens = token_generation_for_shard(1, shard, ignore_msb, smp_count);
-                return make_insert(tokens[0]);
+                return make_insert(tests::generate_partition_key(key_schema, shard));
             };
             auto muts = boost::copy_range<std::vector<mutation>>(shards
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
@@ -2715,14 +2708,14 @@ SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
         simple_schema ss;
         auto s = ss.schema();
 
-        auto key_and_token_pair = token_generation_for_current_shard(6);
+        const auto keys = tests::generate_partition_keys(6, s);
         auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
 
         sstables::sstable_run run;
 
         auto insert = [&] (int first_key_idx, int last_key_idx) {
             auto sst = sstable_for_overlapping_test(env, s, next_gen(),
-                                                    key_and_token_pair[first_key_idx].first, key_and_token_pair[last_key_idx].first);
+                                                    keys[first_key_idx].key(), keys[last_key_idx].key());
             return run.insert(sst);
         };
 
@@ -2882,7 +2875,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         simple_schema ss;
         auto s = ss.schema();
 
-        auto pk = ss.make_pkey(make_local_key(s));
+        const auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         fs::path tmp(tmpdir_path);
@@ -2992,7 +2985,7 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
         simple_schema ss;
         auto s = ss.schema();
 
-        auto pk = ss.make_pkey(make_local_key(s));
+        const auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
@@ -3031,10 +3024,10 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(cs.make_sstable_set(s));
         lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
 
-        auto key_and_token_pair = token_generation_for_current_shard(2);
-        set1->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
-        set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
-        set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+        const auto keys = tests::generate_partition_keys(2, s);
+        set1->insert(sstable_for_overlapping_test(env, s, 1, keys[0].key(), keys[1].key(), 0));
+        set2->insert(sstable_for_overlapping_test(env, s, 2, keys[0].key(), keys[1].key(), 0));
+        set2->insert(sstable_for_overlapping_test(env, s, 3, keys[0].key(), keys[1].key(), 0));
 
         BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return generation_value(sst->generation()); }), unsigned(0)) == 6);
         {

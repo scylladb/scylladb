@@ -16,6 +16,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/key_utils.hh"
 #include "db/config.hh"
 #include "utils/lister.hh"
 
@@ -61,8 +62,7 @@ using namespace sstables;
 sstables::shared_sstable
 make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factory) {
     auto s = test_table_schema();
-    auto key_token_pair = token_generation_for_shard(1, this_shard_id(), 12);
-    auto key = partition_key::from_exploded(*s, {to_bytes(key_token_pair[0].first)});
+    auto key = tests::generate_partition_key(s);
     mutation m(s, key);
     m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
     return make_sstable_containing(sst_factory, {m});
@@ -79,10 +79,8 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
     // a thread. We could fix that, but deferring that for now.
     auto s = table.schema();
     auto mt = make_lw_shared<replica::memtable>(s);
-    auto msb = db.get_config().murmur3_partitioner_ignore_msb_bits();
     for (shard_id shard = 0; shard < smp::count; ++shard) {
-        auto key_token_pair = token_generation_for_shard(1, shard, msb);
-        auto key = partition_key::from_exploded(*s, {to_bytes(key_token_pair[0].first)});
+        auto key = tests::generate_partition_key(s, shard);
         mutation m(s, key);
         m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
         mt->apply(std::move(m));

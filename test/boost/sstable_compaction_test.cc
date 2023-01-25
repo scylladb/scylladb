@@ -68,6 +68,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/key_utils.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
@@ -490,9 +491,9 @@ SEASTAR_TEST_CASE(compact_02) {
 
 // NOTE: must run in a thread.
 static void add_sstable_for_leveled_test(test_env& env, lw_shared_ptr<replica::column_family> cf, int64_t gen, uint64_t fake_data_size,
-                                         uint32_t sstable_level, sstring first_key, sstring last_key, int64_t max_timestamp = 0) {
+                                         uint32_t sstable_level, const partition_key& first_key, const partition_key& last_key, int64_t max_timestamp = 0) {
     auto sst = env.make_sstable(cf->schema(), "", gen, la, big);
-    sstables::test(sst).set_values_for_leveled_strategy(fake_data_size, sstable_level, max_timestamp, std::move(first_key), std::move(last_key));
+    sstables::test(sst).set_values_for_leveled_strategy(fake_data_size, sstable_level, max_timestamp, first_key, last_key);
     assert(sst->data_size() == fake_data_size);
     assert(sst->get_sstable_level() == sstable_level);
     assert(sst->get_stats_metadata().max_timestamp == max_timestamp);
@@ -501,26 +502,27 @@ static void add_sstable_for_leveled_test(test_env& env, lw_shared_ptr<replica::c
 }
 
 // NOTE: must run in a thread.
-static shared_sstable add_sstable_for_overlapping_test(test_env& env, lw_shared_ptr<replica::column_family> cf, int64_t gen, sstring first_key, sstring last_key, stats_metadata stats = {}) {
+static shared_sstable add_sstable_for_overlapping_test(test_env& env, lw_shared_ptr<replica::column_family> cf, int64_t gen,
+        const partition_key& first_key, const partition_key& last_key, stats_metadata stats = {}) {
     auto sst = env.make_sstable(cf->schema(), "", gen, la, big);
     sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
     column_family_test(cf).add_sstable(sst).get();
     return sst;
 }
-static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key, uint32_t level = 0) {
+static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen,
+        const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
     auto sst = env.make_sstable(schema, "", gen, la, big);
-    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, std::move(first_key), std::move(last_key));
+    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
     return sst;
 }
 
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
-static bool key_range_overlaps(table_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
-    const dht::i_partitioner& p = cf->schema()->get_partitioner();
-    const dht::sharder& sharder = cf->schema()->get_sharder();
-    auto range1 = create_token_range_from_keys(sharder, p, a, b);
-    auto range2 = create_token_range_from_keys(sharder, p, c, d);
-    return range1.overlaps(range2, dht::token_comparator());
+static bool key_range_overlaps(table_for_tests& cf, const dht::decorated_key& a, const dht::decorated_key& b,
+        const dht::decorated_key& c, const dht::decorated_key& d) {
+    auto range1 = dht::partition_range::make({a, true}, {b, true});
+    auto range2 = dht::partition_range::make({c, true}, {d, true});
+    return range1.overlaps(range2, dht::ring_position_comparator(*cf.schema()));
 }
 
 static shared_sstable get_sstable(const lw_shared_ptr<replica::column_family>& cf, int64_t generation) {
@@ -544,20 +546,20 @@ SEASTAR_TEST_CASE(leveled_01) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(50);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(50, cf.schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
     auto max_sstable_size_in_mb = 1;
     auto max_sstable_size = max_sstable_size_in_mb*1024*1024;
 
     // Creating two sstables which key range overlap.
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_sstable_size, /*level*/0, min_key, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_sstable_size, /*level*/0, min_key.key(), max_key.key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
-    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, key_and_token_pair[1].first, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, keys[1].key(), max_key.key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, key_and_token_pair[1].first, max_key) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, keys[1], max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
@@ -587,27 +589,27 @@ SEASTAR_TEST_CASE(leveled_02) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(50);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(50, cf.schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
     auto max_sstable_size_in_mb = 1;
     auto max_sstable_size = max_sstable_size_in_mb*1024*1024;
 
     // Generation 1 will overlap only with generation 2.
     // Remember that for level0, leveled strategy prefer choosing older sstables as candidates.
 
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_sstable_size, /*level*/0, min_key, key_and_token_pair[10].first);
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_sstable_size, /*level*/0, min_key.key(), keys[10].key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
-    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, min_key, key_and_token_pair[20].first);
+    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, min_key.key(), keys[20].key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
-    add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size, /*level*/0, key_and_token_pair[30].first, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size, /*level*/0, keys[30].key(), max_key.key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 3);
 
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, key_and_token_pair[30].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[30].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[10], min_key, keys[20]) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[20], keys[30], max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[10], keys[30], max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 1) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == false);
@@ -640,25 +642,25 @@ SEASTAR_TEST_CASE(leveled_03) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(50);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(50, cf.schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
 
     // Creating two sstables of level 0 which overlap
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/1024*1024, /*level*/0, min_key, key_and_token_pair[10].first);
-    add_sstable_for_leveled_test(env, cf, /*gen*/2, /*data_size*/1024*1024, /*level*/0, min_key, key_and_token_pair[20].first);
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/1024*1024, /*level*/0, min_key.key(), keys[10].key());
+    add_sstable_for_leveled_test(env, cf, /*gen*/2, /*data_size*/1024*1024, /*level*/0, min_key.key(), keys[20].key());
     // Creating a sstable of level 1 which overlap with two sstables above.
-    add_sstable_for_leveled_test(env, cf, /*gen*/3, /*data_size*/1024*1024, /*level*/1, min_key, key_and_token_pair[30].first);
+    add_sstable_for_leveled_test(env, cf, /*gen*/3, /*data_size*/1024*1024, /*level*/1, min_key.key(), keys[30].key());
     // Creating a sstable of level 1 which doesn't overlap with any sstable.
-    add_sstable_for_leveled_test(env, cf, /*gen*/4, /*data_size*/1024*1024, /*level*/1, key_and_token_pair[40].first, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/4, /*data_size*/1024*1024, /*level*/1, keys[40].key(), max_key.key());
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[40].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[30].first, key_and_token_pair[40].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[10], min_key, keys[20]) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[10], min_key, keys[30]) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[20], min_key, keys[30]) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[10], keys[40], max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, keys[30], keys[40], max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == true);
@@ -697,26 +699,26 @@ SEASTAR_TEST_CASE(leveled_04) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(50);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(50, cf.schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
 
     auto max_sstable_size_in_mb = 1;
     auto max_sstable_size_in_bytes = max_sstable_size_in_mb*1024*1024;
 
     // add 1 level-0 sstable to cf.
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/max_sstable_size_in_bytes, /*level*/0, min_key, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/max_sstable_size_in_bytes, /*level*/0, min_key.key(), max_key.key());
 
     // create two big sstables in level1 to force leveled compaction on it.
     auto max_bytes_for_l1 = leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
     // NOTE: SSTables in level1 cannot overlap.
-    add_sstable_for_leveled_test(env, cf, /*gen*/2, /*data_size*/max_bytes_for_l1, /*level*/1, min_key, key_and_token_pair[25].first);
-    add_sstable_for_leveled_test(env, cf, /*gen*/3, /*data_size*/max_bytes_for_l1, /*level*/1, key_and_token_pair[26].first, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/2, /*data_size*/max_bytes_for_l1, /*level*/1, min_key.key(), keys[25].key());
+    add_sstable_for_leveled_test(env, cf, /*gen*/3, /*data_size*/max_bytes_for_l1, /*level*/1, keys[26].key(), max_key.key());
 
     // Create SSTable in level2 that overlaps with the ones in level1,
     // so compaction in level1 will select overlapping sstables in
     // level2.
-    add_sstable_for_leveled_test(env, cf, /*gen*/4, /*data_size*/max_sstable_size_in_bytes, /*level*/2, min_key, max_key);
+    add_sstable_for_leveled_test(env, cf, /*gen*/4, /*data_size*/max_sstable_size_in_bytes, /*level*/2, min_key.key(), max_key.key());
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
@@ -787,7 +789,8 @@ SEASTAR_TEST_CASE(leveled_06) {
 
     auto max_bytes_for_l1 = leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
     // Create fake sstable that will be compacted into L2.
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/max_bytes_for_l1*2, /*level*/1, "a", "a");
+    const auto key = tests::generate_partition_key(cf.schema());
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, /*data_size*/max_bytes_for_l1*2, /*level*/1, key.key(), key.key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
@@ -814,8 +817,9 @@ SEASTAR_TEST_CASE(leveled_07) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
+    const auto key = tests::generate_partition_key(cf.schema());
     for (auto i = 0; i < leveled_manifest::MAX_COMPACTING_L0*2; i++) {
-        add_sstable_for_leveled_test(env, cf, i, 1024*1024, /*level*/0, "a", "a", i /* max timestamp */);
+        add_sstable_for_leveled_test(env, cf, i, 1024*1024, /*level*/0, key.key(), key.key(), i /* max timestamp */);
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
@@ -839,19 +843,19 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
     table_for_tests cf(env.manager());
 
     auto sstables_no = cf.schema()->max_compaction_threshold();
-    auto key_and_token_pair = token_generation_for_current_shard(sstables_no);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    auto keys = tests::generate_partition_keys(sstables_no, cf.schema());
+    auto min_key = keys.front();
+    auto max_key = keys.back();
     auto sstable_max_size = 1024*1024;
 
     // add non overlapping with min token to be discarded by strategy
-    add_sstable_for_leveled_test(env, cf, 0, sstable_max_size, /*level*/1, min_key, min_key);
+    add_sstable_for_leveled_test(env, cf, 0, sstable_max_size, /*level*/1, min_key.key(), min_key.key());
 
     for (auto i = 1; i < sstables_no-1; i++) {
-        add_sstable_for_leveled_test(env, cf, i, sstable_max_size, /*level*/1, key_and_token_pair[i].first, key_and_token_pair[i].first);
+        add_sstable_for_leveled_test(env, cf, i, sstable_max_size, /*level*/1, keys[i].key(), keys[i].key());
     }
     // add large token span sstable into level 1, which overlaps with all sstables added in loop above.
-    add_sstable_for_leveled_test(env, cf, sstables_no, sstable_max_size, 1, key_and_token_pair[1].first, max_key);
+    add_sstable_for_leveled_test(env, cf, sstables_no, sstable_max_size, 1, keys[1].key(), max_key.key());
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
@@ -879,15 +883,15 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
 
     table_for_tests cf(env.manager(), s);
 
-    auto key_and_token_pair = token_generation_for_current_shard(1);
+    const auto keys = tests::generate_partition_keys(1, cf.schema());
     auto sstable_max_size_in_mb = 1;
     auto l0_sstables_no = s->min_compaction_threshold();
     // we don't want level 0 to be worth promoting.
     auto l0_sstables_size = (sstable_max_size_in_mb*1024*1024)/(l0_sstables_no+1);
 
-    add_sstable_for_leveled_test(env, cf, 0, sstable_max_size_in_mb*1024*1024, /*level*/1, key_and_token_pair[0].first, key_and_token_pair[0].first);
+    add_sstable_for_leveled_test(env, cf, 0, sstable_max_size_in_mb*1024*1024, /*level*/1, keys[0].key(), keys[0].key());
     for (auto gen = 0; gen < l0_sstables_no; gen++) {
-        add_sstable_for_leveled_test(env, cf, gen+1, l0_sstables_size, /*level*/0, key_and_token_pair[0].first, key_and_token_pair[0].first);
+        add_sstable_for_leveled_test(env, cf, gen+1, l0_sstables_size, /*level*/0, keys[0].key(), keys[0].key());
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     BOOST_REQUIRE(candidates.size() == size_t(l0_sstables_no+1));
@@ -923,8 +927,8 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(5);
-    auto min_key = key_and_token_pair[0].first;
+    const auto keys = tests::generate_partition_keys(5, cf.schema());
+    auto min_key = keys.front();
     auto max_sstable_size_in_mb = 1;
     auto max_sstable_size_in_bytes = max_sstable_size_in_mb*1024*1024;
 
@@ -932,9 +936,9 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
     // to bring a sstable from level 3 that theoretically wasn't compacted
     // for many rounds and won't introduce an overlap.
     auto max_bytes_for_l1 = leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
-    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_bytes_for_l1*1.1, /*level*/1, min_key, key_and_token_pair[2].first);
-    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size_in_bytes, /*level*/2, min_key, key_and_token_pair[1].first);
-    add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size_in_bytes, /*level*/3, min_key, key_and_token_pair[1].first);
+    add_sstable_for_leveled_test(env, cf, /*gen*/1, max_bytes_for_l1*1.1, /*level*/1, min_key.key(), keys[2].key());
+    add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size_in_bytes, /*level*/2, min_key.key(), keys[1].key());
+    add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size_in_bytes, /*level*/3, min_key.key(), keys[1].key());
 
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
@@ -956,14 +960,14 @@ SEASTAR_TEST_CASE(check_overlapping) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
 
-    auto key_and_token_pair = token_generation_for_current_shard(4);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(4, cf.schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
 
-    auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key, key_and_token_pair[1].first);
-    auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first);
-    auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, key_and_token_pair[3].first, max_key);
-    auto sst4 = add_sstable_for_overlapping_test(env, cf, /*gen*/4, min_key, max_key);
+    auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key.key(), keys[1].key());
+    auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key.key(), keys[2].key());
+    auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, keys[3].key(), max_key.key());
+    auto sst4 = add_sstable_for_overlapping_test(env, cf, /*gen*/4, min_key.key(), max_key.key());
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
     std::vector<shared_sstable> compacting = { sst1, sst2 };
@@ -1188,20 +1192,19 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
-        auto key_for_this_shard = token_generation_for_current_shard(1);
-        auto apply_key = [mt, s, &r1_col] (sstring key_to_write) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
+        auto key_for_this_shard = tests::generate_partition_keys(1, s);
+        auto apply_key = [mt, s, &r1_col] (const dht::decorated_key& key) {
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
             mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
             mt->apply(std::move(m));
         };
-        apply_key(key_for_this_shard[0].first);
+        apply_key(key_for_this_shard[0]);
 
         auto sst = env.make_sstable(s, tmpdir_path, 51, sstables::get_highest_sstable_version(), big);
         return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, sst, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 51);
-        }).then([&env, s, key = key_for_this_shard[0].first, tmpdir_path] (auto sstp) mutable {
+        }).then([&env, s, key = key_for_this_shard[0], tmpdir_path] (auto sstp) mutable {
             auto new_tables = make_lw_shared<std::vector<sstables::shared_sstable>>();
             auto creator = [&env, new_tables, s, tmpdir_path] {
                 auto sst = env.make_sstable(s, tmpdir_path, 52, sstables::get_highest_sstable_version(), big);
@@ -1220,8 +1223,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                 return (*reader)().then([s, reader, key] (mutation_fragment_v2_opt m) {
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->is_partition_start());
-                    auto pkey = partition_key::from_exploded(*s, {to_bytes(key)});
-                    BOOST_REQUIRE(m->as_partition_start().key().key().equal(*s, pkey));
+                    BOOST_REQUIRE(m->as_partition_start().key().equal(*s, key));
                     return reader->next_partition();
                 }).then([reader] {
                     return (*reader)();
@@ -1303,9 +1305,9 @@ static stats_metadata build_stats(int64_t min_timestamp, int64_t max_timestamp, 
 
 SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
   return test_env::do_with_async([] (test_env& env) {
-    auto key_and_token_pair = token_generation_for_current_shard(4);
-    auto min_key = key_and_token_pair[0].first;
-    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    const auto keys = tests::generate_partition_keys(4, table_for_tests::make_default_schema());
+    const auto& min_key = keys.front();
+    const auto& max_key = keys.back();
 
     auto t0 = gc_clock::from_time_t(1).time_since_epoch().count();
     auto t1 = gc_clock::from_time_t(10).time_since_epoch().count();
@@ -1317,9 +1319,9 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         table_for_tests cf(env.manager());
         auto close_cf = deferred_stop(cf);
 
-        auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
-        auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
+        auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key.key(), keys[1].key(), build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key.key(), keys[2].key(), build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key.key(), max_key.key(), build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
         auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(15) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 0);
@@ -1329,9 +1331,9 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         table_for_tests cf(env.manager());
         auto close_cf = deferred_stop(cf);
 
-        auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
-        auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
+        auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key.key(), keys[1].key(), build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key.key(), keys[2].key(), build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key.key(), max_key.key(), build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
         auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(25) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 1);
@@ -1398,13 +1400,14 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
     int64_t timestamp_for_now = now.time_since_epoch().count() * 1000;
     int64_t timestamp_for_past_hour = past_hour.time_since_epoch().count() * 1000;
 
+    const auto key = tests::generate_partition_key(s);
     for (auto i = 1; i <= min_threshold; i++) {
-        auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/i, "a", "a",
+        auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/i, key.key(), key.key(),
             build_stats(timestamp_for_now, timestamp_for_now, std::numeric_limits<int32_t>::max()));
         candidates.push_back(sst);
     }
     // add sstable that belong to a different time tier.
-    auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 1, "a", "a",
+    auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 1, key.key(), key.key(),
         build_stats(timestamp_for_past_hour, timestamp_for_past_hour, std::numeric_limits<int32_t>::max()));
     candidates.push_back(sst);
 
@@ -1436,23 +1439,24 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     std::vector<sstables::shared_sstable> candidates;
     int min_threshold = cf->schema()->min_compaction_threshold();
 
+    const auto key = tests::generate_partition_key(s);
     // add sstables that belong to same time window until min threshold is satisfied.
     for (auto i = 1; i <= min_threshold; i++) {
-        auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/i, "a", "a",
+        auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/i, key.key(), key.key(),
             build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
         candidates.push_back(sst);
     }
     // belongs to the time window
     auto tp2 = tp + std::chrono::seconds(1800);
     timestamp = tp2.time_since_epoch().count() * 1000;
-    auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 1, "a", "a",
+    auto sst = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 1, key.key(), key.key(),
         build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
     candidates.push_back(sst);
 
     // doesn't belong to the time window above
     auto tp3 = tp + std::chrono::seconds(4000);
     timestamp = tp3.time_since_epoch().count() * 1000;
-    auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 2, "a", "a",
+    auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/min_threshold + 2, key.key(), key.key(),
         build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
     candidates.push_back(sst2);
 
@@ -1508,12 +1512,14 @@ SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
             .with_column("id", utf8_type, column_kind::partition_key)
             .with_column("value", int32_type).build();
 
+    const auto key = tests::generate_partition_key(s);
+
     {
         std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS" }, };
         time_window_compaction_strategy_options options(opts);
 
         auto sst = env.make_sstable(s, "", 1, la, big);
-        sstables::test(sst).set_values("key1", "key1", build_stats(ts_in_ms.count(), ts_in_ms.count(), std::numeric_limits<int32_t>::max()));
+        sstables::test(sst).set_values(key.key(), key.key(), build_stats(ts_in_ms.count(), ts_in_ms.count(), std::numeric_limits<int32_t>::max()));
 
         auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
         auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
@@ -1526,7 +1532,7 @@ SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
         time_window_compaction_strategy_options options(opts);
 
         auto sst = env.make_sstable(s, "", 1, la, big);
-        sstables::test(sst).set_values("key1", "key1", build_stats(ts_in_us.count(), ts_in_us.count(), std::numeric_limits<int32_t>::max()));
+        sstables::test(sst).set_values(key.key(), key.key(), build_stats(ts_in_us.count(), ts_in_us.count(), std::numeric_limits<int32_t>::max()));
 
         auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
         auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
@@ -1935,19 +1941,17 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
                 cf, sst_gen).get0().new_sstables;
         };
 
-        auto make_insert = [&] (auto p) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+        auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
-            BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
         };
 
-        auto tokens = token_generation_for_current_shard(4);
-        auto mut1 = make_insert(tokens[0]);
-        auto mut2 = make_insert(tokens[1]);
-        auto mut3 = make_insert(tokens[2]);
-        auto mut4 = make_insert(tokens[3]);
+        const auto keys = tests::generate_partition_keys(4, s);
+        auto mut1 = make_insert(keys[0]);
+        auto mut2 = make_insert(keys[1]);
+        auto mut3 = make_insert(keys[2]);
+        auto mut4 = make_insert(keys[3]);
 
         {
             std::vector<shared_sstable> sstables = {
@@ -2035,17 +2039,17 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                 return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
             };
 
-            auto make_insert = [&] (partition_key key) {
-                mutation m(s, key);
+            auto make_insert = [&] (dht::decorated_key key) {
+                mutation m(s, std::move(key));
                 m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::timestamp_type(0));
                 return m;
             };
 
             auto total_partitions = 10000U;
-            auto local_keys = make_local_keys(total_partitions, s);
+            auto local_keys = tests::generate_partition_keys(total_partitions, s);
             std::vector<mutation> mutations;
             for (auto i = 0U; i < total_partitions; i++) {
-                mutations.push_back(make_insert(partition_key::from_deeply_exploded(*s, { local_keys.at(i) })));
+                mutations.push_back(make_insert(local_keys.at(i)));
             }
             auto sst = make_sstable_containing(sst_gen, mutations);
             auto run_identifier = sst->run_identifier();
@@ -2074,7 +2078,7 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
 
     const auto ts = api::timestamp_type{1};
 
-    auto local_keys = make_local_keys(3, schema);
+    auto local_keys = tests::generate_partition_keys(3, schema);
 
     auto config = env.manager().configure_writer();
     config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
@@ -2097,10 +2101,9 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
     };
 
     auto write_partition = [&, schema, ts] (int pk, bool is_corrupt) {
-        auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-        auto dkey = dht::decorate_key(*schema, pkey);
+        auto dkey = local_keys.at(pk);
 
-        testlog.trace("Writing partition {}", pkey.with_schema(*schema));
+        testlog.trace("Writing partition {}", dkey.key().with_schema(*schema));
 
         write_to_secondary(mutation_fragment_v2(*schema, permit, partition_start(dkey, {})), is_corrupt);
         corrupt_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
@@ -2243,11 +2246,10 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
     std::deque<mutation_fragment_v2> frags;
 
     const auto ts = api::timestamp_type{1};
-    auto local_keys = make_local_keys(5, schema);
+    auto local_keys = tests::generate_partition_keys(5, schema);
 
     auto make_partition_start = [&, schema] (unsigned pk) {
-        auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-        auto dkey = dht::decorate_key(*schema, pkey);
+        auto dkey = local_keys.at(pk);
         return mutation_fragment_v2(*schema, permit, partition_start(std::move(dkey), {}));
     };
 
@@ -2805,11 +2807,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     std::deque<mutation_fragment_v2> scrubbed_fragments;
 
     const auto ts = api::timestamp_type{1};
-    auto local_keys = make_local_keys(5, schema);
+    auto local_keys = tests::generate_partition_keys(5, schema);
 
     auto make_partition_start = [&, schema] (unsigned pk) {
-        auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-        auto dkey = dht::decorate_key(*schema, pkey);
+        auto dkey = local_keys.at(pk);
         return mutation_fragment_v2(*schema, permit, partition_start(std::move(dkey), {}));
     };
 
@@ -2905,15 +2906,13 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
             return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(std::move(all), default_priority_class(), 1, 0), cf.as_table_state(), sst_gen, replacer).get0().new_sstables;
         };
-        auto make_insert = [&] (auto p) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+        auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
-            BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
         };
 
-        auto tokens = token_generation_for_current_shard(16);
+        const auto keys = tests::generate_partition_keys(16, s, local_shard_only::yes, tests::key_size{8, 8});
         std::unordered_set<shared_sstable> sstables;
         std::vector<utils::observer<sstable&>> observers;
         sstables::sstable_run_based_compaction_strategy_for_tests cs;
@@ -2995,8 +2994,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         // Generate 4 sstable runs composed of 4 fragments each after 4 compactions.
         // All fragments non-overlapping.
-        for (auto i = 0U; i < tokens.size(); i++) {
-            auto sst = make_sstable_containing(sst_gen, { make_insert(tokens[i]) });
+        for (auto i = 0U; i < keys.size(); i++) {
+            auto sst = make_sstable_containing(sst_gen, { make_insert(keys[i]) });
             sst->set_sstable_level(1);
             BOOST_REQUIRE(sst->get_sstable_level() == 1);
             column_family_test(cf).add_sstable(sst).get();
@@ -3008,9 +3007,9 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         // Generate 1 sstable run from 4 sstables runs of similar size
         auto result = do_compaction(16, 16);
         BOOST_REQUIRE(result.size() == 16);
-        for (auto i = 0U; i < tokens.size(); i++) {
+        for (auto i = 0U; i < keys.size(); i++) {
             assert_that(sstable_reader(result[i], s, env.make_reader_permit()))
-                .produces(make_insert(tokens[i]))
+                .produces(make_insert(keys[i]))
                 .produces_end_of_stream();
         }
     });
@@ -3082,18 +3081,16 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
         cf->set_compaction_strategy(sstables::compaction_strategy_type::leveled);
 
         {
-            auto tokens = token_generation_for_current_shard(4);
-            auto make_insert = [&] (auto p) {
-                auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+            const auto keys = tests::generate_partition_keys(4, s);
+            auto make_insert = [&] (const dht::decorated_key& key) {
                 mutation m(s, key);
                 m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
-                BOOST_REQUIRE(m.decorated_key().token() == p.second);
                 return m;
             };
-            auto mut1 = make_insert(tokens[0]);
-            auto mut2 = make_insert(tokens[1]);
-            auto mut3 = make_insert(tokens[2]);
-            auto mut4 = make_insert(tokens[3]);
+            auto mut1 = make_insert(keys[0]);
+            auto mut2 = make_insert(keys[1]);
+            auto mut3 = make_insert(keys[2]);
+            auto mut4 = make_insert(keys[3]);
             std::vector<shared_sstable> ssts = {
                     make_sstable_containing(sst_gen, {mut1, mut2}),
                     make_sstable_containing(sst_gen, {mut3, mut4})
@@ -3349,24 +3346,24 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             return next++;
         };
 
-        auto make_insert = [&] (partition_key key) {
+        auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
             return m;
         };
 
         auto deletion_time = gc_clock::now();
-        auto make_delete = [&] (partition_key key) {
+        auto make_delete = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             tombstone tomb(next_timestamp(), deletion_time);
             m.partition().apply(tomb);
             return m;
         };
 
-        auto tokens = token_generation_for_current_shard(3);
-        auto alpha = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
-        auto beta = partition_key::from_exploded(*s, {to_bytes(tokens[1].first)});
-        auto gamma = partition_key::from_exploded(*s, {to_bytes(tokens[2].first)});
+        const auto keys = tests::generate_partition_keys(3, s);
+        const auto& alpha = keys[0];
+        const auto& beta = keys[1];
+        const auto& gamma = keys[2];
 
         auto ttl = 5;
 
@@ -3393,15 +3390,15 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
 
         // since we use compacting_reader expired tombstones shouldn't be read from sstables
         // so we just check there are no live (resurrected for this test) rows in partition
-        auto is_partition_dead = [&s, &cf, &env] (partition_key& pkey) {
+        auto is_partition_dead = [&s, &cf, &env] (const partition_key& pkey) {
             replica::column_family::const_mutation_partition_ptr mp = cf->find_partition_slow(s, env.make_reader_permit(), pkey).get0();
             return mp && mp->live_row_count(*s, gc_clock::time_point::max()) == 0;
         };
 
         cf->add_sstable_and_update_cache(non_expired_sst).get();
-        BOOST_REQUIRE(!is_partition_dead(alpha));
+        BOOST_REQUIRE(!is_partition_dead(alpha.key()));
         cf->add_sstable_and_update_cache(expired_sst).get();
-        BOOST_REQUIRE(is_partition_dead(alpha));
+        BOOST_REQUIRE(is_partition_dead(alpha.key()));
 
         auto replacer = [&] (sstables::compaction_completion_desc desc) {
             auto old_sstables = std::move(desc.old_sstables);
@@ -3441,7 +3438,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         }
         BOOST_REQUIRE(swallowed);
         // check there's no data resurrection
-        BOOST_REQUIRE(is_partition_dead(alpha));
+        BOOST_REQUIRE(is_partition_dead(alpha.key()));
     });
 }
 
@@ -3471,9 +3468,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         auto make_insert = [&] (api::timestamp_clock::duration step) {
             static thread_local int32_t value = 1;
 
-            auto key_and_token_pair = token_generation_for_current_shard(1);
-            auto key_str = key_and_token_pair[0].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+            auto key = tests::generate_partition_key(s);
 
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
@@ -3534,16 +3529,15 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
-        auto make_insert = [&] (partition_key key) {
+        auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
             return m;
         };
         auto min_threshold = cf->schema()->min_compaction_threshold();
-        auto tokens = token_generation_for_current_shard(1);
+        const auto keys = tests::generate_partition_keys(1, s);
         for (auto i = 0; i < 2 * min_threshold; ++i) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
-            auto mut = make_insert(key);
+            auto mut = make_insert(keys[0]);
             auto sst = make_sstable_containing(sst_gen, {mut});
             cf->add_sstable_and_update_cache(sst).wait();
         }
@@ -3597,13 +3591,10 @@ SEASTAR_TEST_CASE(test_bug_6472) {
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
         };
 
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        auto key = tests::generate_partition_key(s);
 
         auto make_expiring_cell = [&] (std::chrono::hours step) {
             static thread_local int32_t value = 1;
-
-            auto key_str = tokens[0].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
 
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
@@ -3650,40 +3641,34 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
 
-    auto tokens = token_generation_for_current_shard(10);
+    const auto keys = tests::generate_partition_keys(10, s);
 
-    auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] (sstring first, sstring last) mutable {
-        return sstable_for_overlapping_test(env, s, (*gen)++, first, last);
-    };
-    auto token = [&] (size_t index) -> dht::token {
-        return tokens[index].second;
-    };
-    auto key_from_token = [&] (size_t index) -> sstring {
-        return tokens[index].first;
+    auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] (const dht::decorated_key& first, const dht::decorated_key& last) mutable {
+        return sstable_for_overlapping_test(env, s, (*gen)++, first.key(), last.key());
     };
     auto token_range = [&] (size_t first, size_t last) -> dht::token_range {
-        return dht::token_range::make(token(first), token(last));
+        return dht::token_range::make(keys[first].token(), keys[last].token());
     };
 
     {
         auto local_ranges = { token_range(0, 9) };
-        auto sst = sst_gen(key_from_token(0), key_from_token(9));
+        auto sst = sst_gen(keys[0], keys[9]);
         BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
     }
 
     {
         auto local_ranges = { token_range(0, 1), token_range(3, 4), token_range(5, 6) };
 
-        auto sst = sst_gen(key_from_token(0), key_from_token(1));
+        auto sst = sst_gen(keys[0], keys[1]);
         BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
 
-        auto sst2 = sst_gen(key_from_token(2), key_from_token(2));
+        auto sst2 = sst_gen(keys[2], keys[2]);
         BOOST_REQUIRE(needs_cleanup(sst2, local_ranges, s));
 
-        auto sst3 = sst_gen(key_from_token(0), key_from_token(6));
+        auto sst3 = sst_gen(keys[0], keys[6]);
         BOOST_REQUIRE(needs_cleanup(sst3, local_ranges, s));
 
-        auto sst5 = sst_gen(key_from_token(7), key_from_token(7));
+        auto sst5 = sst_gen(keys[7], keys[7]);
         BOOST_REQUIRE(needs_cleanup(sst5, local_ranges, s));
     }
 
@@ -3718,13 +3703,12 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(window)).count();
         };
 
-        auto tokens = token_generation_for_shard(4, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        auto keys = tests::generate_partition_keys(4, s);
 
         auto make_sstable = [&] (int sstable_idx) {
             static thread_local int32_t value = 1;
 
-            auto key_str = tokens[sstable_idx].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+            auto key = keys[sstable_idx];
 
             mutation m(s, key);
             for (auto ck = 0; ck < rows_per_partition; ++ck) {
@@ -3762,11 +3746,11 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         auto s = ss.schema();
         std::vector<shared_sstable> sstables;
         sstables.reserve(s->max_compaction_threshold());
-        auto key_and_token_pair = token_generation_for_current_shard(s->max_compaction_threshold() + 2);
+        const auto keys = tests::generate_partition_keys(s->max_compaction_threshold() + 2, s);
         for (auto gen = 1; gen <= s->max_compaction_threshold(); gen++) {
             auto sst = env.make_sstable(s, "", gen);
             sstables::test(sst).set_data_file_size(1);
-            sstables::test(sst).set_values(key_and_token_pair[gen - 1].first, key_and_token_pair[gen + 1].first, stats_metadata{});
+            sstables::test(sst).set_values(keys[gen - 1].key(), keys[gen + 1].key(), stats_metadata{});
             sstables.push_back(std::move(sst));
         }
 
@@ -3782,7 +3766,7 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
-        auto keys = token_generation_for_current_shard(256);
+        const auto keys = tests::generate_partition_keys(256, s);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled,
                                                      s->compaction_strategy_options());
 
@@ -3791,7 +3775,7 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
             std::vector <shared_sstable> sstables;
             for (auto i = 0; i < 256; i++) {
                 auto sst = env.make_sstable(s, "", i + 1);
-                auto key = keys[i].first;
+                auto key = keys[i].key();
                 sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
                 sstables.push_back(std::move(sst));
             }
@@ -3803,7 +3787,7 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
             std::vector <shared_sstable> sstables;
             for (auto i = 0; i < 256; i++) {
                 auto sst = env.make_sstable(s, "", i + 1);
-                auto key = keys[0].first;
+                auto key = keys[0].key();
                 sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
                 sstables.push_back(std::move(sst));
             }
@@ -3813,7 +3797,7 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
         // single sstable
         {
             auto sst = env.make_sstable(s, "", 1);
-            auto key = keys[0].first;
+            auto key = keys[0].key();
             sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
 
             BOOST_REQUIRE(cs.get_reshaping_job({ sst }, s, default_priority_class(), reshape_mode::strict).sstables.size() == 0);
@@ -3840,12 +3824,10 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             using namespace std::chrono;
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        auto key = tests::generate_partition_key(s);
 
         auto make_row = [&] (std::chrono::hours step) {
             static thread_local int32_t value = 1;
-            auto key_str = tokens[0].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
 
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
@@ -3901,8 +3883,7 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
-        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+        auto pkey = tests::generate_partition_key(s);
 
         auto make_row = [&] (std::chrono::hours step) {
             static thread_local int32_t value = 1;
@@ -3949,7 +3930,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             simple_schema ss;
             auto s = ss.schema();
 
-            auto pk = ss.make_pkey(make_local_key(s));
+            auto pk = tests::generate_partition_key(s);
             auto mut = mutation(s, pk);
             ss.add_row(mut, ss.make_ckey(0), "val");
 
@@ -4015,12 +3996,11 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             return (now + duration_cast<seconds>(step)).count();
         };
 
-        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        const auto keys = tests::generate_partition_keys(disjoint_sstable_count, s);
 
         auto make_row = [&](unsigned token_idx, auto step) {
             static thread_local int32_t value = 1;
-            auto key_str = tokens[token_idx].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+            auto key = keys[token_idx];
 
             mutation m(s, key);
             auto next_ts = next_timestamp(step);
@@ -4100,7 +4080,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             mutations_for_small_files.push_back(make_row(0, std::chrono::hours(1)));
 
             std::vector<mutation> mutations_for_big_files;
-            for (auto i = 0; i < tokens.size(); i++) {
+            for (auto i = 0; i < keys.size(); i++) {
                 mutations_for_big_files.push_back(make_row(i, std::chrono::hours(1)));
             }
 
@@ -4153,11 +4133,10 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
         std::map<sstring, sstring> opts;
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, std::move(opts));
 
-        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        auto keys = tests::generate_partition_keys(disjoint_sstable_count, s);
 
         auto make_row = [&](unsigned token_idx) {
-            auto key_str = tokens[token_idx].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+            auto key = keys[token_idx];
 
             mutation m(s, key);
             auto value = 1;
@@ -4293,7 +4272,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         auto tmp = tmpdir();
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto tracker = make_lw_shared<cache_tracker>();
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
 
         auto next_timestamp = [] (auto step) {
             using namespace std::chrono;
@@ -4302,8 +4280,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         auto make_expiring_cell = [&] (schema_ptr s, std::chrono::hours step) {
             static thread_local int32_t value = 1;
 
-            auto key_str = tokens[0].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+            auto key = tests::generate_partition_key(s);
 
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
@@ -4416,13 +4393,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
                                     {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
-        auto key_and_token_pair = token_generation_for_current_shard(8);
-        auto decorated_keys = boost::copy_range<std::vector<dht::decorated_key>>(
-                key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
-                    auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
-                    auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
-                    return dht::decorate_key(*s, std::move(pk));
-                }));
+        const auto keys = tests::generate_partition_keys(8, s);
 
         auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
             auto sstables = selector.select(key).sstables;
@@ -4435,44 +4406,44 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
         {
             auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
             auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
-            set1->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-            set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-            set1->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
-            set2->insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
-            set1->insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 1, keys[0].key(), keys[1].key(), 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 2, keys[0].key(), keys[1].key(), 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 3, keys[3].key(), keys[4].key(), 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 4, keys[4].key(), keys[4].key(), 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 5, keys[4].key(), keys[5].key(), 1));
 
             sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
             sstable_set::incremental_selector sel = compound.make_incremental_selector();
-            check(sel, decorated_keys[0], {1, 2});
-            check(sel, decorated_keys[1], {1, 2});
-            check(sel, decorated_keys[2], {});
-            check(sel, decorated_keys[3], {3});
-            check(sel, decorated_keys[4], {3, 4, 5});
-            check(sel, decorated_keys[5], {5});
-            check(sel, decorated_keys[6], {});
-            check(sel, decorated_keys[7], {});
+            check(sel, keys[0], {1, 2});
+            check(sel, keys[1], {1, 2});
+            check(sel, keys[2], {});
+            check(sel, keys[3], {3});
+            check(sel, keys[4], {3, 4, 5});
+            check(sel, keys[5], {5});
+            check(sel, keys[6], {});
+            check(sel, keys[7], {});
         }
 
         {
             auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
             auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
-            set1->insert(sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
-            set2->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-            set1->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
-            set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
-            set1->insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
-            set2->insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 0, keys[0].key(), keys[1].key(), 0));
+            set2->insert(sstable_for_overlapping_test(env, s, 1, keys[0].key(), keys[1].key(), 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 2, keys[0].key(), keys[1].key(), 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 3, keys[3].key(), keys[4].key(), 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 4, keys[4].key(), keys[4].key(), 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 5, keys[4].key(), keys[5].key(), 1));
 
             sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
             sstable_set::incremental_selector sel = compound.make_incremental_selector();
-            check(sel, decorated_keys[0], {0, 1, 2});
-            check(sel, decorated_keys[1], {0, 1, 2});
-            check(sel, decorated_keys[2], {0});
-            check(sel, decorated_keys[3], {0, 3});
-            check(sel, decorated_keys[4], {0, 3, 4, 5});
-            check(sel, decorated_keys[5], {0, 5});
-            check(sel, decorated_keys[6], {0});
-            check(sel, decorated_keys[7], {0});
+            check(sel, keys[0], {0, 1, 2});
+            check(sel, keys[1], {0, 1, 2});
+            check(sel, keys[2], {0});
+            check(sel, keys[3], {0, 3});
+            check(sel, keys[4], {0, 3, 4, 5});
+            check(sel, keys[5], {0, 5});
+            check(sel, keys[6], {0});
+            check(sel, keys[7], {0});
         }
 
         {
@@ -4487,10 +4458,10 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             auto incremental_selection_test = [&] (strategy_param param) {
                 auto set1 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, false));
                 auto set2 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, bool(param)));
-                set1->insert(sstable_for_overlapping_test(env, s, 0, key_and_token_pair[1].first, key_and_token_pair[1].first, 1));
-                set2->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[2].first, 1));
-                set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[3].first, key_and_token_pair[3].first, 1));
-                set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+                set1->insert(sstable_for_overlapping_test(env, s, 0, keys[1].key(), keys[1].key(), 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 1, keys[0].key(), keys[2].key(), 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 2, keys[3].key(), keys[3].key(), 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 3, keys[4].key(), keys[4].key(), 1));
 
                 sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
                 sstable_set::incremental_selector sel = compound.make_incremental_selector();
@@ -4533,12 +4504,10 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
             using namespace std::chrono;
             return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+        auto key = tests::generate_partition_key(s);
 
         auto make_row = [&](std::chrono::hours step) {
             static thread_local int32_t value = 1;
-            auto key_str = tokens[0].first;
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
 
             mutation m(s, key);
             auto next_ts = next_timestamp(step);
@@ -4594,8 +4563,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         auto s = builder.build();
 
         auto tmp = tmpdir();
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
-        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+        auto pkey = tests::generate_partition_key(s);
 
         table_for_tests cf(env.manager(), s, tmp.path().string());
         auto close_cf = deferred_stop(cf);
@@ -4656,7 +4624,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
 
         auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
-            auto key = make_local_key(t.schema());
+            auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             assert(sst->data_size() == data_size);
             auto backlog_before = t.as_table_state().get_backlog_tracker().backlog();
@@ -4765,7 +4733,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             auto s = builder.build();
 
             auto tmp = tmpdir();
-            auto tokens = token_generation_for_shard(all_files, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
+            auto keys = tests::generate_partition_keys(all_files, s);
 
             table_for_tests cf(env.manager(), s, tmp.path().string());
             auto close_cf = deferred_stop(cf);
@@ -4780,8 +4748,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
                 return (now + step).count();
             };
             auto make_mutation = [&] (unsigned pkey_idx, api::timestamp_type ts) {
-                auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[pkey_idx].first)});
-                mutation m(s, pkey);
+                mutation m(s, keys[pkey_idx]);
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
                 m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(1)), ts);
                 return m;
@@ -4859,8 +4826,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
-        auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
-        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+        auto pkey = tests::generate_partition_key(s);
         table_for_tests cf(env.manager(), s);
         auto close_cf = deferred_stop(cf);
 
@@ -4934,7 +4900,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
 
             mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get0();
             BOOST_REQUIRE(m);
-            BOOST_REQUIRE(m->key().equal(*s, pkey));
+            BOOST_REQUIRE(m->decorated_key().equal(*s, pkey));
             // ASSERT that partition tobmstone is replicated to every fragment.
             BOOST_REQUIRE(m->partition().partition_tombstone());
             auto rows = m->partition().clustered_rows();

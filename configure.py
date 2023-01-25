@@ -1163,6 +1163,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/data_model.cc',
     'test/lib/exception_utils.cc',
     'test/lib/random_schema.cc',
+    'test/lib/key_utils.cc',
 ]
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc']
@@ -1179,6 +1180,9 @@ scylla_perfs = ['test/perf/perf_fast_forward.cc',
                 'test/lib/test_services.cc',
                 'test/lib/test_utils.cc',
                 'test/lib/tmpdir.cc',
+                'test/lib/key_utils.cc',
+                'test/lib/random_schema.cc',
+                'test/lib/data_model.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {

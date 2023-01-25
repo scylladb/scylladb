@@ -33,7 +33,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         auto s = ss.schema();
         fs::path tmp(tmpdir_path);
 
-        auto pk = ss.make_pkey(make_local_key(s));
+        auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         auto s = ss.schema();
         fs::path tmp(tmpdir_path);
 
-        auto pk = ss.make_pkey(make_local_key(s));
+        auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;

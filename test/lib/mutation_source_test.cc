@@ -24,6 +24,7 @@
 #include "cql3/cql3_type.hh"
 #include "test/lib/make_random_string.hh"
 #include "test/lib/data_model.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/algorithm/string/join.hpp>
@@ -822,20 +823,20 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
         .with_column("v", bytes_type)
         .build();
 
-    auto make_partition_mutation = [s] (bytes key) -> mutation {
-        mutation m(s, partition_key::from_single_value(*s, key));
+    auto make_partition_mutation = [s] (dht::decorated_key key) -> mutation {
+        mutation m(s, std::move(key));
         m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
         return m;
     };
 
     int partition_count = 300;
 
-    auto keys = make_local_keys(partition_count, s);
+    auto keys = tests::generate_partition_keys(partition_count, s);
 
     std::vector<mutation> partitions;
     for (int i = 0; i < partition_count; ++i) {
         partitions.emplace_back(
-            make_partition_mutation(to_bytes(keys[i])));
+            make_partition_mutation(keys[i]));
     }
 
     std::sort(partitions.begin(), partitions.end(), mutation_decorated_key_less_comparator());
@@ -1037,11 +1038,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
     };
 
     auto partition_count = 3;
-    auto local_keys = make_local_keys(partition_count, s);
-    std::vector<dht::decorated_key> keys;
-    for (int i = 0; i < partition_count; ++i) {
-        keys.push_back(make_pk(local_keys[i]));
-    }
+    auto keys = tests::generate_partition_keys(partition_count, s);
     std::sort(keys.begin(), keys.end(), dht::ring_position_less_comparator(*s));
 
     auto pk = keys[1];
@@ -1303,11 +1300,11 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
     auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
     auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
 
-    auto key = make_local_key(s);
-    mutation m1 = ss.new_mutation(key);
+    auto key = tests::generate_partition_key(s);
+    mutation m1(s, key);
     m1.partition().apply_delete(*s, rt1);
 
-    mutation m2 = ss.new_mutation(key);
+    mutation m2(s, key);
     m2.partition().apply_delete(*s, rt2);
     ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
 
@@ -1756,18 +1753,18 @@ static mutation_sets generate_mutation_sets() {
                 .with_column("regular_col_1_s2", bytes_type) // will have id in between common columns
                 .build();
 
-        auto local_keys = make_local_keys(2, s1); // use only one schema as s1 and s2 don't differ in representation.
+        auto local_keys = tests::generate_partition_keys(2, s1); // use only one schema as s1 and s2 don't differ in representation.
         auto& key1 = local_keys[0];
         auto& key2 = local_keys[1];
 
         // Differing keys
         result.unequal.emplace_back(mutations{
-            mutation(s1, partition_key::from_single_value(*s1, to_bytes(key1))),
-            mutation(s2, partition_key::from_single_value(*s2, to_bytes(key2)))
+            mutation(s1, key1),
+            mutation(s2, key2)
         });
 
-        auto m1 = mutation(s1, partition_key::from_single_value(*s1, to_bytes(key1)));
-        auto m2 = mutation(s2, partition_key::from_single_value(*s2, to_bytes(key1)));
+        auto m1 = mutation(s1, key1);
+        auto m2 = mutation(s2, key1);
         result.equal.emplace_back(mutations{m1, m2});
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
@@ -2042,8 +2039,10 @@ public:
 
         _schema = make_schema(ks_name, cf_name);
 
-        auto keys = _local_shard_only ? make_local_keys(n_blobs, _schema, _external_blob_size) : make_keys(n_blobs, _schema, _external_blob_size);
-        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (sstring& k) { return to_bytes(k); }));
+        // The pre-existing assumption here is that the type of all the primary key components is blob.
+        // So we generate partition keys and take the single blob component and save it as a random blob value.
+        auto keys = tests::generate_partition_keys(n_blobs, _schema, _local_shard_only, tests::key_size{_external_blob_size, _external_blob_size});
+        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (const dht::decorated_key& dk) { return dk.key().explode().front(); }));
     }
 
     void set_key_cardinality(size_t n_keys) {
@@ -2329,11 +2328,7 @@ public:
     }
 
     std::vector<dht::decorated_key> make_partition_keys(size_t n) {
-        auto local_keys = _local_shard_only ? make_local_keys(n, _schema) : make_keys(n, _schema);
-        return boost::copy_range<std::vector<dht::decorated_key>>(local_keys | boost::adaptors::transformed([this] (sstring& key) {
-            auto pkey = partition_key::from_single_value(*_schema, to_bytes(key));
-            return dht::decorate_key(*_schema, std::move(pkey));
-        }));
+        return tests::generate_partition_keys(n, _schema, _local_shard_only);
     }
 
     std::vector<mutation> operator()(size_t n) {

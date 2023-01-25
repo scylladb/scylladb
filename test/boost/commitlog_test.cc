@@ -42,6 +42,7 @@
 #include "test/lib/data_model.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/key_utils.hh"
 
 using namespace db;
 
@@ -615,8 +616,8 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto s = table.schema();
         auto memtables = table.active_memtables();
 
-        auto add_entry = [&db, &cl, s] (bytes key) mutable {
-            auto md = tests::data_model::mutation_description({ key });
+        auto add_entry = [&db, &cl, s] (const partition_key& key) mutable {
+            auto md = tests::data_model::mutation_description(key.explode());
             md.add_clustered_cell({}, "v", to_bytes("val"));
             auto m = md.build(s);
 
@@ -626,10 +627,10 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             return m.shard_of();
         };
 
-        const auto shard = add_entry(bytes{});
-        auto pk1_raw = make_key_for_shard(shard, s);
+        const auto shard = add_entry(partition_key::make_empty());
+        auto dk = tests::generate_partition_key(s, shard);
 
-        add_entry(to_bytes(pk1_raw));
+        add_entry(std::move(dk.key()));
 
         BOOST_REQUIRE(std::ranges::all_of(memtables, std::mem_fn(&replica::memtable::empty)));
 

@@ -18,6 +18,7 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/key_utils.hh"
 
 #include "schema_builder.hh"
 #include "test/lib/simple_schema.hh"
@@ -4236,11 +4237,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         replica::table& t = env.local_db().find_column_family(ks_name, table_name);
         schema_ptr s = t.schema();
 
-        int32_t pk = 0;
-        dht::decorated_key dk(dht::token(), partition_key::make_empty());
-        do {
-            dk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(++pk)));
-        } while (dht::shard_of(*s, dk.token()) != this_shard_id());
+        dht::decorated_key dk = tests::generate_partition_key(s);
 
         auto ck1 = clustering_key::from_deeply_exploded(*s, {1});
         auto ck1_prefix = clustering_key_prefix::from_deeply_exploded(*s, {1});

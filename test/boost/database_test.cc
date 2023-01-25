@@ -19,6 +19,7 @@
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/key_utils.hh"
 
 #include "replica/database.hh"
 #include "utils/lister.hh"
@@ -858,9 +859,8 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
         auto& tab = db.find_column_family("ks", "test");
         auto s = tab.schema();
 
-        auto pk = make_local_key(s);
-        const auto raw_pk = utf8_type->decompose(data_value(pk));
-        const auto cql3_pk = cql3::raw_value::make_value(raw_pk);
+        auto pk = tests::generate_partition_key(s);
+        const auto cql3_pk = cql3::raw_value::make_value(pk.key().explode().front());
 
         const auto value = sstring(1024, 'a');
         const auto raw_value = utf8_type->decompose(data_value(value));
@@ -948,9 +948,8 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
         auto& tab = db.find_column_family("ks", "test");
         auto s = tab.schema();
 
-        auto pk = make_local_key(s);
-        const auto raw_pk = utf8_type->decompose(data_value(pk));
-        const auto cql3_pk = cql3::raw_value::make_value(raw_pk);
+        auto pk = tests::generate_partition_key(s);
+        const auto cql3_pk = cql3::raw_value::make_value(pk.key().explode().front());
 
         const auto value = sstring(1024, 'a');
         const auto raw_value = utf8_type->decompose(data_value(value));
