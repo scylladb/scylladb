@@ -47,6 +47,7 @@ struct test_env_config {
 
 class test_env {
     struct impl {
+        tmpdir dir;
         std::unique_ptr<db::config> db_config;
         directory_semaphore dir_sem;
         cache_tracker cache_tracker;
@@ -96,6 +97,7 @@ public:
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
+    tmpdir& tempdir() noexcept { return _impl->dir; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout);

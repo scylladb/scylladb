@@ -148,13 +148,15 @@ future<> table_for_tests::stop() {
 
 namespace sstables {
 
-std::unique_ptr<db::config> make_db_config() {
+std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
     auto cfg = std::make_unique<db::config>();
+    cfg->data_file_directories.set({ temp_dir });
     return cfg;
 }
 
 test_env::impl::impl(test_env_config cfg)
-    : db_config(make_db_config())
+    : dir()
+    , db_config(make_db_config(dir.path().native()))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
     , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem)
