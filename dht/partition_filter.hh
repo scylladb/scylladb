@@ -24,7 +24,7 @@ public:
     }
 
     // Must be called with increasing token values.
-    bool belongs_to_current_node(const dht::token& t) {
+    bool belongs_to_current_node(const dht::token& t) const noexcept {
         // While token T is after a range Rn, advance the iterator.
         // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
         // or at a range which is after T (if T doesn't belong to this node).
