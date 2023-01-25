@@ -30,7 +30,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include "db/view/view_update_generator.hh"
-#include "utils/directories.hh"
 
 extern logging::logger dblog;
 
@@ -102,8 +101,8 @@ public:
 
 future<>
 distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags) {
-    co_await dir.invoke_on(0, [] (const sstables::sstable_directory& d) {
-        return utils::directories::verify_owner_and_mode(d.sstable_dir());
+    co_await dir.invoke_on(0, [] (const sstables::sstable_directory& d) -> future<> {
+        co_await d.verify();
     });
 
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {

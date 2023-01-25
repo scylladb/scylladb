@@ -207,9 +207,7 @@ public:
     // is called.
     sstable_info_vector retrieve_shared_sstables();
 
-    std::filesystem::path sstable_dir() const noexcept {
-        return _sstable_dir;
-    }
+    future<> verify() const;
 
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
