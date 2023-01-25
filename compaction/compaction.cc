@@ -1206,7 +1206,7 @@ public:
 
 class cleanup_compaction final : public regular_compaction {
     owned_ranges_ptr _owned_ranges;
-    mutable dht::incremental_owned_ranges_checker _owned_ranges_checker;
+    dht::incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
     dht::partition_range_vector
