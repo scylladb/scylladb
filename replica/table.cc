@@ -1440,6 +1440,16 @@ void compaction_group::clear_sstables() {
     _maintenance_sstables = _t.make_maintenance_sstable_set();
 }
 
+static std::atomic<unsigned> minimum_x_log2_compaction_groups{0};
+
+void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups) {
+    minimum_x_log2_compaction_groups.store(x_log2_compaction_groups, std::memory_order_relaxed);
+}
+
+static inline unsigned get_x_log2_compaction_groups(unsigned x_log2_compaction_groups) {
+    return std::max(x_log2_compaction_groups, minimum_x_log2_compaction_groups.load(std::memory_order_relaxed));
+}
+
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
@@ -1448,7 +1458,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
                         )
-    , _x_log2_compaction_groups(_config.x_log2_compaction_groups)
+    , _x_log2_compaction_groups(get_x_log2_compaction_groups(_config.x_log2_compaction_groups))
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _compaction_groups(make_compaction_groups())

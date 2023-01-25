@@ -113,4 +113,7 @@ public:
     compaction::table_state& as_table_state() const noexcept;
 };
 
+// Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
+void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups);
+
 }

@@ -14,6 +14,7 @@
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
+#include "replica/compaction_group.hh"
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <seastar/util/defer.hh>
@@ -216,7 +217,8 @@ std::pair<int, char**> scylla_tests_cmdline_options_processor::process_cmdline_o
 
     po::options_description desc("Scylla tests additional options");
     desc.add_options()
-            ("help", "Produces help message");
+            ("help", "Produces help message")
+            ("x-log2-compaction-groups", po::value<unsigned>()->default_value(0), "Controls static number of compaction groups per table per shard. For X groups, set the option to log (base 2) of X. Example: Value of 3 implies 8 groups.");
     po::variables_map vm;
 
     po::parsed_options parsed = po::command_line_parser(new_argc, new_argv).
@@ -230,6 +232,14 @@ std::pair<int, char**> scylla_tests_cmdline_options_processor::process_cmdline_o
     if (vm.count("help")) {
         std::cout << desc << std::endl;
         return std::make_pair(argc, argv);
+    }
+
+    unsigned x_log2_compaction_groups = vm["x-log2-compaction-groups"].as<unsigned>();
+    if (x_log2_compaction_groups) {
+        std::cout << "Setting x_log2_compaction_groups to " << x_log2_compaction_groups << std::endl;
+        replica::set_minimum_x_log2_compaction_groups(x_log2_compaction_groups);
+        auto [_new_argc, _new_argv] = rebuild_arg_list_without(argc, argv, "--x-log2-compaction-groups", true);
+        return std::make_pair(_new_argc, _new_argv);
     }
 
     return std::make_pair(argc, argv);
