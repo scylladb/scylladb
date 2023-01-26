@@ -706,7 +706,7 @@ class CQLApprovalTest(Test):
                 self.is_before_test_ok = True
                 cluster.take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.after_test(self.uname)
+                cluster.after_test(self.uname, self.is_executed_ok)
                 self.is_after_test_ok = True
 
                 if self.is_executed_ok is False:
@@ -860,7 +860,7 @@ class PythonTest(Test):
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
             status = await run_test(self, options)
-            cluster.after_test(self.uname)
+            cluster.after_test(self.uname, status)
             self.is_after_test_ok = True
             self.success = status
         except Exception as e:

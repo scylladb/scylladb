@@ -740,10 +740,14 @@ class ScyllaCluster:
         for server in self.running.values():
             server.write_log_marker(f"------ Starting test {name} ------\n")
 
-    def after_test(self, name) -> None:
-        """If the cluster is not dirty, check that it's still alive and the test
+    def after_test(self, name: str, success: bool) -> None:
+        """Mark the cluster as dirty after a failed test.
+        If the cluster is not dirty, check that it's still alive and the test
         hasn't left any garbage."""
         assert self.start_exception is None
+        if not success:
+            self.logger.debug(f"Test failed using cluster {self.name}, marking the cluster as dirty")
+            self.is_dirty = True
         if self.is_dirty:
             self.logger.info(f"The cluster {self.name} is dirty, not checking"
                              f" keyspace count post-condition")
@@ -939,7 +943,7 @@ class ScyllaClusterManager:
         add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
         add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
         add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
-        add_get('/cluster/after-test', self._after_test)
+        add_get('/cluster/after-test/{success}', self._after_test)
         add_get('/cluster/mark-dirty', self._mark_dirty)
         add_get('/cluster/server/{server_id}/stop', self._cluster_server_stop)
         add_get('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
@@ -991,9 +995,11 @@ class ScyllaClusterManager:
     async def _after_test(self, _request) -> aiohttp.web.Response:
         assert self.cluster is not None
         assert self.current_test_case_full_name
-        self.logger.info("Finished test %s, cluster: %s", self.current_test_case_full_name, self.cluster)
+        success = _request.match_info["success"] == "True"
+        self.logger.info("Test %s %s, cluster: %s", self.current_test_case_full_name,
+                         "SUCCEEDED" if success else "FAILED", self.cluster)
         try:
-            self.cluster.after_test(self.current_test_case_full_name)
+            self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
