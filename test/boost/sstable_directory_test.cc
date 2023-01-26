@@ -87,7 +87,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
         m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
         mt->apply(std::move(m));
     }
-    auto sst = table.make_sstable(sstdir.native(), generation_from_value(generation++),
+    auto sst = table.get_sstables_manager().make_sstable(s, sstdir.native(), generation_from_value(generation++),
             sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
     write_memtable_to_sstable(*mt, sst, table.get_sstables_manager().configure_writer("test")).get();
     mt->clear_gently().get();
@@ -504,7 +504,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.make_sstable(upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
         }).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
@@ -546,7 +546,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.make_sstable(upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
         }).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
@@ -588,7 +588,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.make_sstable(upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
         }).get();
         verify_that_all_sstables_are_local(sstdir, 2 * smp::count * smp::count).get();
       });
