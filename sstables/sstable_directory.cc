@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
 #include <boost/range/adaptor/map.hpp>
@@ -64,6 +65,10 @@ sstable_directory::sstable_directory(sstables_manager& manager,
 
 future<> sstable_directory::verify() const {
     return utils::directories::verify_owner_and_mode(_sstable_dir);
+}
+
+future<bool> sstable_directory::exists() const {
+    return file_exists(_sstable_dir.native());
 }
 
 void
