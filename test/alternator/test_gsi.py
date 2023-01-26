@@ -55,9 +55,8 @@ def assert_index_scan(table, index_name, expected_items, **kwargs):
 
 # Although quite silly, it is actually allowed to create an index which is
 # identical to the base table.
-# The following test does not work for KA/LA tables due to #6157,
-# so it's hereby skipped.
-@pytest.mark.skip
+# The following test does not work for KA/LA tables due to #6157, but we
+# no longer allow writing those in Scylla.
 def test_gsi_identical(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
