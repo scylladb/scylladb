@@ -39,12 +39,16 @@ table_for_tests::data::data()
 
 table_for_tests::data::~data() {}
 
+schema_ptr table_for_tests::make_default_schema() {
+    return schema_builder(some_keyspace, some_column_family)
+        .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
+        .build();
+}
+
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager)
     : table_for_tests(
         sstables_manager,
-        schema_builder(some_keyspace, some_column_family)
-            .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
-            .build()
+        make_default_schema()
     )
 { }
 

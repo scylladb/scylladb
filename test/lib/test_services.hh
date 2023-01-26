@@ -51,6 +51,8 @@ struct table_for_tests {
     };
     lw_shared_ptr<data> _data;
 
+    static schema_ptr make_default_schema();
+
     explicit table_for_tests(sstables::sstables_manager& sstables_manager);
 
     explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
