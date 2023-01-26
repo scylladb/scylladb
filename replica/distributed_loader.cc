@@ -401,7 +401,6 @@ class table_population_metadata {
     sstring _ks;
     sstring _cf;
     global_column_family_ptr _global_table;
-    fs::path _base_path;
     std::unordered_map<sstring, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation = sstables::generation_from_value(0);
@@ -412,7 +411,6 @@ public:
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _global_table(_db, _ks, _cf)
-        , _base_path(_global_table->dir())
     {}
 
     ~table_population_metadata() {
@@ -437,10 +435,6 @@ public:
         for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
             co_await it->second->stop();
         }
-    }
-
-    fs::path get_path(std::string_view subdir) {
-        return subdir.empty() ? _base_path : _base_path / subdir;
     }
 
     distributed<replica::database>& db() noexcept {
@@ -480,8 +474,6 @@ private:
 };
 
 future<> table_population_metadata::start_subdir(sstring subdir) {
-    sstring sstdir = get_path(subdir).native();
-
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
     auto& global_table = _global_table;
@@ -532,14 +524,13 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
     auto& db = metadata.db();
     const auto& ks = metadata.ks();
     const auto& cf = metadata.cf();
-    auto sstdir = metadata.get_path(subdir);
-    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
+    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", ks, cf, subdir, do_allow_offstrategy_compaction, dir_must_exist);
 
     assert(this_shard_id() == 0);
 
     if (!metadata.sstable_directories().contains(subdir)) {
         if (dir_must_exist) {
-            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), sstdir));
+            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", metadata.ks(), metadata.cf(), subdir));
         }
         co_return;
     }
