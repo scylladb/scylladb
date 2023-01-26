@@ -214,6 +214,11 @@ public:
         return sst._storage.create_links(sst, dir);
     }
 
+    future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {
+        co_await _sst->_storage.move(*_sst, std::move(new_dir), new_generation, nullptr);
+        _sst->_generation = std::move(new_generation);
+    }
+
     static fs::path filename(const sstable& sst, component_type c) {
         return fs::path(sst.filename(c));
     }

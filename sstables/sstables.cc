@@ -2224,11 +2224,6 @@ future<> sstable::filesystem_storage::move(const sstable& sst, sstring new_dir, 
     }
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
-    co_await _storage.move(*this, std::move(new_dir), new_generation, delay_commit);
-    _generation = std::move(new_generation);
-}
-
 future<> sstable::filesystem_storage::quarantine(const sstable& sst, delayed_commit_changes* delay_commit) {
     auto path = fs::path(dir);
     if (path.filename().native() == staging_dir) {

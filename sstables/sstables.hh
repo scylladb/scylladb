@@ -209,7 +209,6 @@ public:
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
     future<> destroy();
-    future<> move_to_new_dir(sstring new_dir, generation_type generation, delayed_commit_changes* delay = nullptr);
 
     // Move the sstable to the quarantine_dir
     //
@@ -494,6 +493,7 @@ public:
         future<> create_links(const sstable& sst, const sstring& dir) const;
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
         future<> touch_temp_dir(const sstable& sst);
+        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
 
     public:
         explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
@@ -509,7 +509,6 @@ public:
         // Moving in a snapshot or upload will move to a subdirectory of the current directory.
         future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay);
 
-        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);
         future<> wipe(const sstable& sst) noexcept;
