@@ -2094,6 +2094,9 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     clogger.debug("Discarding segments {}", ftd);
 
     for (auto& [f, mode] : ftd) {
+        // `f.remove_file()` resets known_size to 0, so remember the size here,
+        // in order to subtract it from total_size_on_disk accurately.
+        size_t size = f.known_size();
         try {
             if (f) {
                 co_await f.close();
@@ -2110,7 +2113,6 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
                 }
             }
 
-            auto size = f.known_size();
             auto usage = totals.total_size_on_disk;
             auto next_usage = usage - size;
 
@@ -2144,7 +2146,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
         // or had such an exception that we consider the file dead
         // anyway. In either case we _remove_ the file size from
         // footprint, because it is no longer our problem.
-        totals.total_size_on_disk -= f.known_size();
+        totals.total_size_on_disk -= size;
     }
 
     // #8376 - if we had an error in recycling (disk rename?), and no elements
