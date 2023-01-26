@@ -34,13 +34,6 @@ inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstabl
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
 
-std::vector<std::pair<sstring, dht::token>>
-token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
-        unsigned ignore_msb = 0, unsigned smp_count = smp::count);
-
-std::vector<std::pair<sstring, dht::token>>
-token_generation_for_current_shard(unsigned tokens_to_generate);
-
 namespace sstables {
 
 using sstable_ptr = shared_sstable;
