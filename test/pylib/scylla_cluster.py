@@ -99,6 +99,8 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
 
         'permissions_update_interval_in_ms': 100,
         'permissions_validity_in_ms': 100,
+
+        'force_schema_commit_log': True,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
