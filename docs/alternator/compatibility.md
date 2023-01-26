@@ -267,7 +267,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   estimates, and also part of the information about indexes enabled on 
   the table.
   <https://github.com/scylladb/scylla/issues/5013>
-  <https://github.com/scylladb/scylla/issues/5026>
+  <https://github.com/scylladb/scylla/issues/5320>
   <https://github.com/scylladb/scylla/issues/7550>
   <https://github.com/scylladb/scylla/issues/7551>
 
