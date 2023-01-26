@@ -368,14 +368,18 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
 future<size_t>
 distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<replica::database>& db,
-        sharded<db::view::view_update_generator>& view_update_generator, fs::path datadir, sstring ks, sstring cf) {
+        sharded<db::view::view_update_generator>& view_update_generator, bool needs_view_update, sstring ks, sstring cf) {
 
     auto& table = db.local().find_column_family(ks, cf);
     auto new_sstables = std::vector<sstables::shared_sstable>();
 
-    co_await dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) -> future<> {
+    co_await dir.do_for_each_sstable([&table, needs_view_update, &new_sstables] (sstables::shared_sstable sst) -> future<> {
         auto gen = table.calculate_generation_for_new_table();
-        dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
+        dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), needs_view_update ? "staging" : "base", gen);
+        fs::path datadir(table.dir());
+        if (needs_view_update) {
+            datadir /= sstables::staging_dir;
+        }
         co_await sst->move_to_new_dir(datadir.native(), gen);
             // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
             sst->set_sstable_level(0);
@@ -455,19 +459,14 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             return make_sstable(*global_table, upload, gen);
         }, [] (const sstables::shared_sstable&) { return true; }, service::get_local_streaming_priority()).get();
 
+        // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get0();
 
-        auto datadir = upload.parent_path();
-        if (use_view_update_path) {
-            // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-           datadir /= sstables::staging_dir;
-        }
-
-        size_t loaded = directory.map_reduce0([&db, ks, cf, datadir, &view_update_generator] (sstables::sstable_directory& dir) {
-            return make_sstables_available(dir, db, view_update_generator, datadir, ks, cf);
+        size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &view_update_generator] (sstables::sstable_directory& dir) {
+            return make_sstables_available(dir, db, view_update_generator, use_view_update_path, ks, cf);
         }, size_t(0), std::plus<size_t>()).get0();
 
-        dblog.info("Loaded {} SSTables into {}", loaded, datadir.native());
+        dblog.info("Loaded {} SSTables", loaded);
     });
 }
 
