@@ -741,12 +741,16 @@ class ScyllaCluster:
             server.write_log_marker(f"------ Starting test {name} ------\n")
 
     def after_test(self, name) -> None:
-        """Check that the cluster is still alive and the test
+        """If the cluster is not dirty, check that it's still alive and the test
         hasn't left any garbage."""
         assert self.start_exception is None
-        if self._get_keyspace_count() != self.keyspace_count:
-            raise RuntimeError("Test post-condition failed, "
-                               "the test must drop all keyspaces it creates.")
+        if self.is_dirty:
+            self.logger.info(f"The cluster {self.name} is dirty, not checking"
+                             f" keyspace count post-condition")
+        else:
+            if self._get_keyspace_count() != self.keyspace_count:
+                raise RuntimeError(f"Test post-condition on cluster {self.name} failed, "
+                                   f"the test must drop all keyspaces it creates.")
         for server in itertools.chain(self.running.values(), self.stopped.values()):
             server.write_log_marker(f"------ Ending test {name} ------\n")
 

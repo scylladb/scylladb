@@ -192,9 +192,11 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
-# used in tests to make schema changes. Tables are dropped after finished.
+# used in tests to make schema changes. Tables are dropped after test finishes
+# unless the cluster is dirty.
 @pytest.fixture(scope="function")
-def random_tables(request, manager):
+async def random_tables(request, manager):
     tables = RandomTables(request.node.name, manager, unique_name())
     yield tables
-    tables.drop_all()
+    if not await manager.is_dirty():
+        tables.drop_all()
