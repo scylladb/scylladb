@@ -481,9 +481,6 @@ private:
 
 future<> table_population_metadata::start_subdir(sstring subdir) {
     sstring sstdir = get_path(subdir).native();
-    if (!co_await file_exists(sstdir)) {
-        co_return;
-    }
 
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
@@ -495,6 +492,11 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
         global_table->location() + "/" + subdir, default_priority_class(),
         default_io_error_handler_gen()
     );
+
+    if (!co_await directory.invoke_on(0, [] (auto& d) { return d.exists(); })) {
+        co_await directory.stop();
+        co_return;
+    }
 
     // directory must be stopped using table_population_metadata::stop below
     _sstable_directories[subdir] = dptr;

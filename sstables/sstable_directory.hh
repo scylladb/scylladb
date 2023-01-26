@@ -211,6 +211,7 @@ public:
     sstable_info_vector retrieve_shared_sstables();
 
     future<> verify() const;
+    future<bool> exists() const;
     future<> garbage_collect();
 
     // When we compact sstables, we have to atomically instantiate the new
