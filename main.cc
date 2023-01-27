@@ -400,7 +400,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
                 // System error codes we consider "environmental",
                 // i.e. not scylla's fault, therefore there is no point in
                 // aborting and dumping core.
-                for (int i : {EIO, EACCES, ENOSPC}) {
+                for (int i : {EIO, EACCES, EDQUOT, ENOSPC}) {
                     if (e.code() == std::error_code(i, std::system_category())) {
                         do_abort = false;
                         break;
