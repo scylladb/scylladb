@@ -99,7 +99,6 @@ with_column_family(sstables::test_env& env, schema_ptr s, replica::column_family
         auto subdir = std::to_string(x_log2_compaction_groups);
         auto dir = env.tempdir().path() / subdir;
         co_await touch_directory(dir.native());
-        cfg.datadir = dir.native();
         cfg.location = subdir;
         cfg.x_log2_compaction_groups = x_log2_compaction_groups;
         auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});

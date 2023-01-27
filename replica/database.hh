@@ -349,9 +349,7 @@ struct table_stats {
 class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
         sstring location;
-        sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;
@@ -619,9 +617,6 @@ private:
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
 public:
-    sstring dir() const {
-        return _config.datadir;
-    }
 
     const sstring& location() const noexcept { return _config.location; }
 
@@ -1123,9 +1118,7 @@ using keyspace_metadata = data_dictionary::keyspace_metadata;
 class keyspace {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
         sstring location;
-        sstring datadir;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
@@ -1206,10 +1199,6 @@ public:
 
     void set_incremental_backups(bool val) {
         _config.enable_incremental_backups = val;
-    }
-
-    const sstring& datadir() const {
-        return _config.datadir;
     }
 
     const sstring& location() const noexcept { return _config.location; }
