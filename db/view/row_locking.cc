@@ -94,11 +94,8 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     // locks and will keep the entry alive.
     future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
     return lock_partition.then([this, pk = &i->first, row_locks = &i->second._row_locks, ck = std::move(ck), exclusive, tracker = std::move(tracker), timeout] (auto lock1) mutable {
-        auto j = row_locks->find(ck);
-        if (j == row_locks->end()) {
-            // Not yet locked, need to create the lock.
-            j = row_locks->emplace(std::move(ck), lock_type()).first;
-        }
+        // Create a row_lock entry if it doesn't exist already.
+        auto j = row_locks->try_emplace(std::move(ck), lock_type()).first;
         auto* cpk = &j->first;
         auto& row_lock = j->second;
         // Like to the two-level lock entry above, the row_lock entry we've just created
