@@ -4,7 +4,7 @@ ScyllaDB Web Installer for Linux
 
 ScyllaDB Web Installer is a platform-agnostic installation script you can run with ``curl`` to install ScyllaDB on Linux.
 
-See `ScyllaDB Download Center <https://www.scylladb.com/download/#server>`_ for information on manually installing ScyllaDB with platform-specific installation packages.
+See `ScyllaDB Download Center <https://www.scylladb.com/download/#core>`_ for information on manually installing ScyllaDB with platform-specific installation packages.
 
 Prerequisites
 --------------

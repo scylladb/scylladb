@@ -25,7 +25,7 @@ Getting Started
   :id: "getting-started"
   :class: my-panel
 
-  * `Install ScyllaDB (Binary Packages, Docker, or EC2) <https://www.scylladb.com/download/>`_ - Links to the ScyllaDB Download Center
+  * `Install ScyllaDB (Binary Packages, Docker, or EC2) <https://www.scylladb.com/download/#core>`_ - Links to the ScyllaDB Download Center
   
   * :doc:`Configure ScyllaDB </getting-started/system-configuration/>`
   * :doc:`Run ScyllaDB in a Shared Environment </getting-started/scylla-in-a-shared-environment>`
