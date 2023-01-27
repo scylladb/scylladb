@@ -20,7 +20,7 @@ Install ScyllaDB
 
   Keep your versions up-to-date. The two latest versions are supported. Also always install the latest patches for your version. 
 
-  * Download and install ScyllaDB Server, Drivers and Tools in `Scylla Download Center <https://www.scylladb.com/download/#server/>`_
+  * Download and install ScyllaDB Server, Drivers and Tools in `ScyllaDB Download Center <https://www.scylladb.com/download/#core>`_
   * :doc:`ScyllaDB Web Installer for Linux <scylla-web-installer>`
   * :doc:`ScyllaDB Unified Installer (relocatable executable) <unified-installer>`
   * :doc:`Air-gapped Server Installation <air-gapped-install>`
