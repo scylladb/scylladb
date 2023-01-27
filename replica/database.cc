@@ -1242,11 +1242,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
     const db::config& db_config = db.get_config();
 
-    for (auto& extra : db_config.data_file_directories()) {
-        cfg.all_datadirs.push_back(column_family_directory(format("{}/{}", extra, _config.location), s.cf_name(), s.id()));
-    }
     cfg.location = column_family_directory(_config.location, s.cf_name(), s.id());
-    cfg.datadir = format("{}/{}", db_config.data_file_directories()[0], cfg.location);
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
@@ -2045,10 +2041,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
     if (_cfg.data_file_directories().size() > 0) {
         cfg.location = ksm.name();
-        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], cfg.location);
-        for (auto& extra : _cfg.data_file_directories()) {
-            cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
-        }
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
@@ -2056,7 +2048,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
 
     } else {
         cfg.location = "";
-        cfg.datadir = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;
