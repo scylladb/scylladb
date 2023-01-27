@@ -713,7 +713,7 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 
                 auto should_retry = [](auto* ep) {
                     int ec = ep->code().value();
-                    return ec == ENOSPC;
+                    return ec == ENOSPC || ec == EDQUOT;
                 };
                 if (try_catch<std::bad_alloc>(ex)) {
                     // There is a chance something else will free the memory, so we can try again
