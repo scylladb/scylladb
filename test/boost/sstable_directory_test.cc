@@ -157,7 +157,7 @@ static void with_sstable_directory(
 
 SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
   return sstables::test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
+    auto& dir = env.tempdir();
 
     // Write a manifest file to make sure it's ignored
     auto manifest = dir.path() / "manifest.json";
@@ -178,7 +178,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
   return sstables::test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
+    auto& dir = env.tempdir();
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
 
     // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
@@ -198,7 +198,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
 // reproducing https://github.com/scylladb/scylla/issues/10697
 SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
     return sstables::test_env::do_with_async([] (test_env& env) {
-        auto dir = tmpdir();
+        auto& dir = env.tempdir();
         auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
 
         // Add a bogus file in the sstables directory
@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
 // Test always-benign incomplete SSTable: temporaryTOC found
 SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
+    auto& dir = env.tempdir();
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
@@ -234,7 +234,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
 // Test always-benign incomplete SSTable: with extraneous temporaryTOC found
 SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
     return sstables::test_env::do_with_async([] (test_env& env) {
-        auto dir = tmpdir();
+        auto& dir = env.tempdir();
         auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
         link_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
@@ -250,7 +250,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
 // Test the absence of TOC. Behavior is controllable by a flag
 SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
+    auto& dir = env.tempdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     remove_file(test::filename(*sst, sstables::component_type::TOC).native()).get();
@@ -276,7 +276,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
 // is not around (but mentioned in the TOC), then this is an error.
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-    auto dir = tmpdir();
+    auto& dir = env.local().tempdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
     auto tempstr = test::filename(*sst, component_type::TemporaryStatistics);
@@ -309,7 +309,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
 // Test that we see the right generation during the scan. Temporary files are skipped
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-    auto dir = tmpdir();
+    auto& dir = env.local().tempdir();
     make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 3333));
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
     rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
@@ -345,7 +345,7 @@ future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, 
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_generations) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-    auto dir = tmpdir();
+    auto& dir = env.local().tempdir();
     for (shard_id i = 0; i < smp::count; ++i) {
         env.invoke_on(i, [dir = dir.path(), i] (sstables::test_env& env) {
             // this is why it is annoying for the internal functions in the test infrastructure to
@@ -369,7 +369,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_generations) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-    auto dir = tmpdir();
+    auto& dir = env.local().tempdir();
     for (shard_id i = 0; i < smp::count; ++i) {
         env.invoke_on(i, [dir = dir.path(), i] (sstables::test_env& env) {
             // this is why it is annoying for the internal functions in the test infrastructure to
