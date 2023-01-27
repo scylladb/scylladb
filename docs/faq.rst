@@ -228,6 +228,32 @@ Scylla comes with its own version of the Apache Cassandra client tools, in the p
 
 We recommend uninstalling Apache Cassandra before installing :code:`scylla-tools`.
 
+.. _faq-pinning:
+
+Can I install or upgrade to a patch release other than latest on Debian or Ubuntu?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The APT package manager used for Ubuntu, Debian, and image installations of ScyllaDB installs the latest patch 
+release (x.y.z) of a given major release (x.y). To remain on a ScyllaDB patch release that is not the latest, you can 
+use pinning as a workaround.
+
+The following example shows pinning ScyllaDB Enterprise version 2021.1.0-0.20210511.9e8e7d58b-1:
+
+.. code-block:: console
+
+   $ cat <<EOF | sudo tee /etc/apt/preferences.d/99scylla-enterprise
+   Package: scylla-enterprise*
+   Pin: version 2021.1.0-0.20210511.9e8e7d58b-1
+   Pin-Priority: 1001
+   EOF
+
+Pinning may be particularly useful when you want to downgrade ScyllaDB or upgrade to a version that is not the latest 
+available version.
+
+See `this topic <https://unix.stackexchange.com/questions/350192/apt-get-not-properly-resolving-a-dependency-on-a-fixed-version-in-a-debian-ubunt>`_ 
+and `this article <https://help.ubuntu.com/community/PinningHowto>`_ for details about pinning on Debian-based systems.
+
+
 .. _faq-snitch-strategy:
 
 Which snitch or replication strategy should I use?
