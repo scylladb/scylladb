@@ -69,7 +69,7 @@ For example we are looking for the keyspace ``demodb`` and table ``tmcr``:
 
 .. code-block:: console
 
-   SELECT * FROM system.large_partitions WHERE keyspace_name = 'demodb' AND table_name = 'tmcr;
+   SELECT * FROM system.large_partitions WHERE keyspace_name = 'demodb' AND table_name = 'tmcr';
 
 Example output:
 
