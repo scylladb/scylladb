@@ -49,14 +49,6 @@
 
 extern logging::logger apilog;
 
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const api::table_info& ti) {
-    return os << "table{name=" << ti.name << ", id=" << ti.id << "}";
-}
-
-} // namespace std
-
 namespace api {
 
 const locator::token_metadata& http_context::get_token_metadata() {
@@ -136,25 +128,6 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& 
 std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
     auto it = query_params.find(param_name);
     return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
-}
-
-// Run on all tables, skipping dropped tables
-future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
-    std::exception_ptr ex;
-    for (const auto& ti : local_tables) {
-        apilog.debug("Starting {} on {}.{}", op, keyspace, ti);
-        try {
-            co_await func(db.find_column_family(ti.id));
-        } catch (const replica::no_such_column_family& e) {
-            apilog.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
-        } catch (...) {
-            ex = std::current_exception();
-            apilog.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
-        }
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
-    }
 }
 
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {

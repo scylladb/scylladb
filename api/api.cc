@@ -32,7 +32,7 @@
 #include "task_manager.hh"
 #include "task_manager_test.hh"
 
-logging::logger apilog("api");
+extern logging::logger apilog;
 
 namespace api {
 
