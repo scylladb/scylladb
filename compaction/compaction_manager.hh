@@ -389,6 +389,10 @@ public:
     // An inline constructor for testing
     compaction_manager(tasks::task_manager& tm, for_testing_tag) : compaction_manager(tm) {}
 
+    compaction::task_manager_module& get_task_manager_module() noexcept {
+        return *_task_manager_module;
+    }
+
     const scheduling_group& compaction_sg() const noexcept {
         return _cfg.compaction_sched_group;
     }
