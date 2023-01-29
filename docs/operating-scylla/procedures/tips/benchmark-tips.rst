@@ -292,7 +292,7 @@ They have already been correctly configured for use in those public cloud enviro
 AWS
 ===
 
-AWS EC2 i3, i3en and cd5 bare metal instances are **highly recommended** because they are optimized for high I/O.
+AWS EC2 i3, i3en, i4i and c5d bare metal instances are **highly recommended** because they are optimized for high I/O.
 
 Read more about :ref:`Scylla Supported Platforms <system-requirements-supported-platforms>`.
 
