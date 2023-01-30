@@ -129,6 +129,26 @@ protected:
     virtual future<> run() override;
 };
 
+class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
+private:
+    replica::database& _db;
+    std::vector<table_id> _local_tables;
+public:
+    shard_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            tasks::task_id parent_id,
+            replica::database& db,
+            std::vector<table_id> local_tables) noexcept
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        , _db(db)
+        , _local_tables(std::move(local_tables))
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
