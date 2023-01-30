@@ -489,7 +489,7 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
             } else {
                 // All sstables are assumed to be in the same column_family, hence
                 // sharing their base directory.
-                assert (sstdir == sst->_storage.prefix());
+                assert (fs::equivalent(fs::path(sstdir), fs::path(sst->_storage.prefix())));
             }
         }
 
