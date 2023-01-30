@@ -42,6 +42,17 @@ if __name__ == '__main__':
         print("Cannot specify both --swap-size and --swap-size-bytes")
         sys.exit(1)
 
+    swapfile = Path(args.swap_directory) / 'swapfile'
+    if swapfile.exists():
+        print('swapfile {} already exists'.format(swapfile))
+        sys.exit(1)
+
+    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
+    swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
+    if not args.overwrite_unit_file and swapunit.exists():
+        print('swap unit {} already exists'.format(swapunit))
+        sys.exit(1)
+
     diskfree = psutil.disk_usage(args.swap_directory).free
     if args.swap_size or args.swap_size_bytes:
         if args.swap_size:
@@ -71,18 +82,9 @@ if __name__ == '__main__':
             swapsize = half_of_diskfree
 
     swapsize_mb = int(swapsize / 1024 / 1024)
-    swapfile = Path(args.swap_directory) / 'swapfile'
-    if swapfile.exists():
-        print('swapfile {} already exists'.format(swapfile))
-        sys.exit(1)
     run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb), shell=True, check=True)
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile), shell=True, check=True)
-    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
-    swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
-    if swapunit.exists():
-        print('swap unit {} already exists'.format(swapunit))
-        sys.exit(1)
     unit_data = '''
 [Unit]
 Description=swapfile
