@@ -986,6 +986,12 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             auto& schema = *schema_opt;
 
+            if (receiver.get() != nullptr && &receiver->type->without_reversed() != long_type.get()) {
+                throw exceptions::invalid_request_exception(
+                    format("token() produces a value fo type long, which doesn't match the type: {} of {}",
+                           receiver->type->name(), receiver->name->text()));
+            }
+
             std::vector<expression> prepared_token_args;
             prepared_token_args.reserve(tk.args.size());
 
