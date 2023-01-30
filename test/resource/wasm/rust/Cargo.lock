@@ -148,7 +148,9 @@ dependencies = [
 name = "examples"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "scylla-udf",
+ "uuid",
 ]
 
 [[package]]
