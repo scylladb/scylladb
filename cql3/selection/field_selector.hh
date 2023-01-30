@@ -80,7 +80,7 @@ public:
 
     virtual sstring assignment_testable_source_context() const override {
         auto&& name = _type->field_name(_field);
-        auto sname = sstring(reinterpret_cast<const char*>(name.begin(), name.size()));
+        auto sname = std::string_view(reinterpret_cast<const char*>(name.data()), name.size());
         return format("{}.{}", _selected, sname);
     }
 
