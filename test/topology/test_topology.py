@@ -19,7 +19,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
 from cassandra.cluster import Session
 from test.pylib.random_tables import RandomTables
-from test.pylib.rest_client import inject_error
+from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
@@ -256,14 +256,14 @@ async def test_remove_garbage_group0_members(manager: ManagerClient, random_tabl
     logging.info(f'removenode {servers[0]} using {servers[1]}')
     # removenode will fail after removing the server from the token ring,
     # but before removing it from group 0
-    async with inject_error(manager.api, servers[1].ip_addr,
-                            'removenode_fail_before_remove_from_group0', one_shot=True):
-        try:
-            await manager.remove_node(servers[1].server_id, servers[0].server_id)
-        except Exception:
-            # Note: the exception returned here is only '500 internal server error',
-            # need to look in test.py log for the actual message coming from Scylla.
-            logging.info(f'expected exception during injection')
+    await inject_error_one_shot(manager.api, servers[1].ip_addr,
+                                'removenode_fail_before_remove_from_group0')
+    try:
+        await manager.remove_node(servers[1].server_id, servers[0].server_id)
+    except Exception:
+        # Note: the exception returned here is only '500 internal server error',
+        # need to look in test.py log for the actual message coming from Scylla.
+        logging.info(f'expected exception during injection')
 
     # Query the storage_service/host_id endpoint to calculate a list of known token ring members' Host IDs
     # (internally, this endpoint uses token_metadata)
