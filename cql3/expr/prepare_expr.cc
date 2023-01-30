@@ -1000,7 +1000,37 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
                 if (!prepared_arg_opt) {
                     return std::nullopt;
                 }
+
                 prepared_token_args.emplace_back(std::move(*prepared_arg_opt));
+            }
+
+            // Validate that the token() function was passed all partition key columns as the arguments.
+            // In the future we might relax this restriction to be able to compute the token from arbitrary values.
+            if (prepared_token_args.size() != schema.partition_key_size()) {
+                throw exceptions::invalid_request_exception(format(
+                    "Wrong number of arguments to the token() function. Expected {}, got {}. The token() function must "
+                    "be given all partition key columns as arguments.",
+                    schema.partition_key_size(), prepared_token_args.size()));
+            }
+
+            for (std::size_t arg_idx = 0; arg_idx < prepared_token_args.size(); arg_idx++) {
+                const column_value* column_arg = as_if<column_value>(&prepared_token_args[arg_idx]);
+
+                // Make sure that it's a column_value that contains a partition key column, not some other expression.
+                if (column_arg == nullptr || !column_arg->col->is_partition_key()) {
+                    expression::printer arg_printer{.expr_to_print = prepared_token_args[arg_idx], .debug_mode = false};
+                    throw exceptions::invalid_request_exception(
+                        format("The token() function accepts only partition key columns as arguments, found: {}",
+                               arg_printer));
+                }
+
+                // The columns must be passed in the same order as in the table definition.
+                if (column_arg->col->position() != arg_idx) {
+                    throw exceptions::invalid_request_exception(
+                        format("The token() function requires passing all partition key columns in the same order as "
+                               "in the table definition. Got column: {}, but expected: {} instead.",
+                               column_arg->col->name_as_text(), schema.column_at(column_kind::partition_key, arg_idx)));
+                }
             }
 
             return token(std::move(prepared_token_args));

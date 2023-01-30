@@ -1338,8 +1338,7 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
     BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(utf8_type)), exceptions::invalid_request_exception);
 }
 
-// prepare_expression(token) doesn't validate its arguments,
-// validation is done in a different place
+// Calling token() with no arguments should fail, it requires all partition key columns as arguments.
 BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
     schema_ptr table_schema = schema_builder("test_ks", "test_cf")
                                   .with_column("p1", int32_type, column_kind::partition_key)
@@ -1351,12 +1350,10 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
     expression tok = token(std::vector<expression>());
     expression expected = tok;
 
-    // Preparing works as expected, both with and without a reciever
-    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr), expected);
-    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)), expected);
-
-    // Preparing with the wrong receiver fails
-    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(utf8_type)), exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
