@@ -1602,17 +1602,16 @@ static bool check_needs_read_before_write(const parsed::condition_expression& co
 
 // Fail the expression if it has unused attribute names or values. This is
 // how DynamoDB behaves, so we do too.
-static void verify_all_are_used(const rjson::value& req, const char* field,
-        const std::unordered_set<std::string>& used, const char* operation) {
-    const rjson::value* attribute_names = rjson::find(req, field);
-    if (!attribute_names) {
+static void verify_all_are_used(const rjson::value* field,
+        const std::unordered_set<std::string>& used, const char* field_name, const char* operation) {
+    if (!field) {
         return;
     }
-    for (auto it = attribute_names->MemberBegin(); it != attribute_names->MemberEnd(); ++it) {
+    for (auto it = field->MemberBegin(); it != field->MemberEnd(); ++it) {
         if (!used.contains(it->name.GetString())) {
             throw api_error::validation(
                 format("{} has spurious '{}', not used in {}",
-                       field, it->name.GetString(), operation));
+                    field_name, it->name.GetString(), operation));
         }
     }
 }
@@ -1639,8 +1638,8 @@ public:
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
-            verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "PutItem");
-            verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "PutItem");
+            verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "PutItem");
+            verify_all_are_used(expression_attribute_values, used_attribute_values,"ExpressionAttributeValues", "PutItem");
         } else {
             if (expression_attribute_names) {
                 throw api_error::validation("ExpressionAttributeNames cannot be used without ConditionExpression");
@@ -1724,8 +1723,8 @@ public:
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
-            verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "DeleteItem");
-            verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "DeleteItem");
+            verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "DeleteItem");
+            verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "DeleteItem");
         } else {
             if (expression_attribute_names) {
                 throw api_error::validation("ExpressionAttributeNames cannot be used without ConditionExpression");
@@ -2497,8 +2496,8 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
             expression_attribute_names, expression_attribute_values,
             used_attribute_names, used_attribute_values);
 
-    verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateItem");
-    verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateItem");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "UpdateItem");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "UpdateItem");
 
     // DynamoDB forbids having both old-style AttributeUpdates or Expected
     // and new-style UpdateExpression or ConditionExpression in the same request
@@ -3107,7 +3106,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
     std::unordered_set<std::string> used_attribute_names;
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
-    verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
+    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
@@ -3218,7 +3218,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
         rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, used_attribute_names));
-        verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
+        const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+        verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "GetItem");
         auto& keys = (it->value)["Keys"];
         for (rjson::value& key : keys.GetArray()) {
             rs.add(key);
@@ -3792,8 +3793,10 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     // optimized the filtering by modifying partition_ranges and/or
     // ck_bounds. We haven't done this optimization yet.
 
-    verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "Scan");
-    verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "Scan");
+    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Scan");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
@@ -4234,13 +4237,17 @@ future<executor::request_return_type> executor::query(client_state& client_state
         throw api_error::validation("Query must have one of "
                 "KeyConditions or KeyConditionExpression");
     }
+
+    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
+
     // exactly one of key_conditions or key_condition_expression
     auto [partition_ranges, ck_bounds] = key_conditions
                 ? calculate_bounds_conditions(schema, *key_conditions)
                 : calculate_bounds_condition_expression(schema, *key_condition_expression,
-                        rjson::find(request, "ExpressionAttributeValues"),
+                        expression_attribute_values,
                         used_attribute_values,
-                        rjson::find(request, "ExpressionAttributeNames"),
+                        expression_attribute_names,
                         used_attribute_names);
 
     filter filter(request, filter::request_type::QUERY,
@@ -4267,8 +4274,8 @@ future<executor::request_return_type> executor::query(client_state& client_state
     select_type select = parse_select(request, table_type);
 
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names, select);
-    verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "Query");
-    verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "Query");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
