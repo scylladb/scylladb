@@ -96,8 +96,11 @@ with_column_family(sstables::test_env& env, schema_ptr s, replica::column_family
     std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 3 /* 8 CGs */ };
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
         auto tracker = make_lw_shared<cache_tracker>();
-        auto dir = tmpdir();
-        cfg.datadir = dir.path().string();
+        auto subdir = std::to_string(x_log2_compaction_groups);
+        auto dir = env.tempdir().path() / subdir;
+        co_await touch_directory(dir.native());
+        cfg.datadir = dir.native();
+        cfg.location = subdir;
         cfg.x_log2_compaction_groups = x_log2_compaction_groups;
         auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();

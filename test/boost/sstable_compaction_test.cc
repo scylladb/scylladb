@@ -4292,7 +4292,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         auto cm = compaction_manager_for_testing();
 
-        auto tmp = tmpdir();
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto tracker = make_lw_shared<cache_tracker>();
         auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
@@ -4328,8 +4327,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             schemas.push_back(s);
 
             replica::column_family::config cfg = env.make_table_config();
-            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
-            touch_directory(cfg.datadir).get();
+            cfg.location = std::to_string(idx);
+            auto path = env.tempdir().path() / std::to_string(idx);
+            touch_directory(path.native()).get();
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
 
@@ -4342,7 +4342,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         auto sst_gen = [&, gen = make_lw_shared<unsigned>(1)] (size_t idx) mutable {
             auto s = schemas[idx];
             auto t = tables[idx];
-            return env.make_sstable(s, t->dir(), (*gen)++, sstables::sstable::version_types::md, big);
+            auto path = env.tempdir().path() / std::to_string(idx);
+            return env.make_sstable(s, path.native(), (*gen)++, sstables::sstable::version_types::md, big);
         };
 
         auto add_single_fully_expired_sstable_to_table = [&] (auto idx) {
