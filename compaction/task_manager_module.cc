@@ -57,4 +57,22 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     });
 }
 
+future<> cleanup_keyspace_compaction_task_impl::run() {
+    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto local_tables = _table_ids;
+        // Cleanup smaller tables first, to increase chances of success if low on space.
+        std::ranges::sort(local_tables, std::less<>(), [&] (const table_id& ti) {
+            try {
+                return db.find_column_family(ti).get_stats().live_disk_space_used;
+            } catch (const replica::no_such_column_family& e) {
+                return int64_t(-1);
+            }
+        });
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(_status.keyspace));
+        co_await run_on_existing_tables("force_keyspace_cleanup", db, _status.keyspace, local_tables, [&] (replica::table& t) {
+            return t.perform_cleanup_compaction(owned_ranges_ptr);
+        });
+    });
+}
+
 }
