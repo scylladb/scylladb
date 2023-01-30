@@ -304,8 +304,7 @@ public:
 
     static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
         return test_env::do_with_async([fut = std::move(fut)] (test_env& env) {
-            auto tmp = tmpdir();
-            fut(env, tmp.path().string()).get();
+            fut(env, env.tempdir().path().string()).get();
         });
     }
 
