@@ -308,7 +308,7 @@ struct fmt::formatter<locator::effective_replication_map::factory_key> {
     auto format(const locator::effective_replication_map::factory_key& key, FormatContext& ctx) {
         std::ostringstream os;
         os << key;
-        return format_to(ctx.out(), "{}", os.str());
+        return fmt::format_to(ctx.out(), "{}", os.str());
     }
 };
 
