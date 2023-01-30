@@ -1356,6 +1356,142 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
                         exceptions::invalid_request_exception);
 }
 
+// Calling token(p1, p2) should fail - the column p3 is missing.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p2_no_p3) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, p2, p3, p1) should fail - wrong number of arguments (4 instead of 3).
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p2_p3_p1) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p3", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, p3, p2) should fail - the columns should be in the same order as in the table definition.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p3_p2_wrong_order) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p3", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, p2, c1) should fail - the column c1 is a clustering column.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p2_c1) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .with_column("c1", int32_type, column_kind::clustering_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("c1", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, p2, r1) should fail - the column r1 is a clustering column.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p2_r1) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .with_column("r1", int32_type, column_kind::regular_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("r1", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, p2, s1) should fail - the column s1 is a static column.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_p2_s1) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .with_column("s1", int32_type, column_kind::static_column)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("s1", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
+// Calling token(p1, 123, p3) should fail - only columns are accepted as arguments.
+BOOST_AUTO_TEST_CASE(prepare_token_p1_123_p3) {
+    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+                                  .with_column("p1", int32_type, column_kind::partition_key)
+                                  .with_column("p2", int32_type, column_kind::partition_key)
+                                  .with_column("p3", int32_type, column_kind::partition_key)
+                                  .build();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            make_int_untyped("123"),
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)}});
+
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+}
+
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
