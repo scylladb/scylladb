@@ -409,7 +409,9 @@ public:
                 l0_old_ssts.push_back(std::move(sst));
             }
         }
-        _l0_scts.replace_sstables(std::move(l0_old_ssts), std::move(l0_new_ssts));
+        if (l0_old_ssts.size() || l0_new_ssts.size()) {
+            _l0_scts.replace_sstables(std::move(l0_old_ssts), std::move(l0_new_ssts));
+        }
     }
 };
 
