@@ -2352,7 +2352,8 @@ void storage_proxy_stats::write_stats::register_split_metrics_local() {
 
 void storage_proxy_stats::write_stats::register_stats() {
     namespace sm = seastar::metrics;
-    _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_summary("write_latency_summary", sm::description("Write latency summary"), [this] {return to_metrics_summary(write.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
             sm::make_histogram("write_latency", sm::description("The general write latency histogram"),
                     {storage_proxy_stats::current_scheduling_group_label()},
@@ -2411,6 +2412,7 @@ void storage_proxy_stats::write_stats::register_stats() {
                     "and cannot store any more in-flight hints"),
                     {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
         });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 storage_proxy_stats::stats::stats()
@@ -2441,7 +2443,8 @@ void storage_proxy_stats::stats::register_split_metrics_local() {
 void storage_proxy_stats::stats::register_stats() {
     namespace sm = seastar::metrics;
     write_stats::register_stats();
-    _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_summary("read_latency_summary", sm::description("Read latency summary"), [this] {return to_metrics_summary(read.summary());})(storage_proxy_stats::current_scheduling_group_label()).set_skip_when_empty(),
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
@@ -2580,7 +2583,7 @@ void storage_proxy_stats::stats::register_stats() {
                         {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
 
-    _metrics.add_group(REPLICA_STATS_CATEGORY, {
+    new_metrics.add_group(REPLICA_STATS_CATEGORY, {
         sm::make_total_operations("received_counter_updates", received_counter_updates,
                        sm::description("number of counter updates received by this node acting as an update leader"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
@@ -2617,6 +2620,7 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("how many times a coordinator did not perfom prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept {
@@ -2639,11 +2643,12 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::to
 
 void storage_proxy_stats::split_stats::register_metrics_local() {
     namespace sm = seastar::metrics;
-
-    _metrics.add_group(_category, {
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group(_category, {
         sm::make_counter(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
                        sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::current_scheduling_group_label(), op_type_label(_op_type)})
     });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, gms::inet_address ep) {
@@ -2662,7 +2667,8 @@ void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, gms::ine
 
 void storage_proxy_stats::global_write_stats::register_stats() {
     namespace sm = seastar::metrics;
-    _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_current_bytes("queued_write_bytes", queued_write_bytes,
                            sm::description("number of bytes in pending write requests"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
@@ -2671,6 +2677,7 @@ void storage_proxy_stats::global_write_stats::register_stats() {
                            sm::description("number of bytes in pending background write requests"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
         });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 void storage_proxy_stats::global_stats::register_stats() {
