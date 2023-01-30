@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
 import pytest
 from test.pylib.internal_types import IPAddress, HostID
+from test.pylib.shorten_sockpath import ShortenSockpath
 
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,10 @@ class UnixRESTClient(RESTClient):
         #       host parameter is ignored but set to socket name as convention
         self.uri_scheme: str = "http+unix"
         self.default_host: str = f"{os.path.basename(sock_path)}"
-        self.connector = UnixConnector(path=sock_path)
+        # ShortenSockpath needs to be kept alive while it is used, so we
+        # keep it in self:
+        self.sock_path = ShortenSockpath(sock_path)
+        self.connector = UnixConnector(path = self.sock_path)
 
 
 class TCPRESTClient(RESTClient):

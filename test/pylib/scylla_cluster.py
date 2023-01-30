@@ -27,6 +27,7 @@ from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.shorten_sockpath import ShortenSockpath
 import aiohttp
 import aiohttp.web
 import yaml
@@ -853,7 +854,7 @@ class ScyllaClusterManager:
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
-        self.sock_path: str = f"{self.manager_dir}/api"
+        self.sock_path: ShortenSockPath = ShortenSockpath(f"{self.manager_dir}/api")
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
