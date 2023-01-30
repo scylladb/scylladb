@@ -3852,8 +3852,7 @@ future<> test_twcs_interposer_on_flush(bool split_during_flush) {
             return m;
         };
 
-        auto tmp = tmpdir();
-        table_for_tests cf(env.manager(), s, tmp.path().string());
+        table_for_tests cf(env.manager(), s, env.tempdir().path().string());
         auto close_cf = deferred_stop(cf);
         cf->start();
 
@@ -4596,14 +4595,13 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-        auto tmp = tmpdir();
         auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
         auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
 
-        table_for_tests cf(env.manager(), s, tmp.path().string());
+        table_for_tests cf(env.manager(), s, env.tempdir().path().string());
         auto close_cf = deferred_stop(cf);
-        auto sst_gen = [&env, &cf, s, &tmp] () mutable {
-            return env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf),
+        auto sst_gen = [&env, &cf, s] () mutable {
+            return env.make_sstable(s, env.tempdir().path().string(), column_family_test::calculate_generation_for_new_table(*cf),
                 sstables::get_highest_sstable_version(), big);
         };
 
