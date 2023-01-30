@@ -45,7 +45,7 @@ future<> get_config_swagger_entry(std::string_view name, const std::string& desc
     } else {
         ss <<',';
     };
-    ss << "\"/config/" << name <<"\": {"
+    ss << "\"/v2/config/" << name <<"\": {"
       "\"get\": {"
         "\"description\": \"" << boost::replace_all_copy(boost::replace_all_copy(boost::replace_all_copy(description,"\n","\\n"),"\"", "''"), "\t", " ") <<"\","
         "\"operationId\": \"find_config_"<< name <<"\","
