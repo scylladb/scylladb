@@ -3821,9 +3821,8 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
     });
 }
 
-SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
-    return test_env::do_with_async([] (test_env& env) {
-      auto test_interposer_on_flush = [&] (bool split_during_flush) {
+future<> test_twcs_interposer_on_flush(bool split_during_flush) {
+    return test_env::do_with_async([split_during_flush] (test_env& env) {
         auto builder = schema_builder("tests", "test_twcs_interposer_on_flush")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", int32_type, column_kind::clustering_key)
@@ -3873,11 +3872,15 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);
         BOOST_REQUIRE(cf->get_sstables()->size() == expected_ssts);
-      };
-
-      test_interposer_on_flush(true);
-      test_interposer_on_flush(false);
   });
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split) {
+    return test_twcs_interposer_on_flush(true);
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_nosplit) {
+    return test_twcs_interposer_on_flush(false);
 }
 
 SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
