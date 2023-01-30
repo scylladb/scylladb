@@ -1322,17 +1322,20 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok =
-        token({::make_shared<column_identifier_raw>("p1", true), ::make_shared<column_identifier_raw>("p2", true),
-               ::make_shared<column_identifier_raw>("p3", true)});
-
-    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+    expression tok = token({unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("p3", true)}});
 
     expression expected = token({column_value(table_schema->get_column_definition("p1")),
                                  column_value(table_schema->get_column_definition("p2")),
                                  column_value(table_schema->get_column_definition("p3"))});
 
-    BOOST_REQUIRE_EQUAL(prepared, expected);
+    // Preparing works as expected, both with and without a reciever
+    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)), expected);
+
+    // Preparing with the wrong receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(utf8_type)), exceptions::invalid_request_exception);
 }
 
 // prepare_expression(token) doesn't validate its arguments,
@@ -1346,10 +1349,14 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression tok = token(std::vector<expression>());
+    expression expected = tok;
 
-    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
+    // Preparing works as expected, both with and without a reciever
+    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr), expected);
+    BOOST_REQUIRE_EQUAL(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(long_type)), expected);
 
-    BOOST_REQUIRE_EQUAL(tok, prepared);
+    // Preparing with the wrong receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), make_receiver(utf8_type)), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
