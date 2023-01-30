@@ -1114,14 +1114,14 @@ tls-ssl/index.html: /stable/operating-scylla/security
 /using-scylla/integrations/integration_kairos/index.html: /stable/using-scylla/integrations/integration-kairos
 /upgrade/ami_upgrade/index.html: /stable/upgrade/ami-upgrade
 
-/scylla-cloud/cloud-setup/gcp-vpc-peering/index.html: /stable/scylla-cloud/cloud-setup/GCP/gcp-vpc-peering
-/scylla-cloud/cloud-setup/GCP/gcp-vcp-peering/index.html: /stable/scylla-cloud/cloud-setup/GCP/gcp-vpc-peering
+/scylla-cloud/cloud-setup/gcp-vpc-peering/index.html: https://cloud.docs.scylladb.com/stable/cloud-setup/gcp-vpc-peering.html
+/scylla-cloud/cloud-setup/GCP/gcp-vcp-peering/index.html: https://cloud.docs.scylladb.com/stable/cloud-setup/gcp-vpc-peering.html
 
 # move scylla cloud for AWS to dedicated directory
-/scylla-cloud/cloud-setup/aws-vpc-peering/index.html: /stable/scylla-cloud/cloud-setup/AWS/aws-vpc-peering
-/scylla-cloud/cloud-setup/cloud-prom-proxy/index.html: /stable/scylla-cloud/cloud-setup/AWS/cloud-prom-proxy
-/scylla-cloud/cloud-setup/outposts/index.html: /stable/scylla-cloud/cloud-setup/AWS/outposts
-/scylla-cloud/cloud-setup/scylla-cloud-byoa/index.html: /stable/scylla-cloud/cloud-setup/AWS/scylla-cloud-byoa
+/scylla-cloud/cloud-setup/aws-vpc-peering/index.html: https://cloud.docs.scylladb.com/stable/cloud-setup/aws-vpc-peering.html
+/scylla-cloud/cloud-setup/cloud-prom-proxy/index.html: https://cloud.docs.scylladb.com/stable/monitoring/cloud-prom-proxy.html
+/scylla-cloud/cloud-setup/outposts/index.html: https://cloud.docs.scylladb.com/stable/cloud-setup/outposts.html
+/scylla-cloud/cloud-setup/scylla-cloud-byoa/index.html: https://cloud.docs.scylladb.com/stable/cloud-setup/scylla-cloud-byoa.html
 /scylla-cloud/cloud-services/scylla_cloud_costs/index.html: /stable/scylla-cloud/cloud-services/scylla-cloud-costs
 /scylla-cloud/cloud-services/scylla_cloud_managin_versions/index.html: /stable/scylla-cloud/cloud-services/scylla-cloud-managin-versions
 /scylla-cloud/cloud-services/scylla_cloud_support_alerts_sla/index.html: /stable/scylla-cloud/cloud-services/scylla-cloud-support-alerts-sla
