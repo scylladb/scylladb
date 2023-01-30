@@ -147,11 +147,11 @@ token::get_token_validator() {
     return long_type;
 }
 
-static uint64_t unbias(const token& t) {
+uint64_t unbias(const token& t) {
     return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
 }
 
-static token bias(uint64_t n) {
+token bias(uint64_t n) {
     return token(token::kind::key, n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 

@@ -23,7 +23,7 @@
 
 namespace dht {
 
-logging::logger logger("range_streamer");
+static logging::logger logger("range_streamer");
 
 using inet_address = gms::inet_address;
 

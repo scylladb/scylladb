@@ -654,6 +654,9 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 // ranges_to_subtract must be sorted and deoverlapped.
 future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& ranges, dht::partition_range_vector ranges_to_subtract);
 
+// Returns a token_range vector split based on the given number of most-significant bits
+dht::token_range_vector split_token_range_msb(unsigned most_significant_bits);
+
 } // dht
 
 namespace std {
