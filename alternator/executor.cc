@@ -3218,7 +3218,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
         rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, used_attribute_names));
-        const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+        const rjson::value* expression_attribute_names = rjson::find(it->value, "ExpressionAttributeNames");
         verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "GetItem");
         auto& keys = (it->value)["Keys"];
         for (rjson::value& key : keys.GetArray()) {

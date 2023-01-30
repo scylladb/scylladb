@@ -311,6 +311,23 @@ def test_batch_get_item_projection_expression(test_table):
         expected_items = [{k: item[k] for k in wanted if k in item} for item in items]
         assert multiset(got_items) == multiset(expected_items)
 
+# Test BatchGetItem with ProjectionExpression using an attribute from ExpressionAttributeNames
+def test_batch_get_item_projection_expression_with_attribute_name(test_table):
+    items = [{'p': random_string(), 'c': random_string(), 'val2': random_string()} for i in range(10)]
+    with test_table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    keys = [{k: x[k] for k in ('p', 'c')} for x in items]
+    reply = test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ProjectionExpression': '#ppp', 'ConsistentRead': True,
+        "ExpressionAttributeNames": {"#ppp": "p"}}})
+    got_items = reply['Responses'][test_table.name]
+    expected_items = [{'p': item['p']} for item in items]
+    assert multiset(got_items) == multiset(expected_items)
+    # Same as above but we should return validation error when there is some unused name.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.meta.client.batch_get_item(RequestItems = {test_table.name: {'Keys': keys, 'ProjectionExpression': '#ppp', 'ConsistentRead': True,
+            "ExpressionAttributeNames": {"#ppp": "p", "#unused": "unused"}}})
+
 # Test that we return the required UnprocessedKeys/UnprocessedItems parameters
 def test_batch_unprocessed(test_table_s):
     p = random_string()
