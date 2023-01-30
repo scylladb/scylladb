@@ -566,10 +566,13 @@ raft_tests = set([
 
 wasms = set([
     'wasm/return_input.wat',
+    'wasm/test_complex_null_values.wat',
     'wasm/test_fib_called_on_null.wat',
+    'wasm/test_functions_with_frozen_types.wat',
     'wasm/test_mem_grow.wat',
     'wasm/test_pow.wat',
     'wasm/test_short_ints.wat',
+    'wasm/test_types_with_and_without_nulls.wat',
     'wasm/test_UDA_final.wat',
     'wasm/test_UDA_scalar.wat',
     'wasm/test_word_double.wat',
@@ -1363,6 +1366,9 @@ wasm_deps = {}
 
 wasm_deps['wasm/return_input.wat'] = 'test/resource/wasm/rust/return_input.rs'
 wasm_deps['wasm/test_short_ints.wat'] = 'test/resource/wasm/rust/test_short_ints.rs'
+wasm_deps['wasm/test_complex_null_values.wat'] = 'test/resource/wasm/rust/test_complex_null_values.rs'
+wasm_deps['wasm/test_functions_with_frozen_types.wat'] = 'test/resource/wasm/rust/test_functions_with_frozen_types.rs'
+wasm_deps['wasm/test_types_with_and_without_nulls.wat'] = 'test/resource/wasm/rust/test_types_with_and_without_nulls.rs'
 
 wasm_deps['wasm/test_fib_called_on_null.wat'] = 'test/resource/wasm/c/test_fib_called_on_null.c'
 wasm_deps['wasm/test_mem_grow.wat'] = 'test/resource/wasm/c/test_mem_grow.c'
