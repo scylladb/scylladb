@@ -902,14 +902,15 @@ class ScyllaClusterManager:
         if hasattr(self, "site"):
             await self.site.stop()
             del self.site
-        if not self.cluster.is_dirty:
-            self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=False)
-        else:
-            self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                            self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=True)
-        del self.cluster
+        if hasattr(self, "cluster"):
+            if not self.cluster.is_dirty:
+                self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
+                await self.clusters.put(self.cluster, is_dirty=False)
+            else:
+                self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
+                                self.cluster, self.test_uname)
+                await self.clusters.put(self.cluster, is_dirty=True)
+            del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
         self.is_running = False
