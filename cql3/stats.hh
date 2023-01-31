@@ -12,6 +12,8 @@
 
 #include "cql3/statements/statement_type.hh"
 
+#include <cstdint>
+
 namespace cql3 {
 
 /** Enums for selecting counters in `cql_stats', like:
