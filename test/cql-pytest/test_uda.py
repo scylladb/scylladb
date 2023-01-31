@@ -71,13 +71,26 @@ def test_wrong_sfunc_or_ffunc(scylla_only, cql, test_keyspace):
 def test_drop_sfunc_or_ffunc(scylla_only, cql, test_keyspace):
     avg_partial_body = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
     div_body = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state[1]//state[2]'"
-    with new_function(cql, test_keyspace, avg_partial_body) as avg_partial, new_function(cql, test_keyspace, div_body) as div_fun:
+    with new_function(cql, test_keyspace, avg_partial_body, args="tuple<bigint, bigint>, bigint") as avg_partial,\
+         new_function(cql, test_keyspace, div_body, args="tuple<bigint, bigint>") as div_fun:
         custom_avg_body = f"(bigint) SFUNC {avg_partial} STYPE tuple<bigint, bigint> FINALFUNC {div_fun} INITCOND (0,0)"
         with new_aggregate(cql, test_keyspace, custom_avg_body) as custom_avg:
             with pytest.raises(InvalidRequest, match="it is used"):
                 cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}")
             with pytest.raises(InvalidRequest, match="it is used"):
                 cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}")
+            avg_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42'"
+            div_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42'"
+            with new_function(cql, test_keyspace, avg_partial_body2, avg_partial, "bigint, bigint"),\
+                 new_function(cql, test_keyspace, div_body2, div_fun, "bigint"):
+                with pytest.raises(InvalidRequest, match="There are multiple"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}")
+                with pytest.raises(InvalidRequest, match="There are multiple"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}")
+                with pytest.raises(InvalidRequest, match="it is used"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}(tuple<bigint, bigint>, bigint)")
+                with pytest.raises(InvalidRequest, match="it is used"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}(tuple<bigint, bigint>)")
 
 # Test that the state function takes a correct number of arguments - the state and the new input
 def test_incorrect_state_func(scylla_only, cql, test_keyspace):
