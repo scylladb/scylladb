@@ -10,6 +10,7 @@
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/functions/functions.hh"
 
 #include "boost/range/adaptor/map.hpp"
 
@@ -109,6 +110,9 @@ void drop_type_statement::validate_while_executing(query_processor& qp) const {
             }
         }
 
+        if (auto&& fun_name = functions::functions::used_by_user_function(_name)) {
+            throw exceptions::invalid_request_exception(format("Cannot drop user type {}.{} as it is still used by function {}", keyspace, type->get_name_as_string(), *fun_name));
+        }
     } catch (data_dictionary::no_such_keyspace& e) {
         throw exceptions::invalid_request_exception(format("Cannot drop type in unknown keyspace {}", keyspace()));
     }
