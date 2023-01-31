@@ -67,28 +67,37 @@ def test_wrong_sfunc_or_ffunc(scylla_only, cql, test_keyspace):
         with pytest.raises(InvalidRequest, match="doesn't return state"):
             cql.execute(f"CREATE AGGREGATE {test_keyspace}.{unique_name()} {custom_avg_body}")
 
-# Test that dropping the state function or the final function is not allowed if it's used by an aggregate
-def test_drop_sfunc_or_ffunc(scylla_only, cql, test_keyspace):
+# Test that dropping the state function, reduce function or the final function is not allowed if it's used by an aggregate
+def test_drop_sfunc_reducefunc_or_ffunc(scylla_only, cql, test_keyspace):
     avg_partial_body = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
+    avg_reduce_body = "(state1 tuple<bigint, bigint>, state2 tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state1[1] + state2[1], state1[2] + state2[2]}'"
     div_body = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state[1]//state[2]'"
     with new_function(cql, test_keyspace, avg_partial_body, args="tuple<bigint, bigint>, bigint") as avg_partial,\
+         new_function(cql, test_keyspace, avg_reduce_body, args="tuple<bigint, bigint>, tuple<bigint, bigint>") as avg_reduce,\
          new_function(cql, test_keyspace, div_body, args="tuple<bigint, bigint>") as div_fun:
-        custom_avg_body = f"(bigint) SFUNC {avg_partial} STYPE tuple<bigint, bigint> FINALFUNC {div_fun} INITCOND (0,0)"
+        custom_avg_body = f"(bigint) SFUNC {avg_partial} STYPE tuple<bigint, bigint> REDUCEFUNC {avg_reduce} FINALFUNC {div_fun} INITCOND (0,0)"
         with new_aggregate(cql, test_keyspace, custom_avg_body) as custom_avg:
             with pytest.raises(InvalidRequest, match="it is used"):
                 cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}")
             with pytest.raises(InvalidRequest, match="it is used"):
+                cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_reduce}")
+            with pytest.raises(InvalidRequest, match="it is used"):
                 cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}")
             avg_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42'"
-            div_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42'"
+            div_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 4'"
             with new_function(cql, test_keyspace, avg_partial_body2, avg_partial, "bigint, bigint"),\
+                 new_function(cql, test_keyspace, avg_partial_body2, avg_reduce, "bigint, bigint"),\
                  new_function(cql, test_keyspace, div_body2, div_fun, "bigint"):
                 with pytest.raises(InvalidRequest, match="There are multiple"):
                     cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}")
                 with pytest.raises(InvalidRequest, match="There are multiple"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_reduce}")
+                with pytest.raises(InvalidRequest, match="There are multiple"):
                     cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}")
                 with pytest.raises(InvalidRequest, match="it is used"):
                     cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_partial}(tuple<bigint, bigint>, bigint)")
+                with pytest.raises(InvalidRequest, match="it is used"):
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{avg_reduce}(tuple<bigint, bigint>, tuple<bigint, bigint>)")
                 with pytest.raises(InvalidRequest, match="it is used"):
                     cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}(tuple<bigint, bigint>)")
 
