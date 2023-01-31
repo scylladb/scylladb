@@ -28,6 +28,9 @@
 #include "extensions.hh"
 #include "log.hh"
 #include "utils/config_file_impl.hh"
+#include <seastar/core/metrics_api.hh>
+#include <seastar/core/relabel_config.hh>
+#include <seastar/util/file.hh>
 
 namespace utils {
 
@@ -927,6 +930,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , wasm_udf_yield_fuel(this, "wasm_udf_yield_fuel", value_status::Used, 100000, "Wasmtime fuel a WASM UDF can consume before yielding")
     , wasm_udf_total_fuel(this, "wasm_udf_total_fuel", value_status::Used, 100000000, "Wasmtime fuel a WASM UDF can consume before termination")
     , wasm_udf_memory_limit(this, "wasm_udf_memory_limit", value_status::Used, 2*1024*1024, "How much memory each WASM UDF can allocate at most")
+    , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
@@ -1172,6 +1176,68 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>& addre
     }
 
     co_return coroutine::exception(std::move(ex));
+}
+
+static future<std::vector<seastar::metrics::relabel_config>> get_relable_from_file(const std::string& name) {
+    file f = co_await seastar::open_file_dma(name, open_flags::ro);
+    size_t s = co_await f.size();
+    seastar::input_stream<char> in = seastar::make_file_input_stream(f);
+    temporary_buffer<char> buf = co_await in.read_exactly(s);
+    auto yaml = YAML::Load(sstring(buf.begin(), buf.end()));
+    std::vector<seastar::metrics::relabel_config> relabels;
+    const YAML::Node& relabel_configs = yaml["relabel_configs"];
+    relabels.resize(relabel_configs.size());
+    size_t i = 0;
+    for (auto it = relabel_configs.begin(); it != relabel_configs.end(); ++it, i++) {
+        const YAML::Node& element = *it;
+        for(YAML::const_iterator e_it = element.begin(); e_it != element.end(); ++e_it) {
+            std::string key = e_it->first.as<std::string>();
+            if (key == "source_labels") {
+                auto labels = e_it->second;
+                std::vector<std::string> source_labels;
+                source_labels.resize(labels.size());
+                size_t j = 0;
+                for (auto label_it = labels.begin(); label_it !=  labels.end(); ++label_it, j++) {
+                    source_labels[j] = label_it->as<std::string>();
+                }
+                relabels[i].source_labels = source_labels;
+            } else if (key == "action") {
+                relabels[i].action = seastar::metrics::relabel_config_action(e_it->second.as<std::string>());
+            } else if (key == "replacement") {
+                relabels[i].replacement = e_it->second.as<std::string>();
+            } else if (key == "target_label") {
+                relabels[i].target_label = e_it->second.as<std::string>();
+            } else if (key == "separator") {
+                relabels[i].separator = e_it->second.as<std::string>();
+            } else if (key == "regex") {
+                relabels[i].expr = e_it->second.as<std::string>();
+            } else {
+                throw std::runtime_error("unkown entry '" + key + "' in file " + name);
+            }
+        }
+    }
+    co_return relabels;
+}
+
+future<> update_relabel_config_from_file(const std::string& name) {
+    if (name.empty()) {
+        co_return;
+    }
+
+    std::vector<seastar::metrics::relabel_config> relabels = co_await  get_relable_from_file(name);
+    bool failed = false;
+    co_await smp::invoke_on_all([&relabels, &failed] {
+        return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
+            if (result.metrics_relabeled_due_to_collision > 0) {
+                failed = true;
+            }
+            return;
+        });
+    });
+    if (failed) {
+        throw std::runtime_error("conflicts found during relabeling");
+    }
+    co_return;
 }
 
 }

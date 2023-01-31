@@ -406,6 +406,7 @@ public:
     named_value<uint64_t> wasm_udf_yield_fuel;
     named_value<uint64_t> wasm_udf_total_fuel;
     named_value<size_t> wasm_udf_memory_limit;
+    named_value<sstring> relabel_config_file;
     // wasm_udf_reserved_memory is static because the options in db::config
     // are parsed using seastar::app_template, while this option is used for
     // configuring the Seastar memory subsystem.
@@ -464,4 +465,11 @@ inline bool is_true(sstring val) {
 
 future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+
+/*!
+ * \brief read the the relabel config from a file
+ *
+ * Will throw an exception if there is a conflict with the metrics names
+ */
+future<> update_relabel_config_from_file(const std::string& name);
 }
