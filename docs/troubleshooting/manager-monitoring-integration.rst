@@ -42,18 +42,17 @@ If you get a response with no errors, Scylla Manager is running.
 
       # Bind prometheus API to the specified TCP address using HTTP protocol.
       # By default it binds to all network interfaces but you can restrict it
-      # by specifying it like this 127:0.0.1:56090 or any other combination
+      # by specifying it like this 127:0.0.1:5090 or any other combination
       # of ip and port.
-      prometheus: '172.17.0.1:56090'
+      prometheus: '172.17.0.1:5090'
 
 
-
-   * In  ``scylla-monitoring/prometheus/scylla_manager_servers.yml``, change the IP address Prometheus uses to pull Scylla Manager metrics from. The IP address is set to ``172.17.0.1:56090`` by default. 
+   * In  ``scylla-monitoring/prometheus/scylla_manager_servers.yml``, change the IP address Prometheus uses to pull Scylla Manager metrics from. The IP address is set to ``172.17.0.1:5090`` by default. 
 
    .. code-block:: none
 
       - targets:
-        - 172.17.0.1:56090
+        - 172.17.0.1:5090
 
 5. If you are not using the Scylla Monitoring stack (Docker), and are using your own Prometheus stack, check that the Scylla Manager target is listed. 
 Navigate to: ``http://[Prometheus_IP]:9090/targets (status menu -> targets)``. It may be that only Scylla and Node_Exporter sections are there, and Scylla Manager is missing:
