@@ -899,11 +899,12 @@ class TopologyTest(PythonTest):
                 await manager.start()
                 self.success = await run_test(self, options)
             except Exception as e:
-                self.server_log = manager.cluster.read_server_log()
-                self.server_log_filename = manager.cluster.server_log_filename()
                 if manager.is_before_test_ok is False:
-                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
+                    if hasattr(manager, 'cluster'):
+                        self.server_log = manager.cluster.read_server_log()
+                        self.server_log_filename = manager.cluster.server_log_filename()
+                        print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                        print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
             manager.logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
