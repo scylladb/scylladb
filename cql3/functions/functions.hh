@@ -72,6 +72,7 @@ public:
     static void replace_function(shared_ptr<function>);
     static void remove_function(const function_name& name, const std::vector<data_type>& arg_types);
     static std::optional<function_name> used_by_user_aggregate(const function_name& name);
+    static std::optional<function_name> used_by_user_function(const ut_name& user_type);
 private:
     template <typename F>
     static void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, F&& f);

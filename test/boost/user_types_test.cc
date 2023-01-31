@@ -14,6 +14,7 @@
 #include "types/user.hh"
 #include "types/list.hh"
 #include "test/lib/exception_utils.hh"
+#include "db/config.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -184,7 +185,42 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
                 boost::irange(1, 1 << 15) | boost::adaptors::transformed([] (int i) { return format("a{} int", i); }), ", "))).discard_result().get();
         REQUIRE_INVALID(e, "alter type ut4 add b int",
                 "Cannot add new field to type ks.ut4: maximum number of fields reached");
+
+        e.execute_cql("create type ut5 (a int)").discard_result().get();
+        e.execute_cql("create table cf3 (a int primary key, b ut5)").discard_result().get();
+        REQUIRE_INVALID(e, "drop type ut5",
+                "Cannot drop user type ks.ut5 as it is still used by table ks.cf3");
+        e.execute_cql("drop table cf3").discard_result().get();
+        e.execute_cql("drop type ut5").discard_result().get();
+
+        e.execute_cql("create type ut6 (a int)").discard_result().get();
+        e.execute_cql("create type ut7 (b frozen<ut6>)").discard_result().get();
+        REQUIRE_INVALID(e, "drop type ut6",
+                "Cannot drop user type ks.ut6 as it is still used by user type ut7");
+        e.execute_cql("drop type ut7").discard_result().get();
+        e.execute_cql("drop type ut6").discard_result().get();
     });
+}
+
+SEASTAR_TEST_CASE(test_drop_user_type_used_in_udf) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
+    // Raise timeout to survive debug mode and contention.
+    db_cfg.user_defined_function_time_limit_ms(1000);
+    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create type ut (a int)").discard_result().get();
+        e.execute_cql("create function f1(a int) called on null input returns ut language lua as 'return {a = 42}'").discard_result().get();
+        REQUIRE_INVALID(e, "drop type ut",
+                "Cannot drop user type ks.ut as it is still used by function ks.f1");
+        e.execute_cql("drop function f1").discard_result().get();
+        e.execute_cql("create function f2(a ut) called on null input returns int language lua as 'return 42'").discard_result().get();
+        REQUIRE_INVALID(e, "drop type ut",
+                "Cannot drop user type ks.ut as it is still used by function ks.f2");
+        e.execute_cql("drop function f2").discard_result().get();
+        e.execute_cql("drop type ut").discard_result().get();
+    }, db_cfg_ptr);
 }
 
 static future<> test_alter_user_type(bool frozen) {

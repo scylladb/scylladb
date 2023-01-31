@@ -13,6 +13,7 @@
 #include "cql3/lists.hh"
 #include "cql3/constants.hh"
 #include "cql3/user_types.hh"
+#include "cql3/ut_name.hh"
 #include "cql3/type_json.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -154,6 +155,20 @@ std::optional<function_name> functions::used_by_user_aggregate(const function_na
         auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
         if (aggregate && (aggregate->sfunc().name() == name || (aggregate->has_finalfunc() && aggregate->finalfunc().name() == name))) {
             return aggregate->name();
+        }
+    }
+    return {};
+}
+
+std::optional<function_name> functions::used_by_user_function(const ut_name& user_type) {
+    for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
+        for (auto& arg_type : fptr->arg_types()) {
+            if (arg_type->references_user_type(user_type.get_keyspace(), user_type.get_user_type_name())) {
+                return fptr->name();
+            }
+        }
+        if (fptr->return_type()->references_user_type(user_type.get_keyspace(), user_type.get_user_type_name())) {
+            return fptr->name();
         }
     }
     return {};
