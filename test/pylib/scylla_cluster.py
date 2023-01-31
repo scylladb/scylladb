@@ -41,6 +41,7 @@ from cassandra.cluster import Session           # pylint: disable=no-name-in-mod
 from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 
 
 class ReplaceConfig(NamedTuple):
@@ -543,6 +544,7 @@ class ScyllaCluster:
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
                  host_registry: HostRegistry, replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+        assert "scylla" in DRIVER_NAME.lower(), "ScyllaCluster requires Scylla driver"
         self.logger = logger
         self.host_registry = host_registry
         self.leased_ips = set[IPAddress]()
