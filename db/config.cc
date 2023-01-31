@@ -28,6 +28,9 @@
 #include "extensions.hh"
 #include "log.hh"
 #include "utils/config_file_impl.hh"
+#include <seastar/core/metrics_api.hh>
+#include <seastar/core/relabel_config.hh>
+#include <seastar/util/file.hh>
 
 namespace utils {
 
@@ -909,10 +912,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 10, "Time for which information about finished task stays in memory.")
     , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
         "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions.")
+    , relabel_file_name(this, "relabel_file_name", value_status::Used, "", "Optionally, read reable config from file")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
     , log_to_syslog(this, "log_to_syslog", value_status::Used)
+
     , _extensions(std::move(exts))
 {}
 
@@ -1149,6 +1154,76 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>& addre
     }
 
     co_return coroutine::exception(std::move(ex));
+}
+
+static future<std::vector<seastar::metrics::relabel_config>> get_relable_from_file(const std::string& name) {
+    return seastar::open_file_dma(name, open_flags::ro).then([](file f) {
+        return f.size().then([f](size_t s) {
+            return do_with(seastar::make_file_input_stream(f), [s](seastar::input_stream<char>& in) {
+                return in.read_exactly(s).then([](temporary_buffer<char> buf) {
+                    auto yaml = YAML::Load(sstring(buf.begin(), buf.end()));
+                    std::vector<seastar::metrics::relabel_config> relabels;
+                    const YAML::Node& realbels_config = yaml["relabel_configs"];
+                    relabels.resize(realbels_config.size());
+                    size_t i = 0;
+                    for (auto it = realbels_config.begin(); it != realbels_config.end(); ++it, i++) {
+                        const YAML::Node& element = *it;
+                        if (element["source_labels"]) {
+                            auto labels = element["source_labels"];
+                            std::vector<std::string> source_labels;
+                            source_labels.resize(labels.size());
+                            size_t j = 0;
+                            for (auto label_it = labels.begin(); label_it !=  labels.end(); ++label_it, j++) {
+                                source_labels[j] = label_it->as<std::string>();
+                            }
+                            relabels[i].source_labels = source_labels;
+                        }
+                        if (element["action"]) {
+                            relabels[i].action = seastar::metrics::relabel_config_action(element["action"].as<std::string>());
+                        }
+                        if (element["replacement"]) {
+                            relabels[i].replacement = element["replacement"].as<std::string>();
+                        }
+                        if (element["target_label"]) {
+                            relabels[i].target_label = element["target_label"].as<std::string>();
+                        }
+                        if (element["separator"]) {
+                            relabels[i].separator = element["separator"].as<std::string>();
+                        }
+                        if (element["regex"]) {
+                            relabels[i].expr = element["regex"].as<std::string>();
+                        }
+                    }
+                    return relabels;
+                });
+            });
+        });
+    });
+}
+
+future<> update_relabel_config_from_file(const std::string& name) {
+    if (name.empty()) {
+        return make_ready_future<>();
+    }
+
+    std::vector<seastar::metrics::relabel_config> relabels;
+    return get_relable_from_file(name).then([](std::vector<seastar::metrics::relabel_config>&& relabels) {
+        return do_with(std::move(relabels), false, [](const std::vector<seastar::metrics::relabel_config>& relabels, bool& failed) {
+            return smp::invoke_on_all([&relabels, &failed] {
+                return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
+                    if (result.metrics_relabeled_due_to_collision > 0) {
+                        failed = true;
+                    }
+                    return;
+                });
+            }).then([&failed](){
+                if (failed) {
+                    throw std::runtime_error("conflicts found during relabeling");
+                }
+                return make_ready_future<>();
+            });
+        });
+    });
 }
 
 }

@@ -388,6 +388,8 @@ public:
 
     named_value<bool> cache_index_pages;
 
+    named_value<sstring> relabel_file_name;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
@@ -439,4 +441,11 @@ inline bool is_true(sstring val) {
 
 future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+
+/*!
+ * \brief read the the relabel config from a file
+ *
+ * Will throw an exception if there is a conflict with the metrics names
+ */
+future<> update_relabel_config_from_file(const std::string& name);
 }
