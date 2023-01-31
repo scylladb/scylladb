@@ -847,7 +847,9 @@ class ScyllaClusterManager:
         self.is_after_test_ok: bool = False
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
-        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
+        # Put the socket in /tmp, not base_dir, to avoid going over the length
+        # limit of UNIX-domain socket addresses (issue #12622).
+        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
         self.sock_path: str = f"{self.manager_dir}/api"
         app = aiohttp.web.Application()
         self._setup_routes(app)
