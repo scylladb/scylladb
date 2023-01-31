@@ -66,7 +66,7 @@ Gracefully stop the node
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server stop
+   sudo service scylla-server stop
 
 Download and install the new release
 ------------------------------------
