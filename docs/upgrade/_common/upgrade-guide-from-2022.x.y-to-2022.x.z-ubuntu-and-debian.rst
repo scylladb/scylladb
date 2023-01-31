@@ -68,7 +68,7 @@ Gracefully stop the node
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server stop
+   sudo service scylla-server stop
 
 Download and install the new release
 ------------------------------------
@@ -92,13 +92,13 @@ Start the node
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server start
+   sudo service scylla-server start
 
 Validate
 --------
 1. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in UN status.
 2. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the ScyllaDB version.
-3. Check scylla-enterprise-server log (by ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no errors.
+3. Check scylla-server log (by ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no errors.
 4. Check again after 2 minutes to validate no new issues are introduced.
 
 Once you are sure the node upgrade is successful, move to the next node in the cluster.
@@ -130,7 +130,7 @@ Gracefully shutdown ScyllaDB
 .. code:: sh
 
    nodetool drain
-   sudo service scylla-enterprise-server stop
+   sudo service scylla-server stop
 
 Downgrade to the previous release
 ----------------------------------
@@ -164,7 +164,7 @@ Start the node
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server start
+   sudo service scylla-server start
 
 Validate
 --------
