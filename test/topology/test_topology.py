@@ -68,9 +68,9 @@ async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> Non
 
 
 async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
-    """Weaker version of the above check; the token ring is not immediately updated
-       after bootstrap/replace - the normal tokens of the new node propagate through gossip.
-       Take this into account and wait for the equality condition to hold, with a timeout.
+    """Weaker version of the above check; the token ring is not immediately updated after
+    bootstrap/replace/decommission - the normal tokens of the new node propagate through gossip.
+    Take this into account and wait for the equality condition to hold, with a timeout.
     """
     servers = await manager.running_servers()
     for srv in servers:
@@ -159,7 +159,7 @@ async def test_decommission_node_add_column(manager, random_tables):
     await manager.api.enable_injection(
         bootstrapped_server.ip_addr, 'storage_service_decommission_prepare_handler_sleep', one_shot=True)
     await manager.decommission_node(decommission_target.server_id)
-    await check_token_ring_and_group0_consistency(manager)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     await table.add_column()
     await random_tables.verify_schema()
 
@@ -226,6 +226,7 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     servers = await manager.running_servers()
     for s in servers[:-1]:
         await manager.decommission_node(s.server_id)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logger.info(f'Adding --smp=4 server')
     await manager.server_add(cmdline=['--smp', '4'])
