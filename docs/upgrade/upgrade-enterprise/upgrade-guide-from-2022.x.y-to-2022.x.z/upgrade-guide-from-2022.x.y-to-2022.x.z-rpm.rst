@@ -63,7 +63,7 @@ Stop ScyllaDB
 
 .. code:: sh
 
-   sudo systemctl stop scylla-enterprise-server
+   sudo systemctl stop scylla-server
 
 Download and install the new release
 ------------------------------------
@@ -84,7 +84,7 @@ Start the node
 
 .. code:: sh
 
-   sudo systemctl start scylla-enterprise-server
+   sudo systemctl start scylla-server
 
 Validate
 --------
@@ -125,7 +125,7 @@ Gracefully shutdown ScyllaDB
 .. code:: sh
 
    nodetool drain
-   sudo systemctl stop scylla-enterprise-server
+   sudo systemctl stop scylla-server
 
 Downgrade to the previous release
 -----------------------------------
@@ -149,7 +149,7 @@ Start the node
 
 .. code:: sh
 
-   sudo systemctl start scylla-enterprise-server
+   sudo systemctl start scylla-server
 
 Validate
 --------
