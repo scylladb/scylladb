@@ -114,6 +114,7 @@ private:
     friend class sstables_manager;
 };
 
+constexpr const char* normal_dir = "";
 constexpr const char* staging_dir = "staging";
 constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
@@ -220,6 +221,12 @@ public:
     // Note: moving a sstable in any other dir to quarantine
     // will move it into a quarantine_dir subdirectory of its current directory.
     future<> move_to_quarantine(delayed_commit_changes* delay = nullptr);
+
+    // Move the sstable between states
+    //
+    // Known states are normal, staging, upload and quarantine.
+    // It's up to the storage driver how to implement this.
+    future<> change_state(sstring to, generation_type new_generation, delayed_commit_changes* delay = nullptr);
 
     generation_type generation() const {
         return _generation;
@@ -492,6 +499,13 @@ public:
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
         future<> quarantine(const sstable& sst, delayed_commit_changes* delay);
+
+        // Moves the files around with .move() method. States are basedir subdirectories
+        // with the exception that normal state maps to the basedir itself. If the sstable
+        // is already in the target state, this is a noop.
+        // Moving in a snapshot or upload will move to a subdirectory of the current directory.
+        future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay);
+
         future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);

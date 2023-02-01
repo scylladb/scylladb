@@ -2242,12 +2242,46 @@ future<> sstable::filesystem_storage::quarantine(const sstable& sst, delayed_com
     co_await move(sst, std::move(new_dir), sst.generation(), delay_commit);
 }
 
+future<> sstable::filesystem_storage::change_state(const sstable& sst, sstring to, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    auto path = fs::path(dir);
+    auto current = path.filename().native();
+
+    // Moving between states means moving between basedir/state subdirectories.
+    // However, normal state maps to the basedir itself and thus there's no way
+    // to check if current is normal_dir. The best that can be done here is to
+    // check that it's not anything else
+    if (current == staging_dir || current == upload_dir || current == quarantine_dir) {
+        if (to == quarantine_dir && current != staging_dir) {
+            // Legacy exception -- quarantine from anything but staging
+            // moves to the current directory quarantine subdir
+            path = path / to;
+        } else {
+            path = path.parent_path() / to;
+        }
+    } else {
+        current = normal_dir;
+        path = path / to;
+    }
+
+    if (current == to) {
+        co_return; // Already there
+    }
+
+    sstlog.info("Moving sstable {} to {} in {}", sst.get_filename(), to, path);
+    co_await move(sst, path.native(), std::move(new_generation), delay_commit);
+}
+
 future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
     if (is_quarantined()) {
         return make_ready_future<>();
     }
 
     return _storage.quarantine(*this, delay_commit);
+}
+
+future<> sstable::change_state(sstring to, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    co_await _storage.change_state(*this, to, new_generation, delay_commit);
+    _generation = std::move(new_generation);
 }
 
 future<> sstable::delayed_commit_changes::commit() {
