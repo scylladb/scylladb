@@ -796,6 +796,13 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader) noexcept {
     auto& permit_impl = *reader.permit()._impl;
     permit_impl.on_register_as_inactive();
+    if (_blessed_permit == &permit_impl) {
+        _blessed_permit = nullptr;
+        // No need to call maybe_admit_waiters() here.
+        // If there are waiters, the reader is going to be evicted below,
+        // triggering a call to maybe_admit_waiters() as its resources are
+        // released.
+    }
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
     // Checking the _wait_list covers the count resources only, so check memory

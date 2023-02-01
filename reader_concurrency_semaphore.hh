@@ -528,4 +528,6 @@ public:
     }
 
     void foreach_permit(noncopyable_function<void(const reader_permit&)> func);
+
+    uintptr_t get_blessed_permit() const noexcept { return reinterpret_cast<uintptr_t>(_blessed_permit); }
 };

@@ -1572,3 +1572,36 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
         do_check(permit, 1, 1, std::source_location::current());
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_blessed_read_goes_inactive) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    const auto serialize_multiplier = 2;
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+    auto stop_sem = deferred_stop(semaphore);
+
+    simple_schema ss;
+    auto s = ss.schema();
+
+    auto permit = semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout).get();
+
+    std::vector<reader_permit::resource_units> permit_res;
+
+    permit_res.emplace_back(permit.request_memory(1024).get());
+    permit_res.emplace_back(permit.request_memory(1024).get());
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources(1, 3 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.get_blessed_permit(), 0);
+
+    // permit is the blessed one
+    permit_res.emplace_back(permit.request_memory(1024).get());
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_blessed_permit(), permit.id());
+
+    // register the blessed permit (permit) as inactive
+    permit_res.clear();
+    auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s, permit));
+
+    // Upon being registered as inactive, the permit should loose the blessed status
+    BOOST_REQUIRE_EQUAL(semaphore.get_blessed_permit(), 0);
+}
