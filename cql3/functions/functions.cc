@@ -153,9 +153,9 @@ void functions::remove_function(const function_name& name, const std::vector<dat
 std::optional<function_name> functions::used_by_user_aggregate(const function_name& name, const std::vector<data_type>& arg_types) {
     for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
         auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
-        if (aggregate && ((aggregate->sfunc().name() == name && aggregate->sfunc().arg_types() == arg_types)
-            || (aggregate->has_finalfunc() && aggregate->finalfunc().name() == name && aggregate->finalfunc().arg_types() == arg_types)
-            || (aggregate->is_reducible() && aggregate->reducefunc().name() == name && aggregate->reducefunc().arg_types() == arg_types))) {
+        if (aggregate && ((aggregate->sfunc()->name() == name && aggregate->sfunc()->arg_types() == arg_types)
+            || (aggregate->has_finalfunc() && aggregate->finalfunc()->name() == name && aggregate->finalfunc()->arg_types() == arg_types)
+            || (aggregate->is_reducible() && aggregate->reducefunc()->name() == name && aggregate->reducefunc()->arg_types() == arg_types))) {
             return aggregate->name();
         }
     }
