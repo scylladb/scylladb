@@ -428,12 +428,8 @@ namespace {
 bool_or_null like(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
     data_type lhs_type = type_of(lhs)->underlying_type();
     if (!lhs_type->is_string()) {
-        expression::printer lhs_printer {
-            .expr_to_print = lhs,
-            .debug_mode = false
-        };
         throw exceptions::invalid_request_exception(
-                format("LIKE is allowed only on string types, which {} is not", lhs_printer));
+                format("LIKE is allowed only on string types, which {:user} is not", lhs));
     }
     std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::LIKE, inputs);

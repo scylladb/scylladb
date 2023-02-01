@@ -1259,11 +1259,9 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
         bool rhs_is_null = is<constant>(prepared_rhs) && as<constant>(prepared_rhs).is_null();
 
         if (!rhs_is_null) {
-            expression binop_expr = binop;
-            expression::printer binop_printer{.expr_to_print = binop_expr, .debug_mode = false};
             throw exceptions::invalid_request_exception(format(
-                "IS NOT NULL is the only expression that is allowed when using IS NOT. Invalid binary operator: {}",
-                binop_printer));
+                "IS NOT NULL is the only expression that is allowed when using IS NOT. Invalid binary operator: {:user}",
+                binop));
         }
     }
 

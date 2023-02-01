@@ -813,17 +813,37 @@ bool has_only_eq_binops(const expression&);
 
 } // namespace cql3
 
+/// Custom formatter for an expression. Use {:user} for user-oriented
+/// output, {:debug} for debug-oriented output. Debug is the default.
+///
 /// Required for fmt::join() to work on expression.
 template <>
-struct fmt::formatter<cql3::expr::expression> {
+class fmt::formatter<cql3::expr::expression> {
+    bool _debug = true;
+private:
+    constexpr static bool try_match_and_advance(format_parse_context& ctx, std::string_view s) {
+        auto [ctx_end, s_end] = std::ranges::mismatch(ctx, s);
+        if (s_end == s.end()) {
+            ctx.advance_to(ctx_end);
+            return true;
+        }
+        return false;
+    }
+public:
     constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
+        using namespace std::string_view_literals;
+        if (try_match_and_advance(ctx, "debug"sv)) {
+            _debug = true;
+        } else if (try_match_and_advance(ctx, "user"sv)) {
+            _debug = false;
+        }
+        return ctx.begin();
     }
 
     template <typename FormatContext>
     auto format(const cql3::expr::expression& expr, FormatContext& ctx) const {
         std::ostringstream os;
-        os << expr;
+        os << cql3::expr::expression::printer{.expr_to_print = expr, .debug_mode = _debug};
         return fmt::format_to(ctx.out(), "{}", os.str());
     }
 };
@@ -843,17 +863,7 @@ struct fmt::formatter<cql3::expr::expression::printer> {
     }
 };
 
-/// Required for fmt::join() to work on column_value.
-template <>
-struct fmt::formatter<cql3::expr::column_value> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const cql3::expr::column_value& col, FormatContext& ctx) {
-        std::ostringstream os;
-        os << col;
-        return fmt::format_to(ctx.out(), "{}", os.str());
-    }
+/// Required for fmt::join() to work on ExpressionElement, and for {:user}/{:debug} to work on ExpressionElement.
+template <cql3::expr::ExpressionElement E>
+struct fmt::formatter<E> : public fmt::formatter<cql3::expr::expression> {
 };
