@@ -22,9 +22,13 @@ class system_distributed_keyspace;
 
 }
 
+namespace locator {
+class token_metadata;
+}
+
 namespace db::view {
 
-future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name);
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const replica::table& t, streaming::stream_reason reason);
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
+        streaming::stream_reason reason);
 
 }

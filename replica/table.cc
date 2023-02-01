@@ -387,19 +387,9 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir, sstables::generation_type generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
-        io_error_handler_gen error_handler_gen) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f, gc_clock::now(), error_handler_gen);
-}
-
-sstables::shared_sstable table::make_sstable(sstring dir, sstables::generation_type generation,
-        sstables::sstable_version_types v, sstables::sstable_format_types f) {
-    return get_sstables_manager().make_sstable(_schema, dir, generation, v, f);
-}
-
 sstables::shared_sstable table::make_sstable(sstring dir) {
-    return make_sstable(dir, calculate_generation_for_new_table(),
-                        get_sstables_manager().get_highest_supported_format(), sstables::sstable::format_types::big);
+    auto& sstm = get_sstables_manager();
+    return sstm.make_sstable(_schema, dir, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {

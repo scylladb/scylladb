@@ -485,6 +485,8 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
+    sstables::shared_sstable make_sstable(sstring dir);
+
 public:
     data_dictionary::table as_data_dictionary() const;
 
@@ -492,10 +494,6 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
-    sstables::shared_sstable make_sstable(sstring dir, sstables::generation_type generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
-            io_error_handler_gen error_handler_gen);
-    sstables::shared_sstable make_sstable(sstring dir, sstables::generation_type generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
-    sstables::shared_sstable make_sstable(sstring dir);
     sstables::shared_sstable make_sstable();
     void cache_truncation_record(db_clock::time_point truncated_at) {
         _truncated_at = truncated_at;
@@ -1211,7 +1209,6 @@ public:
     }
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
-    sstring column_family_directory(const sstring& name, table_id uuid) const;
 
     future<> ensure_populated() const;
     void mark_as_populated();
