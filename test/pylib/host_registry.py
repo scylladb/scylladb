@@ -72,7 +72,11 @@ class HostRegistry:
             self.next_host_id += 1
             return Host(self.subnet.format(self.next_host_id))
 
-        self.pool = Pool[Host](254, create_host)
+        async def destroy_host(h: Host) -> None:
+            # Doesn't matter, we never return hosts to the pool as 'dirty'.
+            pass
+
+        self.pool = Pool[Host](254, create_host, destroy_host)
 
         async def cleanup() -> None:
             if self.lock_filename:
@@ -85,5 +89,5 @@ class HostRegistry:
         return await self.pool.get()
 
     async def release_host(self, host: Host) -> None:
-        return await self.pool.put(host)
+        return await self.pool.put(host, is_dirty=False)
 

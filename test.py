@@ -343,7 +343,16 @@ class PythonTestSuite(TestSuite):
         pool_size = cfg.get("pool_size", 2)
 
         self.create_cluster = self.get_cluster_factory(cluster_size)
-        self.clusters = Pool(pool_size, self.create_cluster)
+        async def recycle_cluster(cluster: ScyllaCluster) -> None:
+            """When a dirty cluster is returned to the cluster pool,
+               stop it and release the used IPs. We don't necessarily uninstall() it yet,
+               which would delete the log file and directory - we might want to preserve
+               these if it came from a failed test.
+            """
+            await cluster.stop()
+            await cluster.release_ips()
+
+        self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
@@ -686,7 +695,8 @@ class CQLApprovalTest(Test):
             if self.server_log is not None:
                 logger.info("Server log:\n%s", self.server_log)
 
-        async with self.suite.clusters.instance(logger) as cluster:
+        # TODO: consider dirty_on_exception=True
+        async with self.suite.clusters.instance(False, logger) as cluster:
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -864,11 +874,9 @@ class PythonTest(Test):
                 print("Test {} post-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
-            await self.suite.clusters.steal()
-            await cluster.stop()
-            await cluster.release_ips()
+            await self.suite.clusters.put(cluster, is_dirty=True)
         else:
-            await self.suite.clusters.put(cluster)
+            await self.suite.clusters.put(cluster, is_dirty=False)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
