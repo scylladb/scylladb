@@ -33,7 +33,7 @@ ScyllaDB supports the following snitches:
 
 SimpleSnitch
 ............
-Use the SimpleSnitch when working with single cluster deployments and all the nodes are under the same datacenter
+Use the SimpleSnitch when working with single cluster deployments and all the nodes are under the same datacenter.
 The SimpleSnitch binds all the nodes to the same Rack and datacenter and is recommended to be used only in single datacenter deployments.
 
 .. _snitch-rack-inferring-snitch:
