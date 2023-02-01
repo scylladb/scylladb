@@ -312,6 +312,12 @@ def test_filter_in_restriction(cql, test_keyspace, cassandra_bug):
         assert [(1,)] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (2, 7) ALLOW FILTERING'))
         assert [] == list(cql.execute(f'SELECT ck FROM {table} WHERE x IN (3, 7) ALLOW FILTERING'))
 
+        prepared_select1 = cql.prepare(f'SELECT ck FROM {table} WHERE x IN (?, 4) ALLOW FILTERING')
+        assert [(1,), (2,)] == list(cql.execute(prepared_select1, [2]))
+
+        prepared_select2 = cql.prepare(f'SELECT ck FROM {table} WHERE x IN ? ALLOW FILTERING')
+        assert [(1,), (2,)] == list(cql.execute(prepared_select2, [[2, 4]]))
+
 
 # Both Cassandra and Scylla allow filtering restrictions on frozen UDTs,
 # and the "frozen=True" case of the following test verifies their behavior
