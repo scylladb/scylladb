@@ -99,11 +99,7 @@ BOOST_AUTO_TEST_CASE(expr_visit_visitor_rvalue) {
 }
 
 static sstring expr_print(const expression& e) {
-    expression::printer p {
-        .expr_to_print = e,
-        .debug_mode = false
-    };
-    return format("{}", p);
+    return format("{:user}", e);
 }
 
 static sstring value_print(const cql3::raw_value& v, const expression& e) {

@@ -123,11 +123,7 @@ void validate_timestamp(const db::config& config, const query_options& options, 
 
 sstring relations_to_where_clause(const expr::expression& e) {
     auto expr_to_pretty_string = [](const expr::expression& e) -> sstring {
-        expr::expression::printer p {
-            .expr_to_print = e,
-            .debug_mode = false,
-        };
-        return fmt::format("{}", p);
+        return fmt::format("{:user}", e);
     };
     auto relations = expr::boolean_factors(e);
     auto expressions = relations | boost::adaptors::transformed(expr_to_pretty_string);
