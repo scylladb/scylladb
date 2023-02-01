@@ -2518,9 +2518,14 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
         offset += buf.size();
     }
 
-    if (!stream.eof()) {
-        sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has more", offset, checksum.checksums.size());
-        valid = false;
+    {
+        // We should be at EOF here, but the flag might not be set yet. To ensure
+        // it is set, try to read some more. This should return an empty buffer.
+        auto buf = co_await stream.read();
+        if (!buf.empty()) {
+            sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has more", offset, checksum.checksums.size());
+            valid = false;
+        }
     }
 
     if (actual_full_checksum != expected_digest) {
