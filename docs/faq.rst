@@ -254,7 +254,7 @@ Alternatively, you can explicitly install **all** the ScyllaDB packages for the 
 
 .. code-block:: console
 
-   apt-get install scylla-enterprise{,-server,-jmx,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=2021.1.0-0.20210511.9e8e7d58b-1
+   sudo apt-get install scylla-enterprise{,-server,-jmx,-tools,-tools-core,-kernel-conf,-node-exporter,-conf,-python3}=2021.1.0-0.20210511.9e8e7d58b-1
    sudo apt-get install scylla-enterprise-machine-image=2021.1.0-0.20210511.9e8e7d58b-1  # only execute on AMI instance
 
 
