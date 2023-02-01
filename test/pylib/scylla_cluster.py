@@ -865,7 +865,8 @@ class ScyllaClusterManager:
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
-        await self._get_cluster()
+        self.cluster = await self.clusters.get(self.logger)
+        self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
@@ -876,12 +877,10 @@ class ScyllaClusterManager:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         self.logger.info("Setting up %s", self.current_test_case_full_name)
         if self.cluster.is_dirty:
-            self.logger.info(f"Current cluster %s is dirty after last test, stopping...", self.cluster.name)
-            await self.clusters.steal()
-            await self.cluster.stop()
-            await self.cluster.release_ips()
-            self.logger.info(f"Waiting for new cluster for test %s...", self.current_test_case_full_name)
-            await self._get_cluster()
+            self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
+                             self.cluster.name, self.current_test_case_full_name)
+            self.cluster = await self.clusters.replace_dirty(self.cluster, self.logger)
+            self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
         self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
@@ -897,22 +896,15 @@ class ScyllaClusterManager:
             del self.site
         if not self.cluster.is_dirty:
             self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster)
+            await self.clusters.put(self.cluster, is_dirty=False)
         else:
             self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
-            await self.cluster.stop()
-            await self.cluster.release_ips()
-            await self.clusters.steal()
+            await self.clusters.put(self.cluster, is_dirty=True)
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
         self.is_running = False
-
-    async def _get_cluster(self) -> None:
-        self.cluster = await self.clusters.get(self.logger)
-        self.logger.info("Got new Scylla cluster %s", self.cluster)
-
 
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
         def make_catching_handler(handler: Callable) -> Callable:
