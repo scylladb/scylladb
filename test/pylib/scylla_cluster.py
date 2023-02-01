@@ -115,7 +115,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '-m', '1G',
     '--collectd', '0',
     '--overprovisioned',
-    '--max-networking-io-control-blocks', '100',
+    '--max-networking-io-control-blocks', '1000',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
     '--commitlog-use-o-dsync', '0',
