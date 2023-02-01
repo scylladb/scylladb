@@ -211,16 +211,6 @@ public:
     // No other uses of the object can happen at this point.
     future<> destroy();
 
-    // Move the sstable to the quarantine_dir
-    //
-    // If the sstable is alredy quarantined, this is a noop.
-    // If the sstable is in the base directory or in the staging_dir,
-    // it is moved into the quarantine_dir subdirectory of the base directory.
-    //
-    // Note: moving a sstable in any other dir to quarantine
-    // will move it into a quarantine_dir subdirectory of its current directory.
-    future<> move_to_quarantine(delayed_commit_changes* delay = nullptr);
-
     // Move the sstable between states
     //
     // Known states are normal, staging, upload and quarantine.
@@ -498,7 +488,6 @@ public:
         using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
-        future<> quarantine(const sstable& sst, delayed_commit_changes* delay);
 
         // Moves the files around with .move() method. States are basedir subdirectories
         // with the exception that normal state maps to the basedir itself. If the sstable
