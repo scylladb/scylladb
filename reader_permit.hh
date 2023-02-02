@@ -135,6 +135,8 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
+    const ::schema* get_schema() const;
+    std::string_view get_op_name() const;
     state get_state() const;
 
     bool needs_readmission() const;

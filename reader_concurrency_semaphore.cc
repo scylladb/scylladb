@@ -439,6 +439,14 @@ reader_concurrency_semaphore& reader_permit::semaphore() {
     return _impl->semaphore();
 }
 
+const ::schema* reader_permit::get_schema() const {
+    return _impl->get_schema();
+}
+
+std::string_view reader_permit::get_op_name() const {
+    return _impl->get_op_name();
+}
+
 reader_permit::state reader_permit::get_state() const {
     return _impl->get_state();
 }
