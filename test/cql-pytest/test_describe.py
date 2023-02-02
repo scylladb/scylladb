@@ -818,6 +818,9 @@ def new_random_table(cql, keyspace, udts=[]):
     extras["min_index_interval"] = min_idx_interval
     extras["max_index_interval"] = random.randrange(min_idx_interval, 10000)
     extras["memtable_flush_period_in_ms"] = random.randrange(0, 10000)
+    extras["paxos_grace_seconds"] = random.randrange(1000, 100000)
+
+    extras["tombstone_gc"] = f"{{'mode': 'timeout', 'propagation_delay_in_seconds': '{random.randrange(100, 100000)}'}}"
 
     extra_options = [f"{k} = {v}" for (k, v) in extras.items()]
     extra_str = " AND ".join(extra_options)
