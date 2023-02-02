@@ -254,6 +254,29 @@ protected:
     virtual future<> run() override;
 };
 
+class shard_upgrade_sstables_compaction_task_impl : public rewrite_sstables_compaction_task_impl {
+private:
+    replica::database& _db;
+    std::vector<table_id> _table_infos;
+    bool _exclude_current_version;
+public:
+    shard_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            tasks::task_id parent_id,
+            replica::database& db,
+            std::vector<table_id> table_infos,
+            bool exclude_current_version) noexcept
+        : rewrite_sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        , _db(db)
+        , _table_infos(std::move(table_infos))
+        , _exclude_current_version(exclude_current_version)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
