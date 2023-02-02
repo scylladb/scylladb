@@ -84,4 +84,14 @@ future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     });
 }
 
+future<> offstrategy_keyspace_compaction_task_impl::run() {
+    _needed = co_await _db.map_reduce0([&] (replica::database& db) -> future<bool> {
+        bool needed = false;
+        co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, _status.keyspace, _table_infos, [&needed] (replica::table& t) -> future<> {
+            needed |= co_await t.perform_offstrategy_compaction();
+        });
+        co_return needed;
+    }, false, std::plus<bool>());
+}
+
 }

@@ -719,16 +719,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
+        auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, get_table_ids(table_infos), res);
         try {
-            res = co_await ctx.db.map_reduce0([&] (replica::database& db) -> future<bool> {
-                bool needed = false;
-                co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", db, keyspace, table_infos, [&needed] (replica::table& t) -> future<> {
-                    needed |= co_await t.perform_offstrategy_compaction();
-                });
-                co_return needed;
-            }, false, std::plus<bool>());
+            co_await task->done();
         } catch (...) {
-            apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
+            apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
             throw;
         }
 
