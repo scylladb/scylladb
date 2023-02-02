@@ -527,7 +527,7 @@ public:
         return _stats.current_permits - _stats.inactive_reads - waiters();
     }
 
-    void foreach_permit(noncopyable_function<void(const reader_permit&)> func);
+    void foreach_permit(noncopyable_function<void(const reader_permit&)> func) const;
 
     uintptr_t get_blessed_permit() const noexcept { return reinterpret_cast<uintptr_t>(_blessed_permit); }
 };

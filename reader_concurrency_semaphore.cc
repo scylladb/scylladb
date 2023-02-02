@@ -1253,9 +1253,11 @@ std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) c
     return os.str();
 }
 
-void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) {
+void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) const {
     for (auto& p : _permit_list) {
-        func(reader_permit(p.shared_from_this()));
+        // We cast away const to construct a reader_permit but the resulting
+        // object is passed as const& so there is no const violation here.
+        func(reader_permit(const_cast<reader_permit::impl&>(p).shared_from_this()));
     }
 }
 
