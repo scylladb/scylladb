@@ -107,6 +107,8 @@ public:
         uint64_t disk_reads = 0;
         // The number of sstables read currently.
         uint64_t sstables_read = 0;
+        // Permits waiting on something: admission, memory or execution
+        uint64_t waiters = 0;
     };
 
     using permit_list_type = bi::list<
@@ -204,9 +206,6 @@ private:
         expiring_fifo<entry, expiry_handler, db::timeout_clock> _memory_queue;
     public:
         wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
-        size_t size() const {
-            return _admission_queue.size() + _memory_queue.size();
-        }
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
@@ -508,7 +507,7 @@ public:
     }
 
     size_t waiters() const {
-        return _wait_list.size();
+        return _stats.waiters;
     }
 
     void broken(std::exception_ptr ex = {});

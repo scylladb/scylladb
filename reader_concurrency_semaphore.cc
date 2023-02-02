@@ -690,6 +690,7 @@ static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaph
 
 void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept {
     e.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
+    --_semaphore._stats.waiters;
 
     maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
 }
@@ -729,6 +730,7 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
 
         while (!_ready_list.empty()) {
             auto e = _ready_list.pop();
+            --_stats.waiters;
 
             try {
                 e.func(std::move(e.permit)).forward_to(std::move(e.pr));
@@ -798,6 +800,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             utils::updateable_value(std::numeric_limits<uint32_t>::max())) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
+    assert(!_stats.waiters);
     if (!_stats.total_permits) {
         // We allow destroy without stop() when the semaphore wasn't used at all yet.
         return;
@@ -993,7 +996,7 @@ bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
-    if ((_wait_list.size() + _ready_list.size()) >= _max_queue_length) {
+    if (_stats.waiters >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
         maybe_dump_reader_permit_diagnostics(*this, fmt::format("{} queue overload", queue_name));
         return std::make_exception_ptr(std::runtime_error(format("{}: {} queue overload", _name, queue_name)));
@@ -1018,6 +1021,7 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, read
         _wait_list.push_to_memory_queue(entry(std::move(pr), std::move(permit), std::move(func)), timeout);
         ++_stats.reads_enqueued_for_memory;
     }
+    ++_stats.waiters;
     return fut;
 }
 
@@ -1125,8 +1129,10 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             }
             if (x.func) {
                 _ready_list.push(std::move(x));
+                // permit is just transferred to another queue, no need to update waiters counter
             } else {
                 x.pr.set_value();
+                --_stats.waiters;
             }
         } catch (...) {
             x.pr.set_exception(std::current_exception());
@@ -1237,6 +1243,7 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, r
     promise<> pr;
     auto fut = pr.get_future();
     _ready_list.push(entry(std::move(pr), std::move(permit), std::move(func)));
+    ++_stats.waiters;
     return fut;
 }
 
@@ -1254,6 +1261,7 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
     while (!_wait_list.empty()) {
         _wait_list.front().pr.set_exception(ex);
         _wait_list.pop_front();
+        --_stats.waiters;
     }
 }
 

@@ -1021,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // * 1 waiter
     // * no more count resources left
     auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout);
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2); // (waiters includes _ready_list entries)
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);

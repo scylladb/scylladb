@@ -2043,7 +2043,7 @@ class scylla_memory(gdb.Command):
         used_count = initial_count - int(semaphore["_resources"]["count"])
         used_memory = initial_memory - int(semaphore["_resources"]["memory"])
         try:
-            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+            waiters = int(semaphore["_stats"]["waiters"])
         except gdb.error: # 5.1 compatibility
             waiters = int(semaphore["_wait_list"]["_size"])
         return f'{semaphore_name:<16} {used_count:>3}/{initial_count:>3}, {used_memory:>13}/{initial_memory:>13}, queued: {waiters}'
@@ -5235,7 +5235,7 @@ class scylla_read_stats(gdb.Command):
 
 
         try:
-            waiters = int(semaphore["_wait_list"]["_admission_queue"]["_size"])
+            waiters = int(semaphore["_stats"]["waiters"])
         except gdb.error: # 5.1 compatibility
             waiters = int(semaphore["_wait_list"]["_size"])
 
