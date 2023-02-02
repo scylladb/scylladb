@@ -460,7 +460,7 @@ bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evalu
     expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
     utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
     for (const managed_bytes_opt& elem : list_elems) {
-        if (equal(lhs_constant, elem, evaluation_inputs{}).is_true()) {
+        if (equal(lhs_constant, elem, inputs).is_true()) {
             return true;
         }
     }

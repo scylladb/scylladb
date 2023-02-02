@@ -2525,6 +2525,29 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
     test_evaluate_binop_null(oper_t::IN, make_int_const(5), in_list);
 }
 
+// Tests `<int_value> IN (123, ?, 789)` where the bind variable has value 456
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_list_with_bind_variable) {
+    schema_ptr table_schema =
+        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+
+    expression in_list = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements = {make_int_const(123), bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type)},
+                     make_int_const(789)},
+        .type = list_type_impl::get_instance(int32_type, true)};
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(table_schema, {{"pk", make_int_raw(111)}}, {make_int_raw(456)});
+
+    expression true_in_binop = binary_operator(make_int_const(456), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(true_in_binop, inputs), make_bool_raw(true));
+
+    expression false_in_binop = binary_operator(make_int_const(-100), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(false_in_binop, inputs), make_bool_raw(false));
+
+    expression empty_in_list = binary_operator(make_empty_const(int32_type), oper_t::IN, in_list);
+    BOOST_REQUIRE_EQUAL(evaluate(empty_in_list, inputs), make_bool_raw(false));
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_list_contains) {
     expression list_val = make_int_list_const({1, 3, 5});
 
