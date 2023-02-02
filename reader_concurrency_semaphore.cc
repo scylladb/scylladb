@@ -658,7 +658,7 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
 }
 
 static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list_type& list,
-        std::string_view problem) {
+        std::string_view problem) noexcept {
     static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
 
     rcslog.log(log_level::info, rate_limit, "{}", value_of([&] {
