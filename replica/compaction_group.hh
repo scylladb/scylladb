@@ -45,6 +45,8 @@ class compaction_group {
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    uint64_t _main_set_disk_space_used = 0;
+    uint64_t _maintenance_set_disk_space_used = 0;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -57,6 +59,7 @@ private:
                    enable_backlog_tracker backlog_tracker);
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
+    static uint64_t calculate_disk_space_used_for(const sstables::sstable_set& set);
 public:
     compaction_group(table& t, dht::token_range token_range);
 
@@ -109,6 +112,10 @@ public:
     void trigger_compaction();
 
     compaction_backlog_tracker& get_backlog_tracker();
+
+    size_t live_sstable_count() const noexcept;
+    uint64_t live_disk_space_used() const noexcept;
+    uint64_t total_disk_space_used() const noexcept;
 
     compaction::table_state& as_table_state() const noexcept;
 };

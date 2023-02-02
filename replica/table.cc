@@ -407,12 +407,6 @@ void table::notify_bootstrap_or_replace_end() {
     trigger_offstrategy_compaction();
 }
 
-void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
-    _stats.live_disk_space_used += disk_space_used_by_sstable;
-    _stats.total_disk_space_used += disk_space_used_by_sstable;
-    _stats.live_sstable_count++;
-}
-
 inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
     tracker.replace_sstables({}, {std::move(sstable)});
 }
@@ -438,14 +432,13 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
     if (backlog_tracker) {
         table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
-    // update sstable set last in case either updating
-    // staging sstables or backlog tracker throws
-    _t.update_stats_for_new_sstable(sstable->bytes_on_disk());
     return new_sstables;
 }
 
 void compaction_group::add_sstable(sstables::shared_sstable sstable) {
+    auto sstable_size = sstable->bytes_on_disk();
     _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
+    _main_set_disk_space_used += sstable_size;
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
@@ -454,10 +447,13 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
     _main_sstables = std::move(new_main_sstables);
+    _main_set_disk_space_used = calculate_disk_space_used_for(*_main_sstables);
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
+    auto sstable_size = sst->bytes_on_disk();
     _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    _maintenance_set_disk_space_used += sstable_size;
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
@@ -466,6 +462,7 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstabl
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
     _maintenance_sstables = std::move(new_maintenance_sstables);
+    _maintenance_set_disk_space_used = calculate_disk_space_used_for(*_maintenance_sstables);
 }
 
 void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {
@@ -987,18 +984,37 @@ void table::set_metrics() {
     }
 }
 
+size_t compaction_group::live_sstable_count() const noexcept {
+    // FIXME: switch to sstable_set::size() once available.
+    return _main_sstables->all()->size() + _maintenance_sstables->all()->size();
+}
+
+uint64_t compaction_group::live_disk_space_used() const noexcept {
+    return _main_set_disk_space_used + _maintenance_set_disk_space_used;
+}
+
+uint64_t compaction_group::total_disk_space_used() const noexcept {
+    return live_disk_space_used() + boost::accumulate(_sstables_compacted_but_not_deleted | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
+}
+
+uint64_t compaction_group::calculate_disk_space_used_for(const sstables::sstable_set& set) {
+    uint64_t disk_space_used = 0;
+
+    set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
+        disk_space_used += sst->bytes_on_disk();
+    });
+    return disk_space_used;
+}
+
 void table::rebuild_statistics() {
     _stats.live_disk_space_used = 0;
     _stats.live_sstable_count = 0;
     _stats.total_disk_space_used = 0;
 
-    _sstables->for_each_sstable([this] (const sstables::shared_sstable& tab) {
-        update_stats_for_new_sstable(tab->bytes_on_disk());
-    });
     for (const compaction_group_ptr& cg : compaction_groups()) {
-        for (auto& tab: cg->compacted_undeleted_sstables()) {
-            _stats.total_disk_space_used += tab->bytes_on_disk();
-        }
+        _stats.live_disk_space_used += cg->live_disk_space_used();
+        _stats.total_disk_space_used += cg->total_disk_space_used();
+        _stats.live_sstable_count += cg->live_sstable_count();
     }
 }
 
