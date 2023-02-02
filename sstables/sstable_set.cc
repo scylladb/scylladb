@@ -721,7 +721,7 @@ public:
         irclogger.trace("{}: created for range: {} with {} sstables",
                 fmt::ptr(this),
                 *_pr,
-                _sstables->all()->size());
+                _sstables->size());
     }
 
     incremental_reader_selector(const incremental_reader_selector&) = delete;
@@ -1001,7 +1001,7 @@ std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::ve
 
 lw_shared_ptr<const sstable_list> compound_sstable_set::all() const {
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
@@ -1089,7 +1089,7 @@ std::unique_ptr<incremental_selector_impl> compound_sstable_set::make_incrementa
         abort();
     }
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const lw_shared_ptr<sstable_set>& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const lw_shared_ptr<sstable_set>& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     // optimize for common case where only primary set contains sstables, so its selector can be built without an interposer.
@@ -1118,7 +1118,7 @@ compound_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
@@ -1198,7 +1198,8 @@ sstable_set::make_local_shard_sstable_reader(
         assert(!sst->is_shared());
         return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
-    if (auto sstables = _impl->all(); sstables->size() == 1) [[unlikely]] {
+    if (_impl->size() == 1) [[unlikely]] {
+        auto sstables = _impl->all();
         auto sst = *sstables->begin();
         return reader_factory_fn(sst, pr);
     }
