@@ -35,6 +35,8 @@
 #include "utils/rjson.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_extension.hh"
+#include "db/tags/utils.hh"
+#include "db/tags/extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -764,6 +766,15 @@ static bool is_index(replica::database& db, const table_id& id, const schema& s)
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
+static bool is_update_synchronously_view(const schema& s) {
+    auto tag_opt = db::find_tag(s, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
+    if (!tag_opt.has_value()) {
+        return false;
+    }
+
+    return *tag_opt == "true";
+}
+
 sstring schema::element_type(replica::database& db) const {
     if (is_view()) {
         if (is_index(db, view_info()->base_id(), *this)) {
@@ -907,8 +918,20 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
     os << "\n    AND min_index_interval = " << min_index_interval();
     os << "\n    AND read_repair_chance = " << read_repair_chance();
-    os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "';";
-    os << "\n";
+    os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
+    os << "\n    AND paxos_grace_seconds = " << paxos_grace_seconds().count();
+
+    auto tombstone_gc_str = tombstone_gc_options().to_sstring();
+    std::replace(tombstone_gc_str.begin(), tombstone_gc_str.end(), '"', '\'');
+    os << "\n    AND tombstone_gc = " << tombstone_gc_str;
+    
+    if (cdc_options().enabled()) {
+        os << "\n    AND cdc = " << cdc_options().to_sstring();
+    }
+    if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
+        os << "\n    AND synchronous_updates = " << std::boolalpha << is_update_synchronously_view(*this);
+    }
+    os << ";\n";
 
     if (with_internals) {
         for (auto& cdef : dropped_columns()) {
