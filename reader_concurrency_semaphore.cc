@@ -643,13 +643,12 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     return total;
 }
 
-static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore,
-        const reader_concurrency_semaphore::permit_list_type& list, std::string_view problem, unsigned max_lines = 20) {
+static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore, std::string_view problem, unsigned max_lines = 20) {
     permit_groups permits;
 
-    for (const auto& permit : list) {
+    semaphore.foreach_permit([&] (const reader_permit::impl& permit) {
         permits[permit_group_key(permit.get_schema(), permit.get_op_name(), permit.get_state())].add(permit);
-    }
+    });
 
     permit_stats total;
 
@@ -665,13 +664,12 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
 }
 
-static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list_type& list,
-        std::string_view problem) noexcept {
+static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, std::string_view problem) noexcept {
     static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
 
     rcslog.log(log_level::info, rate_limit, "{}", value_of([&] {
         std::ostringstream os;
-        do_dump_reader_permit_diagnostics(os, semaphore, list, problem);
+        do_dump_reader_permit_diagnostics(os, semaphore, problem);
         return os.str();
     }));
 }
@@ -681,7 +679,7 @@ static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaph
 void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept {
     e.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
 
-    maybe_dump_reader_permit_diagnostics(_semaphore, _semaphore._permit_list, "timed out");
+    maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
 }
 
 reader_concurrency_semaphore::inactive_read::~inactive_read() {
@@ -755,7 +753,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
         if (permit.on_oom_kill()) {
             ++_stats.total_reads_killed_due_to_kill_limit;
         }
-        maybe_dump_reader_permit_diagnostics(*this, _permit_list, "kill limit triggered");
+        maybe_dump_reader_permit_diagnostics(*this, "kill limit triggered");
         throw std::bad_alloc();
     }
     _resources -= r;
@@ -985,7 +983,7 @@ bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
     if ((_wait_list.size() + _ready_list.size()) >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
-        maybe_dump_reader_permit_diagnostics(*this, _permit_list, fmt::format("{} queue overload", queue_name));
+        maybe_dump_reader_permit_diagnostics(*this, fmt::format("{} queue overload", queue_name));
         return std::make_exception_ptr(std::runtime_error(format("{}: {} queue overload", _name, queue_name)));
     }
     return {};
@@ -1085,7 +1083,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
             // Normally, the semaphore should admit waiters as soon as it can.
             // So at any point in time, there should either be no waiters, or it
             // shouldn't be able to admit new reads. Otherwise something went wrong.
-            maybe_dump_reader_permit_diagnostics(*this, _permit_list, "semaphore could admit new reads yet there are waiters");
+            maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters");
             maybe_admit_waiters();
         } else if (admit == can_admit::maybe) {
             evict_readers_in_background();
@@ -1249,16 +1247,20 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
 
 std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) const {
     std::ostringstream os;
-    do_dump_reader_permit_diagnostics(os, *this, _permit_list, "user request", max_lines);
+    do_dump_reader_permit_diagnostics(os, *this, "user request", max_lines);
     return os.str();
 }
 
+void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit::impl&)> func) const {
+    boost::for_each(_permit_list, std::ref(func));
+}
+
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) const {
-    for (auto& p : _permit_list) {
+    foreach_permit([func = std::move(func)] (const reader_permit::impl& p) {
         // We cast away const to construct a reader_permit but the resulting
         // object is passed as const& so there is no const violation here.
         func(reader_permit(const_cast<reader_permit::impl&>(p).shared_from_this()));
-    }
+    });
 }
 
 // A file that tracks the memory usage of buffers resulting from read
