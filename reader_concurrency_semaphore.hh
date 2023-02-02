@@ -121,20 +121,12 @@ public:
     using read_func = noncopyable_function<future<>(reader_permit)>;
 
 private:
-    struct entry {
-        promise<> pr;
-        reader_permit permit;
-        read_func func;
-        entry(promise<>&& pr, reader_permit permit, read_func func)
-            : pr(std::move(pr)), permit(std::move(permit)), func(std::move(func)) {}
-    };
-
     class expiry_handler {
         reader_concurrency_semaphore& _semaphore;
     public:
         explicit expiry_handler(reader_concurrency_semaphore& semaphore)
             : _semaphore(semaphore) {}
-        void operator()(entry& e) noexcept;
+        void operator()(reader_permit& p) noexcept;
     };
 
     struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
@@ -201,21 +193,21 @@ private:
 
     class wait_queue {
         // Stores entries for permits waiting to be admitted.
-        expiring_fifo<entry, expiry_handler, db::timeout_clock> _admission_queue;
+        expiring_fifo<reader_permit, expiry_handler, db::timeout_clock> _admission_queue;
         // Stores entries for serialized permits waiting to obtain memory.
-        expiring_fifo<entry, expiry_handler, db::timeout_clock> _memory_queue;
+        expiring_fifo<reader_permit, expiry_handler, db::timeout_clock> _memory_queue;
     public:
         wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
-        void push_to_admission_queue(entry&& e, db::timeout_clock::time_point timeout) {
+        void push_to_admission_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
             _admission_queue.push_back(std::move(e), timeout);
         }
-        void push_to_memory_queue(entry&& e, db::timeout_clock::time_point timeout) {
+        void push_to_memory_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
             _memory_queue.push_back(std::move(e), timeout);
         }
-        entry& front() {
+        reader_permit& front() {
             if (_memory_queue.empty()) {
                 return _admission_queue.front();
             } else {
@@ -232,7 +224,7 @@ private:
     };
 
     wait_queue _wait_list;
-    queue<entry> _ready_list;
+    queue<reader_permit> _ready_list;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
@@ -262,9 +254,9 @@ private:
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     enum class wait_on { admission, memory };
-    future<> enqueue_waiter(reader_permit permit, read_func func, wait_on wait);
+    future<> enqueue_waiter(reader_permit permit, wait_on wait);
     void evict_readers_in_background();
-    future<> do_wait_admission(reader_permit permit, read_func func = {});
+    future<> do_wait_admission(reader_permit permit);
 
     // Check whether permit can be admitted or not.
     // The wait list is not taken into consideration, this is the caller's
@@ -308,6 +300,8 @@ private:
     // Throws std::bad_alloc if memory consumed is oom_kill_limit_multiply_threshold more than the memory limit.
     void consume(reader_permit::impl& permit, resources r);
     void signal(const resources& r) noexcept;
+
+    future<> with_ready_permit(reader_permit permit);
 
 public:
     struct no_limits { };
