@@ -105,4 +105,15 @@ future<> local_offstrategy_keyspace_compaction_task_impl::run() {
     });
 }
 
+future<> upgrade_sstables_compaction_task_impl::run() {
+    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(_status.keyspace));
+        co_await run_on_existing_tables("upgrade_sstables", db, _status.keyspace, _table_infos, [&] (replica::table& t) -> future<> {
+            return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version);
+            });
+        });
+    });
+}
+
 }
