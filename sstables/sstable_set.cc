@@ -175,6 +175,11 @@ sstable_set::erase(shared_sstable sst) {
     _impl->erase(sst);
 }
 
+size_t
+sstable_set::size() const noexcept {
+    return _impl->size();
+}
+
 sstable_set::~sstable_set() = default;
 
 sstable_set::incremental_selector::incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s)
@@ -349,6 +354,11 @@ void partitioned_sstable_set::erase(shared_sstable sst) {
     }
 }
 
+size_t
+partitioned_sstable_set::size() const noexcept {
+    return _all->size();
+}
+
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
     schema_ptr _schema;
     const std::vector<shared_sstable>& _unleveled_sstables;
@@ -434,6 +444,11 @@ std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition
 
 lw_shared_ptr<const sstable_list> time_series_sstable_set::all() const {
     return make_lw_shared<const sstable_list>(boost::copy_range<const sstable_list>(*_sstables | boost::adaptors::map_values));
+}
+
+size_t
+time_series_sstable_set::size() const noexcept {
+    return _sstables->size();
 }
 
 void time_series_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
@@ -1020,6 +1035,11 @@ void compound_sstable_set::insert(shared_sstable sst) {
 }
 void compound_sstable_set::erase(shared_sstable sst) {
     throw_with_backtrace<std::bad_function_call>();
+}
+
+size_t
+compound_sstable_set::size() const noexcept {
+    return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::size)), size_t(0));
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {

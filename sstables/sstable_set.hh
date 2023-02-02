@@ -68,6 +68,7 @@ public:
     void for_each_sstable(std::function<void(const shared_sstable&)> func) const;
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
+    size_t size() const noexcept;
 
     // Used to incrementally select sstables from sstable set using ring-position.
     // sstable set must be alive during the lifetime of the selector.

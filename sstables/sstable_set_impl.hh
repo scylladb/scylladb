@@ -33,6 +33,7 @@ public:
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const = 0;
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
+    virtual size_t size() const noexcept = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
@@ -97,6 +98,7 @@ public:
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
 };
@@ -122,6 +124,7 @@ public:
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     std::unique_ptr<position_reader_queue> make_position_reader_queue(
@@ -161,6 +164,7 @@ public:
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
