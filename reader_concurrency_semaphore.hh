@@ -201,26 +201,10 @@ private:
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
-        void push_to_admission_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
-            _admission_queue.push_back(std::move(e), timeout);
-        }
-        void push_to_memory_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
-            _memory_queue.push_back(std::move(e), timeout);
-        }
-        reader_permit& front() {
-            if (_memory_queue.empty()) {
-                return _admission_queue.front();
-            } else {
-                return _memory_queue.front();
-            }
-        }
-        void pop_front() {
-            if (_memory_queue.empty()) {
-                _admission_queue.pop_front();
-            } else {
-                _memory_queue.pop_front();
-            }
-        }
+        void push_to_admission_queue(reader_permit&& e, db::timeout_clock::time_point timeout);
+        void push_to_memory_queue(reader_permit&& e, db::timeout_clock::time_point timeout);
+        reader_permit& front();
+        void pop_front();
     };
 
     wait_queue _wait_list;

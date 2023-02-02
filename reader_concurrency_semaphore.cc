@@ -703,6 +703,30 @@ void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
     }
 }
 
+void reader_concurrency_semaphore::wait_queue::push_to_admission_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
+    _admission_queue.push_back(std::move(e), timeout);
+}
+
+void reader_concurrency_semaphore::wait_queue::push_to_memory_queue(reader_permit&& e, db::timeout_clock::time_point timeout) {
+    _memory_queue.push_back(std::move(e), timeout);
+}
+
+reader_permit& reader_concurrency_semaphore::wait_queue::front() {
+    if (_memory_queue.empty()) {
+        return _admission_queue.front();
+    } else {
+        return _memory_queue.front();
+    }
+}
+
+void reader_concurrency_semaphore::wait_queue::pop_front() {
+    if (_memory_queue.empty()) {
+        _admission_queue.pop_front();
+    } else {
+        _memory_queue.pop_front();
+    }
+}
+
 namespace {
 
 struct stop_execution_loop {
