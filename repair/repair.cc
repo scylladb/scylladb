@@ -1445,7 +1445,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         auto old_endpoints_in_local_dc = get_old_endpoints_in_local_dc();
                         auto rf_in_local_dc = get_rf_in_local_dc();
                         if (everywhere_topology) {
-                            neighbors = old_endpoints_in_local_dc;
+                            neighbors = old_endpoints_in_local_dc.empty() ? old_endpoints : old_endpoints_in_local_dc;
+                            rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, old_endpoints={}, new_endpoints={}, old_endpoints_in_local_dc={}, neighbors={}",
+                                    keyspace_name, desired_range, old_endpoints, new_endpoints, old_endpoints_in_local_dc, neighbors);
                         } else if (old_endpoints.size() == replication_factor) {
                             // For example, with RF = 3 and 3 nodes n1, n2, n3
                             // in the cluster, n4 is bootstrapped, old_replicas
