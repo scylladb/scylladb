@@ -152,12 +152,24 @@ def test_list_streams_paged(dynamodb, dynamodbstreams):
                     streams = dynamodbstreams.list_streams(Limit=1, ExclusiveStartStreamArn=streams['LastEvaluatedStreamArn'])
 
 
-@pytest.mark.skip(reason="Python driver validates Limit, so trying to test it is pointless")
 def test_list_streams_zero_limit(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
         with pytest.raises(ClientError, match='ValidationException'):
             wait_for_active_stream(dynamodbstreams, table)
             dynamodbstreams.list_streams(Limit=0)
+
+# The DynamoDB documentation for ListStreams says that for Limit, "the upper
+# limit is 100.". Indeed, if we try 101, we get a ValidationException.
+# There is no reason why Alternator must implement exactly the same limit,
+# but supporting a huge number (below we test 100,000) is not a good idea
+# because theoretically (if we have a huge number of tables...) it can result
+# in a huge response, which we don't want to allow.
+@pytest.mark.xfail(reason="no upper limit for Limit")
+def test_list_streams_too_high_limit(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        with pytest.raises(ClientError, match='ValidationException'):
+            wait_for_active_stream(dynamodbstreams, table)
+            dynamodbstreams.list_streams(Limit=100000)
 
 def test_create_streams_wrong_type(dynamodb, dynamodbstreams, test_table):
     with pytest.raises(ClientError, match='ValidationException'):
