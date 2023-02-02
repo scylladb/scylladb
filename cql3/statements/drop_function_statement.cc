@@ -35,7 +35,7 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp, api::time
         if (!user_func) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", func));
         }
-        if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name(), user_func->arg_types())) {
+        if (auto aggregate = functions::functions::used_by_user_aggregate(user_func)) {
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
         m = co_await qp.get_migration_manager().prepare_function_drop_announcement(user_func, ts);
