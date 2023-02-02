@@ -151,6 +151,23 @@ void functions::replace_function(shared_ptr<function> func) {
     with_udf_iter(func->name(), func->arg_types(), [func] (functions::declared_t::iterator i) {
         i->second = std::move(func);
     });
+    auto scalar_func = dynamic_pointer_cast<scalar_function>(func);
+    if (!scalar_func) {
+        return;
+    }
+    for (auto& fit : _declared) {
+        auto aggregate = dynamic_pointer_cast<user_aggregate>(fit.second);
+        if (aggregate && (same_signature(aggregate->sfunc(), scalar_func)
+            || (same_signature(aggregate->finalfunc(), scalar_func))
+            || (same_signature(aggregate->reducefunc(), scalar_func))))
+        {
+            // we need to replace at least one underlying function
+            shared_ptr<scalar_function> sfunc = same_signature(aggregate->sfunc(), scalar_func) ? scalar_func : aggregate->sfunc();
+            shared_ptr<scalar_function> finalfunc = same_signature(aggregate->finalfunc(), scalar_func) ? scalar_func : aggregate->finalfunc();
+            shared_ptr<scalar_function> reducefunc = same_signature(aggregate->reducefunc(), scalar_func) ? scalar_func : aggregate->reducefunc();
+            fit.second = ::make_shared<user_aggregate>(aggregate->name(), aggregate->initcond(), sfunc, reducefunc, finalfunc);
+        }
+    }
 }
 
 void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
