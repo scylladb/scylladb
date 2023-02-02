@@ -92,7 +92,7 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
 }
 
 future<>
-with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::sstables_manager& sm, noncopyable_function<future<> (replica::column_family&)> func) {
+with_column_family(sstables::test_env& env, schema_ptr s, replica::column_family::config cfg, noncopyable_function<future<> (replica::column_family&)> func) {
     std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 3 /* 8 CGs */ };
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
         auto tracker = make_lw_shared<cache_tracker>();
@@ -101,7 +101,7 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
         cfg.x_log2_compaction_groups = x_log2_compaction_groups;
         auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
         cf->mark_ready_for_writes();
         co_await func(*cf);
         co_await cf->stop();
@@ -499,7 +499,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (replica::column_family& cf) -> future<> {
+    with_column_family(env, s, cfg, [s, &env] (replica::column_family& cf) -> future<> {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -551,7 +551,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, env.manager(), [&env, s](replica::column_family& cf) {
+    return with_column_family(env, s, cfg, [&env, s](replica::column_family& cf) {
         return seastar::async([&env, s, &cf] {
             // populate
             auto new_key = [&] {
@@ -632,7 +632,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (auto& cf) mutable {
+    with_column_family(env, s, cfg, [s, &env] (auto& cf) mutable {
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");
