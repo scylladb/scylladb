@@ -480,7 +480,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
 
             auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, timeout);
 
-            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2);
 
             const auto futures_failed = eventually_true([&] { return permit2_fut.failed() && permit3_fut.failed(); });
             BOOST_CHECK(futures_failed);
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
 
             auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, db::no_timeout);
 
-            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2);
 
             auto permit4_fut = semaphore.obtain_permit(nullptr, "permit4", replica::new_reader_base_cost, db::no_timeout);
 
@@ -662,7 +662,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
             BOOST_REQUIRE(!enqueued_permit_fut.available());
             BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission + 1);
             BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
-            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
         }
 
         BOOST_REQUIRE(semaphore.available_resources().count >= 1);
@@ -784,7 +784,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         const auto stats_after = semaphore.get_stats();
         BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
         BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission + 1);
-        BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
 
         std::ignore = post_enqueue_hook(cookie1);
 
@@ -1021,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // * 1 waiter
     // * no more count resources left
     auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout);
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2); // (waiters includes _ready_list entries)
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2); // (waiters includes _ready_list entries)
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
@@ -1032,7 +1032,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
 
     // Start the read emptying the ready list, this should not be enough to admit p3
     rd2.wait_read_started().get();
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
@@ -1042,7 +1042,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
 
     // Marking p2 as blocked should now allow p3 to be admitted by evicting p1
     rd2.mark_as_blocked();
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
@@ -1084,10 +1084,10 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
 
     auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
 
     semaphore.set_resources({4, 4 * 1024});
-    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
     permit3_fut.get();

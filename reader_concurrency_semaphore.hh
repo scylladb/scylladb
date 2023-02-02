@@ -506,10 +506,6 @@ public:
         return _initial_resources - _resources;
     }
 
-    size_t waiters() const {
-        return _stats.waiters;
-    }
-
     void broken(std::exception_ptr ex = {});
 
     /// Dump diagnostics printout
@@ -523,7 +519,7 @@ public:
     }
 
     uint64_t active_reads() const noexcept {
-        return _stats.current_permits - _stats.inactive_reads - waiters();
+        return _stats.current_permits - _stats.inactive_reads - _stats.waiters;
     }
 
     void foreach_permit(noncopyable_function<void(const reader_permit::impl&)> func) const;

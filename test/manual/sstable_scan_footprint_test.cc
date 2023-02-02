@@ -161,7 +161,7 @@ void execute_reads(const schema& s, reader_concurrency_semaphore& sem, unsigned 
                 const auto res = sem.available_resources();
                 testlog.error("Read failed: {}", eptr);
                 testlog.trace("Reads remaining: count: {}/{}, memory: {}/{}, waiters: {}", (initial_res.count - res.count), initial_res.count,
-                        (initial_res.memory - res.memory), initial_res.memory, sem.waiters());
+                        (initial_res.memory - res.memory), initial_res.memory, sem.get_stats().waiters);
                 e = std::move(eptr);
             });
             thread::yield();
@@ -171,9 +171,9 @@ void execute_reads(const schema& s, reader_concurrency_semaphore& sem, unsigned 
 
         const auto res = sem.available_resources();
         testlog.trace("Initiated reads: {}/{}, count: {}/{}, memory: {}/{}, waiters: {}", n, reads, (initial_res.count - res.count), initial_res.count,
-                (initial_res.memory - res.memory), initial_res.memory, sem.waiters());
+                (initial_res.memory - res.memory), initial_res.memory, sem.get_stats().waiters);
 
-        if (sem.waiters()) {
+        if (sem.get_stats().waiters) {
             testlog.trace("Waiting for queue to drain");
             sem.obtain_permit(&s, "drain", 1, db::no_timeout).get();
         }
