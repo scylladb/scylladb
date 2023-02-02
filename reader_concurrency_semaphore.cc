@@ -87,7 +87,8 @@ class reader_permit::impl
     bool _marked_as_used = false;
     uint64_t _blocked_branches = 0;
     bool _marked_as_blocked = false;
-    db::timeout_clock::time_point _timeout;
+    std::exception_ptr _ex; // exception the permit was aborted with, nullptr if not aborted
+    timer<db::timeout_clock> _ttl_timer;
     query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
     uint64_t _sstables_read = 0;
     size_t _requested_memory = 0;
@@ -134,6 +135,10 @@ private:
         }
     }
 
+    void on_timeout() {
+        _ex = std::make_exception_ptr(timed_out_error{});
+    }
+
 public:
     struct value_tag {};
 
@@ -142,8 +147,9 @@ public:
         , _schema(schema)
         , _op_name_view(op_name)
         , _base_resources(base_resources)
-        , _timeout(timeout)
+        , _ttl_timer([this] { on_timeout(); })
     {
+        set_timeout(timeout);
         _semaphore.on_permit_created(*this);
     }
     impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout)
@@ -152,8 +158,9 @@ public:
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
         , _base_resources(base_resources)
-        , _timeout(timeout)
+        , _ttl_timer([this] { on_timeout(); })
     {
+        set_timeout(timeout);
         _semaphore.on_permit_created(*this);
     }
     ~impl() {
@@ -349,19 +356,20 @@ public:
     }
 
     db::timeout_clock::time_point timeout() const noexcept {
-        return _timeout;
+        return _ttl_timer.armed() ? _ttl_timer.get_timeout() : db::no_timeout;
     }
 
     void set_timeout(db::timeout_clock::time_point timeout) noexcept {
-        using namespace std::chrono_literals;
-        if (_timeout != db::no_timeout && timeout < _timeout) {
-            if (_timeout - timeout > 100ms) {
-                rcslog.warn("Detected timeout skew of {}ms, please check time skew between nodes in the cluster.  backtrace: {}",
-                        std::chrono::duration_cast<std::chrono::milliseconds>(_timeout - timeout).count(),
-                        current_backtrace());
-            }
+        _ttl_timer.cancel();
+        if (timeout != db::no_timeout) {
+            _ttl_timer.arm(timeout);
         }
-        _timeout = timeout;
+    }
+
+    void check_abort() {
+        if (_ex) {
+            std::rethrow_exception(_ex);
+        }
     }
 
     query::max_result_size max_result_size() const {
@@ -517,6 +525,10 @@ db::timeout_clock::time_point reader_permit::timeout() const noexcept {
 
 void reader_permit::set_timeout(db::timeout_clock::time_point timeout) noexcept {
     _impl->set_timeout(timeout);
+}
+
+void reader_permit::check_abort() {
+    return _impl->check_abort();
 }
 
 query::max_result_size reader_permit::max_result_size() const {
