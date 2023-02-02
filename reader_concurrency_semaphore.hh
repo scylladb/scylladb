@@ -12,7 +12,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
-#include <seastar/core/expiring_fifo.hh>
 #include "reader_permit.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "utils/updateable_value.hh"
@@ -121,14 +120,6 @@ public:
     using read_func = noncopyable_function<future<>(reader_permit)>;
 
 private:
-    class expiry_handler {
-        reader_concurrency_semaphore& _semaphore;
-    public:
-        explicit expiry_handler(reader_concurrency_semaphore& semaphore)
-            : _semaphore(semaphore) {}
-        void operator()(reader_permit& p) noexcept;
-    };
-
     struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
         flat_mutation_reader_v2 reader;
         eviction_notify_handler notify_handler;
@@ -191,20 +182,18 @@ private:
     resources _initial_resources;
     resources _resources;
 
-    class wait_queue {
+    struct wait_queue {
         // Stores entries for permits waiting to be admitted.
-        expiring_fifo<reader_permit, expiry_handler, db::timeout_clock> _admission_queue;
+        permit_list_type _admission_queue;
         // Stores entries for serialized permits waiting to obtain memory.
-        expiring_fifo<reader_permit, expiry_handler, db::timeout_clock> _memory_queue;
+        permit_list_type _memory_queue;
     public:
-        wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
-        void push_to_admission_queue(reader_permit&& e, db::timeout_clock::time_point timeout);
-        void push_to_memory_queue(reader_permit&& e, db::timeout_clock::time_point timeout);
-        reader_permit& front();
-        void pop_front();
+        void push_to_admission_queue(reader_permit::impl& p);
+        void push_to_memory_queue(reader_permit::impl& p);
+        reader_permit::impl& front();
     };
 
     wait_queue _wait_list;
@@ -238,9 +227,9 @@ private:
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     enum class wait_on { admission, memory };
-    future<> enqueue_waiter(reader_permit permit, wait_on wait);
+    future<> enqueue_waiter(reader_permit::impl& permit, wait_on wait);
     void evict_readers_in_background();
-    future<> do_wait_admission(reader_permit permit);
+    future<> do_wait_admission(reader_permit::impl& permit);
 
     // Check whether permit can be admitted or not.
     // The wait list is not taken into consideration, this is the caller's
@@ -248,7 +237,7 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    can_admit can_admit_read(const reader_permit& permit) const noexcept;
+    can_admit can_admit_read(const reader_permit::impl& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
@@ -261,6 +250,8 @@ private:
     // * The blessed read finishes and a new blessed permit is choosen.
     // * Memory consumption falls below the limit.
     future<> request_memory(reader_permit::impl& permit, size_t memory);
+
+    void dequeue_permit(reader_permit::impl&);
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
