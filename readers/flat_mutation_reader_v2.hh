@@ -580,6 +580,7 @@ public:
     void unpop_mutation_fragment(mutation_fragment_v2 mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
     const schema_ptr& schema() const { return _impl->_schema; }
     const reader_permit& permit() const { return _impl->_permit; }
+    reader_permit& permit() { return _impl->_permit; }
     db::timeout_clock::time_point timeout() const noexcept { return _impl->timeout(); }
     void set_timeout(db::timeout_clock::time_point timeout) noexcept { _impl->set_timeout(timeout); }
     void set_max_buffer_size(size_t size) {

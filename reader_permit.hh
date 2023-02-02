@@ -101,12 +101,8 @@ private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
             reader_resources base_resources, db::timeout_clock::time_point timeout);
 
-    void on_waiting_for_admission();
-    void on_waiting_for_memory(future<> f);
-    void on_admission();
-    void on_granted_memory();
-
-    future<> get_memory_future();
+    reader_permit::impl& operator*() { return *_impl; }
+    reader_permit::impl* operator->() { return _impl.get(); }
 
     void mark_used() noexcept;
 
