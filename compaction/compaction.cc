@@ -1799,7 +1799,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
     if (validation_errors != 0) {
         for (auto& sst : *sstables->all()) {
-            co_await sst->move_to_quarantine();
+            co_await sst->change_state(sstables::quarantine_dir, sst->generation());
         }
     }
 

@@ -73,7 +73,7 @@ class distributed_loader {
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name);
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator,
-            std::filesystem::path datadir, sstring ks, sstring cf);
+            bool needs_view_update, sstring ks, sstring cf);
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     using must_exist = bool_class<struct must_exist_tag>;
     static future<> populate_column_family(table_population_metadata& metadata, sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);

@@ -114,6 +114,7 @@ private:
     friend class sstables_manager;
 };
 
+constexpr const char* normal_dir = "";
 constexpr const char* staging_dir = "staging";
 constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
@@ -209,17 +210,12 @@ public:
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
     future<> destroy();
-    future<> move_to_new_dir(sstring new_dir, generation_type generation, delayed_commit_changes* delay = nullptr);
 
-    // Move the sstable to the quarantine_dir
+    // Move the sstable between states
     //
-    // If the sstable is alredy quarantined, this is a noop.
-    // If the sstable is in the base directory or in the staging_dir,
-    // it is moved into the quarantine_dir subdirectory of the base directory.
-    //
-    // Note: moving a sstable in any other dir to quarantine
-    // will move it into a quarantine_dir subdirectory of its current directory.
-    future<> move_to_quarantine(delayed_commit_changes* delay = nullptr);
+    // Known states are normal, staging, upload and quarantine.
+    // It's up to the storage driver how to implement this.
+    future<> change_state(sstring to, generation_type new_generation, delayed_commit_changes* delay = nullptr);
 
     generation_type generation() const {
         return _generation;
@@ -484,6 +480,7 @@ public:
         future<> create_links(const sstable& sst, const sstring& dir) const;
         future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
         future<> touch_temp_dir(const sstable& sst);
+        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
 
     public:
         explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
@@ -491,8 +488,13 @@ public:
         using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
         future<> seal(const sstable& sst);
         future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
-        future<> quarantine(const sstable& sst, delayed_commit_changes* delay);
-        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
+
+        // Moves the files around with .move() method. States are basedir subdirectories
+        // with the exception that normal state maps to the basedir itself. If the sstable
+        // is already in the target state, this is a noop.
+        // Moving in a snapshot or upload will move to a subdirectory of the current directory.
+        future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay);
+
         // runs in async context
         void open(sstable& sst, const io_priority_class& pc);
         future<> wipe(const sstable& sst) noexcept;
