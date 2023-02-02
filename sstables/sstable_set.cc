@@ -156,7 +156,7 @@ partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& 
     }));
 }
 
-lw_shared_ptr<sstable_list>
+lw_shared_ptr<const sstable_list>
 sstable_set::all() const {
     return _impl->all();
 }
@@ -306,7 +306,7 @@ std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition
     return r;
 }
 
-lw_shared_ptr<sstable_list> partitioned_sstable_set::all() const {
+lw_shared_ptr<const sstable_list> partitioned_sstable_set::all() const {
     return _all;
 }
 
@@ -432,8 +432,8 @@ std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition
     return boost::copy_range<std::vector<shared_sstable>>(*_sstables | boost::adaptors::map_values);
 }
 
-lw_shared_ptr<sstable_list> time_series_sstable_set::all() const {
-    return make_lw_shared<sstable_list>(boost::copy_range<sstable_list>(*_sstables | boost::adaptors::map_values));
+lw_shared_ptr<const sstable_list> time_series_sstable_set::all() const {
+    return make_lw_shared<const sstable_list>(boost::copy_range<const sstable_list>(*_sstables | boost::adaptors::map_values));
 }
 
 void time_series_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
@@ -984,7 +984,7 @@ std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::ve
     return ret;
 }
 
-lw_shared_ptr<sstable_list> compound_sstable_set::all() const {
+lw_shared_ptr<const sstable_list> compound_sstable_set::all() const {
     auto sets = _sets;
     auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return !set->all()->empty(); });
     auto non_empty_set_count = std::distance(sets.begin(), it);

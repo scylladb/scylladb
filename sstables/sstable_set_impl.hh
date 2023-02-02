@@ -29,7 +29,7 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
-    virtual lw_shared_ptr<sstable_list> all() const = 0;
+    virtual lw_shared_ptr<const sstable_list> all() const = 0;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const = 0;
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
@@ -93,7 +93,7 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
@@ -118,7 +118,7 @@ public:
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
@@ -157,7 +157,7 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
