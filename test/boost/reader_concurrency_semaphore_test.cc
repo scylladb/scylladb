@@ -1645,3 +1645,39 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_with_inactive_re
     permit = {};
     stop_f.get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_permit_waiting_for_memory_goes_inactive) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    const auto serialize_multiplier = 2;
+    const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+
+    std::vector<reader_permit::resource_units> res;
+
+    res.emplace_back(permit1.consume_memory(2048));
+    res.emplace_back(permit2.consume_memory(2048));
+
+    res.emplace_back(permit1.request_memory(1024).get());
+    BOOST_REQUIRE_EQUAL(semaphore.get_blessed_permit(), permit1.id());
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+
+    auto res_fut = permit2.request_memory(1024);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+
+    simple_schema ss;
+    auto s = ss.schema();
+    auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s, permit2));
+
+    // permit2 should have been evicted, its memory requests killed with std::bad_alloc
+    BOOST_REQUIRE(!handle);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 1);
+    BOOST_REQUIRE_EQUAL(permit2.get_state(), reader_permit::state::evicted);
+    BOOST_REQUIRE_THROW(res_fut.get(), std::bad_alloc);
+}

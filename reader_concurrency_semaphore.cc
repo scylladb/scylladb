@@ -314,7 +314,7 @@ public:
     }
 
     void on_register_as_inactive() {
-        assert(_state == reader_permit::state::active_unused || _state == reader_permit::state::active_used);
+        assert(_state == reader_permit::state::active_unused || _state == reader_permit::state::active_used || _state == reader_permit::state::waiting_for_memory);
         on_permit_inactive(reader_permit::state::inactive);
     }
 
@@ -896,6 +896,11 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader) noexcept {
     auto& permit = reader.permit();
+    if (permit->get_state() == reader_permit::state::waiting_for_memory) {
+        // Kill all outstanding memory requests, the read is going to be evicted.
+        permit->aux_data().pr.set_exception(std::make_exception_ptr(std::bad_alloc{}));
+        dequeue_permit(*permit);
+    }
     permit->on_register_as_inactive();
     if (_blessed_permit == &*permit) {
         _blessed_permit = nullptr;
