@@ -44,6 +44,13 @@
 #include "db/query_context.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID_gen.hh"
+#include "tombstone_gc_extension.hh"
+#include "db/tags/extension.hh"
+#include "cdc/cdc_extension.hh"
+#include "db/paxos_grace_seconds_extension.hh"
+#include "db/per_partition_rate_limit_extension.hh"
+
+
 
 using namespace std::literals::chrono_literals;
 
@@ -4127,6 +4134,18 @@ std::string normalize_white_space(const std::string& str) {
   return boost::regex_replace(boost::regex_replace(" " + str + " ", boost::regex("\\s+"), " "), boost::regex(", "), ",");
 }
 
+cql_test_config describe_test_config() {
+    auto ext = std::make_shared<db::extensions>();
+    ext->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
+    ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+    ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
+    ext->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
+    ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
+
+    auto cfg = seastar::make_shared<db::config>(ext);
+    return cql_test_config(cfg);
+}
+
 SEASTAR_TEST_CASE(test_describe_simple_schema) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         std::unordered_map<std::string, std::string> cql_create_tables {
@@ -4148,7 +4167,10 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND memtable_flush_period_in_ms = 0\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n"},
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
+            },
             {"cf1", "CREATE TABLE ks.cf1 (\n"
                 "    pk blob,\n"
                 "    ck blob,\n"
@@ -4169,7 +4191,9 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND memtable_flush_period_in_ms = 0\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n"
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
             },
             {"CF2", "CREATE TABLE ks.\"CF2\" (\n"
                 "    pk blob,\n"
@@ -4191,7 +4215,9 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND memtable_flush_period_in_ms = 10\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n"
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
             },
             {"Cf3", "CREATE TABLE ks.\"Cf3\" (\n"
                 "    pk blob,\n"
@@ -4214,7 +4240,9 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND memtable_flush_period_in_ms = 10\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n"
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
             },
             {"cf4", "CREATE TABLE ks.cf4 (\n"
                 "    pk blob,\n"
@@ -4236,7 +4264,9 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND memtable_flush_period_in_ms = 10\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n"
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"
             }
 
         };
@@ -4252,7 +4282,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
             schema->describe(e.local_db(), ss, false);
             BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
         }
-    });
+    }, describe_test_config());
 }
 
 SEASTAR_TEST_CASE(test_describe_view_schema) {
@@ -4279,7 +4309,9 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
                 "    AND memtable_flush_period_in_ms = 0\n"
                 "    AND min_index_interval = 128\n"
                 "    AND read_repair_chance = 0\n"
-                "    AND speculative_retry = '99.0PERCENTILE';\n";
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND paxos_grace_seconds = 43200\n"
+                "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n";
 
         std::unordered_map<std::string, std::string> cql_create_tables {
           {"cf_view", "CREATE MATERIALIZED VIEW \"KS\".cf_view AS\n"
@@ -4301,7 +4333,10 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
               "    AND memtable_flush_period_in_ms = 0\n"
               "    AND min_index_interval = 128\n"
               "    AND read_repair_chance = 0\n"
-              "    AND speculative_retry = '99.0PERCENTILE';\n"},
+              "    AND speculative_retry = '99.0PERCENTILE'\n"
+              "    AND paxos_grace_seconds = 43200\n"
+              "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'}\n"
+              "    AND synchronous_updates = false;\n"},
           {"cf_index_index", "CREATE INDEX cf_index ON \"KS\".\"cF\"(col2);"},
           {"cf_index1_index", "CREATE INDEX cf_index1 ON \"KS\".\"cF\"(pk);"},
           {"cf_index2_index", "CREATE INDEX cf_index2 ON \"KS\".\"cF\"(pk1);"},
@@ -4325,7 +4360,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
             base_schema->describe(e.local_db(), base_ss, false);
             BOOST_CHECK_EQUAL(normalize_white_space(base_ss.str()), normalize_white_space(base_table));
         }
-    });
+    }, describe_test_config());
 }
 
 shared_ptr<cql_transport::messages::result_message> cql_func_require_nofail(
