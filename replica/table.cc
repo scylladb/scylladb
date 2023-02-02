@@ -803,16 +803,15 @@ void table::set_metrics() {
 }
 
 void table::rebuild_statistics() {
-    // zeroing live_disk_space_used and live_sstable_count because the
-    // sstable list was re-created
     _stats.live_disk_space_used = 0;
     _stats.live_sstable_count = 0;
+    _stats.total_disk_space_used = 0;
 
     _sstables->for_each_sstable([this] (const sstables::shared_sstable& tab) {
         update_stats_for_new_sstable(tab->bytes_on_disk());
     });
     for (auto& tab : _sstables_compacted_but_not_deleted) {
-        update_stats_for_new_sstable(tab->bytes_on_disk());
+        _stats.total_disk_space_used += tab->bytes_on_disk();
     }
 }
 
