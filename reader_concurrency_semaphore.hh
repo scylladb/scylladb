@@ -120,7 +120,7 @@ public:
     using read_func = noncopyable_function<future<>(reader_permit)>;
 
 private:
-    struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
+    struct inactive_read {
         flat_mutation_reader_v2 reader;
         eviction_notify_handler notify_handler;
         timer<lowres_clock> ttl_timer;
@@ -129,23 +129,21 @@ private:
         explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
             : reader(std::move(reader_))
         { }
+        inactive_read(inactive_read&&);
         ~inactive_read();
         void detach() noexcept;
     };
 
-    using inactive_reads_type = bi::list<inactive_read, bi::constant_time_size<false>>;
-
 public:
     class inactive_read_handle {
-        reader_concurrency_semaphore* _sem = nullptr;
-        inactive_read* _irp = nullptr;
+        reader_permit_opt _permit;
 
         friend class reader_concurrency_semaphore;
 
     private:
         void abandon() noexcept;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept;
+        explicit inactive_read_handle(reader_permit permit) noexcept;
     public:
         inactive_read_handle() = default;
         inactive_read_handle(inactive_read_handle&& o) noexcept;
@@ -154,7 +152,7 @@ public:
             abandon();
         }
         explicit operator bool() const noexcept {
-            return bool(_irp);
+            return bool(_permit);
         }
     };
 
@@ -179,12 +177,12 @@ private:
     wait_queue _wait_list;
     permit_list_type _ready_list;
     condition_variable _ready_list_cv;
+    permit_list_type _inactive_reads;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
-    inactive_reads_type _inactive_reads;
     stats _stats;
     permit_list_type _permit_list;
     bool _stopped = false;
@@ -195,9 +193,9 @@ private:
     reader_permit::impl* _blessed_permit = nullptr;
 
 private:
-    void do_detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
-    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
-    void evict(inactive_read&, evict_reason reason) noexcept;
+    void do_detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
+    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
+    void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
 
