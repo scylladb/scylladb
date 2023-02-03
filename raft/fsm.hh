@@ -88,7 +88,7 @@ struct leader {
     // Used to access new leader to set semaphore exception
     const raft::fsm& fsm;
     // Used to limit log size
-    std::unique_ptr<seastar::semaphore> log_limiter_semaphore;
+    lw_shared_ptr<seastar::semaphore> log_limiter_semaphore;
     // If the leader is in the process of transferring the leadership
     // contains a time point in the future the transfer will be aborted at
     // unless completes successfully till then.
@@ -105,7 +105,7 @@ struct leader {
     bool last_read_id_changed = false;
     read_id max_read_id_with_quorum{0};
 
-    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
+    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(make_lw_shared<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
     ~leader();
 };
