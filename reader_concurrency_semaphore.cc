@@ -155,7 +155,7 @@ private:
     void on_timeout() {
         _ex = std::make_exception_ptr(timed_out_error{});
 
-        if (_state == state::waiting_for_admission || _state == state::waiting_for_memory) {
+        if (_state == state::waiting_for_admission || _state == state::waiting_for_memory || _state == state::waiting_for_execution) {
             _aux_data.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
 
             maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
@@ -254,6 +254,10 @@ public:
         on_permit_inactive(reader_permit::state::waiting_for_memory);
     }
 
+    void on_waiting_for_execution() {
+        on_permit_inactive(reader_permit::state::waiting_for_execution);
+    }
+
     void on_admission() {
         assert(_state != reader_permit::state::active_blocked);
         on_permit_active();
@@ -266,6 +270,10 @@ public:
             on_permit_active();
         }
         consume({0, std::exchange(_requested_memory, 0)});
+    }
+
+    void on_executing() {
+        on_permit_active();
     }
 
     void on_register_as_inactive() {
@@ -559,6 +567,9 @@ std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
         case reader_permit::state::waiting_for_memory:
             os << "waiting_for_memory";
             break;
+        case reader_permit::state::waiting_for_execution:
+            os << "waiting_for_execution";
+            break;
         case reader_permit::state::active_unused:
             os << "active/unused";
             break;
@@ -745,6 +756,7 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
 
         while (!_ready_list.empty()) {
             auto permit = _ready_list.pop();
+            permit->on_executing();
             auto e = std::move(permit->aux_data());
             --_stats.waiters;
 
@@ -1146,6 +1158,7 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             }
             if (permit.aux_data().func) {
                 _ready_list.push(reader_permit(permit.shared_from_this()));
+                permit.on_waiting_for_execution();
                 ++_stats.waiters;
             } else {
                 permit.aux_data().pr.set_value();
@@ -1277,7 +1290,8 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit) {
     auto& ad = permit->aux_data();
     ad.pr = {};
     auto fut = ad.pr.get_future();
-    _ready_list.push(std::move(permit));
+    _ready_list.push(reader_permit(permit));
+    permit->on_waiting_for_execution();
     ++_stats.waiters;
     return fut;
 }

@@ -81,6 +81,7 @@ public:
     enum class state {
         waiting_for_admission,
         waiting_for_memory,
+        waiting_for_execution,
         active_unused,
         active_used,
         active_blocked,
