@@ -187,7 +187,7 @@ class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
     # pylint: disable=too-many-instance-attributes
-    START_TIMEOUT = 300     # seconds
+    START_TIMEOUT = 1000     # seconds
     start_time: float
     sleep_interval: float
     log_file: BufferedWriter

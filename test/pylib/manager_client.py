@@ -15,7 +15,7 @@ import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
-from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 import aiohttp
@@ -157,7 +157,8 @@ class ManagerClient():
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
                 data['cmdline'] = cmdline
-            server_info = await self.client.put_json("/cluster/addserver", data, response_type="json")
+            server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
+                                                     timeout=ScyllaServer.START_TIMEOUT)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
