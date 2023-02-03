@@ -396,11 +396,16 @@ public:
         _ping_leader = true;
     }
 
+    struct memory_permit {
+        lw_shared_ptr<seastar::semaphore> sem;
+        semaphore_units<> units;
+    };
+
     // Call this function to wait for the total size in bytes of log entries to
     // go below max_log_size.
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
-    future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size);
 
     // Return current configuration.
     const configuration& get_configuration() const;

@@ -45,11 +45,14 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
-future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
+future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
     check_is_leader();
 
-    auto& sm = *leader_state().log_limiter_semaphore;
-    return as ? get_units(sm, size, *as) : get_units(sm, size);
+    memory_permit mp;
+    mp.sem = leader_state().log_limiter_semaphore;
+    auto& sm = *mp.sem;
+    mp.units = co_await (as ? get_units(sm, size, *as) : get_units(sm, size));
+    co_return mp;
 }
 
 const configuration& fsm::get_configuration() const {
