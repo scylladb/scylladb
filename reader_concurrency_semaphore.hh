@@ -145,31 +145,11 @@ public:
     private:
         void abandon() noexcept;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept
-            : _sem(&sem), _irp(&ir) {
-            _irp->handle = this;
-        }
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept;
     public:
         inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) noexcept
-            : _sem(std::exchange(o._sem, nullptr))
-            , _irp(std::exchange(o._irp, nullptr)) {
-            if (_irp) {
-                _irp->handle = this;
-            }
-        }
-        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
-            if (this == &o) {
-                return *this;
-            }
-            abandon();
-            _sem = std::exchange(o._sem, nullptr);
-            _irp = std::exchange(o._irp, nullptr);
-            if (_irp) {
-                _irp->handle = this;
-            }
-            return *this;
-        }
+        inactive_read_handle(inactive_read_handle&& o) noexcept;
+        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept;
         ~inactive_read_handle() {
             abandon();
         }

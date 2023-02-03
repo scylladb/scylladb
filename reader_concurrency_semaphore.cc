@@ -726,6 +726,33 @@ void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
     }
 }
 
+reader_concurrency_semaphore::inactive_read_handle::inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept
+    : _sem(&sem), _irp(&ir) {
+    _irp->handle = this;
+}
+
+reader_concurrency_semaphore::inactive_read_handle::inactive_read_handle(inactive_read_handle&& o) noexcept
+    : _sem(std::exchange(o._sem, nullptr))
+    , _irp(std::exchange(o._irp, nullptr)) {
+    if (_irp) {
+        _irp->handle = this;
+    }
+}
+
+reader_concurrency_semaphore::inactive_read_handle&
+reader_concurrency_semaphore::inactive_read_handle::operator=(inactive_read_handle&& o) noexcept {
+    if (this == &o) {
+        return *this;
+    }
+    abandon();
+    _sem = std::exchange(o._sem, nullptr);
+    _irp = std::exchange(o._irp, nullptr);
+    if (_irp) {
+        _irp->handle = this;
+    }
+    return *this;
+}
+
 void reader_concurrency_semaphore::wait_queue::push_to_admission_queue(reader_permit::impl& p) {
     p.unlink();
     _admission_queue.push_back(p);
