@@ -507,10 +507,9 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
     }
     logger.trace("[{}] adding entry after waiting for memory permit", id());
 
-    // FIXME: indentation
-        const log_entry& e = _fsm->add_entry(std::move(cmd));
-        memory_permit.units.release();
-        co_return entry_id{.term = e.term, .idx = e.idx};
+    const log_entry& e = _fsm->add_entry(std::move(cmd));
+    memory_permit.units.release();
+    co_return entry_id{.term = e.term, .idx = e.idx};
 }
 
 future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd, seastar::abort_source* as) {
