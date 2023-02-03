@@ -199,7 +199,7 @@ License:        AGPLv3
 URL:            http://www.scylladb.com/
 Requires:       kmod
 # tuned overwrites our sysctl settings
-Obsoletes:	tuned
+Obsoletes:      tuned >= 2.11.0
 
 %description kernel-conf
 This package contains Linux kernel configuration changes for the Scylla database.  Install this package
