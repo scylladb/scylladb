@@ -391,14 +391,14 @@ public:
      */
     static mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
 
-    static future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
-    static future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
-    static future<> remove_view_build_progress(sstring ks_name, sstring view_name);
-    static future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
-    static future<> mark_view_as_built(sstring ks_name, sstring view_name);
-    static future<> remove_built_view(sstring ks_name, sstring view_name);
-    static future<std::vector<view_name>> load_built_views();
-    static future<std::vector<view_build_progress>> load_view_build_progress();
+    future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
+    future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
+    future<> remove_view_build_progress(sstring ks_name, sstring view_name);
+    future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
+    future<> mark_view_as_built(sstring ks_name, sstring view_name);
+    future<> remove_built_view(sstring ks_name, sstring view_name);
+    future<std::vector<view_name>> load_built_views();
+    future<std::vector<view_build_progress>> load_view_build_progress();
 
     // Paxos related functions
     static future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,

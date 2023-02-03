@@ -1784,8 +1784,8 @@ future<> view_builder::start(service::migration_manager& mm) {
             while (!mm.have_schema_agreement()) {
                 seastar::sleep_abortable(500ms, _as).get();
             }
-            auto built = system_keyspace::load_built_views().get0();
-            auto in_progress = system_keyspace::load_view_build_progress().get0();
+            auto built = _sys_ks.load_built_views().get0();
+            auto in_progress = _sys_ks.load_view_build_progress().get0();
             setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
         }).then_wrapped([this] (future<>&& f) {
             // All shards need to arrive at the same decisions on whether or not to
@@ -2001,9 +2001,9 @@ void view_builder::setup_shard_build_step(
         }
         if (this_shard_id() == 0) {
             vbi.bookkeeping_ops.push_back(_sys_dist_ks.remove_view(name.first, name.second));
-            vbi.bookkeeping_ops.push_back(system_keyspace::remove_built_view(name.first, name.second));
+            vbi.bookkeeping_ops.push_back(_sys_ks.remove_built_view(name.first, name.second));
             vbi.bookkeeping_ops.push_back(
-                    system_keyspace::remove_view_build_progress_across_all_shards(
+                    _sys_ks.remove_view_build_progress_across_all_shards(
                             std::move(name.first),
                             std::move(name.second)));
         }
@@ -2019,8 +2019,8 @@ void view_builder::setup_shard_build_step(
         if (auto view = maybe_fetch_view(view_name)) {
             if (vbi.built_views.contains(view->id())) {
                 if (this_shard_id() == 0) {
-                    auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
-                        return system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
+                    auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([this, view = std::move(view)] {
+                        return _sys_ks.remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     vbi.bookkeeping_ops.push_back(std::move(f));
                 }
@@ -2102,7 +2102,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     auto f = this_shard_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
     return when_all_succeed(
             std::move(f),
-            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
+            _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
 }
 
 static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
@@ -2184,11 +2184,11 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
             // current shard, since shard 0 may have already processed the notification, and this
             // shard may since have updated the system table if the drop happened concurrently
             // with the build.
-            return system_keyspace::remove_view_build_progress(ks_name, view_name);
+            return _sys_ks.remove_view_build_progress(ks_name, view_name);
         }
         return when_all_succeed(
-                    system_keyspace::remove_view_build_progress(ks_name, view_name),
-                    system_keyspace::remove_built_view(ks_name, view_name),
+                    _sys_ks.remove_view_build_progress(ks_name, view_name),
+                    _sys_ks.remove_built_view(ks_name, view_name),
                     _sys_dist_ks.remove_view(ks_name, view_name))
                         .discard_result()
                         .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
@@ -2455,7 +2455,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     for (auto& [view, _, next_token] : step.build_status) {
         if (next_token) {
             bookkeeping_ops.push_back(
-                    system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), *next_token));
+                    _sys_ks.update_view_build_progress(view->ks_name(), view->cf_name(), *next_token));
         }
     }
     seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([this] (std::exception_ptr ep) {
@@ -2483,11 +2483,11 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 auto view = builder._db.find_schema(view_id);
                 vlogger.info("Finished building view {}.{}", view->ks_name(), view->cf_name());
                 return seastar::when_all_succeed(
-                        system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()),
-                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then_unpack([view] {
+                        builder._sys_ks.mark_view_as_built(view->ks_name(), view->cf_name()),
+                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then_unpack([&builder, view] {
                     // The view is built, so shard 0 can remove the entry in the build progress system table on
                     // behalf of all shards. It is guaranteed to have a higher timestamp than the per-shard entries.
-                    return system_keyspace::remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
+                    return builder._sys_ks.remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
                 }).then([&builder, view] {
                     auto it = builder._build_notifiers.find(std::pair(view->ks_name(), view->cf_name()));
                     if (it != builder._build_notifiers.end()) {
@@ -2496,7 +2496,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 });
             });
         }
-        return system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), next_token);
+        return _sys_ks.update_view_build_progress(view->ks_name(), view->cf_name(), next_token);
     });
 }
 

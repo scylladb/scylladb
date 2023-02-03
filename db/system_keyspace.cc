@@ -3069,7 +3069,7 @@ mutation system_keyspace::make_size_estimates_mutation(const sstring& ks, std::v
 future<> system_keyspace::register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, generation_number, cpu_id, first_token) VALUES (?, ?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
-    return qctx->execute_cql(
+    return execute_cql(
             std::move(req),
             std::move(ks_name),
             std::move(view_name),
@@ -3081,7 +3081,7 @@ future<> system_keyspace::register_view_for_building(sstring ks_name, sstring vi
 future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
-    return qctx->execute_cql(
+    return execute_cql(
             std::move(req),
             std::move(ks_name),
             std::move(view_name),
@@ -3090,14 +3090,14 @@ future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring vi
 }
 
 future<> system_keyspace::remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name) {
-    return qctx->execute_cql(
+    return execute_cql(
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring view_name) {
-    return qctx->execute_cql(
+    return execute_cql(
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ? AND cpu_id = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
             std::move(ks_name),
             std::move(view_name),
@@ -3105,21 +3105,21 @@ future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring vi
 }
 
 future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name) {
-    return qctx->execute_cql(
+    return execute_cql(
             format("INSERT INTO system.{} (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<> system_keyspace::remove_built_view(sstring ks_name, sstring view_name) {
-    return qctx->execute_cql(
+    return execute_cql(
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
 future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views() {
-    return qctx->execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return boost::copy_range<std::vector<view_name>>(*cql_result
                 | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
@@ -3130,7 +3130,7 @@ future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_view
 }
 
 future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_view_build_progress() {
-    return qctx->execute_cql(format("SELECT keyspace_name, view_name, first_token, next_token, cpu_id FROM system.{}",
+    return execute_cql(format("SELECT keyspace_name, view_name, first_token, next_token, cpu_id FROM system.{}",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::vector<view_build_progress> progress;
         for (auto& row : *cql_result) {

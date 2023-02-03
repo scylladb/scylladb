@@ -621,8 +621,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 future<> storage_service::mark_existing_views_as_built(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     assert(this_shard_id() == 0);
     auto views = _db.local().get_views();
-    co_await coroutine::parallel_for_each(views, [&sys_dist_ks] (view_ptr& view) -> future<> {
-        co_await db::system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name());
+    co_await coroutine::parallel_for_each(views, [this, &sys_dist_ks] (view_ptr& view) -> future<> {
+        co_await _sys_ks.local().mark_view_as_built(view->ks_name(), view->cf_name());
         co_await sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
     });
 }
