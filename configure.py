@@ -405,6 +405,7 @@ scylla_tests = set([
     'test/boost/json_test',
     'test/boost/keys_test',
     'test/boost/large_paging_state_test',
+    'test/boost/recent_entries_map_test',
     'test/boost/like_matcher_test',
     'test/boost/limiting_data_source_test',
     'test/boost/linearizing_input_stream_test',
