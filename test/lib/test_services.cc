@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "test/lib/scylla_tests_cmdline_options.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "db/config.hh"
@@ -13,6 +14,10 @@
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
+#include "replica/compaction_group.hh"
+#include <boost/program_options.hpp>
+#include <iostream>
+#include <seastar/util/defer.hh>
 
 dht::token create_token_from_key(const dht::i_partitioner& partitioner, sstring key) {
     sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
@@ -163,4 +168,79 @@ test_env::impl::impl(test_env_config cfg)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
 { }
 
+}
+
+static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {
+    int new_argc = 0;
+    char** new_argv = (char**) malloc(argc * sizeof(char*));
+    std::memset(new_argv, 0, argc * sizeof(char*));
+    bool exclude_next_arg = false;
+    for (auto i = 0; i < argc; i++) {
+        if (std::exchange(exclude_next_arg, false)) {
+            continue;
+        }
+        if (strcmp(argv[i], filter_out) == 0) {
+            // if arg filtered out has positional arg, that has to be excluded too.
+            exclude_next_arg = exclude_positional_arg;
+            continue;
+        }
+        new_argv[new_argc] = (char*) malloc(strlen(argv[i]) + 1);
+        std::strcpy(new_argv[new_argc], argv[i]);
+        new_argc++;
+    }
+    return std::make_pair(new_argc, new_argv);
+}
+
+static void free_arg_list(int argc, char** argv) {
+    for (auto i = 0; i < argc; i++) {
+        if (argv[i]) {
+            free(argv[i]);
+        }
+    }
+    free(argv);
+}
+
+scylla_tests_cmdline_options_processor::~scylla_tests_cmdline_options_processor() {
+    if (_new_argv) {
+        free_arg_list(_new_argc, _new_argv);
+    }
+}
+
+std::pair<int, char**> scylla_tests_cmdline_options_processor::process_cmdline_options(int argc, char** argv) {
+    namespace po = boost::program_options;
+
+    // Removes -- (intended to separate boost suite args from seastar ones) which confuses boost::program_options.
+    auto [new_argc, new_argv] = rebuild_arg_list_without(argc, argv, "--");
+    auto _ = defer([argc = new_argc, argv = new_argv] {
+        free_arg_list(argc, argv);
+    });
+
+    po::options_description desc("Scylla tests additional options");
+    desc.add_options()
+            ("help", "Produces help message")
+            ("x-log2-compaction-groups", po::value<unsigned>()->default_value(0), "Controls static number of compaction groups per table per shard. For X groups, set the option to log (base 2) of X. Example: Value of 3 implies 8 groups.");
+    po::variables_map vm;
+
+    po::parsed_options parsed = po::command_line_parser(new_argc, new_argv).
+            options(desc).
+            allow_unregistered().
+            run();
+
+    po::store(parsed, vm);
+    po::notify(vm);
+
+    if (vm.count("help")) {
+        std::cout << desc << std::endl;
+        return std::make_pair(argc, argv);
+    }
+
+    unsigned x_log2_compaction_groups = vm["x-log2-compaction-groups"].as<unsigned>();
+    if (x_log2_compaction_groups) {
+        std::cout << "Setting x_log2_compaction_groups to " << x_log2_compaction_groups << std::endl;
+        replica::set_minimum_x_log2_compaction_groups(x_log2_compaction_groups);
+        auto [_new_argc, _new_argv] = rebuild_arg_list_without(argc, argv, "--x-log2-compaction-groups", true);
+        return std::make_pair(_new_argc, _new_argv);
+    }
+
+    return std::make_pair(argc, argv);
 }

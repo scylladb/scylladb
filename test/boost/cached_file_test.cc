@@ -7,7 +7,7 @@
  */
 
 #include <boost/range/irange.hpp>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/when_all.hh>

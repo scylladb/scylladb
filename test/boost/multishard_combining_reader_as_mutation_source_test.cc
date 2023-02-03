@@ -14,7 +14,7 @@
 
 #include <seastar/core/thread.hh>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/test_services.hh"
 #include "test/lib/mutation_source_test.hh"

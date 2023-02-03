@@ -8,7 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "sstables/partition_index_cache.hh"

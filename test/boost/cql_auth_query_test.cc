@@ -12,7 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/util/defer.hh>
 
 #include "auth/authenticated_user.hh"

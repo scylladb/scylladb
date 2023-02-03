@@ -7,7 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/smp.hh>
 
 #include "db/hints/sync_point.hh"

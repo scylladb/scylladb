@@ -8,7 +8,7 @@
 
 
 #include <boost/test/unit_test.hpp>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "clustering_ranges_walker.hh"

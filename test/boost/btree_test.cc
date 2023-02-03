@@ -9,7 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/unit/tree_test_key.hh"
 #include "utils/intrusive_btree.hh"

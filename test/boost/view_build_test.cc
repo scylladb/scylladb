@@ -16,7 +16,7 @@
 #include "db/config.hh"
 #include "cql3/query_options.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 

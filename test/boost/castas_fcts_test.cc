@@ -15,7 +15,7 @@
 
 #include "utils/big_decimal.hh"
 #include "exceptions/exceptions.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/exception_utils.hh"

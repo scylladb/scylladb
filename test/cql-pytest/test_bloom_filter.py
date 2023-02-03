@@ -13,22 +13,32 @@ from cassandra.protocol import ConfigurationException
 # Then bloom filter's false-positive ratio is checked.
 @pytest.mark.parametrize("N,M,fp_chance", [(500, 1000, 0.1)])
 def test_bloom_filter(scylla_only, cql, test_keyspace, N, M, fp_chance):
-    with new_test_table(cql, test_keyspace, "a int PRIMARY KEY", 
-        f"WITH bloom_filter_fp_chance = {fp_chance}") as table:
-        
-        stmt = cql.prepare(f"INSERT INTO {table} (a) VALUES(?)")
-        for k in range(N):
-            cql.execute(stmt, [k])
-        nodetool.flush(cql, table)
-        
-        read_stmt = cql.prepare(f"SELECT * FROM {table} WHERE a = ? BYPASS CACHE")
-        for k in range(N, N+M):
-            cql.execute(read_stmt, [k])
+    def run_test(cql, test_keyspace, N, M, fp_chance):
+        with new_test_table(cql, test_keyspace, "a int PRIMARY KEY",
+            f"WITH bloom_filter_fp_chance = {fp_chance}") as table:
 
-        fp = rest_api.get_column_family_metric(cql, 
-          "bloom_filter_false_positives", table)
-        ratio = fp / M
-        assert ratio >= fp_chance * 0.7 and ratio <= fp_chance * 1.15
+            stmt = cql.prepare(f"INSERT INTO {table} (a) VALUES(?)")
+            for k in range(N):
+                cql.execute(stmt, [k])
+            nodetool.flush(cql, table)
+
+            read_stmt = cql.prepare(f"SELECT * FROM {table} WHERE a = ? BYPASS CACHE")
+            for k in range(N, N+M):
+                cql.execute(read_stmt, [k])
+
+            fp = rest_api.get_column_family_metric(cql,
+              "bloom_filter_false_positives", table)
+            ratio = fp / M
+
+            assert ratio <= fp_chance * 1.15
+            return ratio >= fp_chance * 0.7
+
+    # fast mode: if efficiency is the one expected, test succeeds.
+    #   if lower, test fails.
+    #   if higher, test enter slow mode which retries with higher number of keys, to handle
+    #       scenario where keys were split into many SSTables (e.g. many compaction groups).
+    if run_test(cql, test_keyspace, N, M, fp_chance) == False:
+        assert run_test(cql, test_keyspace, 50000, M, fp_chance)
             
 # Test very small bloom_filter_fp_chance settings.
 # The Cassandra documentation suggests that bloom_filter_fp_chance can be set

@@ -11,7 +11,7 @@
 #include "utils/fb_utilities.hh"
 #include "utils/sequenced_set.hh"
 #include "locator/network_topology_strategy.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "log.hh"

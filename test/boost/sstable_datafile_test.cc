@@ -15,7 +15,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema.hh"
 #include "schema_builder.hh"

@@ -8,7 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"

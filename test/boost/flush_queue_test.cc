@@ -16,7 +16,7 @@
 #include <seastar/core/thread.hh>
 
 #include "seastarx.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/print.hh>
 #include "utils/flush_queue.hh"
 #include "log.hh"

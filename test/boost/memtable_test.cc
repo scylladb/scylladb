@@ -11,7 +11,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema_builder.hh"
 #include <seastar/util/closeable.hh>
@@ -989,11 +989,10 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         utils::get_local_injector().enable("table_seal_active_memtable_try_flush", true /* oneshot */);
         utils::get_local_injector().enable("table_seal_active_memtable_reacquire_write_permit");
 
+        // Trigger flush
+        auto f = t.flush();
+
         BOOST_ASSERT(eventually_true([&] {
-            // Trigger flush
-            for (auto m : memtables) {
-                m->get_dirty_memory_manager().notify_soft_pressure();
-            }
             return db.cf_stats()->failed_memtables_flushes_count - failed_memtables_flushes_count >= 4;
         }));
 
@@ -1006,6 +1005,8 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
             // seal_active_memtable retry loop should eventually succeed
             return t.min_memtable_timestamp() == api::max_timestamp;
         }));
+
+        std::move(f).get();
     });
 #endif
 }

@@ -8,7 +8,7 @@
 
 #include "auth/standard_role_manager.hh"
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"

@@ -10,7 +10,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/semaphore.hh>
 #include "utils/serialized_action.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/phased_barrier.hh"
 #include <seastar/core/timer.hh>

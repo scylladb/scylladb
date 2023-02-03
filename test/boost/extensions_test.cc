@@ -12,7 +12,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
 
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 

@@ -7,7 +7,7 @@
  */
 
 #include <seastar/util/defer.hh>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <string>
 #include <boost/range/adaptor/map.hpp>
 

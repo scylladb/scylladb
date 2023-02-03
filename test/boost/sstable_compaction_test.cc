@@ -17,7 +17,7 @@
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
 #include "compaction/compaction.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema.hh"
 #include "schema_builder.hh"
@@ -2153,6 +2153,14 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
     return corrupt_fragments;
 }
 
+future<> foreach_table_state_with_thread(table_for_tests& table, std::function<void(compaction::table_state&)> action) {
+    return table->parallel_foreach_table_state([action] (compaction::table_state& ts) {
+        return seastar::async([action, &ts] {
+            action(ts);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     cql_test_config test_cfg;
 
@@ -2199,34 +2207,43 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
-
-            auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
-                auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
-                for (const auto& mf : mfs) {
-                   testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
-                   r.produces(*schema, mf);
+            bool found_sstable = false;
+            foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+                auto sstables = in_strategy_sstables(ts);
+                if (sstables.empty()) {
+                    return;
                 }
-                r.produces_end_of_stream();
-            };
+                BOOST_REQUIRE(sstables.size() == 1);
+                BOOST_REQUIRE(sstables.front() == sst);
+                found_sstable = true;
 
-            testlog.info("Verifying written data...");
+                auto verify_fragments = [&](sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
+                    auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                    for (const auto& mf : mfs) {
+                       testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
+                       r.produces(*schema, mf);
+                    }
+                    r.produces_end_of_stream();
+                };
 
-            // Make sure we wrote what we though we wrote.
-            verify_fragments(sst, corrupt_fragments);
+                testlog.info("Verifying written data...");
 
-            testlog.info("Validate");
+                // Make sure we wrote what we though we wrote.
+                verify_fragments(sst, corrupt_fragments);
 
-            // No way to really test validation besides observing the log messages.
-            sstables::compaction_type_options::scrub opts = {
-                .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
-            };
-            table.get_compaction_manager().perform_sstable_scrub(table.as_table_state(), opts).get();
+                testlog.info("Validate");
 
-            BOOST_REQUIRE(sst->is_quarantined());
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
-            verify_fragments(sst, corrupt_fragments);
+                // No way to really test validation besides observing the log messages.
+                sstables::compaction_type_options::scrub opts = {
+                    .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+                };
+                table.get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+
+                BOOST_REQUIRE(sst->is_quarantined());
+                BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+                verify_fragments(sst, corrupt_fragments);
+            }).get();
+            assert(found_sstable);
         });
     }, test_cfg);
 }
@@ -2388,42 +2405,51 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
-
-            auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
-                auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, permit));
-                for (const auto& mf : mfs) {
-                   testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
-                   r.produces(*schema, mf);
+            bool found_sstable = false;
+            foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+                auto sstables = in_strategy_sstables(ts);
+                if (sstables.empty()) {
+                    return;
                 }
-                r.produces_end_of_stream();
-            };
+                BOOST_REQUIRE(sstables.size() == 1);
+                BOOST_REQUIRE(sstables.front() == sst);
+                found_sstable = true;
 
-            testlog.info("Verifying written data...");
+                auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
+                    auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, permit));
+                    for (const auto& mf : mfs) {
+                       testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
+                       r.produces(*schema, mf);
+                    }
+                    r.produces_end_of_stream();
+                };
 
-            // Make sure we wrote what we though we wrote.
-            verify_fragments(sst, corrupt_fragments);
+                testlog.info("Verifying written data...");
 
-            testlog.info("Scrub in abort mode");
+                // Make sure we wrote what we though we wrote.
+                verify_fragments(sst, corrupt_fragments);
 
-            // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            sstables::compaction_type_options::scrub opts = {};
-            opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get(), sstables::compaction_aborted_exception);
+                testlog.info("Scrub in abort mode");
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            verify_fragments(sst, corrupt_fragments);
+                // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
+                sstables::compaction_type_options::scrub opts = {};
+                opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+                BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(ts, opts).get(), sstables::compaction_aborted_exception);
 
-            testlog.info("Scrub in skip mode");
+                BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
+                verify_fragments(sst, corrupt_fragments);
 
-            // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
-            opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-            compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
+                testlog.info("Scrub in skip mode");
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() != sst);
-            verify_fragments(in_strategy_sstables(table.as_table_state()).front(), scrubbed_fragments);
+                // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
+                opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
+                compaction_manager.perform_sstable_scrub(ts, opts).get();
+
+                BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
+                BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
+                verify_fragments(in_strategy_sstables(ts).front(), scrubbed_fragments);
+            }).get();
+            assert(found_sstable);
         });
     }, test_cfg);
 }
@@ -2475,51 +2501,60 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
-
-            auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
-                auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
-                for (const auto& mf : mfs) {
-                   testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
-                   r.produces(*schema, mf);
+            bool found_sstable = false;
+            foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+                auto sstables = in_strategy_sstables(ts);
+                if (sstables.empty()) {
+                    return;
                 }
-                r.produces_end_of_stream();
-            };
+                BOOST_REQUIRE(sstables.size() == 1);
+                BOOST_REQUIRE(sstables.front() == sst);
+                found_sstable = true;
 
-            testlog.info("Verifying written data...");
+                auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
+                    auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                    for (const auto& mf : mfs) {
+                       testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
+                       r.produces(*schema, mf);
+                    }
+                    r.produces_end_of_stream();
+                };
 
-            // Make sure we wrote what we though we wrote.
-            verify_fragments(sst, corrupt_fragments);
+                testlog.info("Verifying written data...");
 
-            testlog.info("Scrub in abort mode");
+                // Make sure we wrote what we though we wrote.
+                verify_fragments(sst, corrupt_fragments);
 
-            // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            sstables::compaction_type_options::scrub opts = {};
-            opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-            BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get(), sstables::compaction_aborted_exception);
+                testlog.info("Scrub in abort mode");
 
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-            verify_fragments(sst, corrupt_fragments);
+                // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
+                sstables::compaction_type_options::scrub opts = {};
+                opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+                BOOST_REQUIRE_THROW(compaction_manager.perform_sstable_scrub(ts, opts).get(), sstables::compaction_aborted_exception);
 
-            testlog.info("Scrub in segregate mode");
+                BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
+                verify_fragments(sst, corrupt_fragments);
 
-            // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
-            opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-            compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
+                testlog.info("Scrub in segregate mode");
 
-            testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table.as_table_state()).size());
-            BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() > 1);
-            {
-                auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
-                auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
-                auto mt_reader_close = deferred_close(mt_reader);
-                while (auto mf_opt = mt_reader().get()) {
-                   testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, *mf_opt));
-                   sst_reader.produces(*schema, *mf_opt);
+                // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
+                opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
+                compaction_manager.perform_sstable_scrub(ts, opts).get();
+
+                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
+                BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
+                {
+                    auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                    auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
+                    auto mt_reader_close = deferred_close(mt_reader);
+                    while (auto mf_opt = mt_reader().get()) {
+                       testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, *mf_opt));
+                       sst_reader.produces(*schema, *mf_opt);
+                    }
+                    sst_reader.produces_end_of_stream();
                 }
-                sst_reader.produces_end_of_stream();
-            }
+            }).get();
+            assert(found_sstable);
         });
     }, test_cfg);
 }
@@ -2577,65 +2612,74 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
 
                 table->add_sstable_and_update_cache(sst).get();
 
-                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() == 1);
-                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).front() == sst);
-
-                auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
-                    auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
-                    for (const auto& mf : mfs) {
-                    testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
-                    r.produces(*schema, mf);
+                bool found_sstable = false;
+                foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        return;
                     }
-                    r.produces_end_of_stream();
-                };
+                    BOOST_REQUIRE(sstables.size() == 1);
+                    BOOST_REQUIRE(sstables.front() == sst);
+                    found_sstable = true;
 
-                testlog.info("Verifying written data...");
-
-                // Make sure we wrote what we though we wrote.
-                verify_fragments(sst, corrupt_fragments);
-
-                testlog.info("Scrub in validate mode");
-
-                // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
-                sstables::compaction_type_options::scrub opts = {};
-                opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-                compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
-
-                BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
-                BOOST_REQUIRE(sst->is_quarantined());
-                verify_fragments(sst, corrupt_fragments);
-
-                testlog.info("Scrub in segregate mode with quarantine_mode {}", qmode);
-
-                // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
-                opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-                opts.quarantine_operation_mode = qmode;
-                compaction_manager.perform_sstable_scrub(table.as_table_state(), opts).get();
-
-                switch (qmode) {
-                case sstables::compaction_type_options::scrub::quarantine_mode::include:
-                case sstables::compaction_type_options::scrub::quarantine_mode::only:
-                    // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                    testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(table.as_table_state()).size());
-                    BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).size() > 1);
-                    {
-                        auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
-                        auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
-                        auto mt_reader_close = deferred_close(mt_reader);
-                        while (auto mf_opt = mt_reader().get()) {
-                            testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, *mf_opt));
-                            sst_reader.produces(*schema, *mf_opt);
+                    auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment_v2>& mfs) {
+                        auto r = assert_that(sst->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                        for (const auto& mf : mfs) {
+                        testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
+                        r.produces(*schema, mf);
                         }
-                        sst_reader.produces_end_of_stream();
-                    }
-                    break;
-                case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
-                    // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                    BOOST_REQUIRE(in_strategy_sstables(table.as_table_state()).empty());
+                        r.produces_end_of_stream();
+                    };
+
+                    testlog.info("Verifying written data...");
+
+                    // Make sure we wrote what we though we wrote.
+                    verify_fragments(sst, corrupt_fragments);
+
+                    testlog.info("Scrub in validate mode");
+
+                    // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
+                    sstables::compaction_type_options::scrub opts = {};
+                    opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
+                    compaction_manager.perform_sstable_scrub(ts, opts).get();
+
+                    BOOST_REQUIRE(in_strategy_sstables(ts).empty());
                     BOOST_REQUIRE(sst->is_quarantined());
                     verify_fragments(sst, corrupt_fragments);
-                    break;
-                }
+
+                    testlog.info("Scrub in segregate mode with quarantine_mode {}", qmode);
+
+                    // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
+                    opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
+                    opts.quarantine_operation_mode = qmode;
+                    compaction_manager.perform_sstable_scrub(ts, opts).get();
+
+                    switch (qmode) {
+                    case sstables::compaction_type_options::scrub::quarantine_mode::include:
+                    case sstables::compaction_type_options::scrub::quarantine_mode::only:
+                        // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
+                        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
+                        BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
+                        {
+                            auto sst_reader = assert_that(table->as_mutation_source().make_reader_v2(schema, env.make_reader_permit()));
+                            auto mt_reader = scrubbed_mt->as_data_source().make_reader_v2(schema, env.make_reader_permit());
+                            auto mt_reader_close = deferred_close(mt_reader);
+                            while (auto mf_opt = mt_reader().get()) {
+                                testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, *mf_opt));
+                                sst_reader.produces(*schema, *mf_opt);
+                            }
+                            sst_reader.produces_end_of_stream();
+                        }
+                        break;
+                    case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
+                        // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
+                        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+                        BOOST_REQUIRE(sst->is_quarantined());
+                        verify_fragments(sst, corrupt_fragments);
+                        break;
+                    }
+                }).get();
+                assert(found_sstable);
             });
         }, test_cfg);
     }
@@ -3861,14 +3905,12 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         size_t target_windows_span = (split_during_flush) ? 10 : 1;
         constexpr size_t rows_per_window = 10;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
         for (unsigned i = 1; i <= target_windows_span; i++) {
             for (unsigned j = 0; j < rows_per_window; j++) {
-                mt->apply(make_row(std::chrono::hours(i)));
+                cf->apply(make_row(std::chrono::hours(i)));
             }
         }
-
-        column_family_test(cf).try_flush_memtable_to_sstable(mt).get();
+        cf->flush().get();
 
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);

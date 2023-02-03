@@ -21,7 +21,7 @@
 #include <seastar/core/thread_cputime_clock.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/with_timeout.hh>
-#include <seastar/testing/test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 #include <deque>
