@@ -135,11 +135,20 @@ void query_options::prepare(const std::vector<lw_shared_ptr<column_specification
     ordered_values.reserve(specs.size());
     for (auto&& spec : specs) {
         auto& spec_name = spec->name->text();
+        bool found_value_for_name = false;
         for (size_t j = 0; j < names.size(); j++) {
             if (names[j] == spec_name) {
                 ordered_values.emplace_back(_value_views[j]);
+                found_value_for_name = true;
                 break;
             }
+        }
+
+        // No bound value was found with the name `spec_name`.
+        // This means that the user forgot to include a bound value with such name.
+        if (!found_value_for_name) {
+            throw exceptions::invalid_request_exception(
+                format("Missing value for bind marker with name: {}", spec_name));
         }
     }
     _value_views = std::move(ordered_values);
