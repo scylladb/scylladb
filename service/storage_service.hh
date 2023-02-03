@@ -362,6 +362,7 @@ public:
 
 private:
     void set_mode(mode m);
+    // Can only be called on shard-0
     future<> mark_existing_views_as_built(sharded<db::system_distributed_keyspace>&);
 
     // Stream data for which we become a new replica.
