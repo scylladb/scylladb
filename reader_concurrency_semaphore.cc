@@ -86,6 +86,9 @@ public:
         promise<> pr;
         std::optional<shared_future<>> fut;
         reader_concurrency_semaphore::read_func func;
+        // Self reference to keep the permit alive while queued for execution.
+        // Must be cleared on all code-paths, otherwise it will keep the permit alive in perpetuity.
+        reader_permit_opt permit_keepalive;
     };
 
 private:
@@ -153,6 +156,8 @@ private:
     }
 
     void on_timeout() {
+        auto keepalive = std::exchange(_aux_data.permit_keepalive, std::nullopt);
+
         _ex = std::make_exception_ptr(timed_out_error{});
 
         if (_state == state::waiting_for_admission || _state == state::waiting_for_memory || _state == state::waiting_for_execution) {
@@ -749,19 +754,19 @@ struct stop_execution_loop {
 future<> reader_concurrency_semaphore::execution_loop() noexcept {
     while (!_stopped) {
         try {
-            co_await _ready_list.not_empty();
+            co_await _ready_list_cv.when();
         } catch (stop_execution_loop) {
             co_return;
         }
 
         while (!_ready_list.empty()) {
-            auto permit = _ready_list.pop();
-            permit->on_executing();
-            auto e = std::move(permit->aux_data());
-            --_stats.waiters;
+            auto& permit = _ready_list.front();
+            dequeue_permit(permit);
+            permit.on_executing();
+            auto e = std::move(permit.aux_data());
 
             try {
-                e.func(std::move(permit)).forward_to(std::move(e.pr));
+                e.func(reader_permit(permit.shared_from_this())).forward_to(std::move(e.pr));
             } catch (...) {
                 e.pr.set_exception(std::current_exception());
             }
@@ -810,7 +815,6 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
             utils::updateable_value<uint32_t> serialize_limit_multiplier, utils::updateable_value<uint32_t> kill_limit_multiplier)
     : _initial_resources(count, memory)
     , _resources(count, memory)
-    , _ready_list(max_queue_length)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
@@ -959,8 +963,8 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     co_await _close_readers_gate.close();
     co_await _permit_gate.close();
     if (_execution_loop_future) {
-        if (_ready_list.has_blocked_consumer()) {
-            _ready_list.abort(std::make_exception_ptr(stop_execution_loop{}));
+        if (_ready_list_cv.has_waiters()) {
+            _ready_list_cv.broken(std::make_exception_ptr(stop_execution_loop{}));
         }
         co_await std::move(*_execution_loop_future);
     }
@@ -1138,7 +1142,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     permit.on_admission();
     ++_stats.reads_admitted;
     if (permit.aux_data().func) {
-        return with_ready_permit(reader_permit(permit.shared_from_this()));
+        return with_ready_permit(permit);
     }
     return make_ready_future<>();
 }
@@ -1157,7 +1161,9 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
                 ++_stats.reads_admitted;
             }
             if (permit.aux_data().func) {
-                _ready_list.push(reader_permit(permit.shared_from_this()));
+                permit.unlink();
+                _ready_list.push_back(permit);
+                _ready_list_cv.signal();
                 permit.on_waiting_for_execution();
                 ++_stats.waiters;
             } else {
@@ -1200,6 +1206,7 @@ void reader_concurrency_semaphore::dequeue_permit(reader_permit::impl& permit) {
     switch (permit.get_state()) {
         case reader_permit::state::waiting_for_admission:
         case reader_permit::state::waiting_for_memory:
+        case reader_permit::state::waiting_for_execution:
             --_stats.waiters;
             break;
         case reader_permit::state::active_unused:
@@ -1280,25 +1287,28 @@ future<> reader_concurrency_semaphore::with_permit(const schema* const schema, c
         db::timeout_clock::time_point timeout, read_func func) {
     auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
     permit->aux_data().func = std::move(func);
-    return do_wait_admission(*permit).then([permit] {});
+    permit->aux_data().permit_keepalive = permit;
+    return do_wait_admission(*permit);
 }
 
-future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit) {
+future<> reader_concurrency_semaphore::with_ready_permit(reader_permit::impl& permit) {
     if (auto ex = check_queue_size("ready")) {
         return make_exception_future<>(std::move(ex));
     }
-    auto& ad = permit->aux_data();
+    auto& ad = permit.aux_data();
     ad.pr = {};
     auto fut = ad.pr.get_future();
-    _ready_list.push(reader_permit(permit));
-    permit->on_waiting_for_execution();
+    permit.unlink();
+    _ready_list.push_back(permit);
+    permit.on_waiting_for_execution();
     ++_stats.waiters;
+    _ready_list_cv.signal();
     return fut;
 }
 
 future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, read_func func) {
     permit->aux_data().func = std::move(func);
-    return with_ready_permit(std::move(permit));
+    return with_ready_permit(*permit);
 }
 
 void reader_concurrency_semaphore::set_resources(resources r) {
@@ -1329,6 +1339,7 @@ void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(cons
     boost::for_each(_permit_list, std::ref(func));
     boost::for_each(_wait_list._admission_queue, std::ref(func));
     boost::for_each(_wait_list._memory_queue, std::ref(func));
+    boost::for_each(_ready_list, std::ref(func));
 }
 
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) const {

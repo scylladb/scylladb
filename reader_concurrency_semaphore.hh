@@ -11,7 +11,7 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/queue.hh>
+#include <seastar/core/condition-variable.hh>
 #include "reader_permit.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "utils/updateable_value.hh"
@@ -197,7 +197,8 @@ private:
     };
 
     wait_queue _wait_list;
-    queue<reader_permit> _ready_list;
+    permit_list_type _ready_list;
+    condition_variable _ready_list_cv;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
@@ -276,7 +277,7 @@ private:
     void consume(reader_permit::impl& permit, resources r);
     void signal(const resources& r) noexcept;
 
-    future<> with_ready_permit(reader_permit permit);
+    future<> with_ready_permit(reader_permit::impl& permit);
 
 public:
     struct no_limits { };
