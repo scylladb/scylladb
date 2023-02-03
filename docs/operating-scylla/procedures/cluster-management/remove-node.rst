@@ -56,13 +56,20 @@ Removing an Unavailable Node
 If the node status is **Down Normal (DN)**, you should try to restore it. Once the node is up, use the ``nodetool decommission``
 command (see `Removing a Running Node`_) to remove it.
 
-If all attempts to restore the node have failed and the node is down, you can remove the node by running the ``nodetool removenode``
+If all attempts to restore the node have failed and the node is **permanently down**, you can remove the node by running the ``nodetool removenode``
 command providing the Host ID of the node you are removing. See :doc:`nodetool removenode </operating-scylla/nodetool-commands/removenode>` for details.
 
 .. warning::
     * Using ``nodetool removenode`` is a fallback procedure that should only be used when a node is permanently down and cannot
-      be recovered. 
+      be recovered.
+    * It’s essential to ensure the removed node will **never** come back to the cluster, which **might adversely affect your data** 
+      (data resurrection/loss). To prevent the removed node from rejoining the cluster, remove that node from the cluster 
+      network or VPC.
     * You must never use ``nodetool removenode`` to remove a running node that can be reached by other nodes in the cluster.
+
+.. REMOVE IN FUTURE VERSIONS - The problem listed as the second bullet in the warning above is solved by Raft.
+.. Update the warning to suggest enabling Raft when Raft topology changes are implemented.
+.. Remove the bullet when Raft topology changes are mandatory.
 
 **Example:**
 
