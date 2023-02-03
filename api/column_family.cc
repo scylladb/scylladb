@@ -303,7 +303,7 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
     return ratio_holder(f + sst->filter_get_recent_true_positive(), f);
 }
 
-void set_column_family(http_context& ctx, routes& r) {
+void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
         for (auto i: ctx.db.local().get_column_families_mapping()) {

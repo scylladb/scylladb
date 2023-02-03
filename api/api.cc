@@ -165,9 +165,11 @@ future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
                 });
 }
 
-future<> set_server_load_sstable(http_context& ctx) {
+future<> set_server_load_sstable(http_context& ctx, sharded<db::system_keyspace>& sys_ks) {
     return register_api(ctx, "column_family",
-                "The column family API", set_column_family);
+                "The column family API", [&sys_ks] (http_context& ctx, routes& r) {
+                    set_column_family(ctx, r, sys_ks);
+                });
 }
 
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms) {
