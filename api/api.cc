@@ -172,6 +172,10 @@ future<> set_server_load_sstable(http_context& ctx, sharded<db::system_keyspace>
                 });
 }
 
+future<> unset_server_load_sstable(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_column_family(ctx, r); });
+}
+
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms) {
     return register_api(ctx, "messaging_service",
                 "The messaging service API", [&ms] (http_context& ctx, routes& r) {
