@@ -187,6 +187,19 @@ public:
         // If task has a parent, data concerning its children is updated and sequence number is inherited
         // from a parent and set. Otherwise, it must be set by caller.
         future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = task_info{});
+
+        // Must be called on target shard.
+        template<typename TaskImpl, typename... Args>
+        requires std::is_base_of_v<task::impl, TaskImpl> &&
+        requires (module_ptr module, Args&&... args) {
+            {TaskImpl(module, std::forward<Args>(args)...)} -> std::same_as<TaskImpl>;
+        }
+        future<task_ptr> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
+            auto task_impl_ptr = std::make_unique<TaskImpl>(shared_from_this(), std::forward<Args>(args)...);
+            auto task = co_await make_task(std::move(task_impl_ptr), parent_info);
+            task->start();
+            co_return task;
+        }
     };
 public:
     task_manager(config cfg, abort_source& as) noexcept;
