@@ -29,6 +29,7 @@
 
 namespace db {
 
+class system_keyspace;
 class system_distributed_keyspace;
 
 }
@@ -147,6 +148,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     using base_to_build_step_type = std::unordered_map<table_id, build_step>;
 
     replica::database& _db;
+    db::system_keyspace& _sys_ks;
     db::system_distributed_keyspace& _sys_dist_ks;
     service::migration_notifier& _mnotifier;
     reader_permit _permit;
@@ -185,7 +187,7 @@ public:
     static constexpr size_t batch_memory_max = 1024*1024;
 
 public:
-    view_builder(replica::database&, db::system_distributed_keyspace&, service::migration_notifier&);
+    view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&);
     view_builder(view_builder&&) = delete;
 
     /**
