@@ -100,9 +100,9 @@ class RESTClient(metaclass=ABCMeta):
 
     async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                       response_type: Optional[str] = None) -> Any:
+                       response_type: Optional[str] = None, timeout: Optional[float] = None) -> Any:
         ret = await self._fetch("PUT", resource_uri, response_type = response_type, host = host,
-                                port = port, params = params, json = data)
+                                port = port, params = params, json = data, timeout = timeout)
         return ret
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
