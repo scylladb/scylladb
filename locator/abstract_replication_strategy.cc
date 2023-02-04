@@ -165,19 +165,35 @@ effective_replication_map::get_ranges(inet_address ep) const {
     });
 }
 
-// Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
+// Caller must ensure that token_metadata will not change throughout the call.
 future<dht::token_range_vector>
 abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tmptr) const {
+    co_return co_await get_ranges(ep, *tmptr);
+}
+
+// Caller must ensure that token_metadata will not change throughout the call.
+future<dht::token_range_vector>
+abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
     dht::token_range_vector ret;
-    const auto& tm = *tmptr;
+    if (!tm.is_normal_token_owner(ep)) {
+        co_return ret;
+    }
     const auto& sorted_tokens = tm.sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
     }
     auto prev_tok = sorted_tokens.back();
     for (auto tok : sorted_tokens) {
-        auto eps = co_await calculate_natural_endpoints(tok, tm);
-        if (eps.contains(ep)) {
+        bool should_add = false;
+        if (get_type() == replication_strategy_type::everywhere_topology) {
+            // everywhere_topology deserves this special fast path.
+            // Using the common path would make the function quadratic in the number of endpoints.
+            should_add = true;
+        } else {
+            auto eps = co_await calculate_natural_endpoints(tok, tm);
+            should_add = eps.contains(ep);
+        }
+        if (should_add) {
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
         prev_tok = tok;
@@ -208,38 +224,6 @@ effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
         }
         return false;
     });
-}
-
-future<std::unordered_multimap<inet_address, dht::token_range>>
-abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
-    std::unordered_multimap<inet_address, dht::token_range> ret;
-    if (!tm.is_normal_token_owner(endpoint)) {
-        co_return ret;
-    }
-    bool is_everywhere_topology = get_type() == replication_strategy_type::everywhere_topology;
-    for (auto& t : tm.sorted_tokens()) {
-        // This is a fast path for everywhere_topology to avoid calculating
-        // natural endpoints, since any node that is part of the the ring
-        // will be responsible for all tokens.
-        if (is_everywhere_topology) {
-            dht::token_range_vector r = tm.get_primary_ranges_for(t);
-            for (auto&& rng : r) {
-                ret.emplace(endpoint, rng);
-            }
-            continue;
-        }
-        auto eps = co_await calculate_natural_endpoints(t, tm);
-        if (eps.contains(endpoint)) {
-            dht::token_range_vector r = tm.get_primary_ranges_for(t);
-            rslogger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
-            for (auto&& rng : r) {
-                ret.emplace(endpoint, rng);
-            }
-        } else {
-            rslogger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
-        }
-    }
-    co_return ret;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
