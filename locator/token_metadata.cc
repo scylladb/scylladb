@@ -779,13 +779,12 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
     if (_leaving_endpoints.empty()) {
         return;
     }
-    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this).get0();
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
     for (auto endpoint : _leaving_endpoints) {
-        auto r = address_ranges.equal_range(endpoint);
-        for (auto x = r.first; x != r.second; x++) {
-            affected_ranges.emplace(x->second);
+        auto r = strategy.get_address_ranges(unpimplified_this, endpoint).get0();
+        for (const auto& x : r) {
+            affected_ranges.emplace(x.second);
         }
     }
     // for each of those ranges, find what new nodes will be responsible for the range when
@@ -816,16 +815,14 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
     if (_replacing_endpoints.empty()) {
         return;
     }
-    auto address_ranges = strategy.get_address_ranges(unpimplified_this).get0();
     for (const auto& node : _replacing_endpoints) {
         auto existing_node = node.first;
         auto replacing_node = node.second;
+        auto address_ranges = strategy.get_address_ranges(unpimplified_this, existing_node).get0();
         for (const auto& x : address_ranges) {
             seastar::thread::maybe_yield();
-            if (x.first == existing_node) {
-                tlogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
-                new_pending_ranges.emplace(x.second, replacing_node);
-            }
+            tlogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
+            new_pending_ranges.emplace(x.second, replacing_node);
         }
     }
 }
