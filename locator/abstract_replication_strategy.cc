@@ -216,22 +216,6 @@ effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
 }
 
 future<std::unordered_multimap<inet_address, dht::token_range>>
-abstract_replication_strategy::get_address_ranges(const token_metadata& tm) const {
-    std::unordered_multimap<inet_address, dht::token_range> ret;
-    for (auto& t : tm.sorted_tokens()) {
-        dht::token_range_vector r = tm.get_primary_ranges_for(t);
-        auto eps = co_await calculate_natural_endpoints(t, tm);
-        rslogger.debug("token={}, primary_range={}, address={}", t, r, eps);
-        for (auto ep : eps) {
-            for (auto&& rng : r) {
-                ret.emplace(ep, rng);
-            }
-        }
-    }
-    co_return ret;
-}
-
-future<std::unordered_multimap<inet_address, dht::token_range>>
 abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
