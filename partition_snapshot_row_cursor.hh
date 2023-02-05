@@ -100,6 +100,11 @@ public:
 // Insertion of row entries after cursor's position invalidates the cursor.
 // Exceptions thrown from mutators invalidate the cursor.
 //
+// Range tombstone information is accessible via range_tombstone() and range_tombstone_for_row()
+// functions. range_tombstone() returns the tombstone for the interval which strictly precedes
+// the current row, and range_tombstone_for_row() returns the information for the row itself.
+// If the interval which precedes the row is not continuous, then range_tombstone() is empty.
+// If range_tombstone() is not empty then the interval is continuous.
 class partition_snapshot_row_cursor final {
     friend class partition_snapshot_row_weakref;
     struct position_in_version {
@@ -108,6 +113,10 @@ class partition_snapshot_row_cursor final {
         int version_no;
         bool unique_owner = false;
         is_continuous continuous = is_continuous::no; // Range continuity in the direction of lower keys (in cursor schema domain).
+
+        // Range tombstone in the direction of lower keys (in cursor schema domain).
+        // Excludes the row. In the reverse mode, the row may have a different range tombstone.
+        tombstone rt;
     };
 
     const schema& _schema; // query domain
@@ -126,14 +135,18 @@ class partition_snapshot_row_cursor final {
     // also in _reversed mode.
     std::optional<mutation_partition::rows_type::iterator> _latest_it;
 
-    // Continuity corresponding to ranges which are not represented in _heap because the cursor
+    // Continuity and range tombstone corresponding to ranges which are not represented in _heap because the cursor
     // went pass all the entries in those versions.
     bool _background_continuity = false;
+    tombstone _background_rt;
 
     bool _continuous{};
     bool _dummy{};
     const bool _unique_owner;
     const bool _reversed;
+    const bool _digest_requested;
+    tombstone _range_tombstone;
+    tombstone _range_tombstone_for_row;
     position_in_partition _position; // table domain
     partition_snapshot::change_mark _change_mark;
 
@@ -170,6 +183,8 @@ class partition_snapshot_row_cursor final {
     bool recreate_current_row() {
         _current_row.clear();
         _continuous = _background_continuity;
+        _range_tombstone = _background_rt;
+        _range_tombstone_for_row = _background_rt;
         _dummy = true;
         if (_heap.empty()) {
             if (_reversed) {
@@ -184,16 +199,28 @@ class partition_snapshot_row_cursor final {
         do {
             boost::range::pop_heap(_heap, heap_less);
             memory::on_alloc_point();
-            rows_entry& e = *_heap.back().it;
+            position_in_version& v = _heap.back();
+            rows_entry& e = *v.it;
+            if (_digest_requested) {
+                e.row().cells().prepare_hash(_schema, column_kind::regular_column);
+            }
             _dummy &= bool(e.dummy());
-            _continuous |= bool(_heap.back().continuous);
-            _current_row.push_back(_heap.back());
+            _continuous |= bool(v.continuous);
+            _range_tombstone_for_row.apply(e.range_tombstone());
+            if (v.continuous) {
+                _range_tombstone.apply(v.rt);
+            }
+            _current_row.push_back(v);
             _heap.pop_back();
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
 
-        if (boost::algorithm::any_of(_heap, [] (auto&& v) { return v.continuous; })) {
-            // FIXME: Optimize by dropping dummy() entries.
-            _continuous = true;
+        // FIXME: Optimize by dropping dummy() entries.
+        for (position_in_version& v : _heap) {
+            _continuous |= bool(v.continuous);
+            if (v.continuous) {
+                _range_tombstone.apply(v.rt);
+                _range_tombstone_for_row.apply(v.rt);
+            }
         }
 
         _position = position_in_partition(_current_row[0].it->position());
@@ -209,6 +236,7 @@ class partition_snapshot_row_cursor final {
         _heap.clear();
         _latest_it.reset();
         _background_continuity = false;
+        _background_rt = {};
         int version_no = 0;
         bool unique_owner = _unique_owner;
         bool first = true;
@@ -221,13 +249,18 @@ class partition_snapshot_row_cursor final {
             }
             if (pos) {
                 is_continuous cont;
+                tombstone rt;
                 if (_reversed) [[unlikely]] {
                     if (cmp(pos->position(), lower_bound) != 0) {
                         cont = pos->continuous();
+                        rt = pos->range_tombstone();
                         if (pos != rows.begin()) {
                             --pos;
                         } else {
                             _background_continuity |= bool(cont);
+                            if (cont) {
+                                _background_rt = rt;
+                            }
                             pos = {};
                         }
                     } else {
@@ -236,15 +269,31 @@ class partition_snapshot_row_cursor final {
                             // Positions past last dummy are complete since mutation sources
                             // can't contain any keys which are larger.
                             cont = is_continuous::yes;
+                            rt = {};
                         } else {
                             cont = next_entry->continuous();
+                            rt = next_entry->range_tombstone();
                         }
                     }
                 } else {
                     cont = pos->continuous();
+                    rt = pos->range_tombstone();
                 }
                 if (pos) [[likely]] {
-                    _heap.emplace_back(position_in_version{pos, std::move(rows), version_no, unique_owner, cont});
+                    _heap.emplace_back(position_in_version{pos, std::move(rows), version_no, unique_owner, cont, rt});
+                }
+            } else {
+                if (_reversed) [[unlikely]] {
+                    if (!rows.empty()) {
+                        pos = std::prev(rows.end());
+                    } else {
+                        _background_continuity = true;
+                    }
+                } else {
+                    _background_continuity = true; // Default continuity past the last entry
+                }
+                if (pos) [[likely]] {
+                    _heap.emplace_back(position_in_version{pos, std::move(rows), version_no, unique_owner, is_continuous::yes});
                 }
             }
             ++version_no;
@@ -270,9 +319,13 @@ class partition_snapshot_row_cursor final {
                 if (_reversed && curr.it) [[unlikely]] {
                     if (curr.rows.begin() == curr.it) {
                         _background_continuity |= bool(curr.it->continuous());
+                        if (curr.it->continuous()) {
+                            _background_rt.apply(curr.it->range_tombstone());
+                        }
                         curr.it = {};
                     } else {
                         curr.continuous = curr.it->continuous();
+                        curr.rt = curr.it->range_tombstone();
                         --curr.it;
                     }
                 }
@@ -280,15 +333,20 @@ class partition_snapshot_row_cursor final {
                 if (_reversed) [[unlikely]] {
                     if (curr.rows.begin() == curr.it) {
                         _background_continuity |= bool(curr.it->continuous());
+                        if (curr.it->continuous()) {
+                            _background_rt.apply(curr.it->range_tombstone());
+                        }
                         curr.it = {};
                     } else {
                         curr.continuous = curr.it->continuous();
+                        curr.rt = curr.it->range_tombstone();
                         --curr.it;
                     }
                 } else {
                     ++curr.it;
                     if (curr.it) {
                         curr.continuous = curr.it->continuous();
+                        curr.rt = curr.it->range_tombstone();
                     }
                 }
             }
@@ -310,11 +368,12 @@ public:
     // When reversed, s must be a reversed schema relative to snp->schema()
     // Positions and fragments accepted and returned by the cursor are from the domain of s.
     // Iterators are from the table's schema domain.
-    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false, bool digest_requested = false)
         : _schema(s)
         , _snp(snp)
         , _unique_owner(unique_owner)
         , _reversed(reversed)
+        , _digest_requested(digest_requested)
         , _position(position_in_partition::static_row_tag_t{})
     { }
 
@@ -375,22 +434,32 @@ public:
             _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
 
-            is_continuous cont = it->continuous();
-            if (_reversed) [[unlikely]] {
-                if (!match) {
-                    // lower_bound() in reverse order points to predecessor of it unless the keys are equal.
-                    if (it == rows.begin()) {
-                        _background_continuity |= bool(it->continuous());
-                        it = {};
+            is_continuous cont;
+            tombstone rt;
+            if (it) {
+                cont = it->continuous();
+                rt = it->range_tombstone();
+                if (_reversed) [[unlikely]] {
+                    if (!match) {
+                        // lower_bound() in reverse order points to predecessor of it unless the keys are equal.
+                        if (it == rows.begin()) {
+                            if (it->continuous()) {
+                                _background_continuity = true;
+                                _background_rt.apply(it->range_tombstone());
+                            }
+                            it = {};
+                        } else {
+                            --it;
+                        }
                     } else {
-                        cont = it->continuous();
-                        --it;
+                        // We can put anything in the match case since this continuity will not be used
+                        // when advancing the cursor. Same applies to rt.
+                        cont = is_continuous::no;
+                        rt = {};
                     }
-                } else {
-                    // We can put anything in the match case since this continuity will not be used
-                    // when advancing the cursor.
-                    cont = is_continuous::no;
                 }
+            } else {
+                _background_continuity = true; // Default continuity
             }
 
             if (!it) {
@@ -400,7 +469,7 @@ public:
                 }
             } else if (match) {
                 _current_row.insert(_current_row.begin(), position_in_version{
-                    it, std::move(rows), 0, _unique_owner, cont});
+                    it, std::move(rows), 0, _unique_owner, cont, rt});
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
@@ -409,10 +478,11 @@ public:
                 if (heap_i != _heap.end()) {
                     heap_i->it = it;
                     heap_i->continuous = cont;
+                    heap_i->rt = rt;
                     boost::range::make_heap(_heap, heap_less);
                 } else {
                     _heap.push_back(position_in_version{
-                        it, std::move(rows), 0, _unique_owner, cont});
+                        it, std::move(rows), 0, _unique_owner, cont, rt});
                     boost::range::push_heap(_heap, heap_less);
                 }
             }
@@ -454,7 +524,8 @@ public:
     // Advances to the next row, if any.
     // If there is no next row, advances to the extreme position in the direction of the cursor
     // (position_in_partition::before_all_clustering_rows() or position_in_partition::after_all_clustering_rows)
-    // and does not point at a row. continuous() is still valid in this case.
+    // and does not point at a row.
+    // Information about the range, continuous() and range_tombstone(), is still valid in this case.
     // Call only when valid, not necessarily pointing at a row.
     bool next() { return advance(true); }
 
@@ -464,6 +535,16 @@ public:
     // Returns true iff the key range adjacent to the cursor's position from the side of smaller keys
     // is marked as continuous.
     bool continuous() const { return _continuous; }
+
+    // Can be called when cursor is valid, not necessarily pointing at a row.
+    // Returns the range tombstone for the key range adjacent to the cursor's position from the side of smaller keys.
+    // Excludes the range for the row itself. That information is returned by range_tombstone_for_row().
+    // It's possible that range_tombstone() is empty and range_tombstone_for_row() is not empty.
+    tombstone range_tombstone() const { return _range_tombstone; }
+
+    // Can be called when cursor is pointing at a row.
+    // Returns the range tombstone covering the row under the cursor.
+    tombstone range_tombstone_for_row() const { return _range_tombstone_for_row; }
 
     // Can be called when cursor is pointing at a row.
     bool dummy() const { return _dummy; }
@@ -522,6 +603,7 @@ public:
 
     struct ensure_result {
         rows_entry& row;
+        mutation_partition_v2::rows_type::iterator it;
         bool inserted = false;
     };
 
@@ -529,6 +611,7 @@ public:
     // Doesn't change logical value or continuity of the snapshot.
     // Can be called only when cursor is valid and pointing at a row.
     // The cursor remains valid after the call and points at the same row as before.
+    // Use only with evictable snapshots.
     ensure_result ensure_entry_in_latest() {
         auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         if (is_in_latest_version()) {
@@ -537,7 +620,7 @@ public:
             if (_snp.at_latest_version()) {
                 _snp.tracker()->touch(latest);
             }
-            return {latest, false};
+            return {latest, latest_i, false};
         } else {
             // Copy row from older version because rows in evictable versions must
             // hold values which are independently complete to be consistent on eviction.
@@ -555,18 +638,26 @@ public:
             if (_reversed) { // latest_i is not reliably a successor
                 // FIXME: set continuity when possible. Not that important since cache sets it anyway when populating.
                 re.set_continuous(false);
+                e->set_range_tombstone(range_tombstone_for_row());
                 rows_entry::tri_compare cmp(*_snp.schema());
                 auto res = rows.insert(std::move(e), cmp);
                 if (res.second) {
                     _snp.tracker()->insert(re);
                 }
-                return {*res.first, res.second};
+                return {*res.first, res.first, res.second};
             } else {
                 auto latest_i = get_iterator_in_latest_version();
-                e->set_continuous(latest_i && latest_i->continuous());
-                rows.insert_before(latest_i, std::move(e));
+                if (latest_i && latest_i->continuous()) {
+                    e->set_continuous(true);
+                    // See the "information monotonicity" rule.
+                    e->set_range_tombstone(latest_i->range_tombstone());
+                } else {
+                    e->set_continuous(false);
+                    e->set_range_tombstone(range_tombstone_for_row());
+                }
+                auto i = rows.insert_before(latest_i, std::move(e));
                 _snp.tracker()->insert(re);
-                return {re, true};
+                return {re, i, true};
             }
         }
     }
@@ -577,10 +668,13 @@ public:
     // Doesn't change logical value of mutation_partition or continuity of the snapshot.
     // The cursor doesn't have to be valid.
     // The cursor is invalid after the call.
+    // When returns an engaged optional, the attributes of the cursor: continuous() and range_tombstone()
+    // are valid, as if the cursor was advanced to the requested position.
     // Assumes the snapshot is evictable and not populated by means other than ensure_entry_if_complete().
-    // Subsequent calls to ensure_entry_if_complete() must be given strictly monotonically increasing
+    // Subsequent calls to ensure_entry_if_complete() or advance_to() must be given weakly monotonically increasing
     // positions unless iterators are invalidated across the calls.
     // The cursor must not be a reversed-order cursor.
+    // Use only with evictable snapshots.
     std::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
         if (_reversed) { // latest_i is unreliable
             throw_with_backtrace<std::logic_error>("ensure_entry_if_complete() called on reverse cursor");
@@ -590,28 +684,48 @@ public:
             auto has_entry = maybe_advance_to(pos);
             assert(has_entry); // evictable snapshots must have a dummy after all rows.
         }
-        {
-            position_in_partition::equal_compare eq(_schema);
-            if (eq(position(), pos)) {
-                if (dummy()) {
-                    return std::nullopt;
-                }
-                return ensure_entry_in_latest();
-            } else if (!continuous()) {
-                return std::nullopt;
-            }
-        }
         auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
-        auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
-            is_continuous(latest_i && latest_i->continuous())));
+        position_in_partition::equal_compare eq(_schema);
+        if (eq(position(), pos)) {
+            // Check if entry was already inserted by previous call to ensure_entry_if_complete()
+            if (latest_i != rows.begin()) {
+                auto prev_i = std::prev(latest_i);
+                if (eq(prev_i->position(), pos)) {
+                    return ensure_result{*prev_i, prev_i, false};
+                }
+            }
+            return ensure_entry_in_latest();
+        } else if (!continuous()) {
+            return std::nullopt;
+        }
+        // Check if entry was already inserted by previous call to ensure_entry_if_complete()
+        if (latest_i != rows.begin()) {
+            auto prev_i = std::prev(latest_i);
+            if (eq(prev_i->position(), pos)) {
+                return ensure_result{*prev_i, prev_i, false};
+            }
+        }
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(_schema, pos,
+                    is_dummy(!pos.is_clustering_row()),
+                    is_continuous::no));
+        if (latest_i && latest_i->continuous()) {
+            e->set_continuous(true);
+            e->set_range_tombstone(latest_i->range_tombstone()); // See the "information monotonicity" rule.
+        } else {
+            // Even if the range in the latest version is not continuous, the row itself is assumed to be complete,
+            // so it must inherit the current range tombstone.
+            e->set_range_tombstone(range_tombstone());
+        }
         auto e_i = rows.insert_before(latest_i, std::move(e));
         _snp.tracker()->insert(*e_i);
-        return ensure_result{*e_i, true};
+        return ensure_result{*e_i, e_i, true};
     }
 
     // Brings the entry pointed to by the cursor to the front of the LRU
     // Cursor must be valid and pointing at a row.
+    // Use only with evictable snapshots.
     void touch() {
         // We cannot bring entries from non-latest versions to the front because that
         // could result violate ordering invariant for the LRU, which states that older versions
@@ -634,21 +748,32 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
-        out << "{cursor: position=" << cur._position << ", cont=" << cur.continuous() << ", ";
+        out << "{cursor: position=" << cur._position
+            << ", cont=" << cur.continuous()
+            << ", rt=" << cur.range_tombstone();
+        if (cur.range_tombstone() != cur.range_tombstone_for_row()) {
+            out << ", row_rt=" << cur.range_tombstone_for_row();
+        }
+        out << ", ";
         if (cur._reversed) {
             out << "reversed, ";
         }
         if (!cur.iterators_valid()) {
             return out << " iterators invalid}";
         }
-        out << "current=[";
+        out << "snp=" << &cur._snp << ", current=[";
         bool first = true;
         for (auto&& v : cur._current_row) {
             if (!first) {
                 out << ", ";
             }
             first = false;
-            out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.continuous << "}";
+            out << "{v=" << v.version_no
+                << ", pos=" << v.it->position()
+                << ", cont=" << v.continuous
+                << ", rt=" << v.rt
+                << ", row_rt=" << v.it->range_tombstone()
+                << "}";
         }
         out << "], heap=[\n  ";
         first = true;
@@ -657,7 +782,12 @@ public:
                 out << ",\n  ";
             }
             first = false;
-            out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.continuous << "}";
+            out << "{v=" << v.version_no
+                << ", pos=" << v.it->position()
+                << ", cont=" << v.continuous
+                << ", rt=" << v.rt
+                << ", row_rt=" << v.it->range_tombstone()
+                << "}";
         }
         out << "], latest_iterator=[";
         if (cur._latest_it) {

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "mutation_partition.hh"
+#include "mutation_partition_v2.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 #include "utils/coroutine.hh"
@@ -20,6 +21,8 @@
 class static_row;
 
 // This is MVCC implementation for mutation_partitions.
+//
+// See docs/dev/mvcc.md for important design information.
 //
 // It is assumed that mutation_partitions are stored in some sort of LSA-managed
 // container (memtable or row cache).
@@ -102,53 +105,23 @@ class static_row;
 // snapshot on the list is marked as unique owner so that on its destruction
 // it continues removal of the partition versions.
 
-//
-// Continuity merging rules.
-//
-// Non-evictable snapshots contain fully continuous partitions in all versions at all times.
-// For evictable snapshots, that's not the case.
-//
-// Each version has its own continuity, fully specified in that version,
-// independent of continuity of other versions. Continuity of the snapshot is a
-// union of continuities of each version. This rule follows from the fact that we
-// want eviction from older versions to not have to touch newer versions.
-//
-// It is assumed that continuous intervals in different versions are non-
-// overlapping,  with exceptions for points corresponding to complete rows.
-// A row may overlap  with another row, in which case it completely overrides
-// it. A later version may have a row which falls into a continuous interval
-// in the older version. A newer version cannot have a continuous interval
-// which is not a row and covers a row in the older version. We make use of
-// this assumption to make calculation of the union of intervals on merging
-// easier.
-//
-// versions of evictable entries always have a dummy entry at position_in_partition::after_all_clustered_rows().
-// This is needed so that they can be always made fully discontinuous by eviction, and because
-// we need a way to link partitions with no rows into the LRU.
-//
-// Snapshots of evictable entries always have a row entry at
-// position_in_partition::after_all_clustered_rows().
-//
-
 class partition_version_ref;
 
 class partition_version : public anchorless_list_base_hook<partition_version> {
     partition_version_ref* _backref = nullptr;
-    mutation_partition _partition;
+    mutation_partition_v2 _partition;
 
     friend class partition_version_ref;
     friend class partition_entry;
     friend class partition_snapshot;
 public:
-    static partition_version& container_of(mutation_partition& mp) {
+    static partition_version& container_of(mutation_partition_v2& mp) {
         return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
     }
 
-    using is_evictable = bool_class<class evictable_tag>;
-
     explicit partition_version(schema_ptr s) noexcept
         : _partition(std::move(s)) { }
-    explicit partition_version(mutation_partition mp) noexcept
+    explicit partition_version(mutation_partition_v2 mp) noexcept
         : _partition(std::move(mp)) { }
     partition_version(partition_version&& pv) noexcept;
     partition_version& operator=(partition_version&& pv) noexcept;
@@ -157,8 +130,8 @@ public:
     // Returns stop_iteration::yes iff there are no more elements to free.
     stop_iteration clear_gently(cache_tracker* tracker) noexcept;
 
-    mutation_partition& partition() { return _partition; }
-    const mutation_partition& partition() const { return _partition; }
+    mutation_partition_v2& partition() { return _partition; }
+    const mutation_partition_v2& partition() const { return _partition; }
 
     bool is_referenced() const { return _backref; }
     // Returns true iff this version is directly referenced from a partition_entry (is its newset version).
@@ -295,7 +268,7 @@ private:
     mutation_cleaner* _cleaner;
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
-    std::optional<std::pair<version_number_type, apply_resume>> _version_merging_state;
+    std::optional<apply_resume> _version_merging_state;
     bool _locked = false;
     friend class partition_entry;
     friend class mutation_cleaner_impl;
@@ -400,19 +373,6 @@ public:
 
     using range_tombstone_result = utils::chunked_vector<range_tombstone>;
 
-    // Returns range tombstones overlapping with [start, end)
-    range_tombstone_result range_tombstones(position_in_partition_view start, position_in_partition_view end);
-    // Invokes the callback for every range tombstones overlapping with [start, end) until
-    // the callback returns stop_iteration::yes or all tombstones are exhausted.
-    // Returns stop_iteration::yes if all range tombstones in the range were consumed.
-    // When reversed is true, start and end are assumed to belong to the domain of reverse clustering order schema
-    // and the method produces range_tombstones in reverse order, conforming to reverse schema.
-    stop_iteration range_tombstones(position_in_partition_view start, position_in_partition_view end,
-                                    std::function<stop_iteration(range_tombstone)> callback,
-                                    bool reversed = false);
-    // Returns all range tombstones
-    range_tombstone_result range_tombstones();
-
     phase_type phase() const { return _phase; }
 };
 
@@ -482,7 +442,8 @@ public:
     // Constructs a non-evictable entry holding empty partition
     partition_entry() = default;
     // Constructs a non-evictable entry
-    explicit partition_entry(mutation_partition mp);
+    explicit partition_entry(mutation_partition_v2);
+    partition_entry(const schema&, mutation_partition);
     // Returns a reference to partition_entry containing given pv,
     // assuming pv.is_referenced_from_entry().
     static partition_entry& container_of(partition_version& pv) {
@@ -547,14 +508,21 @@ public:
     void apply(logalloc::region&,
                mutation_cleaner&,
                const schema& s,
-               const mutation_partition& mp,
+               const mutation_partition_v2& mp,
                const schema& mp_schema,
                mutation_application_stats& app_stats);
 
     void apply(logalloc::region&,
                mutation_cleaner&,
                const schema& s,
-               mutation_partition&& mp,
+               mutation_partition_v2&& mp,
+               const schema& mp_schema,
+               mutation_application_stats& app_stats);
+
+    void apply(logalloc::region&,
+               mutation_cleaner&,
+               const schema& s,
+               const mutation_partition& mp,
                const schema& mp_schema,
                mutation_application_stats& app_stats);
 
@@ -616,8 +584,8 @@ public:
         return *_version;
     }
 
-    mutation_partition squashed(schema_ptr from, schema_ptr to);
-    mutation_partition squashed(const schema&);
+    mutation_partition_v2 squashed(schema_ptr from, schema_ptr to, is_evictable);
+    mutation_partition squashed(const schema&, is_evictable);
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
@@ -646,7 +614,7 @@ public:
 };
 
 // Monotonic exception guarantees
-void merge_versions(const schema&, mutation_partition& newer, mutation_partition&& older);
+void merge_versions(const schema&, mutation_partition& newer, mutation_partition&& older, is_evictable);
 
 inline partition_version_ref& partition_snapshot::version()
 {

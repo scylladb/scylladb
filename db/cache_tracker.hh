@@ -50,6 +50,8 @@ public:
         uint64_t rows_processed_from_memtable;
         uint64_t rows_dropped_from_memtable;
         uint64_t rows_merged_from_memtable;
+        uint64_t dummy_processed_from_memtable;
+        uint64_t rows_covered_by_range_tombstones_from_memtable;
         uint64_t partition_evictions;
         uint64_t partition_removals;
         uint64_t row_evictions;
@@ -91,8 +93,11 @@ public:
     void insert(cache_entry&);
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
+    void insert(mutation_partition_v2&) noexcept;
     void insert(rows_entry&) noexcept;
     void remove(rows_entry&) noexcept;
+    // Inserts e such that it will be evicted right before more_recent in the absence of later touches.
+    void insert(rows_entry& more_recent, rows_entry& e) noexcept;
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;
@@ -118,8 +123,10 @@ public:
     mutation_cleaner& memtable_cleaner() noexcept { return _memtable_cleaner; }
     uint64_t partitions() const noexcept { return _stats.partitions; }
     const stats& get_stats() const noexcept { return _stats; }
+    stats& get_stats() noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
     lru& get_lru() { return _lru; }
+    seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };
 
 inline
@@ -139,8 +146,20 @@ void cache_tracker::insert(rows_entry& entry) noexcept {
 }
 
 inline
+void cache_tracker::insert(rows_entry& more_recent, rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    ++_stats.rows;
+    _lru.add_before(more_recent, entry);
+}
+
+inline
 void cache_tracker::insert(partition_version& pv) noexcept {
-    for (rows_entry& row : pv.partition().clustered_rows()) {
+    insert(pv.partition());
+}
+
+inline
+void cache_tracker::insert(mutation_partition_v2& p) noexcept {
+    for (rows_entry& row : p.clustered_rows()) {
         insert(row);
     }
 }

@@ -32,6 +32,7 @@
 #include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
+#include "utils/unconst.hh"
 
 logging::logger mplog("mutation_partition");
 
@@ -685,8 +686,8 @@ mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     return i->row();
 }
 
-deletable_row&
-mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
+rows_entry&
+mutation_partition::clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     check_schema(s);
     auto i = _rows.find(pos, rows_entry::tri_compare(s));
     if (i == _rows.end()) {
@@ -694,7 +695,12 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
             current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
         i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
-    return i->row();
+    return *i;
+}
+
+deletable_row&
+mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
+    return clustered_rows_entry(s, pos, dummy, continuous).row();
 }
 
 deletable_row&
@@ -704,7 +710,7 @@ mutation_partition::append_clustered_row(const schema& s, position_in_partition_
     auto i = _rows.end();
     if (!_rows.empty() && (cmp(*std::prev(i), pos) >= 0)) {
         throw std::runtime_error(format("mutation_partition::append_clustered_row(): cannot append clustering row with key {} to the partition"
-                ", last clustering row is equal or greater: {}", pos, std::prev(i)->key()));
+                ", last clustering row is equal or greater: {}", pos, std::prev(i)->position()));
     }
     auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
     i = _rows.insert_before_hint(i, std::move(e), cmp).first;
@@ -734,21 +740,6 @@ boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
     return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
-}
-
-template <typename Container>
-boost::iterator_range<typename Container::iterator>
-unconst(Container& c, boost::iterator_range<typename Container::const_iterator> r) {
-    return boost::make_iterator_range(
-        c.erase(r.begin(), r.begin()),
-        c.erase(r.end(), r.end())
-    );
-}
-
-template <typename Container>
-typename Container::iterator
-unconst(Container& c, typename Container::const_iterator i) {
-    return c.erase(i, i);
 }
 
 boost::iterator_range<mutation_partition::rows_type::iterator>
@@ -974,8 +965,7 @@ static void get_compacted_row_slice(const schema& s,
     }
 }
 
-bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
-                       gc_clock::time_point now = gc_clock::time_point::min()) {
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);
@@ -1200,6 +1190,7 @@ bool
 rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
     position_in_partition::equal_compare eq(s);
     return eq(position(), other.position())
+           && _range_tombstone == other._range_tombstone
            && row().equal(column_kind::regular_column, s, other.row(), other_schema);
 }
 
@@ -1554,12 +1545,24 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
     , _link(std::move(o._link))
     , _key(std::move(o._key))
     , _row(std::move(o._row))
+    , _range_tombstone(std::move(o._range_tombstone))
     , _flags(std::move(o._flags))
 {
 }
 
+void rows_entry::compact(const schema& s, tombstone t) {
+    can_gc_fn never_gc = [] (tombstone) { return false; };
+    row().compact_and_expire(s,
+                             t + _range_tombstone,
+                             gc_clock::time_point::min(),  // no TTL expiration
+                             never_gc,                     // no GC
+                             gc_clock::time_point::min()); // no GC
+    // FIXME: Purge redundant _range_tombstone
+}
+
 void rows_entry::replace_with(rows_entry&& o) noexcept {
     swap(o);
+    _range_tombstone = std::move(o._range_tombstone);
     _row = std::move(o._row);
 }
 
@@ -2558,12 +2561,7 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
                 return stop_iteration::no;
             }
             try {
-                auto notify = defer([&, dirty_before = region.occupancy().total_space()] {
-                    auto dirty_after = region.occupancy().total_space();
-                    if (_on_space_freed && dirty_before > dirty_after) {
-                        _on_space_freed(dirty_before - dirty_after);
-                    }
-                });
+                auto dirty_guard = make_region_space_guard();
                 return _worker_state->alloc_section(region, [&] {
                     return snp.merge_partition_versions(_app_stats);
                 });

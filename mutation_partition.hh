@@ -903,6 +903,16 @@ class rows_entry final : public evictable {
     intrusive_b::member_hook _link;
     clustering_key _key;
     deletable_row _row;
+
+    // Given p is the preceding rows_entry&,
+    // this tombstone applies to the range (p.position(), position()] if continuous()
+    // and to [position(), position()] if !continuous().
+    // So the tombstone applies only to the continuous interval, to the left.
+    // On top of that, _row.deleted_at() may still apply new information.
+    // So it's not deoverlapped with the row tombstone.
+    // Set only when in mutation_partition_v2.
+    tombstone _range_tombstone;
+
     struct flags {
         // _before_ck and _after_ck encode position_in_partition::weight
         bool _before_ck : 1;
@@ -944,6 +954,7 @@ public:
     rows_entry(const schema& s, const rows_entry& e)
         : _key(e._key)
         , _row(s, e._row)
+        , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
     { }
     // Valid only if !dummy()
@@ -967,6 +978,8 @@ public:
     is_continuous continuous() const { return is_continuous(_flags._continuous); }
     void set_continuous(bool value) { _flags._continuous = value; }
     void set_continuous(is_continuous value) { set_continuous(bool(value)); }
+    void set_range_tombstone(tombstone t) { _range_tombstone = t; }
+    tombstone range_tombstone() const { return _range_tombstone; }
     is_dummy dummy() const { return is_dummy(_flags._dummy); }
     bool is_last_dummy() const { return _flags._last_dummy; }
     void set_dummy(bool value) { _flags._dummy = value; }
@@ -1016,8 +1029,16 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage(const schema&) const;
+
+    // Handles eviction of the row, but doesn't attempt to handle eviction
+    // of the containing partition_entry in case this is the last row.
+    // Used by tests which don't keep the partition_entry inside a row_cache instance.
+    void on_evicted_shallow() noexcept override;
+
     void on_evicted(cache_tracker&) noexcept;
     void on_evicted() noexcept override;
+
+    void compact(const schema&, tombstone);
 
     class printer {
         const schema& _schema;
@@ -1090,7 +1111,7 @@ struct apply_resume {
         return *this;
     }
 
-    operator bool() const { return _stage != stage::done; }
+    explicit operator bool() const { return _stage != stage::done; }
 
     static apply_resume merging_rows() {
         return {stage::merging_rows, position_in_partition::for_partition_start()};
@@ -1102,6 +1123,12 @@ struct apply_resume {
 
     static apply_resume done() {
         return {stage::done, position_in_partition::for_partition_start()};
+    }
+
+    void set_position(position_in_partition_view pos) {
+        with_allocator(standard_allocator(), [&] {
+            _pos = position_in_partition(pos);
+        });
     }
 };
 
@@ -1274,6 +1301,9 @@ public:
     // object contains at least all the writes it contained before the call (monotonicity). It may contain partial writes.
     // Also, some progress is always guaranteed (liveness).
     //
+    // If returns stop_iteration::yes, then the sum of this and p is NO LONGER the same as before the call,
+    // the state of p is undefined and should not be used for reading.
+    //
     // The operation can be driven to completion like this:
     //
     //   apply_resume res;
@@ -1381,6 +1411,7 @@ public:
     deletable_row& clustered_row(const schema& s, clustering_key&& key);
     deletable_row& clustered_row(const schema& s, clustering_key_view key);
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
+    rows_entry& clustered_rows_entry(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
     // Throws if the row already exists or if the row was not inserted to the
     // last position (one or more greater row already exists).
     // Weak exception guarantees.
@@ -1448,3 +1479,6 @@ inline
 mutation_partition& mutation_partition::container_of(rows_type& rows) {
     return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition::_rows);
 }
+
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
+                       gc_clock::time_point now = gc_clock::time_point::min());

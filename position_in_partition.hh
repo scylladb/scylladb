@@ -567,8 +567,7 @@ public:
             bool a_rt_weight = bool(a._ck);
             bool b_rt_weight = bool(b._ck);
             return a_rt_weight == b_rt_weight
-                   && (!a_rt_weight || (_equal(*a._ck, *b._ck)
-                        && a._bound_weight == b._bound_weight));
+                   && (!a_rt_weight || (a._bound_weight == b._bound_weight && _equal(*a._ck, *b._ck)));
         }
     public:
         equal_compare(const schema& s) : _equal(s) { }

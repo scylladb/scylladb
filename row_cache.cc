@@ -86,6 +86,13 @@ cache_tracker::~cache_tracker() {
     clear();
 }
 
+memory::reclaiming_result cache_tracker::evict_from_lru_shallow() noexcept {
+    return with_allocator(_region.allocator(), [this] () noexcept {
+        current_tracker = this;
+        return _lru.evict_shallow();
+    });
+}
+
 void cache_tracker::set_compaction_scheduling_group(seastar::scheduling_group sg) {
     _memtable_cleaner.set_scheduling_group(sg);
     _garbage.set_scheduling_group(sg);
@@ -1220,10 +1227,10 @@ void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
     it.erase(dht::raw_token_less_comparator{});
 }
 
-void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
-    mutation_partition::rows_type::iterator it(this);
-
-    if (is_last_dummy()) {
+static
+mutation_partition_v2::rows_type::iterator on_evicted_shallow(rows_entry& e, cache_tracker& tracker) noexcept {
+    mutation_partition_v2::rows_type::iterator it(&e);
+    if (e.is_last_dummy()) {
         // Every evictable partition entry must have a dummy entry at the end,
         // so don't remove it, just unlink from the LRU.
         // That dummy is linked in the LRU, because there may be partitions
@@ -1235,19 +1242,25 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
     } else {
         // When evicting a dummy with both sides continuous we don't need to break continuity.
         //
-        auto still_continuous = continuous() && dummy();
-        mutation_partition::rows_type::key_grabber kg(it);
+        auto still_continuous = e.continuous() && e.dummy();
+        auto old_rt = e.range_tombstone();
+        mutation_partition_v2::rows_type::key_grabber kg(it);
         kg.release(current_deleter<rows_entry>());
-        if (!still_continuous) {
+        if (!still_continuous || old_rt != it->range_tombstone()) {
             it->set_continuous(false);
         }
         tracker.on_row_eviction();
     }
+    return it;
+}
 
-    mutation_partition::rows_type* rows = it.tree_if_singular();
+void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
+    auto it = ::on_evicted_shallow(*this, tracker);
+
+    mutation_partition_v2::rows_type* rows = it.tree_if_singular();
     if (rows != nullptr) {
         assert(it->is_last_dummy());
-        partition_version& pv = partition_version::container_of(mutation_partition::container_of(*rows));
+        partition_version& pv = partition_version::container_of(mutation_partition_v2::container_of(*rows));
         if (pv.is_referenced_from_entry()) {
             partition_entry& pe = partition_entry::container_of(pv);
             if (!pe.is_locked()) {
@@ -1260,6 +1273,10 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
 
 void rows_entry::on_evicted() noexcept {
     on_evicted(*current_tracker);
+}
+
+void rows_entry::on_evicted_shallow() noexcept {
+    ::on_evicted_shallow(*this, *current_tracker);
 }
 
 flat_mutation_reader_v2 cache_entry::read(row_cache& rc, read_context& reader) {

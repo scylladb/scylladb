@@ -13,12 +13,14 @@
 #include "mutation.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "log.hh"
+#include "clustering_interval_set.hh"
+#include "mutation_partition_v2.hh"
 
 extern logging::logger testlog;
 
 class mutation_partition_assertion {
     schema_ptr _schema;
-    const mutation_partition& _m;
+    mutation_partition _m;
 private:
     static mutation_partition compacted(const schema& s, const mutation_partition& m) {
         mutation_partition res(s, m);
@@ -27,9 +29,14 @@ private:
         return res;
     }
 public:
+    mutation_partition_assertion(schema_ptr s, mutation_partition&& m)
+        : _schema(s)
+        , _m(std::move(m))
+    { }
+
     mutation_partition_assertion(schema_ptr s, const mutation_partition& m)
         : _schema(s)
-        , _m(m)
+        , _m(*s, m)
     { }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
@@ -84,7 +91,10 @@ public:
 
     mutation_partition_assertion& has_same_continuity(const mutation_partition& other) {
         if (!_m.equal_continuity(*_schema, other)) {
-            BOOST_FAIL(format("Continuity doesn't match: {}\n ...and: {}", mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
+            auto expected = other.get_continuity(*_schema, is_continuous::yes);
+            auto got = _m.get_continuity(*_schema, is_continuous::yes);
+            BOOST_FAIL(format("Continuity doesn't match, expected: {}\nbut got: {}, mutation before: {}\n ...and after: {}",
+                              expected, got, mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
@@ -100,6 +110,11 @@ public:
 static inline
 mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition& mp) {
     return {std::move(s), mp};
+}
+
+static inline
+mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition_v2& mp) {
+    return {s, mp.as_mutation_partition(*s)};
 }
 
 class mutation_assertion {

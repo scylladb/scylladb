@@ -14,7 +14,7 @@
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
     if (rt) {
-        return out << "{range_tombstone: start=" << rt.start_bound() << ", end=" << rt.end_bound() << ", " << rt.tomb << "}";
+        return out << "{range_tombstone: start=" << rt.position() << ", end=" << rt.end_position() << ", " << rt.tomb << "}";
     } else {
         return out << "{range_tombstone: none}";
     }
