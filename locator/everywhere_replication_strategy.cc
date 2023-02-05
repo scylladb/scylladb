@@ -36,6 +36,19 @@ inet_address_vector_replica_set everywhere_replication_strategy::get_natural_end
     return boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints());
 }
 
+stop_iteration everywhere_replication_strategy::for_each_natural_endpoint_until(const token&, const effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
+    const auto& tm = *erm.get_token_metadata_ptr();
+    if (tm.sorted_tokens().empty()) {
+        return func(utils::fb_utilities::get_broadcast_address());
+    }
+    for (const auto& ep : tm.get_all_endpoints()) {
+        if (func(ep)) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
+}
+
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
 static registry registrator_short_name("EverywhereStrategy");

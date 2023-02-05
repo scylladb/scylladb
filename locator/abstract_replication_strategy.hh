@@ -101,6 +101,8 @@ public:
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
+    // Returns the last stop_iteration result of the called func
+    virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
     virtual void validate_options() const = 0;
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
@@ -202,6 +204,7 @@ public:
     future<replication_map> clone_endpoints_gently() const;
 
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
+    virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const;
 
     // get_ranges() returns the list of ranges held by the given endpoint.
@@ -233,7 +236,7 @@ public:
     get_range_addresses() const;
 
 private:
-    dht::token_range_vector do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const;
+    dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
 
 public:
     static factory_key make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr);
