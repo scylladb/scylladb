@@ -263,6 +263,13 @@ available in CI if you navigate to 'Build artifacts' at the Jenkins build
 page. This will bring you to a folder with all the test logs, preserved by
 Jenkins in event of test failure.
 
+## Stability
+
+Testing is hard. Testing ScyllaDB is even harder, but we strive to ensure our testing
+suite is as solid as possible. The first step is contribuing a stable (read: non-flaky) test.
+To do so, when developing tests, please run them (1) in debug mode and (2) 100 times in a row (using `--repeat 100`),
+and see that they pass successfully.
+
 ## See also
 
 For command line help and available options, please see also:
