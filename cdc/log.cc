@@ -43,6 +43,7 @@
 #include "tracing/trace_state.hh"
 #include "stats.hh"
 #include "compaction/compaction_strategy.hh"
+#include "utils/labels.hh"
 
 namespace std {
 
@@ -93,11 +94,11 @@ cdc::stats::stats() {
         _metrics.add_group(cdc_group_name, {
                 sm::make_total_operations("operations_" + kind, counters.unsplit_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(false)}),
+                        {split_label(false), basic_level}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_" + kind, counters.split_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(true)}),
+                        {split_label(true), basic_level}).set_skip_when_empty(),
 
                 sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
                         sm::description(format("number of {} preimage queries performed", kind)),

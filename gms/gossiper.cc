@@ -42,6 +42,7 @@
 #include "utils/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
+#include "utils/labels.hh"
 
 namespace gms {
 
@@ -121,15 +122,15 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
                 } else {
                     return 0;
                 }
-            }, sm::description("Heartbeat of the current Node.")),
+            }, sm::description("Heartbeat of the current Node."))(basic_level),
         sm::make_gauge("live",
             [this] {
                 return _live_endpoints.size();
-            }, sm::description("How many live nodes the current node sees")),
+            }, sm::description("How many live nodes the current node sees"))(basic_level),
         sm::make_gauge("unreachable",
             [this] {
                 return _unreachable_endpoints.size();
-            }, sm::description("How many unreachable nodes the current node sees")),
+            }, sm::description("How many unreachable nodes the current node sees"))(basic_level),
     });
 }
 

@@ -31,6 +31,7 @@
 #include <limits>
 #include <cctype>
 #include <vector>
+#include "utils/labels.hh"
 
 #ifdef THRIFT_USES_BOOST
 #include <boost/make_shared.hpp>
@@ -347,7 +348,7 @@ thrift_stats::thrift_stats(thrift_server& server) {
                         sm::description("Holds a current number of opened Thrift connections.")),
 
         sm::make_counter("served", [&server] { return server.requests_served(); },
-                        sm::description("Rate of serving Thrift requests.")),
+                        sm::description("Rate of serving Thrift requests."))(basic_level),
         sm::make_gauge("serving", [&server] { return server.requests_serving(); },
                         sm::description("Number of Thrift requests being currently served.")),
         sm::make_gauge("requests_blocked_memory_current", [&server] { return server.memory_available().waiters(); },

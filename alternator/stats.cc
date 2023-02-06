@@ -9,6 +9,7 @@
 #include "stats.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include <seastar/core/metrics.hh>
+#include "utils/labels.hh"
 
 namespace alternator {
 
@@ -21,10 +22,10 @@ stats::stats() : api_operations{} {
     _metrics.add_group("alternator", {
 #define OPERATION(name, CamelCaseName) \
                 seastar::metrics::make_total_operations("operation", api_operations.name, \
-                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}),
+                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)})(basic_level),
 #define OPERATION_LATENCY(name, CamelCaseName) \
                 seastar::metrics::make_histogram("op_latency", \
-                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}),
+                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}).set_skip_when_empty()(basic_level),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
@@ -75,7 +76,7 @@ stats::stats() : api_operations{} {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
                     seastar::metrics::description("number of unsupported operations via Alternator API")),
             seastar::metrics::make_total_operations("total_operations", total_operations,
-                    seastar::metrics::description("number of total operations via Alternator API")),
+                    seastar::metrics::description("number of total operations via Alternator API"))(basic_level),
             seastar::metrics::make_total_operations("reads_before_write", reads_before_write,
                     seastar::metrics::description("number of performed read-before-write operations")),
             seastar::metrics::make_total_operations("write_using_lwt", write_using_lwt,
