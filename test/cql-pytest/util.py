@@ -101,13 +101,16 @@ def new_type(cql, keyspace, cmd):
 
 # A utility function for creating a new temporary user-defined function.
 @contextmanager
-def new_function(cql, keyspace, body, name=None):
+def new_function(cql, keyspace, body, name=None, args=None):
     fun = name if name else unique_name()
     cql.execute(f"CREATE FUNCTION {keyspace}.{fun} {body}")
     try:
         yield fun
     finally:
-        cql.execute(f"DROP FUNCTION {keyspace}.{fun}")
+        if args:
+            cql.execute(f"DROP FUNCTION {keyspace}.{fun}({args})")
+        else:
+            cql.execute(f"DROP FUNCTION {keyspace}.{fun}")
 
 # A utility function for creating a new temporary user-defined aggregate.
 @contextmanager
