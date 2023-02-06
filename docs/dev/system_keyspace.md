@@ -356,4 +356,25 @@ CREATE TABLE system.clients (
 Currently only CQL clients are tracked. The table used to be present on disk (in data
 directory) before and including version 4.5.
 
+## system.sstables
+
+The "ownership" table for non-local sstables
+
+Schema:
+~~~
+CREATE TABLE system.sstables (
+    location text,
+    generation bigint,
+    format text,
+    status text,
+    uuid uuid,
+    version text,
+    PRIMARY KEY (location, generation)
+)
+~~~
+
+When a user keyspace is created with S3 storage options, sstables are put on the
+remote object storage and the information about them is kept in this table. The
+"uuid" field is used to point to the "folder" in which all sstables files are.
+
 ## TODO: the rest

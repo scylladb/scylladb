@@ -25,6 +25,11 @@
 #include "locator/host_id.hh"
 #include "mutation/canonical_mutation.hh"
 
+namespace sstables {
+    struct entry_descriptor;
+    class generation_type;
+}
+
 namespace service {
 
 class storage_proxy;
@@ -145,6 +150,7 @@ public:
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
+    static constexpr auto SSTABLES_REGISTRY = "sstables";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -226,6 +232,7 @@ public:
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
+    static schema_ptr sstables_registry();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
@@ -449,6 +456,13 @@ public:
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
+
+    future<> sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc);
+    future<utils::UUID> sstables_registry_lookup_entry(sstring location, sstables::generation_type gen);
+    future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
+    future<> sstables_registry_delete_entry(sstring location, sstables::generation_type gen);
+    using sstable_registry_entry_consumer = noncopyable_function<future<>(utils::UUID uuid, sstring state, sstables::entry_descriptor desc)>;
+    future<> sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer);
 
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);
