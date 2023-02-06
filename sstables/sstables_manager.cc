@@ -13,6 +13,7 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "db/system_keyspace.hh"
 
 namespace sstables {
 
@@ -110,6 +111,14 @@ future<> sstables_manager::close() {
 
 std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_components_lister(std::filesystem::path dir) {
     return std::make_unique<sstable_directory::components_lister>(std::move(dir));
+}
+
+void sstables_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void sstables_manager::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
 }
 
 }   // namespace sstables
