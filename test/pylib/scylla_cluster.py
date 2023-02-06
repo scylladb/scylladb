@@ -115,7 +115,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '-m', '1G',
     '--collectd', '0',
     '--overprovisioned',
-    '--max-networking-io-control-blocks', '100',
+    '--max-networking-io-control-blocks', '1000',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
     '--commitlog-use-o-dsync', '0',
@@ -190,7 +190,7 @@ class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
     # pylint: disable=too-many-instance-attributes
-    START_TIMEOUT = 300     # seconds
+    START_TIMEOUT = 1000     # seconds
     start_time: float
     sleep_interval: float
     log_file: BufferedWriter
