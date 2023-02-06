@@ -303,7 +303,7 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
     return ratio_holder(f + sst->filter_get_recent_true_positive(), f);
 }
 
-void set_column_family(http_context& ctx, routes& r) {
+void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
         for (auto i: ctx.db.local().get_column_families_mapping()) {
@@ -892,11 +892,11 @@ void set_column_family(http_context& ctx, routes& r) {
         });
     });
 
-    cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {
+    cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<request> req) {
         auto ks_cf = parse_fully_qualified_cf_name(req->param["name"]);
         auto&& ks = std::get<0>(ks_cf);
         auto&& cf_name = std::get<1>(ks_cf);
-        return db::system_keyspace::load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace_view_build_progress>& vb) mutable {
+        return sys_ks.local().load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace_view_build_progress>& vb) mutable {
             std::set<sstring> vp;
             for (auto b : vb) {
                 if (b.view.first == ks) {
@@ -1028,5 +1028,113 @@ void set_column_family(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+}
+
+void unset_column_family(http_context& ctx, routes& r) {
+    cf::get_column_family_name.unset(r);
+    cf::get_column_family.unset(r);
+    cf::get_column_family_name_keyspace.unset(r);
+    cf::get_memtable_columns_count.unset(r);
+    cf::get_all_memtable_columns_count.unset(r);
+    cf::get_memtable_on_heap_size.unset(r);
+    cf::get_all_memtable_on_heap_size.unset(r);
+    cf::get_memtable_off_heap_size.unset(r);
+    cf::get_all_memtable_off_heap_size.unset(r);
+    cf::get_memtable_live_data_size.unset(r);
+    cf::get_all_memtable_live_data_size.unset(r);
+    cf::get_cf_all_memtables_on_heap_size.unset(r);
+    cf::get_all_cf_all_memtables_on_heap_size.unset(r);
+    cf::get_cf_all_memtables_off_heap_size.unset(r);
+    cf::get_all_cf_all_memtables_off_heap_size.unset(r);
+    cf::get_cf_all_memtables_live_data_size.unset(r);
+    cf::get_all_cf_all_memtables_live_data_size.unset(r);
+    cf::get_memtable_switch_count.unset(r);
+    cf::get_all_memtable_switch_count.unset(r);
+    cf::get_estimated_row_size_histogram.unset(r);
+    cf::get_estimated_row_count.unset(r);
+    cf::get_estimated_column_count_histogram.unset(r);
+    cf::get_all_compression_ratio.unset(r);
+    cf::get_pending_flushes.unset(r);
+    cf::get_all_pending_flushes.unset(r);
+    cf::get_read.unset(r);
+    cf::get_all_read.unset(r);
+    cf::get_write.unset(r);
+    cf::get_all_write.unset(r);
+    cf::get_read_latency_histogram_depricated.unset(r);
+    cf::get_read_latency_histogram.unset(r);
+    cf::get_read_latency.unset(r);
+    cf::get_write_latency.unset(r);
+    cf::get_all_read_latency_histogram_depricated.unset(r);
+    cf::get_all_read_latency_histogram.unset(r);
+    cf::get_write_latency_histogram_depricated.unset(r);
+    cf::get_write_latency_histogram.unset(r);
+    cf::get_all_write_latency_histogram_depricated.unset(r);
+    cf::get_all_write_latency_histogram.unset(r);
+    cf::get_pending_compactions.unset(r);
+    cf::get_all_pending_compactions.unset(r);
+    cf::get_live_ss_table_count.unset(r);
+    cf::get_all_live_ss_table_count.unset(r);
+    cf::get_unleveled_sstables.unset(r);
+    cf::get_live_disk_space_used.unset(r);
+    cf::get_all_live_disk_space_used.unset(r);
+    cf::get_total_disk_space_used.unset(r);
+    cf::get_all_total_disk_space_used.unset(r);
+    cf::get_min_row_size.unset(r);
+    cf::get_all_min_row_size.unset(r);
+    cf::get_max_row_size.unset(r);
+    cf::get_all_max_row_size.unset(r);
+    cf::get_mean_row_size.unset(r);
+    cf::get_all_mean_row_size.unset(r);
+    cf::get_bloom_filter_false_positives.unset(r);
+    cf::get_all_bloom_filter_false_positives.unset(r);
+    cf::get_recent_bloom_filter_false_positives.unset(r);
+    cf::get_all_recent_bloom_filter_false_positives.unset(r);
+    cf::get_bloom_filter_false_ratio.unset(r);
+    cf::get_all_bloom_filter_false_ratio.unset(r);
+    cf::get_recent_bloom_filter_false_ratio.unset(r);
+    cf::get_all_recent_bloom_filter_false_ratio.unset(r);
+    cf::get_bloom_filter_disk_space_used.unset(r);
+    cf::get_all_bloom_filter_disk_space_used.unset(r);
+    cf::get_bloom_filter_off_heap_memory_used.unset(r);
+    cf::get_all_bloom_filter_off_heap_memory_used.unset(r);
+    cf::get_index_summary_off_heap_memory_used.unset(r);
+    cf::get_all_index_summary_off_heap_memory_used.unset(r);
+    cf::get_compression_metadata_off_heap_memory_used.unset(r);
+    cf::get_all_compression_metadata_off_heap_memory_used.unset(r);
+    cf::get_speculative_retries.unset(r);
+    cf::get_all_speculative_retries.unset(r);
+    cf::get_key_cache_hit_rate.unset(r);
+    cf::get_true_snapshots_size.unset(r);
+    cf::get_all_true_snapshots_size.unset(r);
+    cf::get_row_cache_hit_out_of_range.unset(r);
+    cf::get_all_row_cache_hit_out_of_range.unset(r);
+    cf::get_row_cache_hit.unset(r);
+    cf::get_all_row_cache_hit.unset(r);
+    cf::get_row_cache_miss.unset(r);
+    cf::get_all_row_cache_miss.unset(r);
+    cf::get_cas_prepare.unset(r);
+    cf::get_cas_propose.unset(r);
+    cf::get_cas_commit.unset(r);
+    cf::get_sstables_per_read_histogram.unset(r);
+    cf::get_tombstone_scanned_histogram.unset(r);
+    cf::get_live_scanned_histogram.unset(r);
+    cf::get_col_update_time_delta_histogram.unset(r);
+    cf::get_auto_compaction.unset(r);
+    cf::enable_auto_compaction.unset(r);
+    cf::disable_auto_compaction.unset(r);
+    cf::get_built_indexes.unset(r);
+    cf::get_compression_metadata_off_heap_memory_used.unset(r);
+    cf::get_compression_parameters.unset(r);
+    cf::get_compression_ratio.unset(r);
+    cf::get_read_latency_estimated_histogram.unset(r);
+    cf::get_write_latency_estimated_histogram.unset(r);
+    cf::set_compaction_strategy_class.unset(r);
+    cf::get_compaction_strategy_class.unset(r);
+    cf::set_compression_parameters.unset(r);
+    cf::set_crc_check_chance.unset(r);
+    cf::get_sstable_count_per_level.unset(r);
+    cf::get_sstables_for_key.unset(r);
+    cf::toppartitions.unset(r);
+    cf::force_major_compaction.unset(r);
 }
 }

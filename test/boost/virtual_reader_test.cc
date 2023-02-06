@@ -177,16 +177,16 @@ SEASTAR_TEST_CASE(test_query_view_built_progress_virtual_table) {
         auto rand = [] { return dht::token::get_random_token(); };
         auto next_token = rand();
         auto next_token_str = next_token.to_sstring();
-        db::system_keyspace::register_view_for_building("ks", "v1", rand()).get();
-        db::system_keyspace::register_view_for_building("ks", "v2", rand()).get();
-        db::system_keyspace::register_view_for_building("ks", "v3", rand()).get();
-        db::system_keyspace::update_view_build_progress("ks", "v3", next_token).get();
-        db::system_keyspace::register_view_for_building("ks", "v4", rand()).get();
-        db::system_keyspace::update_view_build_progress("ks", "v4", next_token).get();
-        db::system_keyspace::register_view_for_building("ks", "v5", rand()).get();
-        db::system_keyspace::register_view_for_building("ks", "v6", rand()).get();
-        db::system_keyspace::remove_view_build_progress_across_all_shards("ks", "v5").get();
-        db::system_keyspace::remove_view_build_progress_across_all_shards("ks", "v6").get();
+        e.get_system_keyspace().register_view_for_building("ks", "v1", rand()).get();
+        e.get_system_keyspace().register_view_for_building("ks", "v2", rand()).get();
+        e.get_system_keyspace().register_view_for_building("ks", "v3", rand()).get();
+        e.get_system_keyspace().update_view_build_progress("ks", "v3", next_token).get();
+        e.get_system_keyspace().register_view_for_building("ks", "v4", rand()).get();
+        e.get_system_keyspace().update_view_build_progress("ks", "v4", next_token).get();
+        e.get_system_keyspace().register_view_for_building("ks", "v5", rand()).get();
+        e.get_system_keyspace().register_view_for_building("ks", "v6", rand()).get();
+        e.get_system_keyspace().remove_view_build_progress_across_all_shards("ks", "v5").get();
+        e.get_system_keyspace().remove_view_build_progress_across_all_shards("ks", "v6").get();
         auto rs = e.execute_cql("select * from system.views_builds_in_progress where keyspace_name = 'ks'").get0();
         assert_that(rs).is_rows().with_rows_ignore_order({
                 { {utf8_type->decompose(sstring("ks"))}, {utf8_type->decompose(sstring("v1"))}, {int32_type->decompose(0)}, { } },
