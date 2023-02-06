@@ -14,6 +14,7 @@
 #include "message/messaging_service_fwd.hh"
 #include "raft/raft.hh"
 #include "raft/server.hh"
+#include "utils/recent_entries_map.hh"
 #include "direct_failure_detector/failure_detector.hh"
 #include "service/raft/group0_fwd.hh"
 
@@ -154,7 +155,7 @@ class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinge
     netw::messaging_service& _ms;
     raft_address_map& _address_map;
 
-    using rate_limits = std::unordered_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
+    using rate_limits = utils::recent_entries_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
     rate_limits _rate_limits;
 
 public:
