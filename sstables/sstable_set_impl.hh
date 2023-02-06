@@ -29,10 +29,11 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
-    virtual lw_shared_ptr<sstable_list> all() const = 0;
+    virtual lw_shared_ptr<const sstable_list> all() const = 0;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const = 0;
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
+    virtual size_t size() const noexcept = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
@@ -93,10 +94,11 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
 };
@@ -118,10 +120,11 @@ public:
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     std::unique_ptr<position_reader_queue> make_position_reader_queue(
@@ -157,10 +160,11 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
-    virtual lw_shared_ptr<sstable_list> all() const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual void for_each_sstable(std::function<void(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(

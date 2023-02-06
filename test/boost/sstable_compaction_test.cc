@@ -5040,6 +5040,7 @@ SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables) {
         cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
 
         BOOST_REQUIRE(cf->get_sstable_set().all()->size() == 1);
+        BOOST_REQUIRE(cf->get_sstable_set().size() == 1);
     });
 }
 

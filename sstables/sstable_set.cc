@@ -156,7 +156,7 @@ partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& 
     }));
 }
 
-lw_shared_ptr<sstable_list>
+lw_shared_ptr<const sstable_list>
 sstable_set::all() const {
     return _impl->all();
 }
@@ -173,6 +173,11 @@ sstable_set::insert(shared_sstable sst) {
 void
 sstable_set::erase(shared_sstable sst) {
     _impl->erase(sst);
+}
+
+size_t
+sstable_set::size() const noexcept {
+    return _impl->size();
 }
 
 sstable_set::~sstable_set() = default;
@@ -306,7 +311,7 @@ std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition
     return r;
 }
 
-lw_shared_ptr<sstable_list> partitioned_sstable_set::all() const {
+lw_shared_ptr<const sstable_list> partitioned_sstable_set::all() const {
     return _all;
 }
 
@@ -347,6 +352,11 @@ void partitioned_sstable_set::erase(shared_sstable sst) {
         _leveled_sstables_change_cnt++;
         _leveled_sstables.subtract({make_interval(*sst), value_set({sst})});
     }
+}
+
+size_t
+partitioned_sstable_set::size() const noexcept {
+    return _all->size();
 }
 
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
@@ -432,8 +442,13 @@ std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition
     return boost::copy_range<std::vector<shared_sstable>>(*_sstables | boost::adaptors::map_values);
 }
 
-lw_shared_ptr<sstable_list> time_series_sstable_set::all() const {
-    return make_lw_shared<sstable_list>(boost::copy_range<sstable_list>(*_sstables | boost::adaptors::map_values));
+lw_shared_ptr<const sstable_list> time_series_sstable_set::all() const {
+    return make_lw_shared<const sstable_list>(boost::copy_range<const sstable_list>(*_sstables | boost::adaptors::map_values));
+}
+
+size_t
+time_series_sstable_set::size() const noexcept {
+    return _sstables->size();
 }
 
 void time_series_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
@@ -706,7 +721,7 @@ public:
         irclogger.trace("{}: created for range: {} with {} sstables",
                 fmt::ptr(this),
                 *_pr,
-                _sstables->all()->size());
+                _sstables->size());
     }
 
     incremental_reader_selector(const incremental_reader_selector&) = delete;
@@ -984,9 +999,9 @@ std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::ve
     return ret;
 }
 
-lw_shared_ptr<sstable_list> compound_sstable_set::all() const {
+lw_shared_ptr<const sstable_list> compound_sstable_set::all() const {
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
@@ -1020,6 +1035,11 @@ void compound_sstable_set::insert(shared_sstable sst) {
 }
 void compound_sstable_set::erase(shared_sstable sst) {
     throw_with_backtrace<std::bad_function_call>();
+}
+
+size_t
+compound_sstable_set::size() const noexcept {
+    return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::size)), size_t(0));
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {
@@ -1069,7 +1089,7 @@ std::unique_ptr<incremental_selector_impl> compound_sstable_set::make_incrementa
         abort();
     }
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const lw_shared_ptr<sstable_set>& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const lw_shared_ptr<sstable_set>& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     // optimize for common case where only primary set contains sstables, so its selector can be built without an interposer.
@@ -1098,7 +1118,7 @@ compound_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
     auto sets = _sets;
-    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return !set->all()->empty(); });
+    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
@@ -1178,7 +1198,8 @@ sstable_set::make_local_shard_sstable_reader(
         assert(!sst->is_shared());
         return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
-    if (auto sstables = _impl->all(); sstables->size() == 1) [[unlikely]] {
+    if (_impl->size() == 1) [[unlikely]] {
+        auto sstables = _impl->all();
         auto sst = *sstables->begin();
         return reader_factory_fn(sst, pr);
     }

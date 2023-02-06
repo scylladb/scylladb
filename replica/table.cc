@@ -1284,7 +1284,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
 
             new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(t._schema));
             std::vector<sstables::shared_sstable> new_sstables_for_backlog_tracker;
-            new_sstables_for_backlog_tracker.reserve(cg.main_sstables()->all()->size());
+            new_sstables_for_backlog_tracker.reserve(cg.main_sstables()->size());
             cg.main_sstables()->for_each_sstable([this, &new_sstables_for_backlog_tracker] (const sstables::shared_sstable& s) {
                 new_sstables->insert(s);
                 new_sstables_for_backlog_tracker.push_back(s);
@@ -1313,7 +1313,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
 }
 
 size_t table::sstables_count() const {
-    return _sstables->all()->size();
+    return _sstables->size();
 }
 
 std::vector<uint64_t> table::sstable_count_per_level() const {

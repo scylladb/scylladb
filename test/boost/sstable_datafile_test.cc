@@ -85,6 +85,10 @@ atomic_cell make_dead_atomic_cell(uint32_t deletion_time) {
     return atomic_cell::make_dead(0, gc_clock::time_point(gc_clock::duration(deletion_time)));
 }
 
+static void assert_sstable_set_size(const sstable_set& s, size_t expected_size) {
+    BOOST_REQUIRE(s.size() == expected_size && s.size() == s.all()->size());
+}
+
 SEASTAR_TEST_CASE(datafile_generation_09) {
     // Test that generated sstable components can be successfully loaded.
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
@@ -2183,13 +2187,13 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
         auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
         set.insert(sst);
-        BOOST_REQUIRE(set.all()->size() == 1);
+        assert_sstable_set_size(set, 1);
 
         auto unleveled_sst = sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
         auto leveled_sst = sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
         set.erase(unleveled_sst);
         set.erase(leveled_sst);
-        BOOST_REQUIRE(set.all()->size() == 1);
+        assert_sstable_set_size(set, 1);
         BOOST_REQUIRE(set.all()->contains(sst));
     }
 
@@ -2201,12 +2205,12 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
         {
             auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
             set.insert(sst);
-            BOOST_REQUIRE(set.all()->size() == 1);
+            assert_sstable_set_size(set, 1);
         }
 
         auto sst2 = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 1);
         set.insert(sst2);
-        BOOST_REQUIRE(set.all()->size() == 2);
+        assert_sstable_set_size(set, 2);
 
         set.erase(sst2);
     }
@@ -2217,11 +2221,11 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
         auto sst = sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
         set.insert(sst);
-        BOOST_REQUIRE(set.all()->size() == 1);
+        assert_sstable_set_size(set, 1);
 
         auto sst2 = sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
         set.erase(sst2);
-        BOOST_REQUIRE(set.all()->size() == 1);
+        assert_sstable_set_size(set, 1);
         BOOST_REQUIRE(set.all()->contains(sst));
     }
 
@@ -3049,7 +3053,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
 
         {
             auto cloned_compound = *compound;
-            BOOST_REQUIRE(cloned_compound.all()->size() == 3);
+            assert_sstable_set_size(cloned_compound, 3);
         }
 
         set2 = make_lw_shared(cs.make_sstable_set(s));
