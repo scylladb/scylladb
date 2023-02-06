@@ -393,10 +393,10 @@ More info
 ---------
 Where can I ask a question not covered here?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Two mailing lists.
 
-* `scylladb-dev <https://groups.google.com/d/forum/scylladb-dev>`_: Discuss the development of Scylla itself.
-* `scylladb-users <https://groups.google.com/d/forum/scylladb-users>`_: Discuss using Scylla and developing client applications.
+* `ScyllaDB Community Forum <https://forum.scylladb.com>`_: Discuss using ScyllaDB and developing client applications.
+* `scylladb-dev <https://groups.google.com/d/forum/scylladb-dev>`_: Discuss the development of ScyllaDB itself.
+
 
 I deleted data from Scylla, but disk usage stays the same. Why?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

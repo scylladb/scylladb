@@ -2,7 +2,7 @@
 
 ## Asking questions or requesting help
 
-Use the [Scylla Users mailing list](https://groups.google.com/g/scylladb-users) or the [Slack workspace](http://slack.scylladb.com) for general questions and help.
+Use the [ScyllaDB Community Forum](https://forum.scylladb.com) or the [Slack workspace](http://slack.scylladb.com) for general questions and help.
 
 Join the [Scylla Developers mailing list](https://groups.google.com/g/scylladb-dev) for deeper technical discussions and to discuss your ideas for contributions.
 

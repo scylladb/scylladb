@@ -4,11 +4,15 @@ Integrate Scylla with Spring
 
 `Spring <https://spring.io>`_ is a java framework for creating easy to use web services.
 `Spring Boot <https://spring.io/projects/spring-boot>`_ makes it easy to create stand-alone, production-grade Spring based Applications that you can "just run".
-If you have tested your application with Scylla and Spring and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+If you have tested your application with Scylla and Spring and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 Additional Information
 ----------------------
+
+**ScyllaDB University**
+
+* `Spring Boot, ScyllaDB, and Time Series Data lesson <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/spring-boot-scylladb-and-time-series-data/>`_ on ScyllaDB University 
 
 **Blog Posts**
 

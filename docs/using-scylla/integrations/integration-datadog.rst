@@ -13,7 +13,7 @@ The way to do so is running a DataDog Agent to pull metrics from Prometheus and 
 If you are a Scylla Cloud user, you can export your cluster metrics to your own Prometheus and use the same method to export the metrics from Prometheus to DataDog, effectively monitoring your Scylla Cloud cluster with DataDog.
 
 
-The list below contains integration projects using DataDog to monitor Scylla. If you have monitored Scylla with DataDog and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+The list below contains integration projects using DataDog to monitor Scylla. If you have monitored Scylla with DataDog and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 Additional Topics
 -----------------

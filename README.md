@@ -30,9 +30,9 @@ requirements - you just need to meet the frozen toolchain's prerequisites
 Building Scylla with the frozen toolchain `dbuild` is as easy as:
 
 ```bash
-$ git submodule update --init --force --recursive
-$ ./tools/toolchain/dbuild ./configure.py
-$ ./tools/toolchain/dbuild ninja build/release/scylla
+$ git submodule update --init --force --recursive
+$ ./tools/toolchain/dbuild ./configure.py
+$ ./tools/toolchain/dbuild ninja build/release/scylla
 ```
 
 For further information, please see:
@@ -60,7 +60,7 @@ Please note that you need to run Scylla with `dbuild` if you built it with the f
 For more run options, run:
 
 ```bash
-$ ./tools/toolchain/dbuild ./build/release/scylla --help
+$ ./tools/toolchain/dbuild ./build/release/scylla --help
 ```
 
 ## Testing
@@ -100,10 +100,10 @@ If you are a developer working on Scylla, please read the [developer guidelines]
 
 ## Contact
 
-* The [users mailing list] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
+* The [community forum] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
 * The [developers mailing list] is for developers and people interested in following the development of ScyllaDB to discuss technical topics.
 
-[Users mailing list]: https://groups.google.com/forum/#!forum/scylladb-users
+[Community forum]: https://forum.scylladb.com/
 
 [Slack channel]: http://slack.scylladb.com/
 

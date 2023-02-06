@@ -13,7 +13,7 @@ An example of such a third-party integration uses Chronicle as follows:
    :width: 600pt
 
 The list below contains integration projects using Scylla with IOTA Chronicle.
-If you have tested your application with Scylla and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 

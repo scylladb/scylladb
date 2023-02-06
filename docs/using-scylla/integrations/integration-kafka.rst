@@ -11,7 +11,7 @@ Integrate Scylla with Kafka
 Apache Kafka is capable of delivering reliable, scalable, high-throughput data streams across a myriad of data sources and sinks.
 A great number of open source users and enterprise customers use Scylla and Kafka together.
 You can use Scylla and Apache Kafka in integration solutions, such as creating a scalable backend for an IoT service.
-If you have tested your application with Scylla and Kafka and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+If you have tested your application with Scylla and Kafka and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 Additional Information
