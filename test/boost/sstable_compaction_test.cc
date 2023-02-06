@@ -4689,12 +4689,14 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         const uint64_t all_tables_disk_usage = double(available_disk_size_per_shard) * target_disk_usage;
 
         auto as = abort_source();
+
+        auto task_manager = tasks::task_manager({}, as);
         compaction_manager::config cfg = {
             .compaction_sched_group = { default_scheduling_group(), default_priority_class() },
             .maintenance_sched_group = { default_scheduling_group(), default_priority_class() },
             .available_memory = available_memory,
         };
-        auto manager = compaction_manager(std::move(cfg), as);
+        auto manager = compaction_manager(std::move(cfg), as, task_manager);
 
         auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
@@ -5049,8 +5051,8 @@ SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
     abort_source as;
 
     auto cfg = compaction_manager::config{ .available_memory = 1 };
-
-    auto cm = compaction_manager(cfg, as);
+    auto task_manager = tasks::task_manager({}, as);
+    auto cm = compaction_manager(cfg, as, task_manager);
     cm.enable();
 
     testlog.info("requesting abort");

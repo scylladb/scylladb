@@ -170,7 +170,8 @@ public:
 
                 cache_tracker tracker;
                 cell_locker_stats cl_stats;
-                auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+                tasks::task_manager tm;
+                auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
                 auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, tracker);
 
                 auto start = perf_sstable_test_env::now();

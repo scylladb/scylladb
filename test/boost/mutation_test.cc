@@ -99,7 +99,8 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
         auto dir = tmpdir();
         cfg.datadir = dir.path().string();
         cfg.x_log2_compaction_groups = x_log2_compaction_groups;
-        auto cm = make_lw_shared<compaction_manager>(compaction_manager::for_testing_tag{});
+        tasks::task_manager tm;
+        auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto cf = make_lw_shared<replica::column_family>(s, cfg, replica::column_family::no_commitlog(), *cm, sm, *cl_stats, *tracker);
         cf->mark_ready_for_writes();

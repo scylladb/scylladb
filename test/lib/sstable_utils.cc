@@ -165,7 +165,7 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
 }
 
 compaction_manager_for_testing::wrapped_compaction_manager::wrapped_compaction_manager(bool enabled)
-        : cm(compaction_manager::for_testing_tag{})
+        : cm(tm, compaction_manager::for_testing_tag{})
 {
     if (enabled) {
         cm.enable();

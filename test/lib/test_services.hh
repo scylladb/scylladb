@@ -43,7 +43,8 @@ struct table_for_tests {
         replica::cf_stats cf_stats{0};
         replica::column_family::config cfg;
         cell_locker_stats cl_stats;
-        compaction_manager cm{compaction_manager::for_testing_tag{}};
+        tasks::task_manager tm;
+        compaction_manager cm{tm, compaction_manager::for_testing_tag{}};
         lw_shared_ptr<replica::column_family> cf;
         std::unique_ptr<table_state> table_s;
         data();

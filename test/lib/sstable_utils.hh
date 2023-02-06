@@ -322,6 +322,7 @@ public:
 // Must be used in a seastar thread
 class compaction_manager_for_testing {
     struct wrapped_compaction_manager {
+        tasks::task_manager tm;
         compaction_manager cm;
         explicit wrapped_compaction_manager(bool enabled);
         // Must run in a seastar thread

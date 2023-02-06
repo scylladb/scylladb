@@ -645,8 +645,9 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
-compaction_manager::compaction_manager(config cfg, abort_source& as)
-    : _cfg(std::move(cfg))
+compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
+    : _task_manager_module(make_shared<compaction::task_manager_module>(tm))
+    , _cfg(std::move(cfg))
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -669,6 +670,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
     if (this_shard_id() == 0) {
@@ -679,8 +681,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
     }
 }
 
-compaction_manager::compaction_manager()
-    : _cfg(config{ .available_memory = 1 })
+compaction_manager::compaction_manager(tasks::task_manager& tm)
+    : _task_manager_module(make_shared<compaction::task_manager_module>(tm))
+    , _cfg(config{ .available_memory = 1 })
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
@@ -689,6 +692,7 @@ compaction_manager::compaction_manager()
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.
 }
@@ -842,12 +846,15 @@ future<> compaction_manager::drain() {
 }
 
 future<> compaction_manager::stop() {
+    if (auto cm = std::exchange(_task_manager_module, nullptr)) {
+        co_await cm->stop();
+    }
     // never started
     if (_state == state::none) {
-        return make_ready_future<>();
+        co_return;
     } else {
         do_stop();
-        return std::move(*_stop_future);
+        co_return co_await std::move(*_stop_future);
     }
 }
 
