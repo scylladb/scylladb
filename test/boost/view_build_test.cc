@@ -29,6 +29,7 @@
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/key_utils.hh"
 #include "utils/ranges.hh"
 
 #include "readers/from_mutations_v2.hh"
@@ -406,20 +407,30 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
 SEASTAR_TEST_CASE(test_view_update_generator) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+        auto s = test_table_schema();
 
-        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
-        auto key_token_pair = token_generation_for_shard(2, this_shard_id(), msb);
-        auto key1 = key_token_pair[0].first;
-        auto key2 = key_token_pair[1].first;
+        auto insert_id = e.prepare("insert into t (p, c, v) values (?, ?, ?)").get();
+
+        auto keys = tests::generate_partition_keys(2, s);
+        const auto& key1 = keys[0];
+        const auto& key2 = keys[1];
+
+        const auto key1_raw = cql3::raw_value::make_value(key1.key().explode().front());
+        const auto key2_raw = cql3::raw_value::make_value(key2.key().explode().front());
 
         for (auto i = 0; i < 1024; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
+            e.execute_prepared(insert_id, {
+                    key1_raw,
+                    cql3::raw_value::make_value(serialized(format("c{}", i))),
+                    cql3::raw_value::make_value(serialized("x"))}).get();
         }
         for (auto i = 0; i < 512; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', '{}')", key2, i, i + 1)).get();
+            e.execute_prepared(insert_id, {
+                    cql3::raw_value::make_value(key2.key().explode().front()),
+                    cql3::raw_value::make_value(serialized(format("c{}", i))),
+                    cql3::raw_value::make_value(serialized(format("{}", i + 1)))}).get();
         }
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
 
         std::vector<shared_sstable> ssts;
 
@@ -437,8 +448,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             return sst;
         };
 
-        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
-        mutation m(s, key);
+        mutation m(s, key1);
         auto col = s->get_column_definition("v");
         for (int i = 1024; i < 1280; ++i) {
             auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
@@ -447,7 +457,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             // can test the registration semaphore of the view update
             // generator
             if (!(i % 10)) {
-                ssts.push_back(write_to_sstable(std::exchange(m, mutation(s, key))));
+                ssts.push_back(write_to_sstable(std::exchange(m, mutation(s, key1))));
             }
         }
         ssts.push_back(write_to_sstable(std::move(m)));
@@ -466,25 +476,29 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
+        auto select_by_p_id = e.prepare("SELECT * FROM t WHERE p = ?").get();
+        auto select_by_p_and_c_id = e.prepare("SELECT * FROM t WHERE p = ? and c = ?").get();
+
         eventually([&, key1, key2] {
-            auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key1)).get0();
+            auto msg = e.execute_prepared(select_by_p_id, {key1_raw}).get();
             assert_that(msg).is_rows().with_size(1280);
-            msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key2)).get0();
+            msg = e.execute_prepared(select_by_p_id, {key2_raw}).get();
             assert_that(msg).is_rows().with_size(512);
+            const auto key1_dv = key1.key().explode().front();
 
             for (int i = 0; i < 1024; ++i) {
-                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}' and c = 'c{}'", key1, i)).get0();
+                auto msg = e.execute_prepared(select_by_p_and_c_id, {key1_raw, cql3::raw_value::make_value(serialized(format("c{}", i)))}).get();
                 assert_that(msg).is_rows().with_size(1).with_row({
-                     {utf8_type->decompose(key1)},
+                     {key1_dv},
                      {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
                      {utf8_type->decompose(sstring("x"))}
                  });
 
             }
             for (int i = 1024; i < 1280; ++i) {
-                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}' and c = 'c{}'", key1, i)).get0();
+                auto msg = e.execute_prepared(select_by_p_and_c_id, {key1_raw, cql3::raw_value::make_value(serialized(format("c{}", i)))}).get();
                 assert_that(msg).is_rows().with_size(1).with_row({
-                     {utf8_type->decompose(key1)},
+                     {key1_dv},
                      {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
                      {utf8_type->decompose(sstring(fmt::format("v{}", i)))}
                  });
@@ -509,11 +523,14 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
 
-        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
-        auto key1 = token_generation_for_shard(1, this_shard_id(), msb).front().first;
+        auto s = test_table_schema();
+        const auto key = tests::generate_partition_key(s);
+        const auto key1_raw = cql3::raw_value::make_value(key.key().explode().front());
+
+        auto insert_id = e.prepare("insert into t (p, c, v) values (?, ?, 'x')").get();
 
         for (auto i = 0; i < 1024; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
+            e.execute_prepared(insert_id, {key1_raw, cql3::raw_value::make_value(serialized(format("c{}", i)))}).get();
         }
 
         // We need data on the disk so that the pre-image reader is forced to go to disk.
@@ -522,11 +539,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
 
         lw_shared_ptr<replica::table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
-        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
         mutation m(s, key);
         auto col = s->get_column_definition("v");
         const auto filler_val_size = 4 * 1024;
@@ -582,11 +597,14 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
                       "where p is not null and c is not null and v is not null "
                       "primary key (v, c, p)").get();
 
-        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
-        auto key1 = token_generation_for_shard(1, this_shard_id(), msb).front().first;
+        auto s = test_table_schema();
+        const auto key = tests::generate_partition_key(s);
+        const auto key1_raw = cql3::raw_value::make_value(key.key().explode().front());
+
+        auto insert_id = e.prepare("insert into t (p, c, v) values (?, ?, 'x')").get();
 
         for (auto i = 0; i < 1024; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
+            e.execute_prepared(insert_id, {key1_raw, cql3::raw_value::make_value(serialized(format("c{}", i)))}).get();
         }
 
         // We need data on the disk so that the pre-image reader is forced to go to disk.
@@ -595,11 +613,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
 
         lw_shared_ptr<replica::table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
-
-        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
 
         auto make_sstable = [&] {
             mutation m(s, key);

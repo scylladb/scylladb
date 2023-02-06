@@ -83,7 +83,7 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
 /// TODO: counters
 class value_generator {
 public:
-    using atomic_value_generator = std::function<data_value(std::mt19937&, size_t)>;
+    using atomic_value_generator = std::function<data_value(std::mt19937&, size_t, size_t)>;
     using generator = std::function<data_model::mutation_description::value(std::mt19937&)>;
 
     static const size_t no_size_in_bytes_limit{std::numeric_limits<size_t>::max()};
@@ -100,7 +100,10 @@ public:
     size_t min_size(const abstract_type& type);
 
     atomic_value_generator get_atomic_value_generator(const abstract_type& type);
+    // Generate a value for the given type, according to the provided size constraints.
+    // Controlling the size of values only really works with string-like types and collections of these.
     data_value generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t max_size_in_bytes = no_size_in_bytes_limit);
+    data_value generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t min_size_in_bytes, size_t max_size_in_bytes);
 
     generator get_generator(const abstract_type& type);
     data_model::mutation_description::value generate_value(std::mt19937& engine, const abstract_type& type);

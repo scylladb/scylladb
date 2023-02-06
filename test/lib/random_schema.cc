@@ -199,7 +199,7 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
 
 namespace {
 
-utils::multiprecision_int generate_multiprecision_integer_value(std::mt19937& engine, size_t max_size_in_bytes) {
+utils::multiprecision_int generate_multiprecision_integer_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     using utils::multiprecision_int;
 
     const auto max_bytes = std::min(size_t(16), std::max(size_t(2), max_size_in_bytes) - 1);
@@ -221,7 +221,8 @@ utils::multiprecision_int generate_multiprecision_integer_value(std::mt19937& en
 }
 
 template <typename String>
-String generate_string_value(std::mt19937& engine, typename String::value_type min, typename String::value_type max, size_t max_size_in_bytes) {
+String generate_string_value(std::mt19937& engine, typename String::value_type min, typename String::value_type max,
+        size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto size_dist = random::stepped_int_distribution<size_t>{{
         {95.0, {   0,   31}},
         { 4.5, {  32,   99}},
@@ -229,7 +230,10 @@ String generate_string_value(std::mt19937& engine, typename String::value_type m
         { 0.1, {1000, 9999}}}};
     auto char_dist = std::uniform_int_distribution<typename String::value_type>(min, max);
 
-    const auto size = std::min(size_dist(engine), max_size_in_bytes / sizeof(std::wstring::value_type));
+    const auto size = std::clamp(
+            size_dist(engine),
+            min_size_in_bytes / sizeof(typename String::value_type),
+            max_size_in_bytes / sizeof(typename String::value_type));
     String str(size, '\0');
 
     for (size_t i = 0; i < size; ++i) {
@@ -240,13 +244,14 @@ String generate_string_value(std::mt19937& engine, typename String::value_type m
 }
 
 std::vector<data_value> generate_frozen_tuple_values(std::mt19937& engine, value_generator& val_gen, const std::vector<data_type>& member_types,
-        size_t max_size_in_bytes) {
+        size_t min_size_in_bytes, size_t max_size_in_bytes) {
     std::vector<data_value> values;
     values.reserve(member_types.size());
+    const auto member_min_size_in_bytes = min_size_in_bytes / member_types.size();
     const auto member_max_size_in_bytes = max_size_in_bytes / member_types.size();
 
     for (auto member_type : member_types) {
-        values.push_back(val_gen.generate_atomic_value(engine, *member_type, member_max_size_in_bytes));
+        values.push_back(val_gen.generate_atomic_value(engine, *member_type, member_min_size_in_bytes, member_max_size_in_bytes));
     }
 
     return values;
@@ -282,8 +287,8 @@ data_model::mutation_description::collection generate_collection(std::mt19937& e
     std::map<bytes, md::atomic_value, serialized_compare> collection{key_type.as_less_comparator()};
 
     for (size_t i = 0; i < size; ++i) {
-        collection.emplace(key_generator(engine, value_generator::no_size_in_bytes_limit).serialize_nonnull(),
-                value_generator(engine, value_generator::no_size_in_bytes_limit).serialize().value_or(""));
+        collection.emplace(key_generator(engine, 0, value_generator::no_size_in_bytes_limit).serialize_nonnull(),
+                value_generator(engine, 0, value_generator::no_size_in_bytes_limit).serialize().value_or(""));
     }
 
     md::collection flat_collection;
@@ -296,7 +301,7 @@ data_model::mutation_description::collection generate_collection(std::mt19937& e
 }
 
 std::vector<data_value> generate_frozen_list(std::mt19937& engine, const abstract_type& value_type, value_generator& val_gen,
-        size_t max_size_in_bytes) {
+        size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto value_generator = val_gen.get_atomic_value_generator(value_type);
 
     auto size_dist = std::uniform_int_distribution<size_t>(0, 4);
@@ -308,16 +313,18 @@ std::vector<data_value> generate_frozen_list(std::mt19937& engine, const abstrac
         return collection;
     }
 
+    const auto value_min_size_in_bytes = min_size_in_bytes / size;
     const auto value_max_size_in_bytes = max_size_in_bytes / size;
 
     for (size_t i = 0; i < size; ++i) {
-        collection.emplace_back(value_generator(engine, value_max_size_in_bytes));
+        collection.emplace_back(value_generator(engine, value_min_size_in_bytes, value_max_size_in_bytes));
     }
 
     return collection;
 }
 
-std::vector<data_value> generate_frozen_set(std::mt19937& engine, const abstract_type& key_type, value_generator& val_gen, size_t max_size_in_bytes) {
+std::vector<data_value> generate_frozen_set(std::mt19937& engine, const abstract_type& key_type, value_generator& val_gen,
+        size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto key_generator = val_gen.get_atomic_value_generator(key_type);
 
     auto size_dist = std::uniform_int_distribution<size_t>(0, 4);
@@ -331,9 +338,10 @@ std::vector<data_value> generate_frozen_set(std::mt19937& engine, const abstract
     }
 
     const auto value_max_size_in_bytes = max_size_in_bytes / size;
+    const auto value_min_size_in_bytes = min_size_in_bytes / size;
 
     for (size_t i = 0; i < size; ++i) {
-        auto val = key_generator(engine, value_max_size_in_bytes);
+        auto val = key_generator(engine, value_min_size_in_bytes, value_max_size_in_bytes);
         auto serialized_key = val.serialize_nonnull();
         collection.emplace(std::move(serialized_key), std::move(val));
     }
@@ -346,7 +354,7 @@ std::vector<data_value> generate_frozen_set(std::mt19937& engine, const abstract
 }
 
 std::vector<std::pair<data_value, data_value>> generate_frozen_map(std::mt19937& engine, const abstract_type& key_type,
-        const abstract_type& value_type, value_generator& val_gen, size_t max_size_in_bytes) {
+        const abstract_type& value_type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto key_generator = val_gen.get_atomic_value_generator(key_type);
     auto value_generator = val_gen.get_atomic_value_generator(value_type);
 
@@ -364,11 +372,14 @@ std::vector<std::pair<data_value, data_value>> generate_frozen_map(std::mt19937&
     const auto item_max_size_in_bytes = max_size_in_bytes / size;
     const auto key_max_size_in_bytes = item_max_size_in_bytes / 2;
     const auto value_max_size_in_bytes = item_max_size_in_bytes / 2;
+    const auto item_min_size_in_bytes = min_size_in_bytes / size;
+    const auto key_min_size_in_bytes = item_min_size_in_bytes / 2;
+    const auto value_min_size_in_bytes = item_min_size_in_bytes / 2;
 
     for (size_t i = 0; i < size; ++i) {
-        auto key = key_generator(engine, key_max_size_in_bytes);
+        auto key = key_generator(engine, key_min_size_in_bytes, key_max_size_in_bytes);
         auto serialized_key = key.serialize_nonnull();
-        auto value = value_generator(engine, value_max_size_in_bytes);
+        auto value = value_generator(engine, value_min_size_in_bytes, value_max_size_in_bytes);
         collection.emplace(std::move(serialized_key), std::pair(std::move(key), std::move(value)));
     }
 
@@ -379,37 +390,37 @@ std::vector<std::pair<data_value, data_value>> generate_frozen_map(std::mt19937&
     return flat_collection;
 }
 
-data_value generate_empty_value(std::mt19937&, size_t) {
+data_value generate_empty_value(std::mt19937&, size_t, size_t) {
     return data_value::make_null(empty_type);
 }
 
-data_value generate_byte_value(std::mt19937& engine, size_t) {
+data_value generate_byte_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_int<int8_t>(engine));
 }
 
-data_value generate_short_value(std::mt19937& engine, size_t) {
+data_value generate_short_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_int<int16_t>(engine));
 }
 
-data_value generate_int32_value(std::mt19937& engine, size_t) {
+data_value generate_int32_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_int<int32_t>(engine));
 }
 
-data_value generate_long_value(std::mt19937& engine, size_t) {
+data_value generate_long_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_int<int64_t>(engine));
 }
 
-data_value generate_ascii_value(std::mt19937& engine, size_t max_size_in_bytes) {
-    return data_value(ascii_native_type{generate_string_value<sstring>(engine, 0, 127, max_size_in_bytes)});
+data_value generate_ascii_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+    return data_value(ascii_native_type{generate_string_value<sstring>(engine, 0, 127, min_size_in_bytes, max_size_in_bytes)});
 }
 
-data_value generate_bytes_value(std::mt19937& engine, size_t max_size_in_bytes) {
+data_value generate_bytes_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     return data_value(generate_string_value<bytes>(engine, std::numeric_limits<bytes::value_type>::min(),
-            std::numeric_limits<bytes::value_type>::max(), max_size_in_bytes));
+            std::numeric_limits<bytes::value_type>::max(), min_size_in_bytes, max_size_in_bytes));
 }
 
-data_value generate_utf8_value(std::mt19937& engine, size_t max_size_in_bytes) {
-    auto wstr = generate_string_value<std::wstring>(engine, 0, 0x0FFF, max_size_in_bytes);
+data_value generate_utf8_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+    auto wstr = generate_string_value<std::wstring>(engine, 0, 0x0FFF, min_size_in_bytes, max_size_in_bytes);
 
     std::locale locale("en_US.utf8");
     using codec = std::codecvt<wchar_t, char, std::mbstate_t>;
@@ -427,72 +438,73 @@ data_value generate_utf8_value(std::mt19937& engine, size_t max_size_in_bytes) {
     return data_value(std::move(utf8_str));
 }
 
-data_value generate_boolean_value(std::mt19937& engine, size_t) {
+data_value generate_boolean_value(std::mt19937& engine, size_t, size_t) {
     auto dist = std::uniform_int_distribution<int8_t>(0, 1);
     return data_value(bool(dist(engine)));
 }
 
-data_value generate_date_value(std::mt19937& engine, size_t) {
+data_value generate_date_value(std::mt19937& engine, size_t, size_t) {
     return data_value(date_type_native_type{db_clock::time_point(db_clock::duration(random::get_int<std::make_unsigned_t<db_clock::rep>>(engine)))});
 }
 
-data_value generate_timeuuid_value(std::mt19937&, size_t) {
+data_value generate_timeuuid_value(std::mt19937&, size_t, size_t) {
     return data_value(timeuuid_native_type{utils::UUID_gen::get_time_UUID()});
 }
 
-data_value generate_timestamp_value(std::mt19937& engine, size_t) {
+data_value generate_timestamp_value(std::mt19937& engine, size_t, size_t) {
     using pt = db_clock::time_point;
     return data_value(pt(pt::duration(random::get_int<pt::rep>(engine))));
 }
 
-data_value generate_simple_date_value(std::mt19937& engine, size_t) {
+data_value generate_simple_date_value(std::mt19937& engine, size_t, size_t) {
     return data_value(simple_date_native_type{random::get_int<simple_date_native_type::primary_type>(engine)});
 }
 
-data_value generate_time_value(std::mt19937& engine, size_t) {
+data_value generate_time_value(std::mt19937& engine, size_t, size_t) {
     return data_value(time_native_type{random::get_int<time_native_type::primary_type>(engine)});
 }
 
-data_value generate_uuid_value(std::mt19937& engine, size_t) {
+data_value generate_uuid_value(std::mt19937& engine, size_t, size_t) {
     return data_value(utils::make_random_uuid());
 }
 
-data_value generate_inet_addr_value(std::mt19937& engine, size_t) {
+data_value generate_inet_addr_value(std::mt19937& engine, size_t, size_t) {
     return data_value(net::ipv4_address(random::get_int<int32_t>(engine)));
 }
 
-data_value generate_float_value(std::mt19937& engine, size_t) {
+data_value generate_float_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_real<float>(engine));
 }
 
-data_value generate_double_value(std::mt19937& engine, size_t) {
+data_value generate_double_value(std::mt19937& engine, size_t, size_t) {
     return data_value(random::get_real<double>(engine));
 }
 
-data_value generate_varint_value(std::mt19937& engine, size_t max_size_in_bytes) {
-    return data_value(generate_multiprecision_integer_value(engine, max_size_in_bytes));
+data_value generate_varint_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+    return data_value(generate_multiprecision_integer_value(engine, min_size_in_bytes, max_size_in_bytes));
 }
 
-data_value generate_decimal_value(std::mt19937& engine, size_t max_size_in_bytes) {
+data_value generate_decimal_value(std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     auto scale_dist = std::uniform_int_distribution<int32_t>(-8, 8);
-    return data_value(big_decimal(scale_dist(engine), generate_multiprecision_integer_value(engine, max_size_in_bytes - sizeof(int32_t))));
+    return data_value(big_decimal(scale_dist(engine), generate_multiprecision_integer_value(engine,
+                    min_size_in_bytes - sizeof(int32_t), max_size_in_bytes - sizeof(int32_t))));
 }
 
-data_value generate_duration_value(std::mt19937& engine, size_t) {
+data_value generate_duration_value(std::mt19937& engine, size_t, size_t) {
     auto months = months_counter(random::get_int<months_counter::value_type>(engine));
     auto days = days_counter(random::get_int<days_counter::value_type>(0, 31, engine));
     auto nanoseconds = nanoseconds_counter(random::get_int<nanoseconds_counter::value_type>(86400000000000, engine));
     return data_value(cql_duration{months, days, nanoseconds});
 }
 
-data_value generate_frozen_tuple_value(std::mt19937& engine, const tuple_type_impl& type, value_generator& val_gen, size_t max_size_in_bytes) {
+data_value generate_frozen_tuple_value(std::mt19937& engine, const tuple_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
-    return make_tuple_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), max_size_in_bytes));
+    return make_tuple_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), min_size_in_bytes, max_size_in_bytes));
 }
 
-data_value generate_frozen_user_value(std::mt19937& engine, const user_type_impl& type, value_generator& val_gen, size_t max_size_in_bytes) {
+data_value generate_frozen_user_value(std::mt19937& engine, const user_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
-    return make_user_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), max_size_in_bytes));
+    return make_user_value(type.shared_from_this(), generate_frozen_tuple_values(engine, val_gen, type.all_types(), min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_list_value(std::mt19937& engine, const list_type_impl& type, value_generator& val_gen) {
@@ -500,10 +512,10 @@ data_model::mutation_description::collection generate_list_value(std::mt19937& e
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
-data_value generate_frozen_list_value(std::mt19937& engine, const list_type_impl& type, value_generator& val_gen, size_t max_size_in_bytes) {
+data_value generate_frozen_list_value(std::mt19937& engine, const list_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
     return make_list_value(type.shared_from_this(),
-            generate_frozen_list(engine, *type.get_elements_type(), val_gen, max_size_in_bytes));
+            generate_frozen_list(engine, *type.get_elements_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_set_value(std::mt19937& engine, const set_type_impl& type, value_generator& val_gen) {
@@ -511,10 +523,10 @@ data_model::mutation_description::collection generate_set_value(std::mt19937& en
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
-data_value generate_frozen_set_value(std::mt19937& engine, const set_type_impl& type, value_generator& val_gen, size_t max_size_in_bytes) {
+data_value generate_frozen_set_value(std::mt19937& engine, const set_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
     return make_set_value(type.shared_from_this(),
-            generate_frozen_set(engine, *type.get_elements_type(), val_gen, max_size_in_bytes));
+            generate_frozen_set(engine, *type.get_elements_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
 data_model::mutation_description::collection generate_map_value(std::mt19937& engine, const map_type_impl& type, value_generator& val_gen) {
@@ -522,17 +534,21 @@ data_model::mutation_description::collection generate_map_value(std::mt19937& en
     return generate_collection(engine, *type.name_comparator(), *type.value_comparator(), val_gen);
 }
 
-data_value generate_frozen_map_value(std::mt19937& engine, const map_type_impl& type, value_generator& val_gen, size_t max_size_in_bytes) {
+data_value generate_frozen_map_value(std::mt19937& engine, const map_type_impl& type, value_generator& val_gen, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
     return make_map_value(type.shared_from_this(),
-            generate_frozen_map(engine, *type.get_keys_type(), *type.get_values_type(), val_gen, max_size_in_bytes));
+            generate_frozen_map(engine, *type.get_keys_type(), *type.get_values_type(), val_gen, min_size_in_bytes, max_size_in_bytes));
 }
 
 } // anonymous namespace
 
 data_value value_generator::generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t max_size_in_bytes) {
+    return generate_atomic_value(engine, type, 0, max_size_in_bytes);
+}
+
+data_value value_generator::generate_atomic_value(std::mt19937& engine, const abstract_type& type, size_t min_size_in_bytes, size_t max_size_in_bytes) {
     assert(!type.is_multi_cell());
-    return get_atomic_value_generator(type)(engine, max_size_in_bytes);
+    return get_atomic_value_generator(type)(engine, min_size_in_bytes, max_size_in_bytes);
 }
 
 value_generator::value_generator()
@@ -560,7 +576,7 @@ value_generator::value_generator()
             {duration_type.get(), &generate_duration_value}} {
     std::mt19937 engine;
     for (const auto& [regular_type, regular_value_gen] : _regular_value_generators) {
-        _regular_value_min_sizes.emplace(regular_type, regular_value_gen(engine, size_t{}).serialized_size());
+        _regular_value_min_sizes.emplace(regular_type, regular_value_gen(engine, size_t{}, size_t{}).serialized_size());
     }
 }
 
@@ -575,23 +591,23 @@ size_t value_generator::min_size(const abstract_type& type) {
     std::mt19937 engine;
 
     if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(&type)) {
-        return generate_frozen_user_value(engine, *maybe_user_type, *this, size_t{}).serialized_size();
+        return generate_frozen_user_value(engine, *maybe_user_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
     if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(&type)) {
-        return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, size_t{}).serialized_size();
+        return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
     if (auto maybe_list_type = dynamic_cast<const list_type_impl*>(&type)) {
-        return generate_frozen_list_value(engine, *maybe_list_type, *this, size_t{}).serialized_size();
+        return generate_frozen_list_value(engine, *maybe_list_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
     if (auto maybe_set_type = dynamic_cast<const set_type_impl*>(&type)) {
-        return generate_frozen_set_value(engine, *maybe_set_type, *this, size_t{}).serialized_size();
+        return generate_frozen_set_value(engine, *maybe_set_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
     if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(&type)) {
-        return generate_frozen_map_value(engine, *maybe_map_type, *this, size_t{}).serialized_size();
+        return generate_frozen_map_value(engine, *maybe_map_type, *this, size_t{}, size_t{}).serialized_size();
     }
 
     if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(&type)) {
@@ -610,32 +626,32 @@ value_generator::atomic_value_generator value_generator::get_atomic_value_genera
     }
 
     if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(&type)) {
-        return [this, maybe_user_type] (std::mt19937& engine, size_t max_size_in_bytes) {
-            return generate_frozen_user_value(engine, *maybe_user_type, *this, max_size_in_bytes);
+        return [this, maybe_user_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_frozen_user_value(engine, *maybe_user_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
     if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(&type)) {
-        return [this, maybe_tuple_type] (std::mt19937& engine, size_t max_size_in_bytes) {
-            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, max_size_in_bytes);
+        return [this, maybe_tuple_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
     if (auto maybe_list_type = dynamic_cast<const list_type_impl*>(&type)) {
-        return [this, maybe_list_type] (std::mt19937& engine, size_t max_size_in_bytes) {
-            return generate_frozen_list_value(engine, *maybe_list_type, *this, max_size_in_bytes);
+        return [this, maybe_list_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_frozen_list_value(engine, *maybe_list_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
     if (auto maybe_set_type = dynamic_cast<const set_type_impl*>(&type)) {
-        return [this, maybe_set_type] (std::mt19937& engine, size_t max_size_in_bytes) {
-            return generate_frozen_set_value(engine, *maybe_set_type, *this, max_size_in_bytes);
+        return [this, maybe_set_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_frozen_set_value(engine, *maybe_set_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
     if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(&type)) {
-        return [this, maybe_map_type] (std::mt19937& engine, size_t max_size_in_bytes) {
-            return generate_frozen_map_value(engine, *maybe_map_type, *this, max_size_in_bytes);
+        return [this, maybe_map_type] (std::mt19937& engine, size_t min_size_in_bytes, size_t max_size_in_bytes) {
+            return generate_frozen_map_value(engine, *maybe_map_type, *this, min_size_in_bytes, max_size_in_bytes);
         };
     }
 
@@ -650,7 +666,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
     auto it = _regular_value_generators.find(&type);
     if (it != _regular_value_generators.end()) {
         return [this, gen = it->second] (std::mt19937& engine) -> data_model::mutation_description::value {
-            return gen(engine, no_size_in_bytes_limit).serialize_nonnull();
+            return gen(engine, 0, no_size_in_bytes_limit).serialize_nonnull();
         };
     }
 
@@ -661,14 +677,14 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_user_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_user_value(engine, *maybe_user_type, *this, no_size_in_bytes_limit).serialize_nonnull();
+                return generate_frozen_user_value(engine, *maybe_user_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
 
     if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(&type)) {
         return [this, maybe_tuple_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, no_size_in_bytes_limit).serialize_nonnull();
+            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
         };
     }
 
@@ -679,7 +695,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_list_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_list_value(engine, *maybe_list_type, *this, no_size_in_bytes_limit).serialize_nonnull();
+                return generate_frozen_list_value(engine, *maybe_list_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
@@ -691,7 +707,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_set_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_set_value(engine, *maybe_set_type, *this, no_size_in_bytes_limit).serialize_nonnull();
+                return generate_frozen_set_value(engine, *maybe_set_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
@@ -703,7 +719,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_map_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_map_value(engine, *maybe_map_type, *this, no_size_in_bytes_limit).serialize_nonnull();
+                return generate_frozen_map_value(engine, *maybe_map_type, *this, 0, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }

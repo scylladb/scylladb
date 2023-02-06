@@ -31,6 +31,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/key_utils.hh"
 #include "utils/error_injection.hh"
 #include "db/commitlog/commitlog.hh"
 #include "test/lib/make_random_string.hh"
@@ -1040,7 +1041,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         // Insert something so that we have data in memtable to flush
         // it has to be somewhat large, as automatic flushing picks the
         // largest memtable to flush
-        mutation mt = {s, ss.make_pkey(make_local_key(s))};
+        mutation mt = {s, tests::generate_partition_key(s)};
         for (uint32_t i = 0; i < 1000; ++i) {
             ss.add_row(mt, ss.make_ckey(i), format("{}", i));
         }

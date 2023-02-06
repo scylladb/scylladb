@@ -34,13 +34,6 @@ inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstabl
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
 
-std::vector<std::pair<sstring, dht::token>>
-token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
-        unsigned ignore_msb = 0, unsigned smp_count = smp::count);
-
-std::vector<std::pair<sstring, dht::token>>
-token_generation_for_current_shard(unsigned tokens_to_generate);
-
 namespace sstables {
 
 using sstable_ptr = shared_sstable;
@@ -168,7 +161,7 @@ public:
     }
 
     // Used to create synthetic sstables for testing leveled compaction strategy.
-    void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, sstring first_key, sstring last_key) {
+    void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, const partition_key& first_key, const partition_key& last_key) {
         _sst->_data_file_size = fake_data_size;
         _sst->_bytes_on_disk = fake_data_size;
         // Create a synthetic stats metadata
@@ -177,21 +170,21 @@ public:
         stats.max_timestamp = max_timestamp;
         stats.sstable_level = sstable_level;
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
-        _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->_components->summary.first_key.value = sstables::key::from_partition_key(*_sst->_schema, first_key).get_bytes();
+        _sst->_components->summary.last_key.value = sstables::key::from_partition_key(*_sst->_schema, last_key).get_bytes();
         _sst->set_first_and_last_keys();
         _sst->_run_identifier = run_id::create_random_id();
         _sst->_shards.push_back(this_shard_id());
     }
 
-    void set_values(sstring first_key, sstring last_key, stats_metadata stats, uint64_t data_file_size = 1) {
+    void set_values(const partition_key& first_key, const partition_key& last_key, stats_metadata stats, uint64_t data_file_size = 1) {
         _sst->_data_file_size = data_file_size;
         _sst->_bytes_on_disk = data_file_size;
         // scylla component must be present for a sstable to be considered fully expired.
         _sst->_recognized_components.insert(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
-        _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->_components->summary.first_key.value = sstables::key::from_partition_key(*_sst->_schema, first_key).get_bytes();
+        _sst->_components->summary.last_key.value = sstables::key::from_partition_key(*_sst->_schema, last_key).get_bytes();
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
         _sst->_run_identifier = run_id::create_random_id();

@@ -17,6 +17,7 @@
 #include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "service/storage_proxy.hh"
@@ -52,19 +53,18 @@ void run_sstable_resharding_test() {
     // create sst shared by all shards
     {
         auto mt = make_lw_shared<replica::memtable>(s);
-        auto get_mutation = [mt, s] (sstring key_to_write, auto value) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
+        auto get_mutation = [mt, s] (const dht::decorated_key& key, auto value) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
         };
         auto cfg = std::make_unique<db::config>();
         for (auto i : boost::irange(0u, smp::count)) {
-            auto key_token_pair = token_generation_for_shard(keys_per_shard, i, cfg->murmur3_partitioner_ignore_msb_bits());
-            BOOST_REQUIRE(key_token_pair.size() == keys_per_shard);
+            const auto keys = tests::generate_partition_keys(keys_per_shard, s, i);
+            BOOST_REQUIRE(keys.size() == keys_per_shard);
             muts[i].reserve(keys_per_shard);
             for (auto k : boost::irange(0u, keys_per_shard)) {
-                auto m = get_mutation(key_token_pair[k].first, i);
+                auto m = get_mutation(keys[k], i);
                 muts[i].push_back(m);
                 mt->apply(std::move(m));
             }
@@ -138,8 +138,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         auto tmp = tmpdir();
         auto cfg = std::make_unique<db::config>();
 
-        auto get_mutation = [] (const schema_ptr& s, sstring key_to_write, auto value) {
-            auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
+        auto get_mutation = [] (const schema_ptr& s, const dht::decorated_key& key, auto value) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
@@ -153,10 +152,10 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
                 return env.make_sstable(s, tmp.path().string(), (*gen)++, version, big);
             };
 
-            auto tokens = token_generation_for_shard(smp::count * 10, this_shard_id(), cfg->murmur3_partitioner_ignore_msb_bits());
+            const auto keys = tests::generate_partition_keys(smp::count * 10, s);
             std::vector<mutation> muts;
-            for (auto& t : tokens) {
-                muts.push_back(get_mutation(s, t.first, 0));
+            for (auto& k : keys) {
+                muts.push_back(get_mutation(s, k, 0));
             }
 
             auto sst = make_sstable_containing(sst_gen, muts);
@@ -166,17 +165,17 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         // create sstable owned by all shards
         // created unshared sstable
         {
+            auto key_s = get_schema();
             auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
             auto sst_gen = [&env, single_sharded_s, &tmp, gen, version]() mutable {
                 return env.make_sstable(single_sharded_s, tmp.path().string(), (*gen)++, version, big);
             };
 
-            auto tokens = token_generation_for_shard(10, this_shard_id(), cfg->murmur3_partitioner_ignore_msb_bits());
             std::vector<mutation> muts;
             for (shard_id shard : boost::irange(0u, smp::count)) {
-                auto tokens = token_generation_for_shard(10, shard, cfg->murmur3_partitioner_ignore_msb_bits());
-                for (auto& t : tokens) {
-                    muts.push_back(get_mutation(single_sharded_s, t.first, shard));
+                const auto keys = tests::generate_partition_keys(10, key_s, shard);
+                for (auto& k : keys) {
+                    muts.push_back(get_mutation(single_sharded_s, k, shard));
                 }
             }
 

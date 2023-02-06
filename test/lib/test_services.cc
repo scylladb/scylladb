@@ -19,22 +19,6 @@
 #include <iostream>
 #include <seastar/util/defer.hh>
 
-dht::token create_token_from_key(const dht::i_partitioner& partitioner, sstring key) {
-    sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
-    dht::token token = partitioner.get_token(key_view);
-    assert(token == partitioner.get_token(key_view));
-    return token;
-}
-
-range<dht::token> create_token_range_from_keys(const dht::sharder& sinfo, const dht::i_partitioner& partitioner, sstring start_key, sstring end_key) {
-    dht::token start = create_token_from_key(partitioner, start_key);
-    assert(this_shard_id() == sinfo.shard_of(start));
-    dht::token end = create_token_from_key(partitioner, end_key);
-    assert(this_shard_id() == sinfo.shard_of(end));
-    assert(end >= start);
-    return range<dht::token>::make(start, end);
-}
-
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
@@ -44,12 +28,16 @@ table_for_tests::data::data()
 
 table_for_tests::data::~data() {}
 
+schema_ptr table_for_tests::make_default_schema() {
+    return schema_builder(some_keyspace, some_column_family)
+        .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
+        .build();
+}
+
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager)
     : table_for_tests(
         sstables_manager,
-        schema_builder(some_keyspace, some_column_family)
-            .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
-            .build()
+        make_default_schema()
     )
 { }
 

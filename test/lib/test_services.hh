@@ -52,6 +52,8 @@ struct table_for_tests {
     };
     lw_shared_ptr<data> _data;
 
+    static schema_ptr make_default_schema();
+
     explicit table_for_tests(sstables::sstables_manager& sstables_manager);
 
     explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
@@ -75,6 +77,3 @@ struct table_for_tests {
         return stop().finally([cf = *this] {});
     }
 };
-
-dht::token create_token_from_key(const dht::i_partitioner&, sstring key);
-range<dht::token> create_token_range_from_keys(const dht::sharder& sharder, const dht::i_partitioner&, sstring start_key, sstring end_key);

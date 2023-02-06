@@ -15,6 +15,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/tmpdir.hh"
@@ -1326,8 +1327,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks
 struct memory_limit_table {
     schema_ptr schema;
     tmpdir sst_dir;
-    int32_t pk;
-    int32_t ck;
+    partition_key pk;
+    clustering_key ck;
     sstring value;
 };
 memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_num_sstables) {
@@ -1344,16 +1345,11 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
     auto& sst_man = tbl.get_sstables_manager();
     auto& semaphore = db.get_reader_concurrency_semaphore();
 
-    int32_t pk = 0;
-    dht::decorated_key dk(dht::token(), partition_key::make_empty());
-    do {
-        dk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(++pk)));
-    } while (dht::shard_of(*s, dk.token()) != this_shard_id());
+    auto dk = tests::generate_partition_key(s);
+    auto ck = tests::generate_clustering_key(s);
 
-    const int32_t ck = 0;
-
-    mutation mut(s, std::move(dk));
-    mut.set_clustered_cell(clustering_key::from_single_value(*s, serialized(ck)), to_bytes("value"), data_value(value), 0);
+    mutation mut(s, dk);
+    mut.set_clustered_cell(ck, to_bytes("value"), data_value(value), 0);
 
     auto sstables_dir = tmpdir();
 
@@ -1378,7 +1374,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
         });
     }).get();
 
-    return {s, std::move(sstables_dir), pk, ck, std::move(value)};
+    return {s, std::move(sstables_dir), std::move(dk.key()), std::move(ck), std::move(value)};
 }
 
 constexpr uint64_t target_memory = uint64_t(1) << 28; // 256MB
@@ -1413,7 +1409,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
         auto read_id = env.prepare("SELECT value FROM ks.tbl WHERE pk = ? AND ck = ?").get0();
 
         parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
-            return env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).then_wrapped(
+            return env.execute_prepared(read_id, {cql3::raw_value::make_value(tbl.pk.explode().front()), cql3::raw_value::make_value(tbl.ck.explode().front())}).then_wrapped(
                     [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
                 if (fut.failed()) {
                     // We expect failed, OOM-killed reads here.
@@ -1463,7 +1459,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
         // We first check that the test params are not too strict and a single
         // read can finish successfully.
         try {
-            auto msg = env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).get();
+            auto msg = env.execute_prepared(read_id, {cql3::raw_value::make_value(tbl.pk.explode().front()), cql3::raw_value::make_value(tbl.ck.explode().front())}).get();
             assert_that(msg).is_rows().with_rows_ignore_order({ {serialized(tbl.value)} });
         } catch (...) {
             BOOST_FAIL(fmt::format("canary read failed with: {}", std::current_exception()));
@@ -1473,7 +1469,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
         uint64_t failed_reads = 0;
 
         parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
-            return env.execute_prepared(read_id, {cql3::raw_value::make_value(serialized(tbl.pk)), cql3::raw_value::make_value(serialized(tbl.ck))}).then_wrapped(
+            return env.execute_prepared(read_id, {cql3::raw_value::make_value(tbl.pk.explode().front()), cql3::raw_value::make_value(tbl.ck.explode().front())}).then_wrapped(
                         [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
                 if (fut.failed()) {
                     // We expect failed, OOM-killed reads here.
