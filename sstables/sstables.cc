@@ -169,6 +169,7 @@ public:
     virtual future<> wipe(const sstable& sst) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
+    virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
 
     virtual sstring prefix() const override { return dir; }
 };
@@ -181,6 +182,12 @@ future<data_sink> sstable::filesystem_storage::make_data_or_index_sink(sstable& 
 
     assert(type == component_type::Data || type == component_type::Index);
     return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
+}
+
+future<data_sink> sstable::filesystem_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
+    return sst.new_sstable_component_file(sst._write_error_handler, type, oflags).then([options = std::move(options)] (file f) mutable {
+        return make_file_data_sink(std::move(f), std::move(options));
+    });
 }
 
 future<file> sstable::filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
@@ -987,8 +994,8 @@ future<file_writer> sstable::make_component_file_writer(component_type c, file_o
     // Note: file_writer::make closes the file if file_writer creation fails
     // so we don't need to use with_file_close_on_failure here.
     return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
-        return new_sstable_component_file(_write_error_handler, c, oflags).then([options = std::move(options), filename = std::move(filename)] (file f) mutable {
-            return file_writer::make(std::move(f), std::move(options), std::move(filename));
+        return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([filename = std::move(filename)] (data_sink sink) mutable {
+            return file_writer(output_stream<char>(std::move(sink)), std::move(filename));
         });
     });
 }
