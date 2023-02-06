@@ -42,7 +42,8 @@ if __name__ == '__main__':
         if systemd_unit.available('systemd-coredump@.service'):
             dropin = '''
 [Service]
-TimeoutStartSec=infinity
+RuntimeMaxSec=infinity
+TimeoutSec=infinity
 '''[1:-1]
             os.makedirs('/etc/systemd/system/systemd-coredump@.service.d', exist_ok=True)
             with open('/etc/systemd/system/systemd-coredump@.service.d/timeout.conf', 'w') as f:
