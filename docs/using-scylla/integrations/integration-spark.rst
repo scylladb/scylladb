@@ -5,7 +5,7 @@ Integrate Scylla with Spark
 
 Scylla is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with Scylla (more :doc:`here </using-scylla/drivers/index>`). Any application which uses a CQL driver will work with Scylla.
 
-The list below contains integration projects using Scylla with Spark. If you have tested your application with Scylla and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+The list below contains integration projects using Scylla with Spark. If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
 
@@ -21,7 +21,7 @@ The list below contains integration projects using Scylla with Spark. If you hav
 
 * `Analyzing flight delays with Scylla on top of Spark (blog entry) <https://www.scylladb.com/2017/05/02/analyzing-flight-delays-scylla-spark-2/>`_
 
-* `Analyzing Data with Spark lesson <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/analyzing-data-with-spark/>`_ on Scylla University 
+* `Analyzing Data with Spark lesson <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/analyzing-data-with-spark/>`_ on ScyllaDB University 
 
 
 

@@ -30,7 +30,7 @@ Scylla Integrations and Connectors
   Any application which uses a CQL driver will work with Scylla.
 
   The list below contains links to integration projects using Scylla with third-party projects. 
-  If you have tested your application with Scylla and want to publish the results, contact us using the `mailing list <https://groups.google.com/d/forum/scylladb-users>`_.
+  If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 
 
   * :doc:`Integrate Scylla with Spark <integration-spark>`
