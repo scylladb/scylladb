@@ -10,6 +10,7 @@ import pytest
 from cassandra.protocol import InvalidRequest
 from util import unique_name, unique_key_string, unique_key_int, new_test_table
 
+import nodetool
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -35,6 +36,45 @@ def test_insert_empty_string_key(cql, table1):
     # error that a "Key may not be empty":
     with pytest.raises(InvalidRequest, match='Key may not be empty'):
         cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('', '{s}', 'dog')")
+
+# Test an empty-string clustering key again, but this time doing a flush
+# bypassing the cache - checking that empty-string clustering keys can
+# be correctly written to sstables and read back. See issue #12561.
+# This test is scylla_only, because it uses BYPASS CACHE.
+def test_insert_empty_string_key_with_flush(cql, table1, scylla_only):
+    s = unique_key_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{s}', '', 'cat')")
+    nodetool.flush(cql, table1)
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c='' BYPASS CACHE")) == [('cat',)]
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' BYPASS CACHE")) == [('cat',)]
+
+# In contrast with normal tables where an empty clustering key is allowed,
+# in a WITH COMPACT STORAGE table, an empty clustering key is not allowed.
+# As usual, an empty partition key is not allowed either.
+@pytest.mark.xfail(reason="issue #12749, misleading error message")
+def test_insert_empty_string_key_compact(cql, test_keyspace):
+    schema = 'p text, c text, v text, primary key (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
+        s = unique_key_string()
+        with pytest.raises(InvalidRequest, match='empty'):
+            cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ('{s}', '', 'cat')")
+        with pytest.raises(InvalidRequest, match='Key may not be empty'):
+            cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ('', '{s}', 'dog')")
+
+# However, in a COMPACT STORAGE table with a *compound* clustering key (more
+# than one clustering key column), setting one of them to empty *is* allowed.
+@pytest.mark.xfail(reason="issue #12749")
+def test_insert_empty_string_compound_clustering_key_compact(cql, test_keyspace):
+    schema = 'p text, c1 text, c2 text, v text, primary key (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
+        s = unique_key_string()
+        # Setting just one of the clustering key components, or both, to
+        # an empty string, is allowed. This is in contrast with a single-
+        # component clustering key which we saw above is cannot be set empty.
+        cql.execute(f"INSERT INTO {table} (p,c1,c2,v) VALUES ('{s}', '', 'dog', 'cat')")
+        cql.execute(f"INSERT INTO {table} (p,c1,c2,v) VALUES ('{s}', 'hello', '', 'mouse')")
+        cql.execute(f"INSERT INTO {table} (p,c1,c2,v) VALUES ('{s}', '', '', 'horse')")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE p='{s}'")) == [('horse',),('cat',),('mouse',)]
 
 # test_update_empty_string_key() is the same as test_insert_empty_string_key()
 # just uses an UPDATE instead of INSERT. It turns out that exactly the cases
