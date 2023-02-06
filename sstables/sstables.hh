@@ -499,6 +499,11 @@ public:
         virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
         virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
         virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
+        struct stat {
+            uint64_t bytes_on_disk = 0;
+            uint64_t filter_file_size = 0;
+        };
+        virtual future<stat> get_stats(const sstable& sst) = 0;
 
         virtual sstring prefix() const  = 0;
     };
