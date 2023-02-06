@@ -3865,9 +3865,8 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
     });
 }
 
-SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
-    return test_env::do_with_async([] (test_env& env) {
-      auto test_interposer_on_flush = [&] (bool split_during_flush) {
+future<> test_twcs_interposer_on_flush(bool split_during_flush) {
+    return test_env::do_with_async([split_during_flush] (test_env& env) {
         auto builder = schema_builder("tests", "test_twcs_interposer_on_flush")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", int32_type, column_kind::clustering_key)
@@ -3897,8 +3896,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             return m;
         };
 
-        auto tmp = tmpdir();
-        table_for_tests cf(env.manager(), s, tmp.path().string());
+        table_for_tests cf(env.manager(), s, env.tempdir().path().string());
         auto close_cf = deferred_stop(cf);
         cf->start();
 
@@ -3915,11 +3913,15 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);
         BOOST_REQUIRE(cf->get_sstables()->size() == expected_ssts);
-      };
-
-      test_interposer_on_flush(true);
-      test_interposer_on_flush(false);
   });
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split) {
+    return test_twcs_interposer_on_flush(true);
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_nosplit) {
+    return test_twcs_interposer_on_flush(false);
 }
 
 SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
@@ -4332,7 +4334,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         auto cm = compaction_manager_for_testing();
 
-        auto tmp = tmpdir();
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto tracker = make_lw_shared<cache_tracker>();
         auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
@@ -4368,8 +4369,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             schemas.push_back(s);
 
             replica::column_family::config cfg = env.make_table_config();
-            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
-            touch_directory(cfg.datadir).get();
+            cfg.location = std::to_string(idx);
+            auto path = env.tempdir().path() / std::to_string(idx);
+            touch_directory(path.native()).get();
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
 
@@ -4382,7 +4384,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         auto sst_gen = [&, gen = make_lw_shared<unsigned>(1)] (size_t idx) mutable {
             auto s = schemas[idx];
             auto t = tables[idx];
-            return env.make_sstable(s, t->dir(), (*gen)++, sstables::sstable::version_types::md, big);
+            auto path = env.tempdir().path() / std::to_string(idx);
+            return env.make_sstable(s, path.native(), (*gen)++, sstables::sstable::version_types::md, big);
         };
 
         auto add_single_fully_expired_sstable_to_table = [&] (auto idx) {
@@ -4635,14 +4638,13 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-        auto tmp = tmpdir();
         auto tokens = token_generation_for_shard(1, this_shard_id(), db::default_murmur3_partitioner_ignore_msb_bits, smp::count);
         auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
 
-        table_for_tests cf(env.manager(), s, tmp.path().string());
+        table_for_tests cf(env.manager(), s, env.tempdir().path().string());
         auto close_cf = deferred_stop(cf);
-        auto sst_gen = [&env, &cf, s, &tmp] () mutable {
-            return env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf),
+        auto sst_gen = [&env, &cf, s] () mutable {
+            return env.make_sstable(s, env.tempdir().path().string(), column_family_test::calculate_generation_for_new_table(*cf),
                 sstables::get_highest_sstable_version(), big);
         };
 

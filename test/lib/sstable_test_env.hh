@@ -43,11 +43,12 @@ public:
 
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
+    std::shared_ptr<tmpdir> shared_tmpdir;
 };
 
 class test_env {
     struct impl {
-        tmpdir dir;
+        std::shared_ptr<tmpdir> dir;
         std::unique_ptr<db::config> db_config;
         directory_semaphore dir_sem;
         cache_tracker cache_tracker;
@@ -74,7 +75,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        return _impl->mgr.make_sstable(std::move(schema), dir, generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
+        return _impl->mgr.make_sstable(std::move(schema), fs::path(dir), generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     struct sst_not_found : public std::runtime_error {
@@ -97,7 +98,7 @@ public:
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
-    tmpdir& tempdir() noexcept { return _impl->dir; }
+    tmpdir& tempdir() noexcept { return *_impl->dir; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout);
@@ -142,8 +143,9 @@ public:
 
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
+            test_env_config cfg { .shared_tmpdir = std::make_shared<tmpdir>() };
             sharded<test_env> env;
-            env.start().get();
+            env.start(cfg).get();
             auto stop = defer([&] { env.stop().get(); });
             func(env);
         });

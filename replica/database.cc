@@ -976,7 +976,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
     add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
     find_column_family(schema).get_index_manager().reload();
-    return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+    co_await find_column_family(schema).make_directory_for_column_family();
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1043,7 +1043,8 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
 
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    auto table_dir = fs::path(table_shards[this_shard_id()]->dir());
+    auto& sstm = table_shards[this_shard_id()]->get_sstables_manager();
+    sstring location = table_shards[this_shard_id()]->location();
     std::optional<sstring> snapshot_name_opt;
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
@@ -1060,7 +1061,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
         return table_shards[this_shard_id()]->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+    co_await sstm.remove_table_directory_if_has_no_snapshots(location);
 }
 
 const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
@@ -1241,10 +1242,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
     const db::config& db_config = db.get_config();
 
-    for (auto& extra : _config.all_datadirs) {
-        cfg.all_datadirs.push_back(column_family_directory(extra, s.cf_name(), s.id()));
-    }
-    cfg.datadir = cfg.all_datadirs[0];
+    cfg.location = column_family_directory(_config.location, s.cf_name(), s.id());
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
@@ -1279,21 +1277,6 @@ keyspace::column_family_directory(const sstring& base_path, const sstring& name,
     auto uuid_sstring = uuid.to_sstring();
     boost::erase_all(uuid_sstring, "-");
     return format("{}/{}-{}", base_path, name, uuid_sstring);
-}
-
-future<>
-keyspace::make_directory_for_column_family(const sstring& name, table_id uuid) {
-    std::vector<sstring> cfdirs;
-    for (auto& extra : _config.all_datadirs) {
-        cfdirs.push_back(column_family_directory(extra, name, uuid));
-    }
-    return parallel_for_each(cfdirs, [] (sstring cfdir) {
-        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/upload"); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/staging"); });
-    });
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
@@ -1367,7 +1350,6 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
-    auto& datadir = ks.datadir();
 
     // keyspace created by either cql or migration 
     // is by definition populated
@@ -1375,8 +1357,9 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
         ks.mark_as_populated();
     }
 
-    if (datadir != "") {
-        co_await io_check([&datadir] { return touch_directory(datadir); });
+    if (ks.location() != "") {
+        auto& sstm = system ? get_system_sstables_manager() : get_user_sstables_manager();
+        co_await sstm.initialize_keyspace_storage(ks.location());
     }
 }
 
@@ -2057,17 +2040,14 @@ keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
     keyspace::config cfg;
     if (_cfg.data_file_directories().size() > 0) {
-        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
-        for (auto& extra : _cfg.data_file_directories()) {
-            cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
-        }
+        cfg.location = ksm.name();
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
         cfg.enable_cache = _cfg.enable_cache();
 
     } else {
-        cfg.datadir = "";
+        cfg.location = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;

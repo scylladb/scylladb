@@ -261,18 +261,16 @@ table::make_reader_v2(schema_ptr s,
     return rd;
 }
 
-sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
-    sstring dir = _config.datadir;
-    if (subdir) {
-        dir += "/" + *subdir;
-    }
-    auto newtab = make_sstable(dir);
-    tlogger.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
+sstables::shared_sstable table::make_streaming_sstable_for_write() {
+    auto newtab = make_sstable(_config.location);
+    tlogger.debug("Created sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
 
 sstables::shared_sstable table::make_streaming_staging_sstable() {
-    return make_streaming_sstable_for_write(sstables::staging_dir);
+    auto newtab = make_sstable(_config.location + "/" + sstables::staging_dir);
+    tlogger.debug("Created staging sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
+    return newtab;
 }
 
 flat_mutation_reader_v2
@@ -389,13 +387,17 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir) {
+sstables::shared_sstable table::make_sstable(sstring location) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, dir, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big);
+    return sstm.make_sstable(_schema, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big, location);
 }
 
 sstables::shared_sstable table::make_sstable() {
-    return make_sstable(_config.datadir);
+    return make_sstable(_config.location);
+}
+
+future<> table::make_directory_for_column_family() {
+    return get_sstables_manager().initialize_storage(_config.location);
 }
 
 void table::notify_bootstrap_or_replace_start() {
@@ -1603,9 +1605,17 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
     }
 }
 
+sstring directory_for_table_snapshots(sstring data_file_dir, sstring location) {
+    return format("{}/{}", data_file_dir, location);
+}
+
+sstring directory_for_table_snapshots(const db::config& cfg, sstring location) {
+    return directory_for_table_snapshots(cfg.data_file_directories()[0], location);
+}
+
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name) {
-    auto jsondir = table_shards[this_shard_id()]->_config.datadir + "/snapshots/" + name;
+    auto jsondir = directory_for_table_snapshots(sharded_db.local().get_config(), table_shards[this_shard_id()]->location()) + "/snapshots/" + name;
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
@@ -1667,8 +1677,8 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
     }
 }
 
-future<bool> table::snapshot_exists(sstring tag) {
-    sstring jsondir = _config.datadir + "/snapshots/" + tag;
+future<bool> table::snapshot_exists(const db::config& cfg, sstring tag) {
+    sstring jsondir = directory_for_table_snapshots(cfg, _config.location) + "/snapshots/" + tag;
     return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
             f.get0();
@@ -1682,10 +1692,11 @@ future<bool> table::snapshot_exists(sstring tag) {
     });
 }
 
-future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
-    return seastar::async([this] {
+future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details(const db::config& cfg) {
+    return seastar::async([this, &cfg] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
-        for (auto& datadir : _config.all_datadirs) {
+        for (auto& extra : cfg.data_file_directories()) {
+            auto datadir = directory_for_table_snapshots(extra, _config.location);
             fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get0();
             if (!file_exists) {
@@ -2517,7 +2528,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // completed first.
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
-            co_await sst->move_to_new_dir(dir(), sst->generation(), &delay_commit);
+            co_await sst->change_state(sstables::normal_dir, sst->generation(), &delay_commit);
             // If view building finished faster, SSTable with repair origin still exists.
             // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.

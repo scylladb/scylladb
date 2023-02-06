@@ -10,6 +10,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_directory.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
@@ -43,14 +44,48 @@ const locator::host_id& sstables_manager::get_local_host_id() const {
 }
 
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
-        sstring dir,
+        fs::path path,
         generation_type generation,
         sstable_version_types v,
         sstable_format_types f,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
+    return make_lw_shared<sstable>(std::move(schema), path.native(), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+}
+
+shared_sstable sstables_manager::make_sstable(schema_ptr schema,
+        generation_type generation,
+        sstable_version_types v,
+        sstable_format_types f,
+        sstring location,
+        gc_clock::time_point now,
+        io_error_handler_gen error_handler_gen,
+        size_t buffer_size) {
+    auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
     return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+}
+
+future<> sstables_manager::initialize_storage(sstring location) {
+    std::vector<sstring> dirs;
+    auto& d_dirs = _db_config.data_file_directories();
+    dirs.reserve(d_dirs.size());
+    std::transform(d_dirs.begin(), d_dirs.end(), std::back_inserter(dirs), [&location] (auto& d_dir) { return format("{}/{}", d_dir, location); });
+    return sstable_directory::initialize_storage(std::move(dirs));
+}
+
+fs::path sstables_manager::sstable_directory(sstring location) {
+    return fs::path(format("{}/{}", _db_config.data_file_directories()[0], location));
+}
+
+future<> sstables_manager::initialize_keyspace_storage(sstring location) {
+    auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
+    return sstable_directory::initialize_keyspace_storage(std::move(dir));
+}
+
+future<> sstables_manager::remove_table_directory_if_has_no_snapshots(sstring location) {
+    auto dir = format("{}/{}", _db_config.data_file_directories()[0], location);
+    return sstables::remove_table_directory_if_has_no_snapshots(fs::path(std::move(dir)));
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {

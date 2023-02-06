@@ -221,6 +221,11 @@ public:
         return sst._storage.create_links(sst, dir);
     }
 
+    future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {
+        co_await _sst->_storage.move(*_sst, std::move(new_dir), new_generation, nullptr);
+        _sst->_generation = std::move(new_generation);
+    }
+
     static fs::path filename(const sstable& sst, component_type c) {
         return fs::path(sst.filename(c));
     }
@@ -299,8 +304,7 @@ public:
 
     static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
         return test_env::do_with_async([fut = std::move(fut)] (test_env& env) {
-            auto tmp = tmpdir();
-            fut(env, tmp.path().string()).get();
+            fut(env, env.tempdir().path().string()).get();
         });
     }
 

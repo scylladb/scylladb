@@ -349,8 +349,7 @@ struct table_stats {
 class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
-        sstring datadir;
+        sstring location;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;
@@ -618,9 +617,8 @@ private:
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
 public:
-    sstring dir() const {
-        return _config.datadir;
-    }
+
+    const sstring& location() const noexcept { return _config.location; }
 
     seastar::gate& async_gate() { return _async_gate; }
 
@@ -699,7 +697,7 @@ public:
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             lw_shared_ptr<sstables::sstable_set> sstables) const;
 
-    sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
+    sstables::shared_sstable make_streaming_sstable_for_write();
     sstables::shared_sstable make_streaming_staging_sstable();
 
     mutation_source as_mutation_source() const;
@@ -834,7 +832,7 @@ public:
     // sitting in the memtable, will be compacted with shadowed data.
     future<> compact_all_sstables();
 
-    future<bool> snapshot_exists(sstring name);
+    future<bool> snapshot_exists(const db::config& cfg, sstring name);
 
     db::replay_position set_low_replay_position_mark();
 
@@ -849,7 +847,7 @@ private:
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
 
-    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
+    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details(const db::config& cfg);
 
     /*!
      * \brief write the schema to a 'schema.cql' file at the given directory.
@@ -1108,6 +1106,7 @@ public:
     compaction::table_state& as_table_state() const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
+    future<> make_directory_for_column_family();
 
     friend class compaction_group;
 };
@@ -1119,8 +1118,7 @@ using keyspace_metadata = data_dictionary::keyspace_metadata;
 class keyspace {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
-        sstring datadir;
+        sstring location;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
@@ -1191,7 +1189,6 @@ public:
     }
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
@@ -1204,9 +1201,7 @@ public:
         _config.enable_incremental_backups = val;
     }
 
-    const sstring& datadir() const {
-        return _config.datadir;
-    }
+    const sstring& location() const noexcept { return _config.location; }
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
 

@@ -779,9 +779,9 @@ public:
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, db::table_selector::all()).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
-            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-                auto cfm = pair.second;
-                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks, &db] (auto& pair) {
+                auto& cf = db.local().find_column_family(pair.second);
+                return cf.make_directory_for_column_family();
             }).get();
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 

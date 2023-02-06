@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
 #include <boost/range/adaptor/map.hpp>
@@ -18,7 +19,9 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
+#include "utils/disk-error-handler.hh"
 #include "replica/database.hh"
+#include "utils/directories.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -49,16 +52,24 @@ future<> sstable_directory::components_lister::close() {
 
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
-        fs::path sstable_dir,
+        sstring location,
         ::io_priority_class io_prio,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
-    , _sstable_dir(std::move(sstable_dir))
+    , _sstable_dir(_manager.sstable_directory(location))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
     , _unshared_remote_sstables(smp::count)
 {}
+
+future<> sstable_directory::verify() const {
+    return utils::directories::verify_owner_and_mode(_sstable_dir);
+}
+
+future<bool> sstable_directory::exists() const {
+    return file_exists(_sstable_dir.native());
+}
 
 void
 sstable_directory::handle_component(scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
@@ -488,7 +499,7 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
             } else {
                 // All sstables are assumed to be in the same column_family, hence
                 // sharing their base directory.
-                assert (sstdir == sst->_storage.prefix());
+                assert (fs::equivalent(fs::path(sstdir), fs::path(sst->_storage.prefix())));
             }
         }
 
@@ -563,6 +574,72 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
         co_await remove_file(pending_delete_log.native());
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+    }
+}
+
+future<> sstable_directory::initialize_storage(std::vector<sstring> dirs) {
+    co_await parallel_for_each(dirs, [] (sstring cfdir) {
+        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
+    });
+    co_await io_check([cfdirs0 = dirs[0]] { return touch_directory(cfdirs0 + "/upload"); });
+    co_await io_check([cfdirs0 = dirs[0]] { return touch_directory(cfdirs0 + "/staging"); });
+}
+
+future<> sstable_directory::initialize_keyspace_storage(sstring dir) {
+    // FIXME: is this really needed? The initialize_storage() calls
+    // recursive_touch_directory() anyway
+    co_await io_check([&dir] { return touch_directory(dir); });
+}
+
+future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+        // push futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path dirpath = sstdir / de.name;
+        if (sstables::sstable::is_temp_dir(dirpath)) {
+            sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
+            futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+}
+
+future<> sstable_directory::handle_sstables_pending_delete(fs::path pending_delete_dir) {
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&futures] (fs::path dir, directory_entry de) {
+        // push nested futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path file_path = dir / de.name;
+        if (file_path.extension() == ".tmp") {
+            sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
+            futures.push_back(remove_file(file_path.string()));
+        } else if (file_path.extension() == ".log") {
+            sstlog.info("Found pending_delete log file: {}, replaying", file_path);
+            auto f = sstables::sstable_directory::replay_pending_delete_log(std::move(file_path));
+            futures.push_back(std::move(f));
+        } else {
+            sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+}
+
+future<> sstable_directory::garbage_collect() {
+    // First pass, cleanup temporary sstable directories and sstables pending delete.
+    co_await cleanup_column_family_temp_sst_dirs();
+    auto pending_delete_dir = _sstable_dir / sstables::sstable::pending_delete_dir_basename();
+    auto exists = co_await file_exists(pending_delete_dir.native());
+    if (exists) {
+        co_await handle_sstables_pending_delete(pending_delete_dir);
     }
 }
 

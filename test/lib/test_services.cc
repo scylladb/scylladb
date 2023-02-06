@@ -131,7 +131,6 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, s
     _data->s = s;
     _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
     _data->cfg.enable_disk_writes = bool(datadir);
-    _data->cfg.datadir = datadir.value_or(sstring());
     _data->cfg.cf_stats = &_data->cf_stats;
     _data->cfg.enable_commitlog = false;
     _data->cm.enable();
@@ -160,8 +159,8 @@ std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
 }
 
 test_env::impl::impl(test_env_config cfg)
-    : dir()
-    , db_config(make_db_config(dir.path().native()))
+    : dir(cfg.shared_tmpdir ? : std::make_shared<tmpdir>())
+    , db_config(make_db_config(dir->path().native()))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
     , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem)

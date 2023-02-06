@@ -77,15 +77,26 @@ public:
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
-            sstring dir,
+            fs::path path,
             generation_type generation,
             sstable_version_types v,
             sstable_format_types f,
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+    shared_sstable make_sstable(schema_ptr schema,
+            generation_type generation,
+            sstable_version_types v,
+            sstable_format_types f,
+            sstring location,
+            gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
+            size_t buffer_size = default_sstable_buffer_size);
+    future<> initialize_storage(sstring location);
+    future<> initialize_keyspace_storage(sstring dir);
 
     sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
+    future<> remove_table_directory_if_has_no_snapshots(sstring location);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
@@ -97,6 +108,7 @@ public:
     const locator::host_id& get_local_host_id() const;
 
     reader_concurrency_semaphore& sstable_metadata_concurrency_sem() noexcept { return _sstable_metadata_concurrency_sem; }
+    fs::path sstable_directory(sstring location); // ATTN: for sstable_directory only!
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
