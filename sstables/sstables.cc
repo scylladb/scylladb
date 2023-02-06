@@ -33,6 +33,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "utils/s3/client.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -3286,14 +3287,135 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+class sstable::s3_storage final : public sstable::storage {
+    shared_ptr<s3::client> _client;
+    sstring _bucket;
+    sstring _location;
+    std::optional<sstring> _remote_prefix;
+
+    static constexpr auto status_creating = "creating";
+    static constexpr auto status_sealed = "sealed";
+    static constexpr auto status_removing = "removing";
+
+    sstring make_s3_object_name(const sstable& sst, component_type type) {
+        return format("/{}/{}/{}", _bucket, *_remote_prefix, sstable_version_constants::get_component_map(sst.get_version()).at(type));
+    }
+
+    future<> ensure_remote_prefix(const sstable& sst);
+
+public:
+    s3_storage(sstring host, sstring bucket, sstring dir)
+        : _client(s3::client::make(ipv4_addr(host)))
+        , _bucket(std::move(bucket))
+        , _location(std::move(dir))
+    {
+    }
+
+    virtual future<> seal(const sstable& sst) override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
+    virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
+    // runs in async context
+    virtual void open(sstable& sst, const io_priority_class& pc) override;
+    virtual future<> wipe(const sstable& sst) noexcept override;
+    virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
+    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
+    virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
+    virtual future<storage::stat> get_stats(const sstable& sst) override;
+
+    virtual sstring prefix() const override { return _location; }
+};
+
+future<> sstable::s3_storage::ensure_remote_prefix(const sstable& sst) {
+    if (!_remote_prefix) {
+        auto uuid = co_await sst.manager().system_keyspace().sstables_registry_lookup_entry(_location, sst.generation());
+        _remote_prefix = uuid.to_sstring();
+    }
+}
+
+void sstable::s3_storage::open(sstable& sst, const io_priority_class& pc) {
+    auto uuid = utils::UUID_gen::get_time_UUID();
+    entry_descriptor desc("", "", "", sst._generation, sst._version, sst._format, component_type::TOC);
+    sst.manager().system_keyspace().sstables_registry_create_entry(_location, uuid, status_creating, std::move(desc)).get();
+    _remote_prefix = uuid.to_sstring();
+
+    memory_data_sink_buffers bufs;
+    sst.write_toc(
+        file_writer(
+            output_stream<char>(
+                data_sink(
+                    std::make_unique<memory_data_sink>(bufs)
+                )
+            )
+        )
+    );
+    _client->put_object(make_s3_object_name(sst, component_type::TOC), std::move(bufs)).get();
+}
+
+future<file> sstable::s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
+    co_await ensure_remote_prefix(sst);
+    co_return _client->make_readable_file(make_s3_object_name(sst, type));
+}
+
+future<data_sink> sstable::s3_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
+    assert(type == component_type::Data || type == component_type::Index);
+    co_await ensure_remote_prefix(sst);
+    co_return _client->make_upload_sink(make_s3_object_name(sst, type));
+}
+
+future<data_sink> sstable::s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
+    co_await ensure_remote_prefix(sst);
+    co_return _client->make_upload_sink(make_s3_object_name(sst, type));
+}
+
+future<> sstable::s3_storage::seal(const sstable& sst) {
+    co_await sst.manager().system_keyspace().sstables_registry_update_entry_status(_location, sst.generation(), status_sealed);
+}
+
+future<sstable::storage::stat> sstable::s3_storage::get_stats(const sstable& sst) {
+    sstable::storage::stat ret;
+
+    // FIXME:
+    //
+    // Stat-ing each file over S3 is a bit painful. Need to preserve the components
+    // size while sealing and reporting these values back. For now just return the
+    // sum of pre-obtained Data and Index file sizes to avoid assertion about the
+    // bytes_on_disk being non zero :(
+
+    ret.bytes_on_disk = sst._data_file_size + sst._index_file_size;
+
+    co_return ret;
+}
+
+future<> sstable::s3_storage::change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) {
+    // FIXME -- this "move" means changing sstable state, e.g. move from staging
+    // or upload to base. To make this work the "status" part of the entry location
+    // must be detached from the entry location itself, see PR#12707
+    co_await coroutine::return_exception(std::runtime_error("Moving S3 objects not implemented"));
+}
+
+future<> sstable::s3_storage::wipe(const sstable& sst) noexcept {
+    auto& sys_ks = sst.manager().system_keyspace();
+
+    co_await sys_ks.sstables_registry_update_entry_status(_location, sst.generation(), status_removing);
+
+    co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
+        co_await _client->delete_object(make_s3_object_name(sst, type));
+    });
+
+    co_await sys_ks.sstables_registry_delete_entry(_location, sst.generation());
+}
+
+future<> sstable::s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
+    co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
+}
+
 std::unique_ptr<sstable::storage> make_storage(const data_dictionary::storage_options& s_opts, sstring dir) {
     return std::visit(overloaded_functor {
         [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable::storage> {
             return std::make_unique<sstable::filesystem_storage>(std::move(dir));
         },
         [dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable::storage> {
-            throw std::runtime_error("S3 storage not implemented yet");
-            return nullptr;
+            return std::make_unique<sstable::s3_storage>(os.endpoint, os.bucket, std::move(dir));
         }
     }, s_opts.value);
 }

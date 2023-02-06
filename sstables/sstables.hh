@@ -518,6 +518,7 @@ public:
     }
 
     class filesystem_storage;
+    class s3_storage;
 
 private:
     sstring filename(component_type f) const {
