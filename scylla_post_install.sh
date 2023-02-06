@@ -63,4 +63,15 @@ MemoryLimit=$MEMORY_LIMIT
 EOS
 fi
 
+if [ -e /etc/systemd/system/systemd-coredump@.service.d/timeout.conf ]; then
+    COREDUMP_RUNTIME_MAX=$(grep RuntimeMaxSec /etc/systemd/system/systemd-coredump@.service.d/timeout.conf)
+    if [ -z $COREDUMP_RUNTIME_MAX ]; then
+    cat << EOS > /etc/systemd/system/systemd-coredump@.service.d/timeout.conf
+[Service]
+RuntimeMaxSec=infinity
+TimeoutSec=infinity
+EOS
+    fi
+fi
+
 systemctl --system daemon-reload >/dev/null || true
