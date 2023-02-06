@@ -2,7 +2,7 @@
 Upgrade Guide - Scylla Enterprise 2021.x.y to 2021.x.z for |OS|
 ======================================================================
 
-This document is a step by step procedure for upgrading from Scylla Enterprise 2021.x.y to 2021.x.z.
+This document is a step by step procedure for upgrading from Scylla Enterprise 2021.x.y to 2021.x.z (where "z" is the :ref:`latest available version <faq-pinning>`).
 
 
 Applicable versions

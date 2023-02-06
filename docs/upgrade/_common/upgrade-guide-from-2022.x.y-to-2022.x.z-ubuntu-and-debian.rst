@@ -2,7 +2,8 @@
 Upgrade Guide - ScyllaDB Enterprise 2022.x.y to 2022.x.z for |OS|
 ======================================================================
 
-This document is a step-by-step procedure for upgrading from ScyllaDB Enterprise 2022.x.y to 2022.x.z.
+This document is a step-by-step procedure for upgrading from ScyllaDB Enterprise 2022.x.y to 2022.x.z 
+(where "z" is the :ref:`latest available version <faq-pinning>`).
 
 
 Applicable versions
