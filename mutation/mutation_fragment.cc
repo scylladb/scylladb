@@ -100,35 +100,44 @@ mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, stat
     : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_static_row) static_row(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, clustering_row&& r)
     : _kind(kind::clustering_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_clustering_row) clustering_row(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, range_tombstone&& r)
     : _kind(kind::range_tombstone), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_range_tombstone) range_tombstone(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, partition_start&& r)
         : _kind(kind::partition_start), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_start) partition_start(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, partition_end&& r)
         : _kind(kind::partition_end), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_end) partition_end(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
+}
+
+void mutation_fragment::reset_memory(const schema& s, std::optional<reader_resources> res) {
+    try {
+        _data->_memory.reset(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
+    } catch (...) {
+        destroy_data();
+        throw;
+    }
 }
 
 void mutation_fragment::destroy_data() noexcept
@@ -156,35 +165,35 @@ mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit
     : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_static_row) static_row(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, clustering_row&& r)
     : _kind(kind::clustering_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_clustering_row) clustering_row(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone_change&& r)
     : _kind(kind::range_tombstone_change), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_range_tombstone_chg) range_tombstone_change(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_start&& r)
         : _kind(kind::partition_start), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_start) partition_start(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_end&& r)
         : _kind(kind::partition_end), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_end) partition_end(std::move(r));
-    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+    reset_memory(s);
 }
 
 void mutation_fragment_v2::destroy_data() noexcept
@@ -205,6 +214,15 @@ void mutation_fragment_v2::destroy_data() noexcept
     case kind::partition_end:
         _data->_partition_end.~partition_end();
         break;
+    }
+}
+
+void mutation_fragment_v2::reset_memory(const schema& s, std::optional<reader_resources> res) {
+    try {
+        _data->_memory.reset(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
+    } catch (...) {
+        destroy_data();
+        throw;
     }
 }
 
@@ -236,12 +254,10 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
         break;
     case kind::static_row:
         _data->_static_row.apply(s, std::move(mf._data->_static_row));
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
         mf._data->_static_row.~static_row();
         break;
     case kind::clustering_row:
         _data->_clustering_row.apply(s, std::move(mf._data->_clustering_row));
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
         mf._data->_clustering_row.~clustering_row();
         break;
     case mutation_fragment::kind::partition_end:
@@ -251,6 +267,7 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
     default: abort();
     }
     mf._data.reset();
+    reset_memory(s);
 }
 
 position_in_partition_view mutation_fragment::position() const
@@ -315,12 +332,10 @@ void mutation_fragment_v2::apply(const schema& s, mutation_fragment_v2&& mf)
         break;
     case kind::static_row:
         _data->_static_row.apply(s, std::move(mf._data->_static_row));
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
         mf._data->_static_row.~static_row();
         break;
     case kind::clustering_row:
         _data->_clustering_row.apply(s, std::move(mf._data->_clustering_row));
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
         mf._data->_clustering_row.~clustering_row();
         break;
     case mutation_fragment_v2::kind::partition_end:
@@ -330,6 +345,7 @@ void mutation_fragment_v2::apply(const schema& s, mutation_fragment_v2&& mf)
     default: abort();
     }
     mf._data.reset();
+    reset_memory(s);
 }
 
 position_in_partition_view mutation_fragment_v2::position() const

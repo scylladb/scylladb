@@ -301,6 +301,7 @@ private:
     mutation_fragment() = default;
     explicit operator bool() const noexcept { return bool(_data); }
     void destroy_data() noexcept;
+    void reset_memory(const schema& s, std::optional<reader_resources> res = {});
     friend class optimized_optional<mutation_fragment>;
 
     friend class position_in_partition;
@@ -313,7 +314,7 @@ public:
         , _data(std::make_unique<data>(std::move(permit)))
     {
         new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        reset_memory(s);
     }
 
     mutation_fragment(const schema& s, reader_permit permit, static_row&& r);
@@ -341,7 +342,7 @@ public:
                 new (&_data->_partition_end) partition_end(o._data->_partition_end);
                 break;
         }
-        _data->_memory.reset(o._data->_memory.resources());
+        reset_memory(s, o._data->_memory.resources());
     }
     mutation_fragment(mutation_fragment&& other) = default;
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
@@ -384,19 +385,19 @@ public:
 
     void mutate_as_static_row(const schema& s, std::invocable<static_row&> auto&& fn) {
         fn(_data->_static_row);
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        reset_memory(s);
     }
     void mutate_as_clustering_row(const schema& s, std::invocable<clustering_row&> auto&& fn) {
         fn(_data->_clustering_row);
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        reset_memory(s);
     }
     void mutate_as_range_tombstone(const schema& s, std::invocable<range_tombstone&> auto&& fn) {
         fn(_data->_range_tombstone);
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        reset_memory(s);
     }
     void mutate_as_partition_start(const schema& s, std::invocable<partition_start&> auto&& fn) {
         fn(_data->_partition_start);
-        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        reset_memory(s);
     }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
