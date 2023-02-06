@@ -15,11 +15,40 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "reader_concurrency_semaphore.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "utils/exceptions.hh"
 #include "schema/schema.hh"
 #include "utils/human_readable.hh"
 
 logger rcslog("reader_concurrency_semaphore");
+
+struct reader_concurrency_semaphore::inactive_read {
+    flat_mutation_reader_v2 reader;
+    eviction_notify_handler notify_handler;
+    timer<lowres_clock> ttl_timer;
+    inactive_read_handle* handle = nullptr;
+
+    explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
+        : reader(std::move(reader_))
+    { }
+    inactive_read(inactive_read&& o)
+        : reader(std::move(o.reader))
+        , notify_handler(std::move(o.notify_handler))
+        , ttl_timer(std::move(o.ttl_timer))
+        , handle(o.handle)
+    {
+        o.handle = nullptr;
+    }
+    ~inactive_read() {
+        detach();
+    }
+    void detach() noexcept {
+        if (handle) {
+            handle->_permit = {};
+            handle = nullptr;
+        }
+    }
+};
 
 namespace {
 
@@ -708,26 +737,6 @@ void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& se
 }
 
 } // anonymous namespace
-
-reader_concurrency_semaphore::inactive_read::~inactive_read() {
-    detach();
-}
-
-reader_concurrency_semaphore::inactive_read::inactive_read(inactive_read&& o)
-    : reader(std::move(o.reader))
-    , notify_handler(std::move(o.notify_handler))
-    , ttl_timer(std::move(o.ttl_timer))
-    , handle(o.handle)
-{
-    o.handle = nullptr;
-}
-
-void reader_concurrency_semaphore::inactive_read::detach() noexcept {
-    if (handle) {
-        handle->_permit = {};
-        handle = nullptr;
-    }
-}
 
 void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
     if (_permit) {

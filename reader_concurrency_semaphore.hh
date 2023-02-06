@@ -13,12 +13,14 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
 #include "reader_permit.hh"
-#include "readers/flat_mutation_reader_v2.hh"
 #include "utils/updateable_value.hh"
 
 namespace bi = boost::intrusive;
 
 using namespace seastar;
+
+class flat_mutation_reader_v2;
+using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -115,24 +117,10 @@ public:
             bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
             bi::constant_time_size<false>>;
 
-    class inactive_read_handle;
-
     using read_func = noncopyable_function<future<>(reader_permit)>;
 
 private:
-    struct inactive_read {
-        flat_mutation_reader_v2 reader;
-        eviction_notify_handler notify_handler;
-        timer<lowres_clock> ttl_timer;
-        inactive_read_handle* handle = nullptr;
-
-        explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
-            : reader(std::move(reader_))
-        { }
-        inactive_read(inactive_read&&);
-        ~inactive_read();
-        void detach() noexcept;
-    };
+    struct inactive_read;
 
 public:
     class inactive_read_handle {
