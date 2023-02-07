@@ -192,7 +192,8 @@ public:
     future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
                      sstables::compaction_sstable_creator_fn creator,
                      sstables::reshape_mode mode,
-                     sstable_filter_func_t sstable_filter);
+                     sstable_filter_func_t sstable_filter,
+                     io_priority_class iop);
 
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this
