@@ -152,4 +152,8 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& opt) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const std::strong_ordering& order);
+std::ostream& operator<<(std::ostream& os, const std::weak_ordering& order);
+std::ostream& operator<<(std::ostream& os, const std::partial_ordering& order);
+
 } // namespace std
