@@ -1227,19 +1227,15 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
 
         auto cdc = _proxy->get_cdc_service();
         if (cdc && cdc->needs_cdc_augmentation(update_mut_vec)) {
-            f_cdc = cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn)
-                    .then([this, base_tbl_id, cdc = cdc->shared_from_this()] (std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) {
-                auto mutations = std::move(std::get<0>(t));
-                auto tracker = std::move(std::get<1>(t));
-                // Pick only the CDC ("augmenting") mutations
-                std::erase_if(mutations, [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
-                    return v.schema()->id() == base_tbl_id;
-                });
-                if (mutations.empty()) {
-                    return make_ready_future<>();
-                }
-                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
+            auto cdc_shared = cdc->shared_from_this(); // keep CDC service alive
+            auto [mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
+            // Pick only the CDC ("augmenting") mutations
+            std::erase_if(mutations, [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
+                return v.schema()->id() == base_tbl_id;
             });
+            if (!mutations.empty()) {
+                f_cdc = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
+            }
         }
     }
 
@@ -1247,7 +1243,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
     future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
 
-    return when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
+    co_await when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
 }
 
 void paxos_response_handler::prune(utils::UUID ballot) {
