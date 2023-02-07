@@ -271,11 +271,16 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
     });
 }
 
+future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
+    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
+    co_await sst->load(std::move(info));
+    co_return sst;
+}
+
 future<>
 sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
     return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
-        auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
-        return sst->load(std::move(info)).then([sst, this] {
+        return load_foreign_sstable(info).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
         });

@@ -141,6 +141,8 @@ public:
         return _unsorted_sstables;
     }
 
+    future<shared_sstable> load_foreign_sstable(foreign_sstable_open_info& info);
+
     // moves unshared SSTables that don't belong to this shard to the right shards.
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
 
