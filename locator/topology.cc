@@ -166,53 +166,26 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
     }
 }
 
-int topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    //
-    // if one of the Nodes IS the Node we are comparing to and the other one
-    // IS NOT - then return the appropriate result.
-    //
-    if (address == a1 && address != a2) {
-        return -1;
-    }
+std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+    const auto& loc = get_location(address);
+    const auto& loc1 = get_location(a1);
+    const auto& loc2 = get_location(a2);
 
-    if (address == a2 && address != a1) {
-        return 1;
-    }
+    // The farthest nodes from a given node are:
+    // 1. Nodes in other DCs then the reference node
+    // 2. Nodes in the other RACKs in the same DC as the reference node
+    // 3. Other nodes in the same DC/RACk as the reference node
+    int same_dc1 = loc1.dc == loc.dc;
+    int same_rack1 = same_dc1 & (loc1.rack == loc.rack);
+    int same_node1 = a1 == address;
+    int d1 = ((same_dc1 << 2) | (same_rack1 << 1) | same_node1) ^ 7;
 
-    // ...otherwise perform the similar check in regard to Data Center
-    sstring address_datacenter = get_datacenter(address);
-    sstring a1_datacenter = get_datacenter(a1);
-    sstring a2_datacenter = get_datacenter(a2);
+    int same_dc2 = loc2.dc == loc.dc;
+    int same_rack2 = same_dc2 & (loc2.rack == loc.rack);
+    int same_node2 = a2 == address;
+    int d2 = ((same_dc2 << 2) | (same_rack2 << 1) | same_node2) ^ 7;
 
-    if (address_datacenter == a1_datacenter &&
-        address_datacenter != a2_datacenter) {
-        return -1;
-    } else if (address_datacenter == a2_datacenter &&
-               address_datacenter != a1_datacenter) {
-        return 1;
-    } else if (address_datacenter == a2_datacenter &&
-               address_datacenter == a1_datacenter) {
-        //
-        // ...otherwise (in case Nodes belong to the same Data Center) check
-        // the racks they belong to.
-        //
-        sstring address_rack = get_rack(address);
-        sstring a1_rack = get_rack(a1);
-        sstring a2_rack = get_rack(a2);
-
-        if (address_rack == a1_rack && address_rack != a2_rack) {
-            return -1;
-        }
-
-        if (address_rack == a2_rack && address_rack != a1_rack) {
-            return 1;
-        }
-    }
-    //
-    // We don't differentiate between Nodes if all Nodes belong to different
-    // Data Centers, thus make them equal.
-    //
-    return 0;
+    return d1 <=> d2;
 }
 
 } // namespace locator

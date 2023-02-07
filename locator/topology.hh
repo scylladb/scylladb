@@ -12,6 +12,7 @@
 
 #include <unordered_set>
 #include <unordered_map>
+#include <compare>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -100,8 +101,13 @@ private:
     /**
      * compares two endpoints in relation to the target endpoint, returning as
      * Comparator.compare would
+     *
+     * The closest nodes to a given node are:
+     * 1. The node itself
+     * 2. Nodes in the same RACK as the reference node
+     * 3. Nodes in the same DC as the reference node
      */
-    int compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
@@ -123,6 +129,9 @@ private:
     std::unordered_set<sstring> _datacenters;
 
     void calculate_datacenters();
+
+public:
+    void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 };
 
 } // namespace locator

@@ -631,3 +631,92 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
     });
 }
 
+namespace locator {
+
+void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+    std::optional<int> expected;
+    const auto& loc = get_location(address);
+    const auto& loc1 = get_location(a1);
+    const auto& loc2 = get_location(a2);
+    if (a1 == a2) {
+        expected = 0;
+    } else {
+        if (a1 == address) {
+            expected = -1;
+        } else if (a2 == address) {
+            expected = 1;
+        } else {
+            if (loc1.dc == loc.dc) {
+                if (loc2.dc != loc.dc) {
+                    expected = -1;
+                } else {
+                    if (loc1.rack == loc.rack) {
+                        if (loc2.rack != loc.rack) {
+                            expected = -1;
+                        }
+                    } else if (loc2.rack == loc.rack) {
+                        expected = 1;
+                    }
+                }
+            } else if (loc2.dc == loc.dc) {
+                expected = 1;
+            }
+        }
+    }
+    auto order = compare_endpoints(address, a1, a2);
+    auto res = order < 0 ? -1 : (order > 0);
+    testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
+            address, loc.dc, loc.rack,
+            a1, loc1.dc, loc1.rack,
+            a2, loc2.dc, loc2.rack,
+            res, bool(expected), expected.value_or(0));
+    if (expected) {
+        BOOST_REQUIRE_EQUAL(res, *expected);
+    }
+}
+
+} // namespace locator
+
+SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
+    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+
+    constexpr size_t NODES = 10;
+
+    std::unordered_map<sstring, size_t> datacenters = {
+                    { "rf1", 1 },
+                    { "rf2", 2 },
+                    { "rf3", 3 },
+    };
+    std::vector<inet_address> nodes;
+    nodes.reserve(NODES);
+
+    auto make_address = [] (unsigned i) {
+        return inet_address((127u << 24) | i);
+    };
+
+    std::generate_n(std::back_inserter(nodes), NODES, [&, i = 0u]() mutable {
+        return make_address(++i);
+    });
+    auto bogus_address = make_address(NODES + 1);
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
+    auto topo = generate_topology(datacenters, nodes);
+
+    const auto& address = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+    const auto& a1 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+    const auto& a2 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+
+    topo->test_compare_endpoints(address, address, address);
+    topo->test_compare_endpoints(address, address, a1);
+    topo->test_compare_endpoints(address, a1, address);
+    topo->test_compare_endpoints(address, a1, a1);
+    topo->test_compare_endpoints(address, a1, a2);
+    topo->test_compare_endpoints(address, a2, a1);
+
+    topo->test_compare_endpoints(bogus_address, bogus_address, bogus_address);
+    topo->test_compare_endpoints(address, bogus_address, bogus_address);
+    topo->test_compare_endpoints(address, a1, bogus_address);
+    topo->test_compare_endpoints(address, bogus_address, a2);
+}
