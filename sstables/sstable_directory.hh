@@ -122,8 +122,6 @@ private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
-    future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
-    future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
 
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
@@ -172,19 +170,6 @@ public:
     // If files were scheduled to be removed, they will be removed after this call.
     future<> commit_directory_changes();
 
-    // reshards a collection of SSTables.
-    //
-    // A reference to the compaction manager must be passed so we can register with it. Knowing
-    // which table is being processed is a requirement of the compaction manager, so this must be
-    // passed too.
-    //
-    // We will reshard max_sstables_per_job at once.
-    //
-    // A creator function must be passed that will create an SSTable object in the correct shard,
-    // and an I/O priority must be specified.
-    future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
-                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, io_priority_class iop);
-
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this
     // directory.
@@ -198,6 +183,9 @@ public:
     // is called.
     sstable_info_vector retrieve_shared_sstables();
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
+
+    future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
+    future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
 
     future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
     future<> collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables);
