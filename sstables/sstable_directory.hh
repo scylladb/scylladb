@@ -125,9 +125,6 @@ private:
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
     future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
 
-    future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
-    future<> collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables);
-
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
@@ -186,15 +183,6 @@ public:
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
                      unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
 
-    using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
-
-    // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
-    future<uint64_t> reshape(compaction_manager& cm, replica::table& table,
-                     sstables::compaction_sstable_creator_fn creator,
-                     sstables::reshape_mode mode,
-                     sstable_filter_func_t sstable_filter,
-                     io_priority_class iop);
-
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this
     // directory.
@@ -208,6 +196,9 @@ public:
     // is called.
     sstable_info_vector retrieve_shared_sstables();
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
+
+    future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
+    future<> collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables);
 
     std::filesystem::path sstable_dir() const noexcept {
         return _sstable_dir;

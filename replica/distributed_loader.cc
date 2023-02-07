@@ -246,15 +246,15 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
     });
 }
 
-} namespace sstables {
+using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
 
-future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator,
+future<uint64_t> reshape(sstables::sstable_directory& dir, compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator,
                                             sstables::reshape_mode mode, sstable_filter_func_t sstable_filter, io_priority_class iop)
 {
-    return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), mode, iop] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
-        return repeat([this, &cm, &table, creator = std::move(creator), &reshaped_size, mode, &filter, iop] () mutable {
-            auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(get_unshared_local_sstables()
-                    | boost::adaptors::filtered([this, &filter] (const auto& sst) {
+    return do_with(uint64_t(0), std::move(sstable_filter), [&dir, &cm, &table, creator = std::move(creator), mode, iop] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
+        return repeat([&dir, &cm, &table, creator = std::move(creator), &reshaped_size, mode, &filter, iop] () mutable {
+            auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(dir.get_unshared_local_sstables()
+                    | boost::adaptors::filtered([&filter] (const auto& sst) {
                 return filter(sst);
             }));
             auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), iop, mode);
@@ -274,10 +274,10 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 
             desc.creator = creator;
 
-            return cm.run_custom_job(table.as_table_state(), compaction_type::Reshape, "Reshape compaction", [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
-                return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([this, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
-                    return remove_input_sstables_from_reshaping(std::move(sstlist)).then([this, new_sstables = std::move(result.new_sstables)] () mutable {
-                        return collect_output_sstables_from_reshaping(std::move(new_sstables));
+            return cm.run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
+                return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([&dir, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
+                    return dir.remove_input_sstables_from_reshaping(std::move(sstlist)).then([&dir, new_sstables = std::move(result.new_sstables)] () mutable {
+                        return dir.collect_output_sstables_from_reshaping(std::move(new_sstables));
                     });
                 });
             }).then_wrapped([&table] (future<> f) {
@@ -298,8 +298,6 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
     });
 }
 
-} namespace replica {
-
 future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
@@ -309,7 +307,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
     auto total_size = co_await dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter, iop] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = db.local().get_compaction_manager();
-        return d.reshape(cm, table, creator, mode, filter, iop);
+        return ::replica::reshape(d, cm, table, creator, mode, filter, iop);
     }, uint64_t(0), std::plus<uint64_t>());
 
     if (total_size > 0) {
