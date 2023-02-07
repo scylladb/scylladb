@@ -157,7 +157,7 @@ class ManagerClient():
             if cmdline:
                 data['cmdline'] = cmdline
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
-                                                     timeout=ScyllaServer.START_TIMEOUT)
+                                                     timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:

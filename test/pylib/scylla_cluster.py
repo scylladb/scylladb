@@ -190,7 +190,9 @@ class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
        and cleanup when finished."""
     # pylint: disable=too-many-instance-attributes
-    START_TIMEOUT = 1000     # seconds
+
+    # in seconds, used for topology operations such as bootstrap or decommission
+    TOPOLOGY_TIMEOUT = 1000
     start_time: float
     sleep_interval: float
     log_file: BufferedWriter
@@ -322,7 +324,7 @@ class ScyllaServer:
         # initializing. When the role is ready, queries begin to
         # work, so rely on this "side effect".
         profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.ip_addr]),
-                                   request_timeout=self.START_TIMEOUT)
+                                   request_timeout=self.TOPOLOGY_TIMEOUT)
         connected = False
         try:
             # In a cluster setup, it's possible that the CQL
@@ -382,7 +384,7 @@ class ScyllaServer:
         sleep_interval = 0.1
         cql_up_state = CqlUpState.NOT_CONNECTED
 
-        while time.time() < self.start_time + self.START_TIMEOUT:
+        while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
             if self.cmd.returncode:
                 with self.log_filename.open('r') as log_file:
                     self.logger.error("failed to start server at host %s in %s",
@@ -427,7 +429,7 @@ class ScyllaServer:
         previous state propagation was missed."""
         auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
         profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(self.seeds),
-                                   request_timeout=self.START_TIMEOUT)
+                                   request_timeout=self.TOPOLOGY_TIMEOUT)
         with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                      contact_points=self.seeds,
                      auth_provider=auth,
