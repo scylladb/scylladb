@@ -242,7 +242,7 @@ public:
                 return "commitlog: timed out";
             }
         };
-        static auto timeout() {
+        static auto timeout() noexcept {
             return request_controller_timed_out_error();
         }
     };
