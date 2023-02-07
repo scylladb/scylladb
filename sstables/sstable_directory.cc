@@ -353,56 +353,6 @@ sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::
     });
 }
 
-future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::table& table, sstables::compaction_sstable_creator_fn creator,
-                                            sstables::reshape_mode mode, sstable_filter_func_t sstable_filter)
-{
-    return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), mode] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
-        return repeat([this, &cm, &table, creator = std::move(creator), &reshaped_size, mode, &filter] () mutable {
-            auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(_unshared_local_sstables
-                    | boost::adaptors::filtered([this, &filter] (const auto& sst) {
-                return filter(sst);
-            }));
-            auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), _io_priority, mode);
-            if (desc.sstables.empty()) {
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }
-
-            if (!reshaped_size) {
-                dirlog.info("Table {}.{} with compaction strategy {} found SSTables that need reshape. Starting reshape process", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-            }
-
-            std::vector<sstables::shared_sstable> sstlist;
-            for (auto& sst : desc.sstables) {
-                reshaped_size += sst->data_size();
-                sstlist.push_back(sst);
-            }
-
-            desc.creator = creator;
-
-            return cm.run_custom_job(table.as_table_state(), compaction_type::Reshape, "Reshape compaction", [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
-                return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([this, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
-                    return remove_input_sstables_from_reshaping(std::move(sstlist)).then([this, new_sstables = std::move(result.new_sstables)] () mutable {
-                        return collect_output_sstables_from_reshaping(std::move(new_sstables));
-                    });
-                });
-            }).then_wrapped([&table] (future<> f) {
-                try {
-                    f.get();
-                } catch (sstables::compaction_stopped_exception& e) {
-                    dirlog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                } catch (...) {
-                    dirlog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return make_ready_future<stop_iteration>(stop_iteration::no);
-            });
-        }).then([&reshaped_size] {
-            return make_ready_future<uint64_t>(reshaped_size);
-        });
-    });
-}
-
 future<>
 sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
                            unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator)
