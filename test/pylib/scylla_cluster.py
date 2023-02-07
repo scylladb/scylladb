@@ -1067,7 +1067,8 @@ class ScyllaClusterManager:
 
         # initate remove
         try:
-            await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead)
+            await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead,
+                                               timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except RuntimeError as exc:
             self.logger.error("_cluster_remove_node failed initiator %s server %s ignore_dead %s, check log at %s",
                           initiator, to_remove, ignore_dead, initiator.log_filename)
@@ -1086,7 +1087,7 @@ class ScyllaClusterManager:
             self.logger.warning("_cluster_decommission_node %s is only running node left", server_id)
         server = self.cluster.running[server_id]
         try:
-            await self.cluster.api.decommission_node(server.ip_addr)
+            await self.cluster.api.decommission_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except RuntimeError as exc:
             self.logger.error("_cluster_decommission_node %s, check log at %s", server,
                           server.log_filename)

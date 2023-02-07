@@ -94,9 +94,9 @@ class RESTClient(metaclass=ABCMeta):
 
     async def post(self, resource_uri: str, host: Optional[str] = None,
                    port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
-                   json: Mapping = None) -> None:
+                   json: Mapping = None, timeout: Optional[float] = None) -> None:
         await self._fetch("POST", resource_uri, host = host, port = port, params = params,
-                          json = json)
+                          json = json, timeout = timeout)
 
     async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[dict[str, str]] = None,
@@ -161,19 +161,20 @@ class ScyllaRESTAPIClient():
         return result
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
-                          ignore_dead: list[IPAddress]) -> None:
+                          ignore_dead: list[IPAddress], timeout: float) -> None:
         """Initiate remove node of host_id in initiator initiator_ip"""
         logger.info("remove_node for %s on %s", host_id, initiator_ip)
         await self.client.post("/storage_service/remove_node",
                                params = {"host_id": host_id,
                                          "ignore_nodes": ",".join(ignore_dead)},
-                               host = initiator_ip)
+                               host = initiator_ip, timeout = timeout)
         logger.debug("remove_node for %s finished", host_id)
 
-    async def decommission_node(self, host_ip: str) -> None:
+    async def decommission_node(self, host_ip: str, timeout: float) -> None:
         """Initiate decommission node of host_ip"""
         logger.debug("decommission_node %s", host_ip)
-        await self.client.post("/storage_service/decommission", host = host_ip)
+        await self.client.post("/storage_service/decommission", host = host_ip,
+                               timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
