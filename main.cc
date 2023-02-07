@@ -400,7 +400,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
                 // System error codes we consider "environmental",
                 // i.e. not scylla's fault, therefore there is no point in
                 // aborting and dumping core.
-                for (int i : {EIO, EACCES, ENOSPC}) {
+                for (int i : {EIO, EACCES, EDQUOT, ENOSPC}) {
                     if (e.code() == std::error_code(i, std::system_category())) {
                         do_abort = false;
                         break;
@@ -1038,7 +1038,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 };
             });
             cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
-            auto stop_cm = deferred_stop(cm);
+            auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
+               cm.stop().get();
+            });
 
             supervisor::notify("starting database");
             debug::the_database = &db;

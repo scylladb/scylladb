@@ -711,13 +711,17 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
                 ex = std::current_exception();
                 _config.cf_stats->failed_memtables_flushes_count++;
 
+                auto should_retry = [](auto* ep) {
+                    int ec = ep->code().value();
+                    return ec == ENOSPC || ec == EDQUOT;
+                };
                 if (try_catch<std::bad_alloc>(ex)) {
                     // There is a chance something else will free the memory, so we can try again
                     allowed_retries--;
                 } else if (auto ep = try_catch<std::system_error>(ex)) {
-                    allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
+                    allowed_retries = should_retry(ep) ? default_retries : 0;
                 } else if (auto ep = try_catch<storage_io_error>(ex)) {
-                    allowed_retries = ep->code().value() == ENOSPC ? default_retries : 0;
+                    allowed_retries = should_retry(ep) ? default_retries : 0;
                 } else {
                     allowed_retries = 0;
                 }
