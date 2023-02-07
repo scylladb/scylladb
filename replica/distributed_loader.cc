@@ -206,7 +206,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_info_vector shared_info, replica::table& table,
-                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, io_priority_class iop)
+                           sstables::compaction_sstable_creator_fn creator, io_priority_class iop)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -216,6 +216,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
 
     // We want to reshard many SSTables at a time for efficiency. However if we have to many we may
     // be risking OOM.
+    auto max_sstables_per_job = table.schema()->max_compaction_threshold();
     auto num_jobs = (shared_info.size() + max_sstables_per_job - 1) / max_sstables_per_job;
     auto sstables_per_job = shared_info.size() / num_jobs;
 
@@ -260,8 +261,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
     co_await dir.invoke_on_all(coroutine::lambda([&] (sstables::sstable_directory& d) -> future<> {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
-        auto max_threshold = table.schema()->max_compaction_threshold();
-        co_await ::replica::reshard(d, std::move(info_vec), table, max_threshold, creator, iop);
+        co_await ::replica::reshard(d, std::move(info_vec), table, creator, iop);
         co_await d.move_foreign_sstables(dir);
     }));
 
