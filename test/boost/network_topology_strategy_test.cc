@@ -22,6 +22,7 @@
 #include <set>
 #include <iostream>
 #include <sstream>
+#include <compare>
 #include <boost/range/algorithm/adjacent_find.hpp>
 #include <boost/algorithm/cxx11/iota.hpp>
 #include "test/lib/log.hh"
@@ -634,32 +635,32 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
 namespace locator {
 
 void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    std::optional<int> expected;
+    std::optional<std::partial_ordering> expected;
     const auto& loc = get_location(address);
     const auto& loc1 = get_location(a1);
     const auto& loc2 = get_location(a2);
     if (a1 == a2) {
-        expected = 0;
+        expected = std::partial_ordering::equivalent;
     } else {
         if (a1 == address) {
-            expected = -1;
+            expected = std::partial_ordering::less;
         } else if (a2 == address) {
-            expected = 1;
+            expected = std::partial_ordering::greater;
         } else {
             if (loc1.dc == loc.dc) {
                 if (loc2.dc != loc.dc) {
-                    expected = -1;
+                    expected = std::partial_ordering::less;
                 } else {
                     if (loc1.rack == loc.rack) {
                         if (loc2.rack != loc.rack) {
-                            expected = -1;
+                            expected = std::partial_ordering::less;
                         }
                     } else if (loc2.rack == loc.rack) {
-                        expected = 1;
+                        expected = std::partial_ordering::greater;
                     }
                 }
             } else if (loc2.dc == loc.dc) {
-                expected = 1;
+                expected = std::partial_ordering::greater;
             }
         }
     }
@@ -668,7 +669,7 @@ void topology::test_compare_endpoints(const inet_address& address, const inet_ad
             address, loc.dc, loc.rack,
             a1, loc1.dc, loc1.rack,
             a2, loc2.dc, loc2.rack,
-            res, bool(expected), expected.value_or(0));
+            res, bool(expected), expected.value_or(std::partial_ordering::unordered));
     if (expected) {
         BOOST_REQUIRE_EQUAL(res, *expected);
     }
