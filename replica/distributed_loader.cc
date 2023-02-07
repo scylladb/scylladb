@@ -253,7 +253,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
 {
     return do_with(uint64_t(0), std::move(sstable_filter), [this, &cm, &table, creator = std::move(creator), mode, iop] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
         return repeat([this, &cm, &table, creator = std::move(creator), &reshaped_size, mode, &filter, iop] () mutable {
-            auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(_unshared_local_sstables
+            auto reshape_candidates = boost::copy_range<std::vector<shared_sstable>>(get_unshared_local_sstables()
                     | boost::adaptors::filtered([this, &filter] (const auto& sst) {
                 return filter(sst);
             }));
