@@ -667,14 +667,23 @@ future<> cql_server::connection::process_request() {
                     _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit) :
                     process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit);
 
-            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
-                    try {
+            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
+                try {
+                    if (response_f.failed()) {
+                        const auto message = format("request processing failed, error [{}]", response_f.get_exception());
+                        clogger.error("{}: {}", _client_state.get_remote_address(), message);
+                        write_response(make_error(stream, exceptions::exception_code::SERVER_ERROR,
+                                                  message,
+                                                  tracing::trace_state_ptr()));
+                    } else {
                         write_response(response_f.get0(), std::move(mem_permit), _compression);
-                        _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
-                    } catch (...) {
-                        clogger.error("request processing failed: {}", std::current_exception());
                     }
-                });
+                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
+                } catch (...) {
+                    clogger.error("{}: request processing failed: {}",
+                                  _client_state.get_remote_address(), std::current_exception());
+                }
+            });
 
             if (should_paralelize) {
                 return make_ready_future<>();
