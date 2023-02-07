@@ -198,7 +198,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
 } namespace sstables {
 
 future<> sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, replica::table& table,
-                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator)
+                           unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, io_priority_class iop)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -224,9 +224,9 @@ future<> sstable_directory::reshard(sstable_info_vector shared_info, compaction_
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
-    co_await coroutine::parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-        return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist] (sstables::compaction_data& info) -> future<> {
-            sstables::compaction_descriptor desc(sstlist, _io_priority);
+    co_await coroutine::parallel_for_each(buckets, [this, &cm, &table, creator = std::move(creator), iop] (std::vector<sstables::shared_sstable>& sstlist) mutable {
+        return cm.run_custom_job(table.as_table_state(), compaction_type::Reshard, "Reshard compaction", [this, &cm, &table, creator, &sstlist, iop] (sstables::compaction_data& info) -> future<> {
+            sstables::compaction_descriptor desc(sstlist, iop);
             desc.options = sstables::compaction_type_options::make_reshard();
             desc.creator = std::move(creator);
 
@@ -241,7 +241,8 @@ future<> sstable_directory::reshard(sstable_info_vector shared_info, compaction_
 } namespace replica {
 
 future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vector<reshard_shard_descriptor> reshard_jobs,
-                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
+                             io_priority_class iop) {
 
     uint64_t total_size = boost::accumulate(reshard_jobs | boost::adaptors::transformed(std::mem_fn(&reshard_shard_descriptor::size)), uint64_t(0));
     if (total_size == 0) {
@@ -256,7 +257,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
         auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
         auto& cm = db.local().get_compaction_manager();
         auto max_threshold = table.schema()->max_compaction_threshold();
-        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator);
+        co_await d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop);
         co_await d.move_foreign_sstables(dir);
     }));
 
@@ -270,10 +271,10 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //  - The second part calls each shard's distributed object to reshard the SSTables they were
 //    assigned.
 future<>
-distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, io_priority_class iop) {
     auto all_jobs = co_await collect_all_shared_sstables(dir);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
-    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
+    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), iop);
 }
 
 future<sstables::generation_type>
@@ -443,7 +444,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             // we need generation calculated by instance of cf at requested shard
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
             return make_sstable(*global_table, upload, gen);
-        }).get();
+        }, service::get_local_streaming_priority()).get();
 
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
@@ -708,7 +709,7 @@ future<> distributed_loader::populate_column_family(table_population_metadata& m
         }).get0();
 
         return make_sstable(*global_table, sstdir, gen, sst_version);
-    });
+    }, default_priority_class());
 
     // The node is offline at this point so we are very lenient with what we consider
     // offstrategy.

@@ -181,7 +181,7 @@ public:
     // A creator function must be passed that will create an SSTable object in the correct shard,
     // and an I/O priority must be specified.
     future<> reshard(sstable_info_vector info, compaction_manager& cm, replica::table& table,
-                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator);
+                     unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, io_priority_class iop);
 
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this
