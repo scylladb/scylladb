@@ -9,7 +9,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 

@@ -46,7 +46,7 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
-#include "mutation_partition.hh"
+#include "mutation/mutation_partition.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"

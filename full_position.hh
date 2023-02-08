@@ -9,7 +9,7 @@
 #pragma once
 
 #include "keys.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 
 struct full_position;
 

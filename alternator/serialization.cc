@@ -14,7 +14,7 @@
 #include "rapidjson/writer.h"
 #include "concrete_types.hh"
 #include "cql3/type_json.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 
 static logging::logger slogger("alternator-serialization");
 

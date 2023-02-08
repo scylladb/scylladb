@@ -31,7 +31,7 @@
 #include "service_permit.hh"
 #include "utils/directories.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "mutation_partition_view.hh"
+#include "mutation/mutation_partition_view.hh"
 #include "utils/runtime.hh"
 #include "utils/error_injection.hh"
 

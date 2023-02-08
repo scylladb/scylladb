@@ -17,7 +17,7 @@
 #include "seastar/core/thread.hh"
 #include "to_string.hh"
 #include "bytes.hh"
-#include "mutation_partition_serializer.hh"
+#include "mutation/mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "partition_slice_builder.hh"

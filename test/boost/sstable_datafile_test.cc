@@ -42,7 +42,7 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
 #include "compatible_ring_position.hh"
-#include "mutation_compactor.hh"
+#include "mutation/mutation_compactor.hh"
 #include "service/priority_manager.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"

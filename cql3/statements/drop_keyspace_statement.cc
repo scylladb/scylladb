@@ -15,7 +15,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/event.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

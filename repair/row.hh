@@ -8,7 +8,7 @@
 
 #pragma once
 #include <optional>
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/coroutine.hh>
 #include "repair/decorated_key_with_hash.hh"

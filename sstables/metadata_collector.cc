@@ -8,7 +8,7 @@
 
 #include "log.hh"
 #include "metadata_collector.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 
 logging::logger mdclogger("metadata_collector");
 

@@ -10,7 +10,7 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 
 namespace service {

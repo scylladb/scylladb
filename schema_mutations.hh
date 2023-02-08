@@ -9,9 +9,9 @@
 #pragma once
 
 #include <vector>
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "schema_fwd.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 
 // Commutative representation of table schema
 // Equality ignores tombstones.

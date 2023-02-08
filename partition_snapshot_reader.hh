@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "partition_version.hh"
+#include "mutation/partition_version.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "readers/range_tombstone_change_merger.hh"

@@ -12,7 +12,7 @@
 #include <seastar/core/enum.hh>
 #include "bytes.hh"
 #include "gc_clock.hh"
-#include "tombstone.hh"
+#include "mutation/tombstone.hh"
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "sstables/key.hh"

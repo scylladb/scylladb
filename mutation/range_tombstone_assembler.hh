@@ -11,7 +11,7 @@
 #include <exception>
 #include <seastar/core/print.hh>
 
-#include "mutation_fragment_v2.hh"
+#include "mutation/mutation_fragment_v2.hh"
 
 /// Converts a stream of range_tombstone_change fragments to an equivalent stream of range_tombstone objects.
 /// The input fragments must be ordered by their position().

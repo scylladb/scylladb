@@ -9,7 +9,7 @@
 #pragma once
 #include <functional>
 #include <variant>
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/lsa/chunked_managed_vector.hh"
 #include "reader_permit.hh"

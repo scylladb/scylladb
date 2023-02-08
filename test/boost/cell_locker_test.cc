@@ -11,7 +11,7 @@
 #include <seastar/core/thread.hh>
 
 #include "cell_locking.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "schema_builder.hh"
 
 using namespace std::literals::chrono_literals;

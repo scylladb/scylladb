@@ -9,7 +9,7 @@
 #pragma once
 
 #include <boost/test/unit_test.hpp>
-#include "range_tombstone_list.hh"
+#include "mutation/range_tombstone_list.hh"
 
 class range_tombstone_list_assertions {
     const schema& _s;

@@ -15,13 +15,13 @@
 #include "schema.hh"
 #include "schema_registry.hh"
 #include "keys.hh"
-#include "mutation_fragment.hh"
-#include "mutation.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation.hh"
 #include "schema_builder.hh"
 #include "reader_permit.hh"
 #include "types/map.hh"
 #include "test/lib/key_utils.hh"
-#include "atomic_cell_or_collection.hh"
+#include "mutation/atomic_cell_or_collection.hh"
 
 // Helper for working with the following table:
 //

@@ -16,7 +16,7 @@
 #include <unordered_map>
 #include <type_traits>
 #include <deque>
-#include "atomic_cell.hh"
+#include "mutation/atomic_cell.hh"
 
 namespace sstables {
 

@@ -6,7 +6,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "service/storage_proxy.hh"
 
 SEASTAR_TEST_CASE(test_internal_operation_filtering) {

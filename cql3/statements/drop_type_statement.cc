@@ -19,7 +19,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

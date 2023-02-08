@@ -10,11 +10,11 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "mutation.hh"
-#include "mutation_fragment_stream_validator.hh"
+#include "mutation/mutation.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 #include "log.hh"
 #include "clustering_interval_set.hh"
-#include "mutation_partition_v2.hh"
+#include "mutation/mutation_partition_v2.hh"
 
 extern logging::logger testlog;
 

@@ -8,7 +8,7 @@
  */
 #pragma once
 #include "utils/UUID_gen.hh"
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 
 namespace service {
 

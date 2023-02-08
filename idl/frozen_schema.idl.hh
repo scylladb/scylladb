@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
 

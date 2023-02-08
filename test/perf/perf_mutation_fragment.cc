@@ -11,7 +11,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/perf/perf.hh"
 
-#include "mutation_fragment.hh"
+#include "mutation/mutation_fragment.hh"
 
 namespace tests {
 

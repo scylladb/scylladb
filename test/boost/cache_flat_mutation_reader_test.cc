@@ -14,9 +14,9 @@
 #include <seastar/core/thread.hh>
 #include "schema_builder.hh"
 #include "keys.hh"
-#include "mutation_partition.hh"
-#include "partition_version.hh"
-#include "mutation.hh"
+#include "mutation/mutation_partition.hh"
+#include "mutation/partition_version.hh"
+#include "mutation/mutation.hh"
 #include "replica/memtable.hh"
 #include "row_cache.hh"
 

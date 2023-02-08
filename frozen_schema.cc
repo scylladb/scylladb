@@ -8,7 +8,7 @@
 
 #include "frozen_schema.hh"
 #include "db/schema_tables.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"

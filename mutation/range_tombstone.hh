@@ -12,9 +12,9 @@
 #include <optional>
 #include "hashing.hh"
 #include "keys.hh"
-#include "tombstone.hh"
+#include "mutation/tombstone.hh"
 #include "clustering_bounds_comparator.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 
 namespace bi = boost::intrusive;
 

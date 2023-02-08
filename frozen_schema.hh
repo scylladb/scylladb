@@ -9,7 +9,7 @@
 #pragma once
 
 #include "schema_fwd.hh"
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "bytes_ostream.hh"
 
 namespace db {

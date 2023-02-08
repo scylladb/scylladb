@@ -14,7 +14,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "cql3/query_processor.hh"
 #include "gms/feature_service.hh"
 

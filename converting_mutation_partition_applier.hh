@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "mutation_partition_visitor.hh"
-#include "atomic_cell.hh"
+#include "mutation/mutation_partition_visitor.hh"
+#include "mutation/atomic_cell.hh"
 #include "schema.hh" // temporary: bring in definition of `column_kind`
 
 class schema;

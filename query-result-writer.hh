@@ -9,7 +9,7 @@
 #pragma once
 
 #include "types.hh"
-#include "atomic_cell.hh"
+#include "mutation/atomic_cell.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "digest_algorithm.hh"

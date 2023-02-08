@@ -16,7 +16,7 @@
 
 #include "test/lib/random_utils.hh"
 #include "utils/disk-error-handler.hh"
-#include "atomic_cell.hh"
+#include "mutation/atomic_cell.hh"
 #include "types.hh"
 
 BOOST_AUTO_TEST_CASE(test_atomic_cell) {

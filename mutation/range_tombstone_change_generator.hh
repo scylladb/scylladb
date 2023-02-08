@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "mutation_fragment_v2.hh"
+#include "mutation/mutation_fragment_v2.hh"
 #include "range_tombstone_list.hh"
 
 template<typename T>

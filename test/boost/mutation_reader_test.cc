@@ -45,7 +45,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "utils/ranges.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_rebuilder.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 #include "readers/from_mutations_v2.hh"

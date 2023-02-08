@@ -11,7 +11,7 @@
 #include <optional>
 
 #include "commitlog_types.hh"
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "schema_fwd.hh"
 
 class commitlog_entry {

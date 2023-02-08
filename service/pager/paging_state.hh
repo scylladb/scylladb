@@ -17,7 +17,7 @@
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include "db/read_repair_decision.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 #include "locator/host_id.hh"
 
 namespace service {

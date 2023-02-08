@@ -21,7 +21,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include <seastar/rpc/rpc.hh>
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "db/config.hh"
 #include "db/view/view_update_backlog.hh"
@@ -107,7 +107,7 @@
 #include "partition_range_compat.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "idl/partition_checksum.dist.impl.hh"

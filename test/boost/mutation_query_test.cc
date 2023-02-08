@@ -29,7 +29,7 @@
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations_v2.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_rebuilder.hh"
 #include "readers/mutation_source.hh"
 #include "service/priority_manager.hh"
 

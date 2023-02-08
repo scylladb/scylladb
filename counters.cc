@@ -7,7 +7,7 @@
  */
 
 #include "counters.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "combine.hh"
 
 #include <boost/range/algorithm/sort.hpp>

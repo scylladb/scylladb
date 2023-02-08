@@ -15,7 +15,7 @@
 #include "cql3/update_parameters.hh"
 #include "cql3/operation.hh"
 #include "cql3/values.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace service::broadcast_tables {

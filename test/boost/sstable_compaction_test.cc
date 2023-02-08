@@ -49,12 +49,12 @@
 #include "test/lib/make_random_string.hh"
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "compatible_ring_position.hh"
-#include "mutation_compactor.hh"
+#include "mutation/mutation_compactor.hh"
 #include "service/priority_manager.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "compaction/table_state.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_rebuilder.hh"
 
 #include <stdio.h>
 #include <ftw.h>

@@ -296,7 +296,6 @@ set(scylla_sources
     api/system.cc
     api/task_manager.cc
     api/task_manager_test.cc
-    atomic_cell.cc
     auth/allow_all_authenticator.cc
     auth/allow_all_authorizer.cc
     auth/authenticated_user.cc
@@ -317,7 +316,6 @@ set(scylla_sources
     auth/transitional.cc
     bytes.cc
     caching_options.cc
-    canonical_mutation.cc
     cdc/cdc_partitioner.cc
     cdc/generation.cc
     cdc/log.cc
@@ -467,7 +465,6 @@ set(scylla_sources
     duration.cc
     exceptions/exceptions.cc
     readers/mutation_readers.cc
-    frozen_mutation.cc
     frozen_schema.cc
     generic_server.cc
     gms/application_state.cc
@@ -507,11 +504,18 @@ set(scylla_sources
     replica/memtable.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
-    mutation.cc
-    mutation_fragment.cc
-    mutation_partition.cc
-    mutation_partition_serializer.cc
-    mutation_partition_view.cc
+    mutation/atomic_cell.cc
+    mutation/canonical_mutation.cc
+    mutation/frozen_mutation.cc
+    mutation/mutation.cc
+    mutation/mutation_fragment.cc
+    mutation/mutation_partition.cc
+    mutation/mutation_partition_serializer.cc
+    mutation/mutation_partition_v2.cc
+    mutation/mutation_partition_view.cc
+    mutation/partition_version.cc
+    mutation/range_tombstone.cc
+    mutation/range_tombstone_list.cc
     mutation_query.cc
     readers/mutation_reader.cc
     mutation_writer/feed_writers.cc
@@ -520,7 +524,6 @@ set(scylla_sources
     mutation_writer/shard_based_splitting_writer.cc
     mutation_writer/timestamp_based_splitting_writer.cc
     partition_slice_builder.cc
-    partition_version.cc
     querier.cc
     query.cc
     query_ranges_to_vnodes.cc
@@ -531,8 +534,6 @@ set(scylla_sources
     raft/server.cc
     raft/tracker.cc
     service/broadcast_tables/experimental/lang.cc
-    range_tombstone.cc
-    range_tombstone_list.cc
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc

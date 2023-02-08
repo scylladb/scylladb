@@ -14,7 +14,7 @@
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

@@ -5,7 +5,7 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "types.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>

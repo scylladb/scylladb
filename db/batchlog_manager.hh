@@ -20,7 +20,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "db_clock.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "utils/UUID.hh"
 
 #include <chrono>

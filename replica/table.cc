@@ -40,7 +40,7 @@
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/fb_utilities.hh"
-#include "mutation_source_metadata.hh"
+#include "mutation/mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
