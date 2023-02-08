@@ -544,6 +544,37 @@ def test_filter_and_limit_2(cql, test_keyspace):
         for i in [3, 1, N]:
             assert results[0:i] == list(cql.execute(f'SELECT ck1 FROM {table} WHERE pk = 1 AND ck2 = 2 AND x = 3 LIMIT {i} ALLOW FILTERING'))
 
+# Yet another reproducer for #10649, this time using a local index instead
+# of a global index. As before, test that a LIMIT works correctly in
+# conjunction filtering. A user tried this variant in issue #12766.
+# This is a scylla_only test because local index is a Scylla-only feature.
+@pytest.mark.parametrize("use_local_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#10649")), False])
+def test_filter_and_limit_local_index(cql, test_keyspace, use_local_index, driver_bug_1, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p, c)') as table:
+        if use_local_index:
+            cql.execute(f'CREATE INDEX ON {table}((p), x)')
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, x, y) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [0, 0, 1, 0])
+        cql.execute(stmt, [0, 1, 1, 1])
+        cql.execute(stmt, [0, 2, 1, 0])
+        cql.execute(stmt, [0, 3, 1, 1])
+        cql.execute(stmt, [0, 4, 1, 0])
+        cql.execute(stmt, [0, 5, 1, 1])
+        cql.execute(stmt, [0, 6, 1, 0])
+        cql.execute(stmt, [0, 7, 1, 1])
+        results = list(cql.execute(f'SELECT c FROM {table} WHERE p = 0 AND x = 1 AND y = 1 ALLOW FILTERING'))
+        assert sorted(results) == [(1,), (3,), (5,), (7,)]
+        # Make sure that with LIMIT N we get back exactly N results - not
+        # less and also not more.
+        assert [(1,)] == sorted(list(cql.execute(f'SELECT c FROM {table} WHERE p = 0 AND x = 1 AND y = 1 LIMIT 1 ALLOW FILTERING')))
+        assert [(1,), (3,), (5,)] == sorted(list(cql.execute(f'SELECT c FROM {table} WHERE p = 0 AND x = 1 AND y = 1 LIMIT 3 ALLOW FILTERING')))
+        # Make the test even harder (exercising more code paths) by asking
+        # to fetch the 3 results in tiny one-result pages instead of one page.
+        s = cql.prepare(f'SELECT c FROM {table} WHERE p = 0 AND x = 1 AND y = 1 LIMIT 3 ALLOW FILTERING')
+        s.fetch_size = 1
+        assert sorted(cql.execute(s)) == [(1,), (3,), (5,)]
+
 # Tests for issue #2962 - different type of indexing on collection columns.
 # Note that we also have a randomized test for this feature as a C++ unit
 # tests, as well as many tests translated from Cassandra's unit tests (grep
