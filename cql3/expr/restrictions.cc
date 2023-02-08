@@ -22,25 +22,6 @@ bool is_legal_relation_for_non_frozen_collection(oper_t oper, bool is_lhs_col_in
     return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed);
 }
 
-bool oper_is_slice(oper_t oper) {
-    switch(oper) {
-        case oper_t::LT:
-        case oper_t::LTE:
-        case oper_t::GT:
-        case oper_t::GTE:
-            return true;
-        case oper_t::EQ:
-        case oper_t::NEQ:
-        case oper_t::IN:
-        case oper_t::CONTAINS:
-        case oper_t::CONTAINS_KEY:
-        case oper_t::IS_NOT:
-        case oper_t::LIKE:
-            return false;
-    }
-    on_internal_error(expr_logger, format("oper_is_slice: Unhandled oper_t: {}", oper));
-}
-
 void validate_single_column_relation(const column_value& lhs, oper_t oper, const schema& schema, bool is_lhs_subscripted) {
     using namespace statements::request_validations; // used for check_false and check_true
 
@@ -53,7 +34,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
                    lhs.col->name_as_text()));
     }
 
-    if (oper_is_slice(oper) && lhs_col_type.references_duration()) {
+    if (expr::is_slice(oper) && lhs_col_type.references_duration()) {
         using statements::request_validations::check_false;
 
         check_false(lhs_col_type.is_collection(), "Slice restrictions are not supported on collections containing durations");
