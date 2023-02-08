@@ -95,6 +95,7 @@ set(scylla_sources
     compaction/compaction_strategy.cc
     compaction/leveled_compaction_strategy.cc
     compaction/size_tiered_compaction_strategy.cc
+    compaction/task_manager_module.cc
     compaction/time_window_compaction_strategy.cc
     compress.cc
     converting_mutation_partition_applier.cc
