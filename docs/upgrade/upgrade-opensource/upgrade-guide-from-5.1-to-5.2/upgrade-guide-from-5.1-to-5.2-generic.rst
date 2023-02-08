@@ -67,7 +67,11 @@ Apply the following procedure **serially** on each node. Do not move to the next
 If you enabled consistent cluster management in each node's configuration file, then as soon as every node has been upgraded to the new version, the cluster will start a procedure which initializes the Raft algorithm for consistent cluster metadata management.
 You must then :ref:`verify <validate-raft-setup>` that this procedure successfully finishes.
 
-.. note:: Before upgrading, make sure to use the latest `ScyllaDB Monitoring <https://monitoring.docs.scylladb.com/>`_ stack.
+.. note:: 
+
+   If you use the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>`_, we recommend upgrading the Monitoring Stack  to the latest version **before** upgrading ScyllaDB.
+   
+   For ScyllaDB 5.2, you MUST upgrade the Monitoring Stack to version 4.3 or later.
 
 Upgrade Steps
 =============
