@@ -20,7 +20,7 @@
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
-#include "mutation_fragment.hh"
+#include "mutation/mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 

@@ -16,7 +16,7 @@
 #include "data_dictionary/user_types_metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

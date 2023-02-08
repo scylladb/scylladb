@@ -13,7 +13,7 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

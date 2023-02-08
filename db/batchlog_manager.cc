@@ -20,7 +20,7 @@
 #include <boost/range/adaptor/sliced.hpp>
 
 #include "batchlog_manager.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "service/storage_proxy.hh"
 #include "system_keyspace.hh"
 #include "utils/rate_limiter.hh"

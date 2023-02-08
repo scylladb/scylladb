@@ -18,7 +18,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
@@ -36,7 +36,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
 #include "timeout_config.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>

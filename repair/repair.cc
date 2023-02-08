@@ -9,7 +9,7 @@
 #include "repair.hh"
 #include "repair/row_level.hh"
 
-#include "atomic_cell_hash.hh"
+#include "mutation/atomic_cell_hash.hh"
 #include "dht/sharder.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"

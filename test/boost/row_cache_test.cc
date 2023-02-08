@@ -27,7 +27,7 @@
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
 #include "partition_slice_builder.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_rebuilder.hh"
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/memtable_snapshot_source.hh"

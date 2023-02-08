@@ -8,7 +8,7 @@
 
 #pragma once
 #include "dht/i_partitioner.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 
 // Represent a position of a mutation_fragment read from a flat mutation
 // reader. Repair nodes negotiate a small range identified by two

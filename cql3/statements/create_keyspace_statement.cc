@@ -14,7 +14,7 @@
 #include "prepared_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"

@@ -7,7 +7,7 @@
  */
 
 #include "mutation_writer/partition_based_splitting_writer.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_rebuilder.hh"
 #include "replica/memtable.hh"
 
 #include <seastar/core/coroutine.hh>

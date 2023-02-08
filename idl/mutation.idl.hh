@@ -7,7 +7,7 @@
  */
 
 #include "counters.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 #include "idl/uuid.idl.hh"
 #include "idl/keys.idl.hh"

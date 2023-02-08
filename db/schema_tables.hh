@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "db/commitlog/replay_position.hh"
 #include "schema_fwd.hh"
 #include "schema_features.hh"

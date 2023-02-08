@@ -25,7 +25,7 @@
 #include "cql3/index_name.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "index/secondary_index_manager.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>

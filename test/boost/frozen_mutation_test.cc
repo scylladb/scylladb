@@ -13,9 +13,9 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "schema_builder.hh"
-#include "mutation_partition_view.hh"
+#include "mutation/mutation_partition_view.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

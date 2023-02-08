@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/group0_state_machine.hh"
-#include "atomic_cell.hh"
+#include "mutation/atomic_cell.hh"
 #include "cql3/selection/selection.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/token.hh"
 #include "message/messaging_service.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"

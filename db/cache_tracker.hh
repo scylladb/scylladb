@@ -10,8 +10,8 @@
 
 #include "utils/lru.hh"
 #include "utils/logalloc.hh"
-#include "partition_version.hh"
-#include "mutation_cleaner.hh"
+#include "mutation/partition_version.hh"
+#include "mutation/mutation_cleaner.hh"
 
 #include <seastar/core/metrics_registration.hh>
 

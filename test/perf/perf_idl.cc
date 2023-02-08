@@ -11,8 +11,8 @@
 #include "test/lib/simple_schema.hh"
 #include "test/perf/perf.hh"
 
-#include "frozen_mutation.hh"
-#include "mutation_partition_view.hh"
+#include "mutation/frozen_mutation.hh"
+#include "mutation/mutation_partition_view.hh"
 
 namespace tests {
 

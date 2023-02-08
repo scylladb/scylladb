@@ -1,10 +1,10 @@
 #pragma once
 
 #include "flat_mutation_reader_v2.hh"
-#include "mutation_fragment.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_rebuilder.hh"
 #include "reader_permit.hh"
-#include "range_tombstone_assembler.hh"
+#include "mutation/range_tombstone_assembler.hh"
 
 class mutation_fragment_v1_stream final {
     flat_mutation_reader_v2 _reader;

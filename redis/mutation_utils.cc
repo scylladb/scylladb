@@ -13,7 +13,7 @@
 #include <seastar/core/print.hh>
 #include "redis/keyspace_utils.hh"
 #include "redis/options.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "service_permit.hh"
 
 using namespace seastar;

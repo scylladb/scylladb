@@ -10,7 +10,7 @@
 
 #include "bytes.hh"
 #include "timestamp.hh"
-#include "tombstone.hh"
+#include "mutation/tombstone.hh"
 #include "gc_clock.hh"
 #include "utils/managed_bytes.hh"
 #include <seastar/net//byteorder.hh>

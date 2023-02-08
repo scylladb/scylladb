@@ -13,8 +13,8 @@
 #include <seastar/util/bool_class.hh>
 #include <seastar/util/closeable.hh>
 
-#include "mutation_fragment.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "readers/from_mutations_v2.hh"

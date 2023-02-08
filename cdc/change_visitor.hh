@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 /*
  * This file contains a general abstraction for walking over mutations,

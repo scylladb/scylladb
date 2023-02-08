@@ -7,7 +7,7 @@
  */
 
 #include "schema_mutations.hh"
-#include "canonical_mutation.hh"
+#include "mutation/canonical_mutation.hh"
 #include "db/schema_tables.hh"
 #include "hashers.hh"
 #include "utils/UUID_gen.hh"

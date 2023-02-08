@@ -11,7 +11,7 @@
 #include <boost/intrusive/unordered_set.hpp>
 
 #include "utils/small_vector.hh"
-#include "mutation_partition.hh"
+#include "mutation/mutation_partition.hh"
 #include "xx_hasher.hh"
 
 #include "db/timeout_clock.hh"

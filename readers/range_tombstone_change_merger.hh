@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "tombstone.hh"
+#include "mutation/tombstone.hh"
 
 // Merges range tombstone changes coming from different streams (readers).
 //

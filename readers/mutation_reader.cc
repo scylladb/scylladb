@@ -9,8 +9,8 @@
 #include <seastar/util/lazy.hh>
 
 #include "readers/flat_mutation_reader_v2.hh"
-#include "mutation_rebuilder.hh"
-#include "mutation_fragment_stream_validator.hh"
+#include "mutation/mutation_rebuilder.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 #include "schema_upgrader.hh"
 
 logging::logger mrlog("mutation_reader");

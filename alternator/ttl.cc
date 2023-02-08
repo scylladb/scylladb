@@ -33,7 +33,7 @@
 #include "service/pager/query_pagers.hh"
 #include "gms/feature_service.hh"
 #include "sstables/types.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "types.hh"
 #include "types/map.hh"
 #include "utils/rjson.hh"

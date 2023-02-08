@@ -10,11 +10,11 @@
 
 #include "query-request.hh"
 #include "query-result.hh"
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "db/timeout_clock.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "utils/chunked_vector.hh"
-#include "range_tombstone_assembler.hh"
+#include "mutation/range_tombstone_assembler.hh"
 
 class reconcilable_result;
 class frozen_reconcilable_result;

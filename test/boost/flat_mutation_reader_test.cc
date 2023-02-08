@@ -12,8 +12,8 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
-#include "mutation.hh"
-#include "mutation_fragment.hh"
+#include "mutation/mutation.hh"
+#include "mutation/mutation_fragment.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/reversing_v2.hh"
@@ -24,8 +24,8 @@
 #include "row_cache.hh"
 #include "test/lib/tmpdir.hh"
 #include "repair/repair.hh"
-#include "mutation_partition_view.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation_partition_view.hh"
+#include "mutation/mutation_rebuilder.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"

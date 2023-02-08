@@ -30,7 +30,7 @@
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 
 namespace auth {
 

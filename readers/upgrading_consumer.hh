@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "mutation_fragment_v2.hh"
-#include "range_tombstone_change_generator.hh"
+#include "mutation/mutation_fragment_v2.hh"
+#include "mutation/range_tombstone_change_generator.hh"
 
 template <typename EndConsumer>
 requires requires(EndConsumer& c, mutation_fragment_v2 mf) {

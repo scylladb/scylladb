@@ -9,7 +9,7 @@
 #pragma once
 
 #include "clustering_ranges_walker.hh"
-#include "mutation_fragment.hh"
+#include "mutation/mutation_fragment.hh"
 
 template<typename T>
 concept SplitterFragmentConsumer = std::invocable<T, mutation_fragment>;

@@ -10,14 +10,14 @@
 
 #include "dht/i_partitioner.hh"
 #include "schema_fwd.hh"
-#include "mutation_fragment.hh"
+#include "mutation/mutation_fragment.hh"
 #include "sstables/shared_sstable.hh"
 #include "reader_permit.hh"
 #include "db/view/row_locking.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/circular_buffer.hh>
-#include "mutation.hh"
-#include "mutation_rebuilder.hh"
+#include "mutation/mutation.hh"
+#include "mutation/mutation_rebuilder.hh"
 
 class evictable_reader_handle;
 class evictable_reader_handle_v2;

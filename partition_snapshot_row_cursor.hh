@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "partition_version.hh"
+#include "mutation/partition_version.hh"
 #include "row_cache.hh"
 #include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>

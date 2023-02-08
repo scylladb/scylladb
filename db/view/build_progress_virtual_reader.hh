@@ -11,7 +11,7 @@
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner.hh"
 #include "readers/flat_mutation_reader_v2.hh"
-#include "mutation_fragment.hh"
+#include "mutation/mutation_fragment.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
 #include "tracing/tracing.hh"

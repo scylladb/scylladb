@@ -9,8 +9,8 @@
 #include "converting_mutation_partition_applier.hh"
 #include "concrete_types.hh"
 
-#include "mutation_partition_view.hh"
-#include "mutation_partition.hh"
+#include "mutation/mutation_partition_view.hh"
+#include "mutation/mutation_partition.hh"
 #include "schema.hh"
 
 bool

@@ -7,8 +7,8 @@
  */
 
 #include "range_tombstone.hh"
-#include "mutation_fragment.hh"
-#include "mutation_fragment_v2.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_fragment_v2.hh"
 
 #include <boost/range/algorithm/upper_bound.hpp>
 

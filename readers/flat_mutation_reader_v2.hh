@@ -13,9 +13,9 @@
 #include <seastar/core/circular_buffer.hh>
 
 #include "dht/i_partitioner.hh"
-#include "mutation_fragment_v2.hh"
-#include "mutation.hh"
-#include "mutation_consumer_concepts.hh"
+#include "mutation/mutation_fragment_v2.hh"
+#include "mutation/mutation.hh"
+#include "mutation/mutation_consumer_concepts.hh"
 #include "reader_permit.hh"
 
 using seastar::future;

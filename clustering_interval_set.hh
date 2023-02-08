@@ -9,7 +9,7 @@
 #pragma once
 
 #include "schema_fwd.hh"
-#include "position_in_partition.hh"
+#include "mutation/position_in_partition.hh"
 #include <boost/icl/interval_set.hpp>
 
 // Represents a non-contiguous subset of clustering_key domain of a particular schema.

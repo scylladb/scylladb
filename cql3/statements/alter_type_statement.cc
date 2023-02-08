@@ -13,7 +13,7 @@
 #include "cql3/column_identifier.hh"
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
-#include "mutation.hh"
+#include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"

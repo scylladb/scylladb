@@ -12,8 +12,8 @@
 #include <seastar/core/io_priority_class.hh>
 #include <seastar/core/smp.hh>
 #include "schema_fwd.hh"
-#include "mutation_fragment.hh"
-#include "mutation_fragment_v2.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_fragment_v2.hh"
 
 struct encoding_stats;
 

@@ -22,7 +22,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
-#include "frozen_mutation.hh"
+#include "mutation/frozen_mutation.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "streaming/stream_reason.hh"
