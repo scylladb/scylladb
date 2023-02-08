@@ -297,19 +297,24 @@ sstable_directory::remove_input_sstables_from_resharding(std::vector<sstables::s
 }
 
 future<>
-sstable_directory::collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables) {
-    dirlog.debug("Collecting {} resharded SSTables", resharded_sstables.size());
-    return parallel_for_each(std::move(resharded_sstables), [this] (sstables::shared_sstable sst) {
+sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared_sstable> resharded_sstables, can_be_remote remote_ok) {
+    dirlog.debug("Collecting {} output SSTables (remote={})", resharded_sstables.size(), remote_ok);
+    return parallel_for_each(std::move(resharded_sstables), [this, remote_ok] (sstables::shared_sstable sst) {
         auto shards = sst->get_shards_for_this_sstable();
         assert(shards.size() == 1);
         auto shard = shards[0];
 
         if (shard == this_shard_id()) {
-            dirlog.trace("Collected resharded SSTable {} already local", sst->get_filename());
+            dirlog.trace("Collected output SSTable {} already local", sst->get_filename());
             _unshared_local_sstables.push_back(std::move(sst));
             return make_ready_future<>();
         }
-        dirlog.trace("Collected resharded SSTable {} is remote. Storing it", sst->get_filename());
+
+        if (!remote_ok) {
+            return make_exception_future<>(std::runtime_error("Unexpected remote sstable"));
+        }
+
+        dirlog.trace("Collected output SSTable {} is remote. Storing it", sst->get_filename());
         return sst->get_open_info().then([this, shard, sst] (sstables::foreign_sstable_open_info info) {
             _unshared_remote_sstables[shard].push_back(std::move(info));
             return make_ready_future<>();
@@ -348,15 +353,6 @@ sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::sh
     });
 }
 
-
-future<>
-sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables) {
-    dirlog.debug("Collecting {} reshaped SSTables", reshaped_sstables.size());
-    return parallel_for_each(std::move(reshaped_sstables), [this] (sstables::shared_sstable sst) {
-        _unshared_local_sstables.push_back(std::move(sst));
-        return make_ready_future<>();
-    });
-}
 
 future<>
 sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func) {
