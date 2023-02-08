@@ -4267,6 +4267,56 @@ SEASTAR_TEST_CASE(test_eviction_of_upper_bound_of_population_range) {
     });
 }
 
+// Checks that merging rows from different partition versions preserves the LRU link of the entry
+// from the newer version. We need this in case we're merging two last dummy entries where the older
+// dummy is already unlinked from the LRU. We need to preserve the fact that the last dummy in the
+// newer version is still linked, which may be the last entry which is still holding the partition
+// entry. Otherwise, we may end up with the partition entry not having any entries linked in the LRU,
+// and we'll end up with an unevictable empty partition entry.
+// If we preserve the LRU link from the newer version, we'll be able to evict the partition entry
+// due to the "older versions are evicted first" rule.
+SEASTAR_TEST_CASE(test_partition_entry_evicted_with_dummy_rows_unlinked_in_oldest_mvcc_version) {
+    return seastar::async([] {
+        simple_schema s;
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pkey = s.make_pkey("pk");
+
+        mutation m1(s.schema(), pkey);
+        m1.partition().apply(s.new_tombstone());
+        underlying.apply(m1);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto pr = dht::partition_range::make_singular(pkey);
+
+        {
+            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+            auto close_rd = deferred_close(rd1);
+            rd1.set_max_buffer_size(1);
+            rd1.fill_buffer().get();
+
+            mutation m2(s.schema(), pkey);
+            m2.partition().apply(s.new_tombstone());
+            apply(cache, underlying, m2);
+
+            BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 1);
+            BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 2); // 2 dummy rows, one in each version.
+
+            tracker.evict_from_lru_shallow();
+        }
+
+        cache.evict();
+
+        tracker.cleaner().drain().get();
+        tracker.memtable_cleaner().drain().get();
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_reading_of_nonfull_keys) {
         return seastar::async([] {
             schema_ptr s = schema_builder("ks", "cf")

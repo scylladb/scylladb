@@ -433,8 +433,10 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
             }
             if (tracker) {
                 // Newer evictable versions store complete rows
-                deletable_row& r = i->row();
-                r = std::move(src_e.row());
+                i->row() = std::move(src_e.row());
+                // Need to preserve the LRU link of the later version in case it's
+                // the last dummy entry which holds the partition entry linked in LRU.
+                i->swap(src_e);
                 tracker->remove(src_e);
             } else {
                 // Avoid row compaction if no newer range tombstone.
