@@ -241,7 +241,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             auto result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
-            co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();
+            co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
         });
     });
 }

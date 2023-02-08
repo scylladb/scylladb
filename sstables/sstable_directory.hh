@@ -184,7 +184,7 @@ public:
     sstable_info_vector retrieve_shared_sstables();
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
 
-    future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
+    future<> remove_sstables(std::vector<sstables::shared_sstable> sstlist);
     future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
 
     using can_be_remote = bool_class<struct can_be_remote_tag>;

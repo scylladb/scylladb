@@ -288,10 +288,10 @@ sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
 }
 
 future<>
-sstable_directory::remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist) {
-    dirlog.debug("Removing {} resharded SSTables", sstlist.size());
+sstable_directory::remove_sstables(std::vector<sstables::shared_sstable> sstlist) {
+    dirlog.debug("Removing {} SSTables", sstlist.size());
     return parallel_for_each(std::move(sstlist), [] (const sstables::shared_sstable& sst) {
-        dirlog.trace("Removing resharded SSTable {}", sst->get_filename());
+        dirlog.trace("Removing SSTable {}", sst->get_filename());
         return sst->unlink().then([sst] {});
     });
 }
@@ -345,9 +345,7 @@ sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::sh
 
         // Do this last for exception safety. If there is an exception on unlink we
         // want to at least leave the SSTable unshared list in a sane state.
-        return parallel_for_each(std::move(sstlist), [] (sstables::shared_sstable sst) {
-            return sst->unlink();
-        }).then([] {
+        return remove_sstables(std::move(sstlist)).then([] {
             dirlog.debug("Finished removing all SSTables");
         });
     });
