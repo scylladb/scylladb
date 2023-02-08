@@ -343,7 +343,16 @@ class PythonTestSuite(TestSuite):
         pool_size = cfg.get("pool_size", 2)
 
         self.create_cluster = self.get_cluster_factory(cluster_size)
-        self.clusters = Pool(pool_size, self.create_cluster)
+        async def recycle_cluster(cluster: ScyllaCluster) -> None:
+            """When a dirty cluster is returned to the cluster pool,
+               stop it and release the used IPs. We don't necessarily uninstall() it yet,
+               which would delete the log file and directory - we might want to preserve
+               these if it came from a failed test.
+            """
+            await cluster.stop()
+            await cluster.release_ips()
+
+        self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
 
     def get_cluster_factory(self, cluster_size: int) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
@@ -686,7 +695,8 @@ class CQLApprovalTest(Test):
             if self.server_log is not None:
                 logger.info("Server log:\n%s", self.server_log)
 
-        async with self.suite.clusters.instance(logger) as cluster:
+        # TODO: consider dirty_on_exception=True
+        async with self.suite.clusters.instance(False, logger) as cluster:
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -842,26 +852,32 @@ class PythonTest(Test):
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        async with self.suite.clusters.instance(logger) as cluster:
-            try:
-                cluster.before_test(self.uname)
-                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-                self.args.insert(0, "--host={}".format(cluster.endpoint()))
-                self.is_before_test_ok = True
-                cluster.take_log_savepoint()
-                status = await run_test(self, options)
-                cluster.after_test(self.uname)
-                self.is_after_test_ok = True
-                self.success = status
-            except Exception as e:
-                self.server_log = cluster.read_server_log()
-                self.server_log_filename = cluster.server_log_filename()
-                if self.is_before_test_ok is False:
-                    print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                    print("Server log of the first server:\n{}".format(self.server_log))
-                    # Don't try to continue if the cluster is broken
-                    raise
-            logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        cluster = await self.suite.clusters.get(logger)
+        try:
+            cluster.before_test(self.uname)
+            logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            self.args.insert(0, "--host={}".format(cluster.endpoint()))
+            self.is_before_test_ok = True
+            cluster.take_log_savepoint()
+            status = await run_test(self, options)
+            cluster.after_test(self.uname)
+            self.is_after_test_ok = True
+            self.success = status
+        except Exception as e:
+            self.server_log = cluster.read_server_log()
+            self.server_log_filename = cluster.server_log_filename()
+            if self.is_before_test_ok is False:
+                print("Test {} pre-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                logger.info(f"Discarding cluster after failed start for test %s...", self.name)
+            elif self.is_after_test_ok is False:
+                print("Test {} post-check failed: {}".format(self.name, str(e)))
+                print("Server log of the first server:\n{}".format(self.server_log))
+                logger.info(f"Discarding cluster after failed test %s...", self.name)
+            await self.suite.clusters.put(cluster, is_dirty=True)
+        else:
+            await self.suite.clusters.put(cluster, is_dirty=False)
+        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:

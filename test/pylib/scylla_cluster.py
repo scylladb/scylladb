@@ -17,8 +17,10 @@ import pathlib
 import shutil
 import tempfile
 import time
+import traceback
 from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
+from enum import Enum
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
@@ -111,6 +113,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--max-networking-io-control-blocks', '100',
     '--unsafe-bypass-fsync', '1',
     '--kernel-page-cache', '1',
+    '--commitlog-use-o-dsync', '0',
     '--abort-on-lsa-bad-alloc', '1',
     '--abort-on-seastar-bad-alloc',
     '--abort-on-internal-error', '1',
@@ -172,6 +175,11 @@ def merge_cmdline_options(base: List[str], override: List[str]) -> List[str]:
         return result
 
     return run()
+
+class CqlUpState(Enum):
+    NOT_CONNECTED = 1,
+    CONNECTED = 2,
+    QUERIED = 3
 
 class ScyllaServer:
     """Starts and handles a single Scylla server, managing logs, checking if responsive,
@@ -295,7 +303,7 @@ class ScyllaServer:
         except Exception as exc:    # pylint: disable=broad-except
             return f"Exception when reading server log {self.log_filename}: {exc}"
 
-    async def cql_is_up(self) -> bool:
+    async def cql_is_up(self) -> CqlUpState:
         """Test that CQL is serving (a check we use at start up)."""
         caslog = logging.getLogger('cassandra')
         oldlevel = caslog.getEffectiveLevel()
@@ -310,6 +318,7 @@ class ScyllaServer:
         # work, so rely on this "side effect".
         profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.ip_addr]),
                                    request_timeout=self.START_TIMEOUT)
+        connected = False
         try:
             # In a cluster setup, it's possible that the CQL
             # here is directed to a node different from the initial contact
@@ -321,16 +330,19 @@ class ScyllaServer:
                          protocol_version=4,
                          auth_provider=auth) as cluster:
                 with cluster.connect() as session:
-                    session.execute("SELECT * FROM system.local")
+                    connected = True
+                    # See the comment above about `auth::standard_role_manager`. We execute
+                    # a 'real' query to ensure that the auth service has finished initializing.
+                    session.execute("SELECT key FROM system.local where key = 'local'")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=[self.ip_addr],
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
-                    return True
+                    return CqlUpState.QUERIED
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
             self.logger.debug("Exception when checking if CQL is up: %s", exc)
-            return False
+            return CqlUpState.CONNECTED if connected else CqlUpState.NOT_CONNECTED
         finally:
             caslog.setLevel(oldlevel)
         # Any other exception may indicate a problem, and is passed to the caller.
@@ -363,6 +375,7 @@ class ScyllaServer:
 
         self.start_time = time.time()
         sleep_interval = 0.1
+        cql_up_state = CqlUpState.NOT_CONNECTED
 
         while time.time() < self.start_time + self.START_TIMEOUT:
             if self.cmd.returncode:
@@ -377,20 +390,30 @@ class ScyllaServer:
                         logpath = log_handler.baseFilename   # type: ignore
                     else:
                         logpath = "?"
-                    raise RuntimeError(f"Failed to start server at host {self.ip_addr}.\n"
+                    raise RuntimeError(f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}.\n"
                                        "Check the log files:\n"
                                        f"{logpath}\n"
                                        f"{self.log_filename}")
 
             if hasattr(self, "host_id") or await self.get_host_id(api):
-                if await self.cql_is_up():
+                cql_up_state = await self.cql_is_up()
+                if cql_up_state == CqlUpState.QUERIED:
                     return
 
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        raise RuntimeError(f"failed to start server {self.ip_addr}, "
-                           f"check server log at {self.log_filename}")
+        err = f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}."
+        if hasattr(self, "host_id"):
+            err += f" Managed to obtain the server's Host ID ({self.host_id})"
+            if cql_up_state == CqlUpState.CONNECTED:
+                err += " and to connect the CQL driver, but failed to execute a query."
+            else:
+                err += " but failed to connect the CQL driver."
+        else:
+            err += " Failed to obtain the server's Host ID."
+        err += f"\nCheck server log at {self.log_filename}."
+        raise RuntimeError(err)
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
@@ -705,6 +728,8 @@ class ScyllaCluster:
         to any specific test, throwing it here would stop a specific
         test."""
         if self.start_exception:
+            # Mark as dirty so further test cases don't try to reuse this cluster.
+            self.is_dirty = True
             raise self.start_exception
 
         for server in self.running.values():
@@ -729,11 +754,14 @@ class ScyllaCluster:
         if server_id not in self.running:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
-        server = self.running.pop(server_id)
+        server = self.running[server_id]
+        # Remove the server from `running` only after we successfully stop it.
+        # Stopping may fail and if we removed it from `running` now it might leak.
         if gracefully:
             await server.stop_gracefully()
         else:
             await server.stop()
+        self.running.pop(server_id)
         self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} stopped")
 
@@ -753,8 +781,10 @@ class ScyllaCluster:
         self.is_dirty = True
         server = self.stopped.pop(server_id)
         server.seeds = self._seeds()
-        await server.start(self.api)
+        # Put the server in `running` before starting it.
+        # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+        await server.start(self.api)
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} started")
 
     async def server_restart(self, server_id: ServerNum) -> ActionReturn:
@@ -817,7 +847,9 @@ class ScyllaClusterManager:
         self.is_after_test_ok: bool = False
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
-        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir=base_dir)
+        # Put the socket in /tmp, not base_dir, to avoid going over the length
+        # limit of UNIX-domain socket addresses (issue #12622).
+        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
         self.sock_path: str = f"{self.manager_dir}/api"
         app = aiohttp.web.Application()
         self._setup_routes(app)
@@ -828,7 +860,8 @@ class ScyllaClusterManager:
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
-        await self._get_cluster()
+        self.cluster = await self.clusters.get(self.logger)
+        self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
@@ -839,12 +872,10 @@ class ScyllaClusterManager:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         self.logger.info("Setting up %s", self.current_test_case_full_name)
         if self.cluster.is_dirty:
-            self.logger.info(f"Current cluster %s is dirty after last test, stopping...", self.cluster.name)
-            await self.clusters.steal()
-            await self.cluster.stop()
-            await self.cluster.release_ips()
-            self.logger.info(f"Waiting for new cluster for test %s...", self.current_test_case_full_name)
-            await self._get_cluster()
+            self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
+                             self.cluster.name, self.current_test_case_full_name)
+            self.cluster = await self.clusters.replace_dirty(self.cluster, self.logger)
+            self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
         self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
@@ -860,44 +891,56 @@ class ScyllaClusterManager:
             del self.site
         if not self.cluster.is_dirty:
             self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster)
+            await self.clusters.put(self.cluster, is_dirty=False)
         else:
             self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
                             self.cluster, self.test_uname)
-            await self.clusters.steal()
-            await self.cluster.stop()
+            await self.clusters.put(self.cluster, is_dirty=True)
         del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
         self.is_running = False
 
-    async def _get_cluster(self) -> None:
-        self.cluster = await self.clusters.get(self.logger)
-        self.logger.info("Got new Scylla cluster %s", self.cluster)
-
-
     def _setup_routes(self, app: aiohttp.web.Application) -> None:
-        app.router.add_get('/up', self._manager_up)
-        app.router.add_get('/cluster/up', self._cluster_up)
-        app.router.add_get('/cluster/is-dirty', self._is_dirty)
-        app.router.add_get('/cluster/replicas', self._cluster_replicas)
-        app.router.add_get('/cluster/running-servers', self._cluster_running_servers)
-        app.router.add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
-        app.router.add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
-        app.router.add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
-        app.router.add_get('/cluster/after-test', self._after_test)
-        app.router.add_get('/cluster/mark-dirty', self._mark_dirty)
-        app.router.add_get('/cluster/server/{server_id}/stop', self._cluster_server_stop)
-        app.router.add_get('/cluster/server/{server_id}/stop_gracefully',
-                           self._cluster_server_stop_gracefully)
-        app.router.add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
-        app.router.add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
-        app.router.add_put('/cluster/addserver', self._cluster_server_add)
-        app.router.add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
-        app.router.add_get('/cluster/decommission-node/{server_id}',
-                           self._cluster_decommission_node)
-        app.router.add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
-        app.router.add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
+        def make_catching_handler(handler: Callable) -> Callable:
+            async def catching_handler(request) -> aiohttp.web.Response:
+                """Catch all exceptions and return them to the client.
+                   Without this, the client would get an 'Internal server error' message
+                   without any details. Thanks to this the test log shows the actual error.
+                """
+                try:
+                    return await handler(request)
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    self.logger.error(f'Exception when executing {handler.__name__}: {e}\n{tb}')
+                    return aiohttp.web.Response(status=500, text=str(e))
+            return catching_handler
+
+        def add_get(route: str, handler: Callable):
+            app.router.add_get(route, make_catching_handler(handler))
+
+        def add_put(route: str, handler: Callable):
+            app.router.add_put(route, make_catching_handler(handler))
+
+        add_get('/up', self._manager_up)
+        add_get('/cluster/up', self._cluster_up)
+        add_get('/cluster/is-dirty', self._is_dirty)
+        add_get('/cluster/replicas', self._cluster_replicas)
+        add_get('/cluster/running-servers', self._cluster_running_servers)
+        add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
+        add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
+        add_get('/cluster/before-test/{test_case_name}', self._before_test_req)
+        add_get('/cluster/after-test', self._after_test)
+        add_get('/cluster/mark-dirty', self._mark_dirty)
+        add_get('/cluster/server/{server_id}/stop', self._cluster_server_stop)
+        add_get('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
+        add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
+        add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
+        add_put('/cluster/addserver', self._cluster_server_add)
+        add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
+        add_get('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
+        add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
+        add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
