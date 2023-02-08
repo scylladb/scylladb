@@ -323,11 +323,11 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
 }
 
 future<>
-sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist) {
+sstable_directory::remove_unshared_sstables(std::vector<sstables::shared_sstable> sstlist) {
     // When removing input sstables from reshaping: Those SSTables used to be in the unshared local
     // list. So not only do we have to remove them, we also have to update the list. Because we're
     // dealing with a vector it's easier to just reconstruct the list.
-    dirlog.debug("Removing {} reshaped SSTables", sstlist.size());
+    dirlog.debug("Removing {} unshared SSTables", sstlist.size());
     return do_with(std::move(sstlist), std::unordered_set<sstables::shared_sstable>(),
             [this] (std::vector<sstables::shared_sstable>& sstlist, std::unordered_set<sstables::shared_sstable>& exclude) {
 

@@ -326,7 +326,7 @@ future<uint64_t> reshape(sstables::sstable_directory& dir, replica::table& table
 
             return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
                 return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([&dir, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
-                    return dir.remove_input_sstables_from_reshaping(std::move(sstlist)).then([&dir, new_sstables = std::move(result.new_sstables)] () mutable {
+                    return dir.remove_unshared_sstables(std::move(sstlist)).then([&dir, new_sstables = std::move(result.new_sstables)] () mutable {
                         return dir.collect_output_unshared_sstables(std::move(new_sstables), sstables::sstable_directory::can_be_remote::no);
                     });
                 });
