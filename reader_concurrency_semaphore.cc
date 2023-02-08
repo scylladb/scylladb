@@ -196,6 +196,8 @@ private:
             maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
 
             _semaphore.dequeue_permit(*this);
+        } else if (_state == state::inactive) {
+            _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
         }
     }
 
