@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "replica/database_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
 
 namespace compaction {
@@ -50,6 +52,23 @@ public:
     }
 protected:
     virtual future<> run() override = 0;
+};
+
+class major_keyspace_compaction_task_impl : public major_compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+    std::vector<table_id> _table_infos;
+public:
+    major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            sharded<replica::database>& db,
+            std::vector<table_id> table_infos) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        , _db(db)
+        , _table_infos(std::move(table_infos))
+    {}
+protected:
+    virtual future<> run() override;
 };
 
 class task_manager_module : public tasks::task_manager::module {
