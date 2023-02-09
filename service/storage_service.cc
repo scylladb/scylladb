@@ -2104,14 +2104,17 @@ future<> storage_service::decommission() {
                 slogger.warn("decommission[{}]: Abort decommission operation started, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 // we need to revert the effect of prepare verb the decommission ops is failed
                 req.cmd = node_ops_cmd::decommission_abort;
-                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) -> future<> {
                     if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
                         // No need to revert previous prepare cmd for those who do not apply prepare cmd.
-                        return make_ready_future<>();
+                        co_return;
                     }
-                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    try {
+                        co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
                         slogger.debug("decommission[{}]: Got abort response from node={}", uuid, node);
-                    });
+                    } catch (...) {
+                        slogger.warn("decommission[{}]: Abort request failed on node={}: {}", uuid, node, std::current_exception());
+                    }
                 }).get();
                 slogger.warn("decommission[{}]: Abort decommission operation finished, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 throw;
@@ -2280,14 +2283,18 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
                 uuid, bootstrap_nodes, sync_nodes, ignore_nodes, std::current_exception());
         // we need to revert the effect of prepare verb the bootstrap ops is failed
         req.cmd = node_ops_cmd::bootstrap_abort;
-        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) {
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) -> future<> {
             if (nodes_unknown_verb.contains(node) || nodes_down.contains(node) || nodes_aborted.contains(node)) {
                 // No need to revert previous prepare cmd for those who do not apply prepare cmd.
-                return make_ready_future<>();
+                co_return;
             }
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+
+            try {
+                co_await _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
                 slogger.debug("bootstrap[{}]: Got abort response from node={}", uuid, node);
-            });
+            } catch (...) {
+                slogger.warn("bootstrap[{}]: Abort request failed on node={}: {}", uuid, node, std::current_exception());
+            }
         }).get();
         slogger.error("bootstrap[{}]: Abort bootstrap operation finished, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}: {}",
                 uuid, bootstrap_nodes, sync_nodes, ignore_nodes, std::current_exception());
@@ -2409,14 +2416,17 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
                 uuid, replace_nodes, sync_nodes, ignore_nodes, std::current_exception());
         // we need to revert the effect of prepare verb the replace ops is failed
         req.cmd = node_ops_cmd::replace_abort;
-        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) {
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) -> future<> {
             if (nodes_unknown_verb.contains(node) || nodes_down.contains(node) || nodes_aborted.contains(node)) {
                 // No need to revert previous prepare cmd for those who do not apply prepare cmd.
-                return make_ready_future<>();
+                co_return;
             }
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+            try {
+                co_await _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
                 slogger.debug("replace[{}]: Got abort response from node={}", uuid, node);
-            });
+            } catch (...) {
+                slogger.warn("replace[{}]: Abort request failed on node={}: {}", uuid, node, std::current_exception());
+            }
         }).get();
         slogger.error("replace[{}]: Abort replace operation finished, replace_nodes={}, sync_nodes={}, ignore_nodes={}: {}",
                 uuid, replace_nodes, sync_nodes, ignore_nodes, std::current_exception());
@@ -2561,14 +2571,18 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                                  uuid, endpoint, nodes, ignore_nodes, std::current_exception());
                     // we need to revert the effect of prepare verb the removenode ops is failed
                     req.cmd = node_ops_cmd::removenode_abort;
-                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                    parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) -> future<> {
                         if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
                             // No need to revert previous prepare cmd for those who do not apply prepare cmd.
-                            return make_ready_future<>();
+                            co_return;
                         }
-                        return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+
+                        try {
+                            co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
                             slogger.debug("removenode[{}]: Got abort response from node={}", uuid, node);
-                        });
+                        } catch (...) {
+                            slogger.warn("removenode[{}]: Abort request failed on node={}: {}", uuid, node, std::current_exception());
+                        }
                     }).get();
                     slogger.info("removenode[{}]: Aborted removenode operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                     throw;
