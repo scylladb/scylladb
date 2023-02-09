@@ -482,8 +482,15 @@ test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
 }
 
 SEASTAR_TEST_CASE(statistics_rewrite) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
-        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).get0();
+    return test_env::do_with_async([] (test_env& env) {
+        auto uncompressed_dir_copy = env.tempdir().path();
+        for (const auto& entry : std::filesystem::directory_iterator(uncompressed_dir().c_str())) {
+            std::filesystem::copy(entry.path(), uncompressed_dir_copy / entry.path().filename());
+        }
+        auto generation_dir = (uncompressed_dir_copy / sstables::staging_dir).native();
+        std::filesystem::create_directories(generation_dir);
+
+        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native(), 1).get0();
         test::create_links(*sstp, generation_dir).get();
         test_sstable_exists(generation_dir, 1, true).get();
 
@@ -493,8 +500,6 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
         sstp = env.reusable_sst(uncompressed_schema(), generation_dir, 1).get0();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
-
-        return make_ready_future<>();
     });
 }
 
