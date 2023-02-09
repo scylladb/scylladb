@@ -169,7 +169,7 @@ private:
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
     future<> node_ops_done(node_ops_id ops_uuid);
     future<> node_ops_abort(node_ops_id ops_uuid);
-    void node_ops_singal_abort(std::optional<node_ops_id> ops_uuid);
+    void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
     future<> node_ops_abort_thread();
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,

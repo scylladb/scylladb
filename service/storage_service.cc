@@ -1548,7 +1548,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
 future<> storage_service::stop() {
     // make sure nobody uses the semaphore
-    node_ops_singal_abort(std::nullopt);
+    node_ops_signal_abort(std::nullopt);
     _listeners.clear();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
@@ -2547,7 +2547,7 @@ void storage_service::on_node_ops_registered(node_ops_id ops_uuid) {
     utils::get_local_injector().inject("storage_service_nodeops_abort_after_1s", [this, ops_uuid] {
         (void)with_gate(_async_gate, [this, ops_uuid] {
             return seastar::sleep_abortable(std::chrono::seconds(1), _abort_source).then([this, ops_uuid] {
-                node_ops_singal_abort(ops_uuid);
+                node_ops_signal_abort(ops_uuid);
             });
         });
     });
@@ -2559,7 +2559,7 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
                                       std::function<future<>()> abort_func) {
     auto watchdog_interval = std::chrono::seconds(_db.local().get_config().nodeops_watchdog_timeout_seconds());
     auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), watchdog_interval, std::move(abort_func),
-                                   [this, ops_uuid]() mutable { node_ops_singal_abort(ops_uuid); });
+                                   [this, ops_uuid]() mutable { node_ops_signal_abort(ops_uuid); });
     _node_ops.emplace(ops_uuid, std::move(meta));
     on_node_ops_registered(ops_uuid);
 }
@@ -3827,8 +3827,8 @@ future<> storage_service::node_ops_abort(node_ops_id ops_uuid) {
     }
 }
 
-void storage_service::node_ops_singal_abort(std::optional<node_ops_id> ops_uuid) {
-    slogger.debug("node_ops_singal_abort: ops_uuid={}", ops_uuid);
+void storage_service::node_ops_signal_abort(std::optional<node_ops_id> ops_uuid) {
+    slogger.debug("node_ops_signal_abort: ops_uuid={}", ops_uuid);
     _node_ops_abort_queue.push_back(ops_uuid);
     _node_ops_abort_cond.signal();
 }
