@@ -3828,7 +3828,9 @@ future<> storage_service::node_ops_abort(node_ops_id ops_uuid) {
 }
 
 void storage_service::node_ops_signal_abort(std::optional<node_ops_id> ops_uuid) {
-    slogger.debug("node_ops_signal_abort: ops_uuid={}", ops_uuid);
+    if (ops_uuid) {
+        slogger.warn("Node operation ops_uuid={} watchdog expired. Signaling the operation to abort", ops_uuid);
+    }
     _node_ops_abort_queue.push_back(ops_uuid);
     _node_ops_abort_cond.signal();
 }
