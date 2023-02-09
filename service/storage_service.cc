@@ -1908,6 +1908,168 @@ future<> storage_service::do_stop_ms() {
     });
 }
 
+class node_ops_ctl {
+    std::unordered_set<gms::inet_address> nodes_unknown_verb;
+    std::unordered_set<gms::inet_address> nodes_down;
+    std::unordered_set<gms::inet_address> nodes_failed;
+
+public:
+    const storage_service& ss;
+    sstring desc;
+    locator::host_id host_id;   // Host ID of the node operand (i.e. added, replaced, or leaving node)
+    inet_address endpoint;      // IP address of the node operand (i.e. added, replaced, or leaving node)
+    std::unordered_set<gms::inet_address> sync_nodes;
+    std::unordered_set<gms::inet_address> ignore_nodes;
+    node_ops_cmd_request req;
+    std::chrono::seconds heartbeat_interval;
+    abort_source as;
+    std::optional<future<>> heartbeat_updater_done_fut;
+
+    explicit node_ops_ctl(const storage_service& ss_, node_ops_cmd cmd, locator::host_id id, gms::inet_address ep, node_ops_id uuid = node_ops_id::create_random_id())
+        : ss(ss_)
+        , host_id(id)
+        , endpoint(ep)
+        , req(cmd, uuid)
+        , heartbeat_interval(ss._db.local().get_config().nodeops_heartbeat_interval_seconds())
+    {}
+
+    ~node_ops_ctl() {
+        if (heartbeat_updater_done_fut) {
+            on_internal_error_noexcept(slogger, "node_ops_ctl destroyed without stopping");
+        }
+    }
+
+    const node_ops_id& uuid() const noexcept {
+        return req.ops_uuid;
+    }
+
+    void start(sstring desc_) {
+        desc = std::move(desc_);
+        for (auto& node : sync_nodes) {
+            if (!ss.gossiper().is_alive(node)) {
+                nodes_down.emplace(node);
+            }
+        }
+        if (!nodes_down.empty()) {
+            auto msg = format("{}[{}]: Cannot start: nodes={} needed for {} operation are down. It is highly recommended to fix the down nodes and try again.", desc, uuid(), nodes_down, desc);
+            slogger.warn("{}", msg);
+            throw std::runtime_error(msg);
+        }
+
+        slogger.info("{}[{}]: Started {} operation: node={}/{}, sync_nodes={}, ignore_nodes={}", desc, uuid(), desc, host_id, endpoint, sync_nodes, ignore_nodes);
+    }
+
+    future<> stop() noexcept {
+        co_await stop_heartbeat_updater();
+    }
+
+    // Caller should set the required req members before prepare
+    future<> prepare(node_ops_cmd cmd) noexcept {
+        return send_to_all(cmd);
+    }
+
+    void start_heartbeat_updater(node_ops_cmd cmd) {
+        if (heartbeat_updater_done_fut) {
+            on_internal_error(slogger, "heartbeat_updater already started");
+        }
+        heartbeat_updater_done_fut = heartbeat_updater(cmd);
+    }
+
+    future<> stop_heartbeat_updater() noexcept {
+        if (heartbeat_updater_done_fut) {
+            as.request_abort();
+            co_await *std::exchange(heartbeat_updater_done_fut, std::nullopt);
+        }
+    }
+
+    future<> done(node_ops_cmd cmd) noexcept {
+        co_await stop_heartbeat_updater();
+        co_await send_to_all(cmd);
+    }
+
+    future<> abort(node_ops_cmd cmd) noexcept {
+        co_await stop_heartbeat_updater();
+        co_await send_to_all(cmd);
+    }
+
+    future<> abort_on_error(node_ops_cmd cmd, std::exception_ptr ex) noexcept {
+        slogger.error("{}[{}]: Operation failed, sync_nodes={}: {}", desc, uuid(), sync_nodes, ex);
+        try {
+            co_await abort(cmd);
+        } catch (...) {
+            slogger.warn("{}[{}]: The {} command failed while handling a previous error, sync_nodes={}: {}. Ignoring", desc, uuid(), cmd, sync_nodes, std::current_exception());
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+
+    future<> send_to_all(node_ops_cmd cmd) {
+        req.cmd = cmd;
+        req.ignore_nodes = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes);
+        sstring op_desc = format("{}", cmd);
+        slogger.info("{}[{}]: Started {}", desc, uuid(), req);
+        auto cmd_category = categorize_node_ops_cmd(cmd);
+        co_await coroutine::parallel_for_each(sync_nodes, [&] (const gms::inet_address& node) -> future<> {
+            if (nodes_unknown_verb.contains(node) || nodes_down.contains(node) ||
+                    (nodes_failed.contains(node) && (cmd_category != node_ops_cmd_category::abort))) {
+                // Note that we still send abort commands to failed nodes.
+                co_return;
+            }
+            try {
+                co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
+                slogger.debug("{}[{}]: Got {} response from node={}", desc, uuid(), op_desc, node);
+            } catch (const seastar::rpc::unknown_verb_error&) {
+                if (cmd_category == node_ops_cmd_category::prepare) {
+                    slogger.warn("{}[{}]: Node {} does not support the {} verb", desc, uuid(), node, op_desc);
+                } else {
+                    slogger.warn("{}[{}]: Node {} did not find ops_uuid={} or does not support the {} verb", desc, uuid(), node, uuid(), op_desc);
+                }
+                nodes_unknown_verb.emplace(node);
+            } catch (const seastar::rpc::closed_error&) {
+                slogger.warn("{}[{}]: Node {} is down for {} verb", desc, uuid(), op_desc, node);
+                nodes_down.emplace(node);
+            } catch (...) {
+                slogger.warn("{}[{}]: Node {} failed {} verb: {}", desc, uuid(), node, op_desc, std::current_exception());
+                nodes_failed.emplace(node);
+            }
+        });
+        std::vector<sstring> errors;
+        if (!nodes_failed.empty()) {
+            errors.emplace_back(format("The {} command failed for nodes={}", op_desc, nodes_failed));
+        }
+        if (!nodes_unknown_verb.empty()) {
+            if (cmd_category == node_ops_cmd_category::prepare) {
+                errors.emplace_back(format("The {} command is unsupported on nodes={}. Please upgrade your cluster and run operation again", op_desc, nodes_unknown_verb));
+            } else {
+                errors.emplace_back(format("The ops_uuid={} was not found or the {} command is unsupported on nodes={}", uuid(), op_desc, nodes_unknown_verb));
+            }
+        }
+        if (!nodes_down.empty()) {
+            errors.emplace_back(format("The {} command failed for nodes={}: the needed nodes are down. It is highly recommended to fix the down nodes and try again", op_desc, nodes_failed));
+        }
+        if (!errors.empty()) {
+            co_await coroutine::return_exception(std::runtime_error(join("; ", errors)));
+        }
+        slogger.info("{}[{}]: Finished {}", desc, uuid(), req);
+    }
+
+    future<> heartbeat_updater(node_ops_cmd cmd) {
+        slogger.info("{}[{}]: Started heartbeat_updater (interval={}s)", desc, uuid(), heartbeat_interval.count());
+        while (!as.abort_requested()) {
+            auto req = node_ops_cmd_request{cmd, uuid(), {}, {}, {}};
+            co_await coroutine::parallel_for_each(sync_nodes, [&] (const gms::inet_address& node) -> future<> {
+                try {
+                    co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
+                    slogger.debug("{}[{}]: Got heartbeat response from node={}", desc, uuid(), node);
+                } catch (...) {
+                    slogger.warn("{}[{}]: Failed to get heartbeat response from node={}", desc, uuid(), node);
+                };
+            });
+            co_await sleep_abortable(heartbeat_interval, as).handle_exception([] (std::exception_ptr) {});
+        }
+        slogger.info("{}[{}]: Stopped heartbeat_updater", desc, uuid());
+    }
+};
+
 future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done) {
     std::string ops;
     if (cmd == node_ops_cmd::decommission_heartbeat) {

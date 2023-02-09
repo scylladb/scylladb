@@ -1832,6 +1832,40 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
 }
 
+node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {
+    switch (cmd) {
+    case node_ops_cmd::removenode_prepare:
+    case node_ops_cmd::replace_prepare:
+    case node_ops_cmd::decommission_prepare:
+    case node_ops_cmd::bootstrap_prepare:
+        return node_ops_cmd_category::prepare;
+
+    case node_ops_cmd::removenode_heartbeat:
+    case node_ops_cmd::replace_heartbeat:
+    case node_ops_cmd::decommission_heartbeat:
+    case node_ops_cmd::bootstrap_heartbeat:
+        return node_ops_cmd_category::heartbeat;
+
+    case node_ops_cmd::removenode_sync_data:
+        return node_ops_cmd_category::sync_data;
+
+    case node_ops_cmd::removenode_abort:
+    case node_ops_cmd::replace_abort:
+    case node_ops_cmd::decommission_abort:
+    case node_ops_cmd::bootstrap_abort:
+        return node_ops_cmd_category::abort;
+
+    case node_ops_cmd::removenode_done:
+    case node_ops_cmd::replace_done:
+    case node_ops_cmd::decommission_done:
+    case node_ops_cmd::bootstrap_done:
+        return node_ops_cmd_category::done;
+
+    default:
+        return node_ops_cmd_category::other;
+    }
+}
+
 std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
     switch (cmd) {
         case node_ops_cmd::removenode_prepare:

@@ -271,6 +271,17 @@ enum class node_ops_cmd : uint32_t {
      repair_updater,
 };
 
+enum class node_ops_cmd_category {
+    prepare,
+    heartbeat,
+    sync_data,
+    abort,
+    done,
+    other
+};
+
+node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept;
+
 std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd);
 
 // The cmd and ops_uuid are mandatory for each request.

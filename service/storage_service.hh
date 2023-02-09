@@ -115,6 +115,8 @@ public:
     void cancel_watchdog();
 };
 
+struct node_ops_ctl;
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -233,6 +235,15 @@ private:
         return _batchlog_manager;
     }
 
+    const gms::gossiper& gossiper() const noexcept {
+        return _gossiper;
+    };
+
+    gms::gossiper& gossiper() noexcept {
+        return _gossiper;
+    };
+
+    friend struct node_ops_ctl;
 public:
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
