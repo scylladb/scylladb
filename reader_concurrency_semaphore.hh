@@ -166,13 +166,14 @@ private:
     permit_list_type _ready_list;
     condition_variable _ready_list_cv;
     permit_list_type _inactive_reads;
+    // Stores permits that are not in any of the above list.
+    permit_list_type _permit_list;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     stats _stats;
-    permit_list_type _permit_list;
     bool _stopped = false;
     bool _evicting = false;
     gate _close_readers_gate;
