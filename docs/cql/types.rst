@@ -93,7 +93,7 @@ The following table gives additional information on the native data types and wh
                          :token:`string`       :ref:`times` below for details
  ``timestamp``           :token:`integer`,     A timestamp (date and time) with millisecond precision. See :ref:`timestamps`
                          :token:`string`       below for details
- ``timeuuid``            :token:`uuid`         Version 1 UUID_, generally used as a “conflict-free” timestamp. See `Working with UUIDs`_ for details
+ ``timeuuid``            :token:`uuid`         A time UUID_ (Version 1 or 7), generally used as a “conflict-free” timestamp. See `Working with UUIDs`_ for details
  ``tinyint``             :token:`integer`      8-bit signed int
  ``uuid``                :token:`uuid`         A UUID_ (of any version). See `Working with UUIDs`_ for details
  ``varint``              :token:`integer`      Arbitrary-precision integer

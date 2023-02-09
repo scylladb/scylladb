@@ -46,6 +46,7 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/UUID_cmp.hh"
 #include "mutation_partition.hh"
 
 #include "types/user.hh"
@@ -1643,7 +1644,7 @@ struct validate_visitor {
         auto msb = read_simple<uint64_t>(in);
         auto lsb = read_simple<uint64_t>(in);
         utils::UUID uuid(msb, lsb);
-        if (uuid.version() != 1) {
+        if (!uuid.is_timestamp()) {
             throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
         }
     }
@@ -2282,7 +2283,7 @@ struct compare_visitor {
       return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
-                return utils::timeuuid_tri_compare(v1, v2);
+                return utils::timeuuid_cmp(v1, v2).tri_compare();
             });
         });
       });
@@ -2312,21 +2313,12 @@ struct compare_visitor {
 
             return std::strong_ordering::greater;
         }
-        auto c1 = (v1[6] >> 4) & 0x0f;
-        auto c2 = (v2[6] >> 4) & 0x0f;
 
-        if (c1 != c2) {
-            return c1 <=> c2;
-        }
-
-        if (c1 == 1) {
-            return with_linearized(v1, [&] (bytes_view v1) {
-                return with_linearized(v2, [&] (bytes_view v2) {
-                    return utils::uuid_tri_compare_timeuuid(v1, v2);
-                });
+        return with_linearized(v1, [&] (bytes_view v1) {
+            return with_linearized(v2, [&] (bytes_view v2) {
+                return utils::timeuuid_cmp(v1, v2).uuid_tri_compare();
             });
-        }
-        return compare_unsigned(v1, v2);
+        });
     }
     std::strong_ordering operator()(const empty_type_impl&) { return std::strong_ordering::equal; }
     std::strong_ordering operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
@@ -2612,7 +2604,7 @@ utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
         throw marshal_exception(format("Invalid UUID format ({})", s));
     }
     utils::UUID v(s);
-    if (v.version() != 1) {
+    if (!v.is_timestamp()) {
         throw marshal_exception(format("Unsupported UUID version ({:d})", v.version()));
     }
     return v;
