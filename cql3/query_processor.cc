@@ -22,6 +22,7 @@
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "hashers.hh"
+#include "utils/error_injection.hh"
 
 namespace cql3 {
 
@@ -600,6 +601,14 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 std::unique_ptr<raw::parsed_statement>
 query_processor::parse_statement(const sstring_view& query) {
     try {
+        {
+            const char* error_injection_key = "query_processor-parse_statement-test_failure";
+            utils::get_local_injector().inject(error_injection_key, [&]() {
+                if (query.find(error_injection_key) != sstring_view::npos) {
+                    throw std::runtime_error(error_injection_key);
+                }
+            });
+        }
         auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");

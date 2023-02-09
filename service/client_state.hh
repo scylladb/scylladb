@@ -177,6 +177,10 @@ public:
         return _remote_address.port();
     }
 
+    const socket_address& get_remote_address() const {
+        return _remote_address;
+    }
+
     const timeout_config& get_timeout_config() const {
         return _timeout_config;
     }
