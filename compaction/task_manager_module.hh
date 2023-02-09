@@ -31,6 +31,27 @@ protected:
     virtual future<> run() override = 0;
 };
 
+class major_compaction_task_impl : public compaction_task_impl {
+public:
+    major_compaction_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string keyspace,
+            std::string table,
+            std::string entity,
+            tasks::task_id parent_id) noexcept
+        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+    {
+        // FIXME: add progress units
+    }
+
+    virtual std::string type() const override {
+        return "major compaction";
+    }
+protected:
+    virtual future<> run() override = 0;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
