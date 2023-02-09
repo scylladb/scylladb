@@ -91,7 +91,8 @@ static void assert_sstable_set_size(const sstable_set& s, size_t expected_size) 
 
 SEASTAR_TEST_CASE(datafile_generation_09) {
     // Test that generated sstable components can be successfully loaded.
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
@@ -133,7 +134,8 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_11) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = complex_schema();
 
         auto mt = make_lw_shared<replica::memtable>(s);
@@ -232,7 +234,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_12) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = complex_schema();
 
         auto mt = make_lw_shared<replica::memtable>(s);
@@ -267,7 +270,8 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
 }
 
 static future<> sstable_compression_test(compressor_ptr c, unsigned generation) {
-    return test_setup::do_with_tmp_directory([c, generation] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([c, generation] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         // NOTE: set a given compressor algorithm to schema.
         schema_builder builder(complex_schema());
         builder.set_compressor_params(c);
@@ -317,7 +321,8 @@ SEASTAR_TEST_CASE(datafile_generation_15) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_16) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = uncompressed_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -353,7 +358,8 @@ static flat_mutation_reader_v2 sstable_reader_v2(shared_sstable sst, schema_ptr 
 }
 
 SEASTAR_TEST_CASE(datafile_generation_37) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = compact_simple_dense_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -390,7 +396,8 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_38) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = compact_dense_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -426,7 +433,8 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_39) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = compact_sparse_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -463,7 +471,8 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_41) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type);
 
@@ -498,7 +507,8 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
 
 SEASTAR_TEST_CASE(datafile_generation_47) {
     // Tests the problem in which the sstable row parser would hang.
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
@@ -532,8 +542,8 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 }
 
 SEASTAR_TEST_CASE(test_counter_write) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
-        return seastar::async([&env, tmpdir_path] {
+    return test_env::do_with_async([] (test_env& env) {
+            auto tmpdir_path = env.tempdir().path().native();
             auto s = schema_builder(some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
@@ -578,7 +588,6 @@ SEASTAR_TEST_CASE(test_counter_write) {
             assert_that(sstable_reader_v2(sstp, s, env.make_reader_permit()))
                 .produces(m)
                 .produces_end_of_stream();
-        });
     });
 }
 
@@ -959,8 +968,8 @@ SEASTAR_TEST_CASE(test_counter_read) {
 }
 
 SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
-        return seastar::async([&env, tmpdir_path] {
+    return test_env::do_with_async([] (test_env& env) {
+            auto tmpdir_path = env.tempdir().path().native();
             for (const auto version : writable_sstable_versions) {
                 schema_builder builder(some_keyspace, some_column_family);
                 builder.with_column("p1", utf8_type, column_kind::partition_key);
@@ -983,7 +992,6 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
                 auto sstp = env.reusable_sst(s, tmpdir_path, 53, version).get0();
                 BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
             }
-        });
     });
 }
 
@@ -2875,7 +2883,8 @@ SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
 }
 
 SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         simple_schema ss;
         auto s = ss.schema();
 
@@ -2902,8 +2911,6 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             BOOST_REQUIRE(sst_mr.is_end_of_stream());
             BOOST_REQUIRE_EQUAL(mut, sst_mut);
         }
-
-        return make_ready_future<>();
     });
 }
 
@@ -2945,7 +2952,8 @@ SEASTAR_TEST_CASE(test_may_have_partition_tombstones) {
 }
 
 SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         simple_schema ss;
         auto s = ss.schema();
 
@@ -2979,13 +2987,11 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
                 testlog.info("failed as expected: {}", std::current_exception());
             }
         }
-
-        return make_ready_future<>();
     });
 }
 
 SEASTAR_TEST_CASE(test_sstable_origin) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
 
@@ -2993,7 +2999,7 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
-        fs::path tmp(tmpdir_path);
+        fs::path tmp = env.tempdir().path();
 
         for (const auto version : all_sstable_versions) {
             if (version < sstable_version_types::mc) {
@@ -3013,8 +3019,6 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
             sst = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++, version, 0);
             BOOST_REQUIRE_EQUAL(sst->get_origin(), origin);
         }
-
-        return make_ready_future<>();
     });
 }
 
@@ -3066,8 +3070,8 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
 }
 
 SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
-        return async([&env, tmpdir_path] {
+    return test_env::do_with_async([] (test_env& env) {
+            auto tmpdir_path = env.tempdir().path().native();
             auto s = complex_schema();
 
             auto mt = make_lw_shared<replica::memtable>(s);
@@ -3090,12 +3094,12 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
             auto close_rd = deferred_close(rd);
             auto f = read_mutation_from_flat_mutation_reader(rd);
             BOOST_REQUIRE_THROW(f.get(), timed_out_error);
-        });
     });
 }
 
 SEASTAR_TEST_CASE(test_validate_checksums) {
-    return test_setup::do_with_tmp_directory([&] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([&] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
@@ -3165,8 +3169,6 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 BOOST_REQUIRE(!valid);
             }
         }
-
-        return make_ready_future<>();
     });
 }
 
@@ -3192,7 +3194,8 @@ SEASTAR_TEST_CASE(partial_sstable_deletion_test) {
 }
 
 SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
-    return test_setup::do_with_tmp_directory([&] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([&] (test_env& env) {
+        auto tmpdir_path = env.tempdir().path().native();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
@@ -3244,8 +3247,6 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
             // Make sure the index page linked into LRU after EOF is evicted.
             while (region.evict_some() == memory::reclaiming_result::reclaimed_something);
         }
-
-        return make_ready_future<>();
     });
 }
 
