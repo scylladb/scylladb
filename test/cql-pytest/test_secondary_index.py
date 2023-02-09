@@ -1556,3 +1556,34 @@ def test_local_secondary_index_null_lookup2(cql, test_keyspace, scylla_only):
         p = unique_key_int()
         cql.execute(f'INSERT INTO {table}(p,c,v) VALUES ({p},0,1)')
         assert [] == list(cql.execute(f'SELECT * FROM {table} WHERE p={p} AND c=0 AND v=null'))
+
+# Reproducers for issue #7659, which involves a query with multiple indexes
+# which wrongly tries to use an index for a non-EQ restriction (whereas an
+# index can only be used for EQ). We have one reproducer for this issue as
+# a C++ test, but this test shows the bug for two kinds of non-EQ restrictions
+# with two different symptoms (one used to assert, the other "just" threw an
+# exception), and for both global and local indexes.
+
+def test_7659_global(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, d int, f int, PRIMARY KEY (a, d)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(d)')
+        cql.execute(f'CREATE INDEX ON {table}(f)')
+        cql.execute(f'INSERT INTO {table}(a,d,f) VALUES (1, 0, 1)')
+        cql.execute(f'INSERT INTO {table}(a,d,f) VALUES (2, 0, 2)')
+        cql.execute(f'INSERT INTO {table}(a,d,f) VALUES (3, 0, 3)')
+        cql.execute(f'INSERT INTO {table}(a,d,f) VALUES (4, 0, 0)')
+        cql.execute(f'INSERT INTO {table}(a,d,f) VALUES (5, 1, 1)')
+        # With issue #7659, this generated an assertion failure:
+        assert [(1,),(2,)] == sorted(list(cql.execute(f"SELECT a FROM {table} WHERE d=0 AND f in (1,2) ALLOW FILTERING")))
+        # With issue #7659, this generated an exception and failed request:
+        assert [(1,),(2,),(3,)] == sorted(list(cql.execute(f"SELECT a FROM {table} WHERE d=0 AND f>0 ALLOW FILTERING")))
+
+def test_7659_local(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, f int, PRIMARY KEY ((a, b), c, d)') as table:
+        cql.execute(f'CREATE INDEX ON {table}((a, b), f)')
+        cql.execute(f'CREATE INDEX ON {table}(d)')
+        cql.execute(f'INSERT INTO {table}(a,b,c,d,e,f) VALUES (0,0,0,0,0,1)')
+        # With issue #7659, this generated an assertion failure:
+        assert [(0,)] == list(cql.execute(f"SELECT a FROM {table} WHERE a=0 and b=0 AND d=0 AND f in (1,2) ALLOW FILTERING"))
+        # With issue #7659, this generated an exception and failed request:
+        assert [(0,)] == list(cql.execute(f"SELECT a FROM {table} WHERE a=0 and b=0 AND d=0 AND f>0 ALLOW FILTERING"))
