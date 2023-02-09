@@ -126,12 +126,11 @@ highest_generation_seen(sharded<sstables::sstable_directory>& dir) {
 // Called from a seastar thread
 static void with_sstable_directory(
     std::filesystem::path path,
-    unsigned load_parallelism,
     sstable_from_existing_file sstable_from_existing,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
     sharded<sstables::directory_semaphore> sstdir_sem;
-    sstdir_sem.start(load_parallelism).get();
+    sstdir_sem.start(1).get();
     auto stop_sstdir_sem = defer([&sstdir_sem] {
         sstdir_sem.stop().get();
     });
@@ -161,7 +160,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
     auto f = open_file_dma(manifest.native(), open_flags::wo | open_flags::create | open_flags::truncate).get0();
     f.close().get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
@@ -182,7 +181,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
     // We should fail validation and leave the directory untouched
     remove_file(test::filename(*sst, sstables::component_type::Statistics).native()).get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
@@ -203,7 +202,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_invalid_file) {
         auto f = open_file_dma(name.native(), open_flags::rw | open_flags::create | open_flags::truncate).get0();
         f.close().get();
 
-        with_sstable_directory(dir.path(), 1,
+        with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
                 auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, {});
@@ -219,7 +218,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true });
@@ -235,7 +234,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
         auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
         link_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
-        with_sstable_directory(dir.path(), 1,
+        with_sstable_directory(dir.path(),
                 sstable_from_existing_file(env),
                 [] (sharded<sstables::sstable_directory>& sstdir) {
             auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true });
@@ -252,14 +251,14 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     remove_file(test::filename(*sst, sstables::component_type::TOC).native()).get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
     auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, { .throw_on_missing_toc = true });
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_ok) {
     auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
@@ -281,7 +280,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     f.close().get();
     auto tempstat = fs::canonical(tempstr);
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [&dir, &tempstat] (sharded<sstables::sstable_directory>& sstdir_ok) {
     auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
@@ -294,7 +293,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
 
     remove_file(test::filename(*sst, sstables::component_type::Statistics).native()).get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
     auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
@@ -311,7 +310,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
     rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
@@ -353,7 +352,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
         }).get();
     }
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
@@ -377,7 +376,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
         }).get();
     }
 
-   with_sstable_directory(dir.path(), 1,
+   with_sstable_directory(dir.path(),
             sstable_from_existing_file(env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
@@ -404,7 +403,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             return cf.flush();
         }).get();
 
-        with_sstable_directory(path, 1,
+        with_sstable_directory(path,
             sstable_from_existing_file(e),
         [&] (sharded<sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
@@ -488,7 +487,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++);
         }
 
-      with_sstable_directory(upload_path, 1,
+      with_sstable_directory(upload_path,
                 sstable_from_existing_file(e),
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
@@ -530,7 +529,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++ * smp::count);
         }
 
-      with_sstable_directory(upload_path, 1,
+      with_sstable_directory(upload_path,
                 sstable_from_existing_file(e),
                 [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
@@ -572,7 +571,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++);
         }
 
-      with_sstable_directory(upload_path, 1,
+      with_sstable_directory(upload_path,
                 sstable_from_existing_file(e),
                 [&, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
