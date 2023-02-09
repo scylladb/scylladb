@@ -30,7 +30,7 @@ public:
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), default_priority_class());
     }
 };
 
