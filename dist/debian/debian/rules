@@ -3,7 +3,6 @@
 include /usr/share/dpkg/pkg-info.mk
 
 export PYBUILD_DISABLE=1
-jobs := $(shell echo $$DEB_BUILD_OPTIONS | sed -r "s/.*parallel=([0-9]+).*/-j\1/")
 ifneq ($(findstring housekeeping, $(DEB_BUILD_OPTIONS)),)
     install_arg := --housekeeping
 else
