@@ -3815,12 +3815,15 @@ future<> storage_service::node_ops_abort(node_ops_id ops_uuid) {
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
+        slogger.info("aborting node operation ops_uuid={}", ops_uuid);
         co_await meta.abort();
         auto as = meta.get_abort_source();
         if (as && !as->abort_requested()) {
             as->request_abort();
         }
         _node_ops.erase(it);
+    } else {
+        slogger.info("aborting node operation ops_uuid={}: operation not found", ops_uuid);
     }
 }
 
