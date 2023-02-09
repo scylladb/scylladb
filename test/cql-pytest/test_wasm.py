@@ -1094,5 +1094,16 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
             assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') > 0)
         assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') == 0)
 
-
-
+# Test that we can use counters as the return type of a WASM UDF.
+def test_counter(cql, test_keyspace, scylla_only):
+    schema = "p int, c counter, PRIMARY KEY (p)"
+    ri_counter_name = unique_name()
+    ri_counter_source = read_function_from_file('return_input', ri_counter_name)
+    src = f"(input counter) RETURNS NULL ON NULL INPUT RETURNS counter LANGUAGE xwasm AS '{ri_counter_source}'"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"UPDATE {table} SET c = c + 2  WHERE p = 42;")
+        with new_function(cql, test_keyspace, src, ri_counter_name):
+            assert cql.execute(f"SELECT {ri_counter_name}(c) AS result FROM {table} WHERE p = 42").one().result == 2
+            cql.execute(f"UPDATE {table} SET c = c + 1  WHERE p = 42;")
+            cql.execute(f"UPDATE {table} SET c = c - 4  WHERE p = 42;")
+            assert cql.execute(f"SELECT {ri_counter_name}(c) AS result FROM {table} WHERE p = 42").one().result == -1
