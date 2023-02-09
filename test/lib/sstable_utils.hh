@@ -289,25 +289,6 @@ public:
             return empty_test_dir(p);
         });
     }
-
-    static future<> do_with_tmp_directory(std::function<future<> (test_env&, sstring tmpdir_path)>&& fut) {
-        return test_env::do_with_async([fut = std::move(fut)] (test_env& env) {
-            auto tmp = tmpdir();
-            fut(env, tmp.path().string()).get();
-        });
-    }
-
-    static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (test_env&, sstring srcdir_path, sstring destdir_path)>&& fut) {
-        return test_env::do_with_async([fut = std::move(fut), src = std::move(src)] (test_env& env) {
-            auto src_dir = tmpdir();
-            for (const auto& entry : std::filesystem::directory_iterator(src.c_str())) {
-                std::filesystem::copy(entry.path(), src_dir.path() / entry.path().filename());
-            }
-            auto dest_path = src_dir.path() / sstables::staging_dir;
-            std::filesystem::create_directories(dest_path);
-            fut(env, src_dir.path().string(), dest_path.string()).get();
-        });
-    }
 };
 
 } // namespace sstables
