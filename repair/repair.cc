@@ -982,6 +982,11 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.info("repair[{}]: starting user-requested repair for keyspace {}, repair id {}, options {}", id.uuid(), keyspace, id.id, options_map);
 
+    if (erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+        rlogger.info("repair[{}]: completed successfully: nothing to repair for keyspace {} with local replication strategy", id.uuid(), keyspace);
+        co_return id.id;
+    }
+
     if (!_gossiper.local().is_normal(utils::fb_utilities::get_broadcast_address())) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
     }
