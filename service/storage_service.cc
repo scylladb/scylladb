@@ -2323,7 +2323,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
     wait_for_normal_state_handled_on_boot(sync_nodes, "replace", uuid).get();
     sync_nodes.push_front(get_broadcast_address());
-    auto sync_nodes_generations = _gossiper.get_generation_for_nodes(sync_nodes).get();
+    auto sync_nodes_generations = _gossiper.get_generation_for_nodes(boost::copy_range<std::unordered_set<inet_address>>(sync_nodes)).get();
     // Map existing nodes to replacing nodes
     std::unordered_map<gms::inet_address, gms::inet_address> replace_nodes = {
         {replace_address, get_broadcast_address()},
