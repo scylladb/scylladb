@@ -2030,12 +2030,12 @@ with open(buildfile, 'w') as f:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
 
-        f.write('build $builddir/{mode}/seastar/libseastar.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
+        f.write('build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar\n'.format(**locals()))
-        f.write('build $builddir/{mode}/seastar/libseastar_testing.a: ninja $builddir/{mode}/seastar/build.ninja | always\n'
+        f.write('build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
