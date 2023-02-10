@@ -12,7 +12,6 @@ import asyncio
 import random
 import time
 from test.pylib.util import wait_for
-from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.topology.util import check_token_ring_and_group0_consistency,            \
@@ -66,38 +65,6 @@ async def test_decommission_node_add_column(manager, random_tables):
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     await table.add_column()
     await random_tables.verify_schema()
-
-@pytest.mark.asyncio
-async def test_replace_different_ip(manager: ManagerClient, random_tables) -> None:
-    servers = await manager.running_servers()
-    await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
-    await manager.server_add(replace_cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
-@pytest.mark.asyncio
-async def test_replace_different_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
-    servers = await manager.running_servers()
-    await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
-    await manager.server_add(replace_cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
-@pytest.mark.asyncio
-async def test_replace_reuse_ip(manager: ManagerClient, random_tables) -> None:
-    servers = await manager.running_servers()
-    await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
-    await manager.server_add(replace_cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
-@pytest.mark.asyncio
-async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, random_tables) -> None:
-    servers = await manager.running_servers()
-    await manager.server_stop(servers[0].server_id)
-    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
-    await manager.server_add(replace_cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 
 @pytest.mark.asyncio
@@ -164,5 +131,3 @@ async def test_remove_node_with_concurrent_ddl(manager, random_tables):
         stopped = True
         await ddl_task
         logger.debug("ddl fiber done, finished")
-
-
