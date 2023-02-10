@@ -41,7 +41,7 @@ bytes as_bytes(const sstring& s) {
 
 future<> test_using_working_sst(schema_ptr s, sstring dir, int64_t gen) {
     return test_env::do_with([s = std::move(s), dir = std::move(dir), gen] (test_env& env) {
-        return env.working_sst(std::move(s), std::move(dir), gen);
+        return env.reusable_sst(std::move(s), std::move(dir), gen).discard_result();
     });
 }
 
