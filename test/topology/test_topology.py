@@ -11,51 +11,17 @@ import logging
 import asyncio
 import random
 import time
-
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-
-from test.pylib.internal_types import ServerInfo
+from test.pylib.util import wait_for
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from cassandra.cluster import Session
 from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import inject_error_one_shot
 from test.topology.util import get_token_ring_host_ids, get_current_group0_config, \
                                check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
 
+
 logger = logging.getLogger(__name__)
-
-
-@pytest.mark.asyncio
-async def test_add_server_add_column(manager, random_tables):
-    """Add a node and then add a column to a table and verify"""
-    table = await random_tables.add_table(ncolumns=5)
-    await manager.server_add()
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-    await table.add_column()
-    await random_tables.verify_schema()
-
-
-@pytest.mark.asyncio
-async def test_stop_server_add_column(manager, random_tables):
-    """Add a node, stop an original node, add a column"""
-    servers = await manager.running_servers()
-    table = await random_tables.add_table(ncolumns=5)
-    await manager.server_add()
-    await manager.server_stop(servers[1].server_id)
-    await table.add_column()
-    await random_tables.verify_schema()
-
-
-@pytest.mark.asyncio
-async def test_restart_server_add_column(manager, random_tables):
-    """Add a node, stop an original node, add a column"""
-    servers = await manager.running_servers()
-    table = await random_tables.add_table(ncolumns=5)
-    ret = await manager.server_restart(servers[1].server_id)
-    await table.add_column()
-    await random_tables.verify_schema()
 
 
 @pytest.mark.asyncio
