@@ -6,7 +6,6 @@
 """
 Test consistency of schema changes with topology changes.
 """
-import pytest
 import logging
 import asyncio
 import random
@@ -16,13 +15,14 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.topology.util import check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
+import pytest
 
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_remove_node_add_column(manager, random_tables):
+async def test_remove_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
@@ -35,7 +35,7 @@ async def test_remove_node_add_column(manager, random_tables):
 
 
 @pytest.mark.asyncio
-async def test_decommission_node_add_column(manager, random_tables):
+async def test_decommission_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     table = await random_tables.add_table(ncolumns=5)
     servers = await manager.running_servers()
@@ -69,7 +69,7 @@ async def test_decommission_node_add_column(manager, random_tables):
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Wait for @slow attribute, #11713")
-async def test_remove_node_with_concurrent_ddl(manager, random_tables):
+async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_tables: RandomTables):
     stopped = False
     ddl_failed = False
 
