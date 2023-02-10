@@ -12,6 +12,7 @@
 #include "cql3/constants.hh"
 #include "cql3/abstract_marker.hh"
 #include "cql3/lists.hh"
+#include "cql3/expr/restrictions.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
 #include "types/list.hh"
@@ -1249,6 +1250,17 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     }
     auto& prepared_lhs = *prepared_lhs_opt;
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, table_schema);
+
+    // validate single column relation before calling prepare_expression to get correct
+    // error message in some cases (issue #11061)
+    if (auto col_val = as_if<column_value>(&prepared_lhs)) {
+        // Simple single column restriction
+        validate_single_column_relation(*col_val, binop.op, *schema, false);
+    } else if (auto sub = as_if<subscript>(&prepared_lhs)) {
+        // Subscripted single column restriction
+        const column_value& sub_col = get_subscripted_column(*sub);
+        validate_single_column_relation(sub_col, binop.op, *schema, true);
+    }
 
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
