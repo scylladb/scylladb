@@ -290,6 +290,7 @@ modes = {
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
+        'build_seastar_shared_libs': True,
         'default': True,
         'description': 'a mode with no optimizations, with sanitizers, and with additional debug checks enabled, used for testing',
     },
@@ -301,6 +302,7 @@ modes = {
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'RelWithDebInfo',
         'can_have_debug_info': True,
+        'build_seastar_shared_libs': False,
         'default': True,
         'description': 'a mode with optimizations and no debug checks, used for production builds',
     },
@@ -312,6 +314,7 @@ modes = {
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Dev',
         'can_have_debug_info': False,
+        'build_seastar_shared_libs': True,
         'default': True,
         'description': 'a mode with no optimizations and no debug checks, optimized for fast build times, used for development',
     },
@@ -323,6 +326,7 @@ modes = {
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Sanitize',
         'can_have_debug_info': True,
+        'build_seastar_shared_libs': False,
         'default': False,
         'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
     },
@@ -334,6 +338,7 @@ modes = {
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
+        'build_seastar_shared_libs': False,
         'default': False,
         'description': 'a mode exclusively used for generating test coverage reports',
     },
@@ -1630,6 +1635,8 @@ def configure_seastar(build_dir, mode, mode_config):
         seastar_cmake_args += ['-DSeastar_ALLOC_FAILURE_INJECTION=ON']
     if args.seastar_debug_allocations:
         seastar_cmake_args += ['-DSeastar_DEBUG_ALLOCATIONS=ON']
+    if modes[mode]['build_seastar_shared_libs']:
+        seastar_cmake_args += ['-DBUILD_SHARED_LIBS=ON']
 
     seastar_cmd = ['cmake', '-G', 'Ninja', real_relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
     cmake_dir = seastar_build_dir
@@ -1655,9 +1662,16 @@ if not ninja:
     sys.exit(1)
 
 def query_seastar_flags(pc_file, link_static_cxx=False):
-    cflags = pkg_config(pc_file, '--cflags', '--static')
-    libs = pkg_config(pc_file, '--libs', '--static')
-
+    use_shared_libs = modes[mode]['build_seastar_shared_libs']
+    if use_shared_libs:
+        opt = '--shared'
+    else:
+        opt = '--static'
+    cflags = pkg_config(pc_file, '--cflags', opt)
+    libs = pkg_config(pc_file, '--libs', opt)
+    if use_shared_libs:
+        rpath = os.path.dirname(libs.split()[0])
+        libs = f"-Wl,-rpath='{rpath}' {libs}"
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
 
@@ -1864,8 +1878,9 @@ with open(buildfile, 'w') as f:
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
-        seastar_dep = '$builddir/{}/seastar/libseastar.a'.format(mode)
-        seastar_testing_dep = '$builddir/{}/seastar/libseastar_testing.a'.format(mode)
+        seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
+        seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
+        seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         for binary in sorted(build_artifacts):
             if binary in other:
                 continue

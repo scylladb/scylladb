@@ -138,6 +138,18 @@ patchelf() {
     LD_LIBRARY_PATH="$PWD/libreloc" libreloc/ld.so libexec/patchelf "$@"
 }
 
+remove_rpath() {
+    local file="$1"
+    local rpath
+    # $file might not be an elf image
+    if rpath=$(patchelf --print-rpath "$file" 2>/dev/null); then
+      if [ -n "$rpath" ]; then
+        echo "remove rpath from $file"
+        patchelf --remove-rpath "$file"
+      fi
+    fi
+}
+
 adjust_bin() {
     local bin="$1"
     # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
@@ -380,11 +392,15 @@ fi
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
 install -m755 libreloc/* -Dt "$rprefix/libreloc"
+for lib in libreloc/*; do
+    remove_rpath "$rprefix/$lib"
+done
 # some files in libexec are symlinks, which "install" dereferences
 # use cp -P for the symlinks instead.
 install -m755 libexec/* -Dt "$rprefix/libexec"
 for bin in libexec/*; do
-	adjust_bin "${bin#libexec/}"
+    remove_rpath "$rprefix/$bin"
+    adjust_bin "${bin#libexec/}"
 done
 install -m644 ubsan-suppressions.supp -Dt "$rprefix/libexec"
 
