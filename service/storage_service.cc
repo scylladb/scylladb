@@ -2391,7 +2391,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         // Step 7: Sync data for replace
         if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
-            _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ignore_nodes).get();
+            _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, boost::copy_range<std::unordered_set<inet_address>>(ignore_nodes)).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
