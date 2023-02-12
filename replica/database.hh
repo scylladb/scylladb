@@ -926,6 +926,7 @@ public:
     }
 
     const table_stats& get_stats() const {
+        const_cast<table*>(this)->rebuild_statistics();
         return _stats;
     }
 
