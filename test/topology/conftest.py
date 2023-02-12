@@ -37,6 +37,26 @@ def pytest_addoption(parser):
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
 
+
+# This is a constant used in `pytest_runtest_makereport` below to store a flag
+# indicating test failure in a stash which can then be accessed from fixtures.
+FAILED_KEY = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """This is a post-test hook execucted by the pytest library.
+    Use it to access the test result and store a flag indicating failure
+    so we can later retrieve it in our fixtures like `manager`.
+
+    `item.stash` is the same stash as `request.node.stash` (in the `request`
+    fixture provided by pytest).
+    """
+    outcome = yield
+    report = outcome.get_result()
+    item.stash[FAILED_KEY] = report.when == "call" and report.failed
+
+
 # Change default pytest-asyncio event_loop fixture scope to session to
 # allow async fixtures with scope larger than function. (e.g. manager fixture)
 # See https://github.com/pytest-dev/pytest-asyncio/issues/68
@@ -159,7 +179,10 @@ async def manager(request, manager_internal):
     test_case_name = request.node.name
     await manager_internal.before_test(test_case_name)
     yield manager_internal
-    await manager_internal.after_test(test_case_name)
+    # `request.node.stash` contains a flag stored in `pytest_runtest_makereport`
+    # that indicates test failure.
+    failed = request.node.stash[FAILED_KEY]
+    await manager_internal.after_test(test_case_name, not failed)
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
@@ -192,9 +215,19 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
-# used in tests to make schema changes. Tables are dropped after finished.
+# used in tests to make schema changes. Tables are dropped after test finishes
+# unless the cluster is dirty or the test has failed.
 @pytest.fixture(scope="function")
-def random_tables(request, manager):
+async def random_tables(request, manager):
     tables = RandomTables(request.node.name, manager, unique_name())
     yield tables
-    tables.drop_all()
+
+    # Don't drop tables at the end if we failed or the cluster is dirty - it may be impossible
+    # (e.g. the cluster is completely dead) and it doesn't matter (we won't reuse the cluster
+    # anyway).
+    # The cluster will be marked as dirty if the test failed, but that happens
+    # at the end of `manager` fixture which we depend on (so these steps will be
+    # executed after us) - so at this point, we need to check for failure ourselves too.
+    failed = request.node.stash[FAILED_KEY]
+    if not failed and not await manager.is_dirty():
+        tables.drop_all()
