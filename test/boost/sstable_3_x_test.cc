@@ -3002,11 +3002,11 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
   });
 }
 
-static sstables::shared_sstable open_sstable(test_env& env, schema_ptr schema, sstring dir, unsigned long generation) {
+static sstables::shared_sstable open_sstable(test_env& env, schema_ptr schema, sstring dir, sstables::generation_type::value_type generation) {
     return env.reusable_sst(std::move(schema), dir, generation, sstables::sstable::version_types::mc).get0();
 }
 
-static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<unsigned long> generations) {
+static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type::value_type> generations) {
     std::vector<sstables::shared_sstable> result;
     for(auto generation: generations) {
         result.push_back(open_sstable(env, s, dir, generation));
@@ -3015,7 +3015,7 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
 }
 
 static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
-                     sstring table_name, std::vector<unsigned long> generations) {
+                     sstring table_name, std::vector<sstables::generation_type::value_type> generations) {
     auto cm = make_lw_shared<compaction_manager_for_testing>(false);
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
@@ -4577,7 +4577,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
                                           tracing::trace_state_ptr(), use_caching::yes);
 }
 
-shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
+shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, sstables::generation_type::value_type gen = 1) {
     return env.reusable_sst(schema, get_read_index_test_path(table_name), gen, sstable_version_types::mc).get0();
 }
 

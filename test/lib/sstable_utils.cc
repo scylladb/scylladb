@@ -81,7 +81,7 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
 }
 
 shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
-        int64_t generation, const sstables::sstable::version_types version, int expected_partition) {
+        sstables::generation_type::value_type generation, const sstables::sstable::version_types version, int expected_partition) {
     auto s = rd.schema();
     auto sst = env.make_sstable(s, path.string(), generation, version, sstable_format_types::big);
     sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
@@ -90,7 +90,7 @@ shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutat
 }
 
 shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
-        unsigned long gen, const sstable::version_types v, int estimated_partitions, gc_clock::time_point query_time) {
+        sstables::generation_type::value_type gen, const sstable::version_types v, int estimated_partitions, gc_clock::time_point query_time) {
     schema_ptr s = mt->schema();
     auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
@@ -123,7 +123,7 @@ static sstring toc_filename(const sstring& dir, schema_ptr schema, unsigned int 
                              sstable_format_types::big, component_type::TOC);
 }
 
-future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
+future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::value_type generation) {
     for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
         if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
             co_return co_await reusable_sst(schema, dir, generation, v);

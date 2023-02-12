@@ -46,7 +46,7 @@ public:
         cf.update_sstables_known_generation(generation_from_value(generation));
     }
 
-    static uint64_t calculate_generation_for_new_table(replica::column_family& cf) {
+    static sstables::generation_type::value_type calculate_generation_for_new_table(replica::column_family& cf) {
         return generation_value(cf.calculate_generation_for_new_table());
     }
 };

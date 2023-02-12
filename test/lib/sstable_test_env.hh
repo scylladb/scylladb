@@ -84,12 +84,12 @@ public:
     }
 
     struct sst_not_found : public std::runtime_error {
-        sst_not_found(const sstring& dir, unsigned long generation)
+        sst_not_found(const sstring& dir, sstables::generation_type::value_type generation)
             : std::runtime_error(format("no versions of sstable generation {} found in {}", generation, dir))
         {}
     };
 
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation,
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::value_type generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);
         sstable_open_config cfg { .load_first_and_last_position_metadata = true };
@@ -99,7 +99,7 @@ public:
     }
 
     // looks up the sstable in the given dir
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::value_type generation);
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }

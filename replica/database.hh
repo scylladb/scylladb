@@ -424,6 +424,11 @@ private:
     // Ensures that concurrent updates to sstable set will work correctly
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
+    // FIXME: until we use uuid for sstables generation (#10459)
+    // _sstable_generation keeps track of the highest
+    // generation number in the table so that newly created sstables
+    // will use numeric generation numbers larger than this one.
+    // Initialized when the table is populated via update_sstables_known_generation.
     std::optional<int64_t> _sstable_generation = {};
 
     db::replay_position _highest_rp;
@@ -568,6 +573,8 @@ private:
         assert(_sstable_generation);
         // FIXME: better way of ensuring we don't attempt to
         // overwrite an existing table.
+        // See https://github.com/scylladb/scylladb/issues/10459
+        // for uuid-based sstable generation
         return sstables::generation_from_value((*_sstable_generation)++ * smp::count + this_shard_id());
     }
 private:

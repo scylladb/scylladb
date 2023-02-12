@@ -591,7 +591,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
     });
 }
 
-static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen,
+static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, sstables::generation_type::value_type gen,
         const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
     auto sst = env.make_sstable(schema, "", gen, la, big);
     sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
@@ -2115,7 +2115,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     const auto decorated_keys = tests::generate_partition_keys(8, s);
 
-    auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
+    auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<sstables::generation_type::value_type> expected_gens) {
         auto sstables = selector.select(key).sstables;
         BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
         for (auto& sst : sstables) {
