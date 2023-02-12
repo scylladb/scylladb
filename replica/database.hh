@@ -920,7 +920,8 @@ public:
         return _compaction_manager;
     }
 
-    table_stats& get_stats() {
+    const table_stats& mutate_stats(std::function<void(table_stats&)> func) {
+        func(_stats);
         return _stats;
     }
 
