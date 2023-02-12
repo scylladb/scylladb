@@ -29,16 +29,14 @@ class modification_statement;
 namespace raw {
 
 class modification_statement : public cf_statement {
-public:
-    using conditions_vector = std::vector<expr::expression>;
 protected:
     const std::unique_ptr<attributes::raw> _attrs;
-    const std::vector<expr::expression> _conditions;
+    const std::optional<expr::expression> _conditions;
 private:
     const bool _if_not_exists;
     const bool _if_exists;
 protected:
-    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions = {}, bool if_not_exists = false, bool if_exists = false);
+    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions = {}, bool if_not_exists = false, bool if_exists = false);
 
 public:
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;

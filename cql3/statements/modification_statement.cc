@@ -565,7 +565,7 @@ void
 modification_statement::prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
         cql3::statements::modification_statement& stmt) const
 {
-    if (_if_not_exists || _if_exists || !_conditions.empty()) {
+    if (_if_not_exists || _if_exists || _conditions) {
         if (stmt.is_counter()) {
             throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
         }
@@ -576,15 +576,16 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
         if (_if_not_exists) {
             // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
             // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-            assert(_conditions.empty());
+            assert(!_conditions);
             assert(!_if_exists);
             stmt.set_if_not_exist_condition();
         } else if (_if_exists) {
-            assert(_conditions.empty());
+            assert(!_conditions);
             assert(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
-            for (auto&& entry : _conditions) {
+            auto conditions = expr::boolean_factors(*_conditions);
+            for (auto&& entry : conditions) {
                 auto condition = column_condition_prepare(entry, db, keyspace(), schema);
 
                 expr::fill_prepare_context(condition, ctx);
@@ -743,7 +744,7 @@ const statement_type statement_type::SELECT = statement_type(statement_type::typ
 
 namespace raw {
 
-modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
+modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions, bool if_not_exists, bool if_exists)
     : cf_statement{std::move(name)}
     , _attrs{std::move(attrs)}
     , _conditions{std::move(conditions)}

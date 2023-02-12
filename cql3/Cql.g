@@ -100,7 +100,6 @@ using namespace cql3::selection;
 using namespace cql3::expr;
 
 using cql3::cql3_type;
-using conditions_type = std::vector<expression>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
@@ -545,25 +544,32 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
         bool if_exists = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>> operations;
+        std::optional<expression> cond_opt;
     }
     : K_UPDATE cf=columnFamilyName
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
-      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions) )?
+      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
                                                   std::move(operations),
                                                   std::move(wclause),
-                                                  std::move(conditions),
+                                                  std::move(cond_opt),
                                                   if_exists);
      }
     ;
 
-updateConditions returns [conditions_type conditions]
+updateConditions returns [expression cond]
+    @init {
+        std::vector<expression> conditions;
+    }
     : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
          ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
+    {
+        return conjunction{std::move(conditions)};
+    }
     ;
 
 /**
@@ -578,18 +584,19 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::unique_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
+        std::optional<expression> cond_opt;
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
       ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
-      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
+      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::delete_statement>(cf,
                                             std::move(attrs),
                                             std::move(column_deletions),
                                             std::move(wclause),
-                                            std::move(conditions),
+                                            std::move(cond_opt),
                                             if_exists);
       }
     ;
