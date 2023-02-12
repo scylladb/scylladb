@@ -118,8 +118,12 @@ def assert_invalid(cql, table, cmd, *args):
     # SyntaxException.
     assert_invalid_throw(cql, table, InvalidRequest, cmd, *args)
 
+assertInvalid = assert_invalid
+
 def assert_invalid_syntax(cql, table, cmd, *args):
     assert_invalid_throw(cql, table, SyntaxException, cmd, *args)
+
+assertInvalidSyntax = assert_invalid_syntax
 
 def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
@@ -145,8 +149,18 @@ def assert_invalid_throw_message_re(cql, table, message, typ, cmd, *args):
 def assert_row_count(result, expected):
     assert len(list(result)) == expected
 
+assertRowCount = assert_row_count
+
 def assert_empty(result):
     assert len(list(result)) == 0
+
+assertEmpty = assert_empty
+
+def assertArrayEquals(a, b):
+    assert a == b
+
+def getRows(results):
+    return list(results)
 
 # Result objects contain some strange types specific to the CQL driver, which
 # normally compare well against normal Python types, but in some cases of nested
@@ -167,6 +181,24 @@ def assert_rows(result, *expected):
     for r,e in zip(allresults, expected):
         r = [result_cleanup(col) for col in r]
         assert r == e
+
+assertRows = assert_rows
+
+# Check if results is one of two possible result sets.
+# Can be useful in cases where Cassandra and Scylla results are
+# expected to be different and we consider that fine.
+def assert_rows2(result, expected1, expected2):
+    allresults = list(result)
+    assert len(allresults) == len(expected1) or len(allresults) == len(expected2)
+    same1 = True
+    for r,e in zip(allresults, expected1):
+        r = [result_cleanup(col) for col in r]
+        same1 = same1 and r == e
+    same2 = True
+    for r,e in zip(allresults, expected2):
+        r = [result_cleanup(col) for col in r]
+        same2 = same2 and r == e
+    assert same1 or same2
 
 # To compare two lists of items (each is a dict) without regard for order,
 # The following function, multiset() converts the list into a multiset
