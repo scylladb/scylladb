@@ -18,21 +18,24 @@
 namespace sstables {
 
 class generation_type {
-    int64_t _value;
+public:
+    using value_type = int64_t;
+private:
+    value_type _value;
 public:
     generation_type() = delete;
 
-    explicit constexpr generation_type(int64_t value) noexcept: _value(value) {}
-    constexpr int64_t value() const noexcept { return _value; }
+    explicit constexpr generation_type(value_type value) noexcept: _value(value) {}
+    constexpr value_type value() const noexcept { return _value; }
 
     constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
     constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
 };
 
-constexpr generation_type generation_from_value(int64_t value) {
+constexpr generation_type generation_from_value(generation_type::value_type value) {
     return generation_type{value};
 }
-constexpr int64_t generation_value(generation_type generation) {
+constexpr generation_type::value_type generation_value(generation_type generation) {
     return generation.value();
 }
 
@@ -49,7 +52,7 @@ namespace std {
 template <>
 struct hash<sstables::generation_type> {
     size_t operator()(const sstables::generation_type& generation) const noexcept {
-        return hash<int64_t>{}(generation.value());
+        return hash<sstables::generation_type::value_type>{}(generation.value());
     }
 };
 
