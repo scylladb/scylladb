@@ -1920,6 +1920,10 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
     db::commitlog* cl = nullptr;
     std::optional<shard_id> shard;
 
+    if (muts.empty()) {
+        co_return;
+    }
+
     writers.reserve(muts.size());
 
     for (size_t i = 0; i < muts.size(); ++i) {
