@@ -1,3 +1,1 @@
 type: Approval
-flaky:
-    - cdc_with_lwt_test

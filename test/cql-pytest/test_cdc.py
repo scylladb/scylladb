@@ -45,3 +45,17 @@ def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
         flush(cql, table + "_scylla_cdc_log")
         cql.execute(f"alter table {table} drop v")
         cql.execute(f"select * from {table}_scylla_cdc_log")
+
+# Regression test for #12098 - check that LWT inserts don't observe
+# themselves inside preimages
+def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
+    schema = "pk int primary key"
+    extra = " with cdc = {'enabled': true, 'preimage':true}"
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        stmt = cql.prepare(f"insert into {table} (pk) values (?) if not exists")
+        for pk in range(500):
+            cql.execute(stmt, (pk,))
+        rs = cql.execute(f"select \"cdc$operation\" from {table}_scylla_cdc_log")
+        # There should be no preimages because no keys were overwritten;
+        # `cdc$operation` should only be `2` in all CDC log rows (denoting INSERT)
+        assert all(r[0] == 2 for r in rs)
