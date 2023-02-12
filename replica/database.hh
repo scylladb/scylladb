@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
+#include "seastar/core/lowres_clock.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -394,6 +395,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
+    lowres_clock::time_point _last_stats_updated;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
     mutable row_locker::stats _row_locker_stats;
@@ -571,6 +573,7 @@ private:
     }
 private:
     void rebuild_statistics();
+    const table_stats& rebuild_statistics_periodic(lowres_clock::duration period = std::chrono::seconds(1));
 
     // Called on schema change.
     void update_optimized_twcs_queries_flag();

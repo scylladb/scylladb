@@ -933,20 +933,23 @@ void table::set_metrics() {
     namespace ms = seastar::metrics;
     if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
-                ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_row_writes", _stats.memtable_app_stats.row_writes, ms::description("Number of row writes performed in memtables"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_row_hits", _stats.memtable_app_stats.row_hits, ms::description("Number of rows overwritten by write operations in memtables"))(cf)(ks).set_skip_when_empty().set_skip_when_empty(),
-                ms::make_counter("memtable_rows_dropped_by_tombstones", _stats.memtable_app_stats.rows_dropped_by_tombstones, ms::description("Number of rows dropped in memtables by a tombstone write"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_rows_compacted_with_tombstones", _stats.memtable_app_stats.rows_compacted_with_tombstones, ms::description("Number of rows scanned during write of a tombstone for the purpose of compaction in memtables"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_range_tombstone_reads", _stats.memtable_range_tombstone_reads, ms::description("Number of range tombstones read from memtables"))(cf)(ks).set_skip_when_empty(),
-                ms::make_counter("memtable_row_tombstone_reads", _stats.memtable_row_tombstone_reads, ms::description("Number of row tombstones read from memtables"))(cf)(ks),
-                ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
-                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
-                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
-                ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks),
+                ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), [this] { return rebuild_statistics_periodic().memtable_switch_count; })(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_partition_writes", [this] () {
+                        const auto& stats = rebuild_statistics_periodic();
+                        return stats.memtable_partition_insertions + stats.memtable_partition_hits;
+                    }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_partition_hits", [this] { return rebuild_statistics_periodic().memtable_partition_hits; }, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_row_writes", [this] { return rebuild_statistics_periodic().memtable_app_stats.row_writes; }, ms::description("Number of row writes performed in memtables"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_row_hits", [this] { return rebuild_statistics_periodic().memtable_app_stats.row_hits; }, ms::description("Number of rows overwritten by write operations in memtables"))(cf)(ks).set_skip_when_empty().set_skip_when_empty(),
+                ms::make_counter("memtable_rows_dropped_by_tombstones", [this] { return rebuild_statistics_periodic().memtable_app_stats.rows_dropped_by_tombstones; }, ms::description("Number of rows dropped in memtables by a tombstone write"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_rows_compacted_with_tombstones", [this] { return rebuild_statistics_periodic().memtable_app_stats.rows_compacted_with_tombstones; }, ms::description("Number of rows scanned during write of a tombstone for the purpose of compaction in memtables"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_range_tombstone_reads", [this] { return rebuild_statistics_periodic().memtable_range_tombstone_reads; }, ms::description("Number of range tombstones read from memtables"))(cf)(ks).set_skip_when_empty(),
+                ms::make_counter("memtable_row_tombstone_reads", [this] { return rebuild_statistics_periodic().memtable_row_tombstone_reads; }, ms::description("Number of row tombstones read from memtables"))(cf)(ks),
+                ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), [this] { return rebuild_statistics_periodic().pending_flushes; })(cf)(ks),
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), [this] { return rebuild_statistics_periodic().live_disk_space_used; })(cf)(ks),
+                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), [this] { return rebuild_statistics_periodic().total_disk_space_used; })(cf)(ks),
+                ms::make_gauge("live_sstable", ms::description("Live sstable count"), [this] { return rebuild_statistics_periodic().live_sstable_count; })(cf)(ks),
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), [this] { return rebuild_statistics_periodic().pending_compactions; })(cf)(ks),
                 ms::make_gauge("pending_sstable_deletions",
                         ms::description("Number of tasks waiting to delete sstables from a table"),
                         [this] { return _sstable_deletion_sem.waiters(); })(cf)(ks)
@@ -973,17 +976,17 @@ void table::set_metrics() {
 
         if (!is_internal_keyspace(_schema->ks_name())) {
             _metrics.add_group("column_family", {
-                    ms::make_summary("read_latency_summary", ms::description("Read latency summary"), [this] {return to_metrics_summary(_stats.reads.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("write_latency_summary", ms::description("Write latency summary"), [this] {return to_metrics_summary(_stats.writes.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_prepare_latency_summary", ms::description("CAS prepare round latency summary"), [this] {return to_metrics_summary(_stats.cas_prepare.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_propose_latency_summary", ms::description("CAS accept round latency summary"), [this] {return to_metrics_summary(_stats.cas_accept.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_commit_latency_summary", ms::description("CAS learn round latency summary"), [this] {return to_metrics_summary(_stats.cas_learn.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("read_latency_summary", ms::description("Read latency summary"), [this] {return to_metrics_summary(rebuild_statistics_periodic().reads.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("write_latency_summary", ms::description("Write latency summary"), [this] {return to_metrics_summary(rebuild_statistics_periodic().writes.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_prepare_latency_summary", ms::description("CAS prepare round latency summary"), [this] {return to_metrics_summary(rebuild_statistics_periodic().cas_prepare.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_propose_latency_summary", ms::description("CAS accept round latency summary"), [this] {return to_metrics_summary(rebuild_statistics_periodic().cas_accept.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_commit_latency_summary", ms::description("CAS learn round latency summary"), [this] {return to_metrics_summary(rebuild_statistics_periodic().cas_learn.summary());})(cf)(ks).set_skip_when_empty(),
 
-                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.reads.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.writes.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_prepare.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_accept.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_learn.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(rebuild_statistics_periodic().reads.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(rebuild_statistics_periodic().writes.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(rebuild_statistics_periodic().cas_prepare.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(rebuild_statistics_periodic().cas_accept.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return to_metrics_histogram(rebuild_statistics_periodic().cas_learn.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                     ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
             });
         }
@@ -1022,6 +1025,14 @@ void table::rebuild_statistics() {
         _stats.total_disk_space_used += cg->total_disk_space_used();
         _stats.live_sstable_count += cg->live_sstable_count();
     }
+    _last_stats_updated = lowres_clock::now();
+}
+
+const replica::table_stats& table::rebuild_statistics_periodic(lowres_clock::duration period) {
+    if (lowres_clock::now() >= _last_stats_updated + period) {
+        rebuild_statistics();
+    }
+    return _stats;
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>
