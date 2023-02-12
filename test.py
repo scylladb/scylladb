@@ -696,7 +696,7 @@ class CQLApprovalTest(Test):
                 logger.info("Server log:\n%s", self.server_log)
 
         # TODO: consider dirty_on_exception=True
-        async with self.suite.clusters.instance(False, logger) as cluster:
+        async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
             try:
                 cluster.before_test(self.uname)
                 logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
@@ -706,7 +706,8 @@ class CQLApprovalTest(Test):
                 self.is_before_test_ok = True
                 cluster.take_log_savepoint()
                 self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.after_test(self.uname)
+                cluster.after_test(self.uname, self.is_executed_ok)
+                cm.dirty = cluster.is_dirty
                 self.is_after_test_ok = True
 
                 if self.is_executed_ok is False:
@@ -860,7 +861,7 @@ class PythonTest(Test):
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
             status = await run_test(self, options)
-            cluster.after_test(self.uname)
+            cluster.after_test(self.uname, status)
             self.is_after_test_ok = True
             self.success = status
         except Exception as e:
@@ -874,9 +875,7 @@ class PythonTest(Test):
                 print("Test {} post-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
-            await self.suite.clusters.put(cluster, is_dirty=True)
-        else:
-            await self.suite.clusters.put(cluster, is_dirty=False)
+        await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
