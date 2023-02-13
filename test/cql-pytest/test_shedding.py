@@ -8,7 +8,7 @@
 
 import pytest
 from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, WriteFailure
 from util import unique_name, new_cql
 import requests
 
@@ -67,8 +67,8 @@ def test_shed_too_large_request(cql, table1, scylla_only):
         # tries to establish a connection with another node, and throws a NoHostAvailable exception if it fails.
         # In the debug builds, the driver can have time to grab the error from the socket,
         # and we get InvalidRequest exception.
-        with pytest.raises((NoHostAvailable, InvalidRequest),
-                           match="request size too large|Unable to complete the operation against any hosts"):
+        with pytest.raises((NoHostAvailable, InvalidRequest, WriteFailure),
+                           match="request size too large|Unable to complete the operation against any hosts|failed to execute write"):
             a_5mb_string = 'x'*10*1024*1024
             ncql.execute(prepared, [a_5mb_string]*6)
     protocol_errors_after = get_protocol_errors()
