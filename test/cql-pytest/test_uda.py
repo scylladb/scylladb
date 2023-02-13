@@ -230,3 +230,39 @@ def test_drop_keyspace_with_uda(scylla_only, cql):
     assert aggregates_before.result - aggregates_after.result == 1
     with pytest.raises(ConfigurationException, match="Cannot drop non existing keyspace"):
         cql.execute(f"DROP KEYSPACE {ks}")
+
+# Test that replacing the state function, reduce function or the final function succesfully changes the function used by the aggregate.
+# When the state or final function is replaced, the new function should be used in following calls to the aggregate. Cassandra keeps using
+# the old function, which we consider a cassandra bug.
+def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
+    schema = "id bigint primary key"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (id) VALUES (1)")
+        cql.execute(f"INSERT INTO {table} (id) VALUES (2)")
+        cql.execute(f"INSERT INTO {table} (id) VALUES (3)")
+        sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + val'"
+        sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + 2 * val'"
+        sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state'"
+        sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 3 * state'"
+        try:
+            # Check if we can use lua, i.e. we're in Scylla
+            with new_function(cql, test_keyspace, sum_partial_body):
+                pass
+        except:
+            # We're in Cassandra, use java instead
+            sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + val'"
+            sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + 2 * val'"
+            sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state'"
+            sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 3 * state'"
+
+        with new_function(cql, test_keyspace, sum_partial_body) as sum_partial, new_function(cql, test_keyspace, sum_final_body) as sum_final:
+            custom_sum_body = f"(bigint) SFUNC {sum_partial} STYPE bigint FINALFUNC {sum_final} INITCOND 0"
+            with new_aggregate(cql, test_keyspace, custom_sum_body) as custom_sum:
+                result = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
+                assert result.result == 6
+                cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{sum_partial} {sum_partial_body2}")
+                result = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
+                assert result.result == 12
+                cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{sum_final} {sum_final_body2}")
+                result = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
+                assert result.result == 36
