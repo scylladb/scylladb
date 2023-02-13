@@ -5,12 +5,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cxx = { version = "1.0.73", features = ["c++20"] }
-wasmtime-wasi = "1.0.0"
-futures = "0.3.23"
-anyhow = "1.0.62"
+cxx = { version = "1.0.83", features = ["c++20"] }
+wasmtime-wasi = "5.0.0"
+futures = "0.3.25"
+anyhow = "1.0.66"
 
 [dependencies.wasmtime]
-version = "1.0.0"
+version = "5.0.0"
 default-features = false
 features = ["async", "wat", "cranelift"]
