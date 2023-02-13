@@ -48,7 +48,7 @@ find_package(Boost COMPONENTS filesystem program_options system thread regex REQ
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
-find_package(Abseil REQUIRED)
+find_package(absl REQUIRED)
 
 set(scylla_build_dir "${CMAKE_BINARY_DIR}/build/${BUILD_TYPE}")
 set(scylla_gen_build_dir "${scylla_build_dir}/gen")
