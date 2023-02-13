@@ -93,6 +93,7 @@ public:
         future<> close();
 
         future<> process(sstable_directory& directory, fs::path location, process_flags flags);
+        future<> commit();
     };
 
 private:

@@ -248,12 +248,13 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     }
 }
 
-future<>
-sstable_directory::commit_directory_changes() {
-    auto files_for_removal = std::exchange(_lister->_state->files_for_removal, {});
-    _lister.reset();
+future<> sstable_directory::commit_directory_changes() {
+    return _lister->commit().finally([x = std::move(_lister)] {});
+}
+
+future<> sstable_directory::components_lister::commit() {
     // Remove all files scheduled for removal
-    return parallel_for_each(std::move(files_for_removal), [] (sstring path) {
+    return parallel_for_each(std::exchange(_state->files_for_removal, {}), [] (sstring path) {
         dirlog.info("Removing file {}", path);
         return remove_file(std::move(path));
     });
