@@ -142,6 +142,12 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
     return std::make_unique<strategy_control_for_test>(has_ongoing_compaction);
 }
 
+static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
+    testlog.info("sstable_set_size={}, live_sstable_count={}, expected={}", t->get_sstables()->size(), t->get_stats().live_sstable_count, expected_count);
+    BOOST_REQUIRE(t->get_sstables()->size() == expected_count);
+    BOOST_REQUIRE(t->get_stats().live_sstable_count == expected_count);
+}
+
 SEASTAR_TEST_CASE(compaction_manager_basic_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
@@ -3896,7 +3902,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
 
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);
-        BOOST_REQUIRE(cf->get_sstables()->size() == expected_ssts);
+        assert_table_sstable_count(cf, expected_ssts);
       };
 
       test_interposer_on_flush(true);
@@ -4623,7 +4629,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         }();
         auto sst = make_sstable_containing(sst_gen, {std::move(row_mut)});
         cf->add_sstable_and_update_cache(sst).get();
-        BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+        assert_table_sstable_count(cf, 1);
 
         auto deletion_mut = [&] () {
             mutation m(s, pkey);
@@ -4634,7 +4640,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         cf->apply(deletion_mut);
 
         cf->compact_all_sstables().get();
-        BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+        assert_table_sstable_count(cf, 1);
         auto new_sst = *(cf->get_sstables()->begin());
         BOOST_REQUIRE(new_sst->generation() != sst->generation());
         assert_that(sstable_reader(new_sst, s, env.make_reader_permit()))

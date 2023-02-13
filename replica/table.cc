@@ -546,6 +546,12 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
     });
 }
 
+void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {
+    _stats.live_disk_space_used += sst->bytes_on_disk();
+    _stats.total_disk_space_used += sst->bytes_on_disk();
+    _stats.live_sstable_count++;
+}
+
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
@@ -558,6 +564,7 @@ table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::o
         } else {
             add_maintenance_sstable(cg, sst);
         }
+        update_stats_for_new_sstable(sst);
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
@@ -597,6 +604,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
         for (auto& sst : ssts) {
             add_sstable(cg, sst);
+            update_stats_for_new_sstable(sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
         try_trigger_compaction(cg);
