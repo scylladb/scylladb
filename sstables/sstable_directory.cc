@@ -165,10 +165,12 @@ sstable_directory::highest_version_seen() const {
     return _max_version_seen;
 }
 
-future<>
-sstable_directory::process_sstable_dir(process_flags flags) {
+future<> sstable_directory::process_sstable_dir(process_flags flags) {
     dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
+    return _lister->process(*this, _sstable_dir, flags);
+}
 
+future<> sstable_directory::components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -181,8 +183,9 @@ sstable_directory::process_sstable_dir(process_flags flags) {
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    auto& sstable_dir_lister = *_lister;
+    auto& sstable_dir_lister = *this;
     auto& state = *sstable_dir_lister._state;
+    auto& _sstable_dir = location;
     std::exception_ptr ex;
     try {
         while (true) {
@@ -218,20 +221,20 @@ sstable_directory::process_sstable_dir(process_flags flags) {
         state.descriptors.erase(desc.generation);
     }
 
-    _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
+    directory._max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
         return std::max<generation_type>(a, b);
     });
 
     dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
-            _sstable_dir, _max_generation_seen, state.descriptors.size(), state.generations_found.size());
+            _sstable_dir, directory._max_generation_seen, state.descriptors.size(), state.generations_found.size());
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await directory.parallel_for_each_restricted(state.descriptors, [this, flags, &state, &directory] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
-        return process_descriptor(std::move(desc), flags);
+        return directory.process_descriptor(std::move(desc), flags);
     });
 
     // For files missing TOC, it depends on where this is coming from.

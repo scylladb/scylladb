@@ -91,6 +91,8 @@ public:
         future<sstring> get();
         components_lister(std::filesystem::path dir);
         future<> close();
+
+        future<> process(sstable_directory& directory, fs::path location, process_flags flags);
     };
 
 private:
