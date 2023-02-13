@@ -335,6 +335,10 @@ update_statement::prepare_for_broadcast_tables() const {
         }
     }
 
+    if (has_static_column_conditions()) {
+        throw service::broadcast_tables::unsupported_operation_error{"static column conditions"};
+    }
+
     broadcast_tables::prepared_update query = {
         .key = get_key(restrictions().get_partition_key_restrictions()),
         .value_condition = get_value_condition(_regular_conditions),
