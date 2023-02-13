@@ -183,25 +183,22 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    auto& sstable_dir_lister = *this;
-    auto& state = *sstable_dir_lister._state;
-    auto& _sstable_dir = location;
     std::exception_ptr ex;
     try {
         while (true) {
-            sstring name = co_await sstable_dir_lister.get();
+            sstring name = co_await get();
             if (name == "") {
                 break;
             }
-            auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), name);
-            sstable_dir_lister.handle(std::move(comps), _sstable_dir / name);
+            auto comps = sstables::entry_descriptor::make_descriptor(location.native(), name);
+            handle(std::move(comps), location / name);
         }
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await sstable_dir_lister.close();
+    co_await close();
     if (ex) {
-        dirlog.debug("Could not process sstable directory {}: {}", _sstable_dir, ex);
+        dirlog.debug("Could not process sstable directory {}: {}", location, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
         // co_await coroutine::return_exception(std::move(ex));
         std::rethrow_exception(std::move(ex));
@@ -210,29 +207,29 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     // Always okay to delete files with a temporary TOC. We want to do it before we process
     // the generations seen: it's okay to reuse those generations since the files will have
     // been deleted anyway.
-    for (auto& desc: state.temp_toc_found) {
-        auto range = state.generations_found.equal_range(desc.generation);
+    for (auto& desc: _state->temp_toc_found) {
+        auto range = _state->generations_found.equal_range(desc.generation);
         for (auto it = range.first; it != range.second; ++it) {
             auto& path = it->second;
             dirlog.trace("Scheduling to remove file {}, from an SSTable with a Temporary TOC", path.native());
-            state.files_for_removal.insert(path.native());
+            _state->files_for_removal.insert(path.native());
         }
-        state.generations_found.erase(range.first, range.second);
-        state.descriptors.erase(desc.generation);
+        _state->generations_found.erase(range.first, range.second);
+        _state->descriptors.erase(desc.generation);
     }
 
-    directory._max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
+    directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
         return std::max<generation_type>(a, b);
     });
 
     dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
-            _sstable_dir, directory._max_generation_seen, state.descriptors.size(), state.generations_found.size());
+            location, directory._max_generation_seen, _state->descriptors.size(), _state->generations_found.size());
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await directory.parallel_for_each_restricted(state.descriptors, [this, flags, &state, &directory] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
-        state.generations_found.erase(desc.generation);
+        _state->generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
         return directory.process_descriptor(std::move(desc), flags);
     });
@@ -241,12 +238,12 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     // If scylla was supposed to have generated this SSTable, this is not okay and
     // we refuse to proceed. If this coming from, say, an import, then we just delete,
     // log and proceed.
-    for (auto& path : state.generations_found | boost::adaptors::map_values) {
+    for (auto& path : _state->generations_found | boost::adaptors::map_values) {
         if (flags.throw_on_missing_toc) {
-            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _sstable_dir.native(), path.native()));
+            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", location.native(), path.native()));
         } else {
-            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _sstable_dir.native());
-            state.files_for_removal.insert(path.native());
+            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), location.native());
+            _state->files_for_removal.insert(path.native());
         }
     }
 }
