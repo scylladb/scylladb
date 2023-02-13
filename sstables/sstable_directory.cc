@@ -35,6 +35,7 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 
 sstable_directory::components_lister::components_lister(std::filesystem::path dir)
         : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
+        , _state(std::make_unique<scan_state>())
 {
 }
 
@@ -61,7 +62,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
 {}
 
 void
-sstable_directory::handle_component(scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
+sstable_directory::handle_component(components_lister::scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
     if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
         return;
     }
@@ -180,9 +181,8 @@ sstable_directory::process_sstable_dir(process_flags flags) {
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    scan_state state;
-
     auto sstable_dir_lister = _manager.get_components_lister(_sstable_dir);
+    auto& state = *sstable_dir_lister._state;
     std::exception_ptr ex;
     try {
         while (true) {

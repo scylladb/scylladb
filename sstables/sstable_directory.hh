@@ -65,7 +65,20 @@ public:
     };
 
     class components_lister {
+    public:
+        struct scan_state {
+            using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
+            using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
+            using scan_descriptors_map = std::unordered_map<generation_type, sstables::entry_descriptor>;
+
+            scan_multimap generations_found;
+            scan_descriptors temp_toc_found;
+            scan_descriptors_map descriptors;
+        };
+
         directory_lister _lister;
+        std::unique_ptr<scan_state> _state;
+
     public:
         future<sstring> get();
         components_lister(std::filesystem::path dir);
@@ -73,15 +86,6 @@ public:
     };
 
 private:
-    using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
-    using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
-    using scan_descriptors_map = std::unordered_map<generation_type, sstables::entry_descriptor>;
-
-    struct scan_state {
-        scan_multimap generations_found;
-        scan_descriptors temp_toc_found;
-        scan_descriptors_map descriptors;
-    };
 
     // SSTable files to be deleted: things with a Temporary TOC, missing TOC files,
     // TemporaryStatistics, etc. Not part of the scan state, because we want to do a 2-phase
@@ -121,7 +125,7 @@ private:
 
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
-    void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
+    void handle_component(components_lister::scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
 
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
