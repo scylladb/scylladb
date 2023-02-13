@@ -62,14 +62,13 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _unshared_remote_sstables(smp::count)
 {}
 
-void
-sstable_directory::handle_component(components_lister::scan_state& state, sstables::entry_descriptor desc, fs::path filename) {
+void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
     if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
         return;
     }
 
     dirlog.trace("for SSTable directory, scanning {}", filename);
-    state.generations_found.emplace(desc.generation, filename);
+    _state->generations_found.emplace(desc.generation, filename);
 
     switch (desc.component) {
     case component_type::TemporaryStatistics:
@@ -77,13 +76,13 @@ sstable_directory::handle_component(components_lister::scan_state& state, sstabl
         // for instance on mutate_level. We should delete it - so we mark it for deletion
         // here, but just the component. The old statistics file should still be there
         // and we'll go with it.
-        state.files_for_removal.insert(filename.native());
+        _state->files_for_removal.insert(filename.native());
         break;
     case component_type::TOC:
-        state.descriptors.emplace(desc.generation, std::move(desc));
+        _state->descriptors.emplace(desc.generation, std::move(desc));
         break;
     case component_type::TemporaryTOC:
-        state.temp_toc_found.push_back(std::move(desc));
+        _state->temp_toc_found.push_back(std::move(desc));
         break;
     default:
         // Do nothing, and will validate when trying to load the file.
@@ -192,7 +191,7 @@ sstable_directory::process_sstable_dir(process_flags flags) {
                 break;
             }
             auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), name);
-            handle_component(state, std::move(comps), _sstable_dir / name);
+            sstable_dir_lister.handle(std::move(comps), _sstable_dir / name);
         }
     } catch (...) {
         ex = std::current_exception();

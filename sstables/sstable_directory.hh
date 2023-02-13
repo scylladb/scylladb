@@ -82,6 +82,8 @@ public:
             std::unordered_set<sstring> files_for_removal;
         };
 
+        void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
+
         directory_lister _lister;
         std::unique_ptr<scan_state> _state;
 
@@ -126,7 +128,6 @@ private:
 
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
-    void handle_component(components_lister::scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
 
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
