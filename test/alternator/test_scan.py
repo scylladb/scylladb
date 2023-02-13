@@ -368,12 +368,15 @@ def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_lim
     # Unfortunately, unlike strings of row-tombstones which end a page after
     # exactly query_tombstone_page_limit, in the case of partition tombstones
     # the limit applies to separate vnode subscans, so we need to have
-    # significantly more before the split. Experimentally "* 4" works here
+    # significantly more before the split. Experimentally "* 8" works here
     # with test/alternator/run, but may need to be changed in the future.
-    N = int(query_tombstone_page_limit * 4)
+    N = int(query_tombstone_page_limit * 8)
     with new_test_table(dynamodb,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'N' }]
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'N' }],
+        # This test does a lot of writes, so let's do them without LWT
+        # to make the test less slow.
+        Tags=[{'Key': 'system:write_isolation', 'Value': 'forbid_rmw'}]
         ) as table:
         # We want to have two live partitions with a lot of partition
         # tombstones between them. But the hash function is pseudo-random
