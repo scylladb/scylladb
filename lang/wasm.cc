@@ -178,7 +178,13 @@ struct from_val_visitor {
         if (ret_size == -1) {
             return bytes_opt{};
         }
-        bytes_opt ret = t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+        bytes_opt ret;
+        const counter_type_impl* counter = dynamic_cast<const counter_type_impl*>(&t);
+        if (counter) {
+            ret = long_type->decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+        } else {
+            ret = t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+        }
 
         if (wasmtime::get_abi(instance, store, *memory) == 2) {
             auto free_func = wasmtime::create_func(instance, store, "_scylla_free");
