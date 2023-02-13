@@ -2023,6 +2023,10 @@ data_value deserialize_aux(const tuple_type_impl& t, View v) {
 
 template<FragmentedView View>
 utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
+    if (v.empty()) {
+        throw marshal_exception("cannot deserialize multiprecision int - empty buffer");
+    }
+    skip_empty_fragments(v);
     bool negative = v.current_fragment().front() < 0;
     utils::multiprecision_int num;
   while (v.size_bytes()) {
@@ -2119,6 +2123,7 @@ bool deserialize_value(const boolean_type_impl&, View v) {
     if (v.size_bytes() != 1) {
         throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size_bytes()));
     }
+    skip_empty_fragments(v);
     return v.current_fragment().front() != 0;
 }
 
