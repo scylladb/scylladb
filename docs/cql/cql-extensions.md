@@ -265,6 +265,36 @@ filters in `SELECT`. However, the evaluation rules for LWT IF clauses
 if `x` is unset. This non-standard behavior of NULLs in IF expressions may
 be made configurable in a future version.
 
+## `NULL` is valid input for LWT IF clause element access
+
+The LWT IF clauses
+
+```cql
+IF some_map[:var] = 3
+```
+
+or
+
+```cql
+IF some_map[:var] != 3
+```
+
+
+is an error if `:var` is `NULL` on Cassandra, but is accepted by
+Scylla. The result of the comparison, for both `=` and `!=`, is `FALSE`.
+
+## `NULL` is valid input for LWT IF clause `LIKE` patterns
+
+The LWT IF clauses
+
+```cql
+IF some_column LIKE :pattern
+```
+
+is an error if `:pattern` is `NULL` on Cassandra, but is accepted by
+Scylla. The result of the pattern match is `FALSE`.
+
+
 ## REDUCEFUNC for UDA
 
 REDUCEFUNC extension adds optional reduction function to user-defined aggregate.

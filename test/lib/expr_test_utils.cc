@@ -456,6 +456,19 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     return std::pair(std::move(inputs), std::move(data));
 }
 
+bind_variable
+make_bind_variable(int32_t index, data_type type) {
+    return bind_variable{index, make_receiver(type, "?")};
+}
+
+raw_value
+evaluate_with_bind_variables(const expression& e, std::vector<raw_value> parameters) {
+    query_options options(default_cql_config, db::consistency_level::ONE, std::nullopt, parameters, true,
+                          query_options::specific_options::DEFAULT);
+    return evaluate(e, evaluation_inputs{.options = &options});
+}
+
+
 // A mock implementation of data_dictionary::database, used in tests
 class mock_database_impl : public data_dictionary::impl {
     schema_ptr _table_schema;

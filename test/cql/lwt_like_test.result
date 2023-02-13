@@ -54,7 +54,11 @@ OK
 > update t set c = 'err' where pk = 1 if c like 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "c" of type text"
 > update t set c = 'err' where pk = 1 if c like null;
-Error from server: code=2200 [Invalid query] message="Invalid NULL value in LIKE pattern"
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| False       | chg |
++-------------+-----+
 > update t set c = 'err' where pk = 1 if c like bigintAsBlob(1);
 Error from server: code=2200 [Invalid query] message="Type error: cannot assign result of function system.bigintasblob (type blob) to c (type text)"
 > -- int column
@@ -63,18 +67,18 @@ OK
 > insert into  ti (pk, c) values (1, 1);
 OK
 > update ti set c = 2 where pk = 1 if c like 'a%';
-Error from server: code=2200 [Invalid query] message="Invalid STRING constant (a%) for "c" of type int"
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which c is not"
 > -- map column
 > create table tm (pk int primary key, m map<int, text>);
 OK
 > insert into  tm (pk, m) values (1, { 1: 'abc' });
 OK
 > update tm set m = { 2: 'error' } where pk = 1 if m like 'a%';
-Error from server: code=2200 [Invalid query] message="Invalid STRING constant (a%) for "m" of type map<int, text>"
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which m is not"
 > -- blob column
 > create table tb (pk int primary key, b blob);
 OK
 > insert into  tb (pk, b) values (1, bigintAsBlob(1));
 OK
 > update tb set b = bigintAsBlob(2) where pk = 1 if b like 'a%';
-Error from server: code=2200 [Invalid query] message="Invalid STRING constant (a%) for "b" of type blob"
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which b is not"

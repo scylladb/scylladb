@@ -249,12 +249,18 @@ enum class comparison_order : char {
     clustering, ///< Table's clustering order. (a,b)>(1,1) means any row past (1,1) in storage.
 };
 
+enum class null_handling_style {
+    sql,           // evaluate(NULL = NULL) -> NULL, evaluate(NULL < x) -> NULL
+    lwt_nulls,     // evaluate(NULL = NULL) -> TRUE, evaluate(NULL < x) -> exception
+};
+
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
     expression lhs;
     oper_t op;
     expression rhs;
     comparison_order order;
+    null_handling_style null_handling = null_handling_style::sql;
 
     binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order = comparison_order::cql);
 
@@ -489,6 +495,9 @@ struct evaluation_inputs {
 std::vector<managed_bytes_opt> get_non_pk_values(const cql3::selection::selection& selection, const query::result_row_view& static_row,
                                          const query::result_row_view* row);
 
+/// Helper for accessing a column value from evaluation_inputs
+managed_bytes_opt extract_column_value(const column_definition* cdef, const evaluation_inputs& inputs);
+
 /// True iff restr evaluates to true, given these inputs
 extern bool is_satisfied_by(
         const expression& restr, const evaluation_inputs& inputs);
@@ -687,12 +696,18 @@ extern expression replace_token(const expression&, const column_definition*);
 extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
+// Adjust an expression for rows that were fetched using query::partition_slice::options::collections_as_maps
+expression adjust_for_collection_as_maps(const expression& e);
+
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema);
+
+// Pre-compile any constant LIKE patterns and return equivalent expression
+expression optimize_like(const expression& e);
 
 
 /**

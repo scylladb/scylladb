@@ -2407,16 +2407,16 @@ def testFilteringOnDurationColumn(cql, test_keyspace):
         #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (d) is not yet supported",
         #                     "SELECT * FROM %s WHERE d IN (1s, 2s) ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on duration columns",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                              "SELECT * FROM %s WHERE d > 1s ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on duration columns",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                              "SELECT * FROM %s WHERE d >= 1s ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on duration columns",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                              "SELECT * FROM %s WHERE d <= 1s ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on duration columns",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                              "SELECT * FROM %s WHERE d < 1s ALLOW FILTERING")
 
 def testFilteringOnListContainingDurations(cql, test_keyspace):
@@ -2435,16 +2435,16 @@ def testFilteringOnListContainingDurations(cql, test_keyspace):
             #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (l) is not yet supported",
             #                     "SELECT * FROM %s WHERE l IN ([1s, 2s], [2s, 3s]) ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                                  "SELECT * FROM %s WHERE l > [2s, 3s] ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                                  "SELECT * FROM %s WHERE l >= [2s, 3s] ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                                  "SELECT * FROM %s WHERE l <= [2s, 3s] ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                                  "SELECT * FROM %s WHERE l < [2s, 3s] ALLOW FILTERING")
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE l CONTAINS 1s ALLOW FILTERING"),
@@ -2468,16 +2468,16 @@ def testFilteringOnMapContainingDurations(cql, test_keyspace):
             #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (m) is not yet supported",
             #        "SELECT * FROM %s WHERE m IN ({1:1s, 2:2s}, {1:1s, 3:3s}) ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE m > {1:1s, 3:3s} ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE m >= {1:1s, 3:3s} ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE m <= {1:1s, 3:3s} ALLOW FILTERING")
 
-            assert_invalid_message(cql, table, "Slice restrictions are not supported on collections containing durations",
+            assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE m < {1:1s, 3:3s} ALLOW FILTERING")
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE m CONTAINS 1s ALLOW FILTERING"),
@@ -2498,16 +2498,16 @@ def testFilteringOnTupleContainingDurations(cql, test_keyspace):
         #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (t) is not yet supported",
         #        "SELECT * FROM %s WHERE t IN ((1, 2s), (1, 3s)) ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on tuples containing durations",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                 "SELECT * FROM %s WHERE t > (1, 2s) ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on tuples containing durations",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                 "SELECT * FROM %s WHERE t >= (1, 2s) ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on tuples containing durations",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                 "SELECT * FROM %s WHERE t <= (1, 2s) ALLOW FILTERING")
 
-        assert_invalid_message(cql, table, "Slice restrictions are not supported on tuples containing durations",
+        assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                 "SELECT * FROM %s WHERE t < (1, 2s) ALLOW FILTERING")
 
 def testFilteringOnUdtContainingDurations(cql, test_keyspace):
@@ -2528,16 +2528,16 @@ def testFilteringOnUdtContainingDurations(cql, test_keyspace):
                 #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (u) is not yet supported",
                 #    "SELECT * FROM %s WHERE u IN ({i: 2, d:3s}, {i: 1, d:3s}) ALLOW FILTERING")
 
-                assert_invalid_message(cql, table, "Slice restrictions are not supported on UDTs containing durations",
+                assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE u > {i: 1, d:3s} ALLOW FILTERING")
 
-                assert_invalid_message(cql, table, "Slice restrictions are not supported on UDTs containing durations",
+                assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE u >= {i: 1, d:3s} ALLOW FILTERING")
 
-                assert_invalid_message(cql, table, "Slice restrictions are not supported on UDTs containing durations",
+                assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE u <= {i: 1, d:3s} ALLOW FILTERING")
 
-                assert_invalid_message(cql, table, "Slice restrictions are not supported on UDTs containing durations",
+                assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE u < {i: 1, d:3s} ALLOW FILTERING")
 
 def testFilteringOnCollectionsWithNull(cql, test_keyspace):

@@ -2412,6 +2412,68 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_neq) {
     test_evaluate_binop_null(oper_t::NEQ, make_int_const(123), make_int_const(456));
 }
 
+static
+binary_operator
+lwt_binary_operator(expression lhs, oper_t op, expression rhs) {
+    auto ret = binary_operator(std::move(lhs), op, std::move(rhs));
+    ret.null_handling = null_handling_style::lwt_nulls;
+    return ret;
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_eq_neq_lwt_nulls) {
+    auto one = make_int_const(1);
+    auto two = make_int_const(2);
+    auto null = constant::make_null(int32_type);
+    auto t = make_bool_raw(true);
+    auto f = make_bool_raw(false);
+    auto eval = [] (const expression& e) { return evaluate(e, evaluation_inputs{}); };
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::EQ, two)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::EQ, one)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::EQ, null)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::EQ, two)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::EQ, null)), t);
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::NEQ, two)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::NEQ, one)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::NEQ, null)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::NEQ, two)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::NEQ, null)), f);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_lwt_nulls) {
+    auto int32_list_type = list_type_impl::get_instance(int32_type, true); 
+    auto one = make_int_const(1);
+    auto two = make_int_const(2);
+    auto null = constant::make_null(int32_type);
+    auto list_with_null = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements = {one, null},
+        .type = int32_list_type,
+    };
+    auto list_without_null = collection_constructor{
+        .style = collection_constructor::style_type::list,
+        .elements = {one},
+        .type = int32_list_type,
+    };
+    auto null_list = constant::make_null(int32_list_type);
+    auto t = make_bool_raw(true);
+    auto f = make_bool_raw(false);
+    auto eval = [] (const expression& e) { return evaluate(e, evaluation_inputs{}); };
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::IN, list_with_null)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(two, oper_t::IN, list_with_null)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::IN, list_with_null)), t);
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::IN, list_without_null)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(two, oper_t::IN, list_without_null)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::IN, list_without_null)), f);
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(one, oper_t::IN, null_list)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(two, oper_t::IN, null_list)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::IN, null_list)), f);
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
     expression true_lt_binop = binary_operator(make_int_const(1), oper_t::LT, make_int_const(2));
     BOOST_REQUIRE_EQUAL(evaluate(true_lt_binop, evaluation_inputs{}), make_bool_raw(true));
@@ -2492,6 +2554,42 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_gte) {
     BOOST_REQUIRE_EQUAL(evaluate(int_min_gte_empty, evaluation_inputs{}), make_bool_raw(true));
 
     test_evaluate_binop_null(oper_t::GTE, make_int_const(234), make_int_const(-3434));
+}
+
+// helper to evaluate expressions that we expect to throw sometimes. std::nullopt -> threw
+static
+std::optional<raw_value>
+evaluate_maybe_exception(const expression& e, const evaluation_inputs& inputs) {
+    try {
+        return evaluate(e, evaluation_inputs{});
+    } catch (exceptions::invalid_request_exception&) {
+        return std::nullopt;
+    }
+}
+
+// LWT inequality has different results if the second operand is NULL
+BOOST_AUTO_TEST_CASE(evalute_lwt_inequality) {
+    const auto operand_pool = std::vector({make_int_const(2), make_int_const(3), constant::make_null(int32_type)});
+    for (auto op : { oper_t::LT, oper_t::LTE, oper_t::GT, oper_t::GTE}) {
+        for (auto& lhs : operand_pool) {
+            for (auto& rhs: operand_pool) {
+                auto binop = lwt_binary_operator(lhs, op, rhs);
+                auto result = evaluate_maybe_exception(binop, evaluation_inputs{});
+                if (rhs.is_null()) {
+                    BOOST_REQUIRE(!result); // NULL rhs is illegal for lwt
+                } else {
+                    // Otherwise, results should be the same as for non-LWT, except FALSE is returned
+                    // instead of NULL
+                    binop.null_handling = null_handling_style::sql;
+                    auto sql_result = evaluate_maybe_exception(binop, evaluation_inputs{});
+                    if (sql_result && sql_result->is_null()) {
+                        sql_result = cql3::raw_value::make_value(data_value(false).serialize_nonnull());
+                    }
+                    BOOST_REQUIRE_EQUAL(result, sql_result);
+                }
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in) {
@@ -3942,4 +4040,36 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_with_null_rhs) {
                                                             table_schema);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(optimized_constant_like) {
+    auto check = [] (expression e, std::optional<sstring> target, bool expect_optimization, std::optional<sstring> pattern_arg = {}) {
+        auto optimized = optimize_like(e);
+        bool was_optimized = find_binop(optimized, [] (const binary_operator&) { return true; }) == nullptr;
+        if (was_optimized != expect_optimization) {
+            return false;
+        }
+        auto params = std::vector({target ? make_text_raw(*target) : raw_value::make_null()});
+        if (pattern_arg) {
+            params.push_back(make_text_raw(*pattern_arg));
+        }
+        return evaluate_with_bind_variables(optimized, params) == evaluate_with_bind_variables(e, params);
+    };
+
+    auto target_var = make_bind_variable(0, utf8_type);
+    auto pattern_var = make_bind_variable(1, utf8_type);
+
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "xxyyz", true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "qxyyz", true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), std::nullopt, true));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "xxyyz", false, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "qxyyz", false, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), std::nullopt, false, "xx%"));
+
+    // Verify that optimization works for subexpressions, not just top-level expressions
+    auto complex = make_conjunction(
+            binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")),
+            // repeated for simplicity
+            binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")));
+    BOOST_REQUIRE(check(std::move(complex), "xxyyz", true));
 }

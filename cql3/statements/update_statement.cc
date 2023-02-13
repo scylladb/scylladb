@@ -304,19 +304,19 @@ std::optional<expr::expression> get_value_condition(const std::vector<lw_shared_
 
     if (conditions.size() > 1) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("conditions: {}", fmt::join(
-            conditions | boost::adaptors::transformed([] (const auto& cond) {
-                return fmt::format("{}{}", cond->get_operation(), cond->get_value());
-            }), ", ")));
+            conditions | boost::adaptors::transformed(std::mem_fn(&column_condition::_expr)), ", ")));
     }
 
     const auto& condition = conditions[0];
 
-    if (!condition->get_value() || condition->get_operation() != cql3::expr::oper_t::EQ) {
+    auto binop = expr::as_if<expr::binary_operator>(&condition->_expr);
+    auto lhs = binop ? expr::as_if<expr::column_value>(&binop->lhs) : nullptr;
+    if (!lhs || (binop->op != cql3::expr::oper_t::EQ)) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "condition: {}{}", condition->get_operation(), condition->get_value()));
+            "condition: {}", condition->_expr));
     }
 
-    return condition->get_value();
+    return binop->rhs;
 }
 
 ::shared_ptr<strongly_consistent_modification_statement>

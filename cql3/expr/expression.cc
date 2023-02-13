@@ -126,13 +126,18 @@ struct row_data_from_partition_slice {
     const selection& sel;
 };
 
-/// Returns col's value from queried data.
-managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& inputs) {
-    auto cdef = col.col;
+} // anonymous
+
+managed_bytes_opt
+extract_column_value(const column_definition* cdef, const evaluation_inputs& inputs) {
     switch (cdef->kind) {
         case column_kind::partition_key:
             return managed_bytes((*inputs.partition_key)[cdef->id]);
         case column_kind::clustering_key:
+            if (cdef->id >= inputs.clustering_key->size()) {
+                // partial clustering key, or LWT non-existing row
+                return std::nullopt;
+            }
             return managed_bytes((*inputs.clustering_key)[cdef->id]);
         case column_kind::static_column:
             [[fallthrough]];
@@ -150,23 +155,23 @@ managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& in
     }
 }
 
+namespace {
+
+/// Returns col's value from queried data.
+managed_bytes_opt get_value(const column_value& col, const evaluation_inputs& inputs) {
+    return extract_column_value(col.col, inputs);
+}
+
 managed_bytes_opt
 get_value(const subscript& s, const evaluation_inputs& inputs) {
-    const column_definition* cdef = get_subscripted_column(s).col;
-
-    auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
-    int32_t index = inputs.selection->index_of(*cdef);
-    if (index == -1) {
-        throw std::runtime_error(
-                format("Column definition {} does not match any column in the query selection",
-                cdef->name_as_text()));
-    }
-    const managed_bytes_opt& serialized = (*inputs.static_and_regular_columns)[index];
+    raw_value container_val = evaluate(s.val, inputs);
+    auto serialized = std::move(container_val).to_managed_bytes_opt();
     if (!serialized) {
         // For null[i] we return null.
         return std::nullopt;
     }
-    const auto deserialized = cdef->type->deserialize(managed_bytes_view(*serialized));
+    auto col_type = static_pointer_cast<const collection_type_impl>(type_of(s.val));
+    const auto deserialized = type_of(s.val)->deserialize(managed_bytes_view(*serialized));
     const auto key = evaluate(s.sub, inputs);
     auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
     if (key.is_null()) {
@@ -200,7 +205,7 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
         }
         return managed_bytes_opt(data_list[key_int].serialize_nonnull());
     } else {
-        throw exceptions::invalid_request_exception(format("subscripting non-map, non-list column {}", cdef->name_as_text()));
+        throw exceptions::invalid_request_exception(fmt::format("subscripting non-map, non-list column {:user}", s.val));
     }
 }
 
@@ -247,41 +252,48 @@ bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, co
     return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-static std::optional<std::pair<managed_bytes, managed_bytes>> evaluate_binop_sides(const expression& lhs,
+static std::pair<managed_bytes_opt, managed_bytes_opt> evaluate_binop_sides(const expression& lhs,
                                                                                    const expression& rhs,
                                                                                    const oper_t op,
                                                                                    const evaluation_inputs& inputs) {
     raw_value lhs_value = evaluate(lhs, inputs);
     raw_value rhs_value = evaluate(rhs, inputs);
 
-    if (lhs_value.is_null() || rhs_value.is_null()) {
-        return std::nullopt;
-    }
-    managed_bytes lhs_bytes = std::move(lhs_value).to_managed_bytes();
-    managed_bytes rhs_bytes = std::move(rhs_value).to_managed_bytes();
+    managed_bytes_opt lhs_bytes = std::move(lhs_value).to_managed_bytes_opt();
+    managed_bytes_opt rhs_bytes = std::move(rhs_value).to_managed_bytes_opt();
     return std::pair(std::move(lhs_bytes), std::move(rhs_bytes));
 }
 
-bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+bool_or_null equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::EQ, inputs);
-    if (!sides_bytes.has_value()) {
+
+    if (null_handling == null_handling_style::lwt_nulls && (!sides_bytes.first || !sides_bytes.second)) {
+        return bool(sides_bytes.first) == bool(sides_bytes.second);
+    }
+
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    return type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+    return type_of(lhs)->equal(managed_bytes_view(*lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
-bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+bool_or_null not_equal(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::NEQ, inputs);
-    if (!sides_bytes.has_value()) {
+
+    if (null_handling == null_handling_style::lwt_nulls && (!sides_bytes.first || !sides_bytes.second)) {
+        return bool(sides_bytes.first) != bool(sides_bytes.second);
+    }
+
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
-    return !type_of(lhs)->equal(managed_bytes_view(lhs_bytes), managed_bytes_view(rhs_bytes));
+    return !type_of(lhs)->equal(managed_bytes_view(*lhs_bytes), managed_bytes_view(*rhs_bytes));
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
@@ -305,31 +317,70 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
     }
 }
 
+bool list_contains_null(managed_bytes_view list) {
+    return boost::algorithm::any_of_equal(partially_deserialize_listlike(list), std::nullopt);
+}
+
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool_or_null limits(const expression& lhs, oper_t op, const expression& rhs, const evaluation_inputs& inputs) {
+bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_handling, const expression& rhs, const evaluation_inputs& inputs) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-     std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, op, inputs);
-    if (!sides_bytes.has_value()) {
-        return bool_or_null::null();
-    }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
-    return limits(lhs_bytes, op, rhs_bytes, type_of(lhs)->without_reversed());
+    if (!sides_bytes.first || !sides_bytes.second) {
+        switch (null_handling) {
+        case null_handling_style::sql:
+            return bool_or_null::null();
+        case null_handling_style::lwt_nulls:
+            switch (op) {
+            case oper_t::LT:
+            case oper_t::LTE:
+            case oper_t::GT:
+            case oper_t::GTE:
+                if (!sides_bytes.second) {
+                    throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
+                } else {
+                    // LWT < > <= >= throws only for NULL second operand, not first
+                    return false;
+                }
+            case oper_t::CONTAINS:
+            case oper_t::CONTAINS_KEY:
+            case oper_t::LIKE:
+            case oper_t::IS_NOT: // IS_NOT doesn't really belong here, luckily this is never reached.
+                throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
+            case oper_t::EQ:
+                return !sides_bytes.first == !sides_bytes.second;
+            case oper_t::NEQ:
+                return !sides_bytes.first != !sides_bytes.second;
+            case oper_t::IN:
+                if (!sides_bytes.second.has_value()) {
+                    // Nothing can be IN a list if there is no list.
+                    return false;
+                } else {
+                    return list_contains_null(*sides_bytes.second);
+                }
+            }
+        }
+    }
+    // at this point, both sides are non-NULL
+
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
+
+    return limits(*lhs_bytes, op, *rhs_bytes, type_of(lhs)->without_reversed());
 }
 
 /// True iff a column is a collection containing value.
 bool_or_null contains(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
 
     const abstract_type& lhs_type = type_of(lhs)->without_reversed();
-    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(sides_bytes->first));
+    data_value lhs_collection = lhs_type.deserialize(managed_bytes_view(*sides_bytes.first));
 
     const collection_type_impl* collection_type = dynamic_cast<const collection_type_impl*>(&lhs_type);
     data_type element_type =
@@ -337,7 +388,7 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 
     auto exists_in = [&](auto&& range) {
         auto found = std::find_if(range.begin(), range.end(), [&](auto&& element) {
-            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), sides_bytes->second) == 0;
+            return element_type->compare(managed_bytes_view(element.serialize_nonnull()), *sides_bytes.second) == 0;
         });
         return found != range.end();
     };
@@ -356,21 +407,21 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
 
 /// True iff a column is a map containing \p key.
 bool_or_null contains_key(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::CONTAINS_KEY, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
 
     data_type lhs_type = type_of(lhs);
     const map_type_impl::native_type data_map =
-        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(lhs_bytes)));
+        value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(*lhs_bytes)));
     data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type)->name_comparator();
 
     for (const std::pair<data_value, data_value>& map_element : data_map) {
         bytes serialized_element_key = map_element.first.serialize_nonnull();
-        if (key_type->compare(managed_bytes_view(rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
+        if (key_type->compare(managed_bytes_view(*rhs_bytes), managed_bytes_view(bytes_view(serialized_element_key))) ==
             0) {
             return true;
         };
@@ -431,30 +482,40 @@ bool_or_null like(const expression& lhs, const expression& rhs, const evaluation
         throw exceptions::invalid_request_exception(
                 format("LIKE is allowed only on string types, which {:user} is not", lhs));
     }
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::LIKE, inputs);
-    if (!sides_bytes.has_value()) {
+    if (!sides_bytes.first || !sides_bytes.second) {
         return bool_or_null::null();
     }
-    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(*sides_bytes);
+    auto [lhs_managed_bytes, rhs_managed_bytes] = std::move(sides_bytes);
 
-    bytes lhs_bytes = to_bytes(lhs_managed_bytes);
-    bytes rhs_bytes = to_bytes(rhs_managed_bytes);
+    bytes lhs_bytes = to_bytes(*lhs_managed_bytes);
+    bytes rhs_bytes = to_bytes(*rhs_managed_bytes);
 
     return like_matcher(bytes_view(rhs_bytes))(bytes_view(lhs_bytes));
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
-    std::optional<std::pair<managed_bytes, managed_bytes>> sides_bytes =
+bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
         evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
-    if (!sides_bytes.has_value()) {
-        return bool_or_null::null();
+    if (!sides_bytes.first || !sides_bytes.second) {
+        switch (null_handling) {
+        case null_handling_style::sql:
+            return bool_or_null::null();
+        case null_handling_style::lwt_nulls:
+            if (!sides_bytes.second) {
+                return false;
+            } else {
+                return list_contains_null(*sides_bytes.second);
+            }
+        }
     }
-    auto [lhs_bytes, rhs_bytes] = std::move(*sides_bytes);
 
-    expression lhs_constant = constant(raw_value::make_value(std::move(lhs_bytes)), type_of(lhs));
-    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(rhs_bytes)));
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
+
+    expression lhs_constant = constant(raw_value::make_value(std::move(*lhs_bytes)), type_of(lhs));
+    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(*rhs_bytes)));
     for (const managed_bytes_opt& elem : list_elems) {
         if (equal(lhs_constant, elem, inputs).is_true()) {
             return true;
@@ -1081,6 +1142,9 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             [&] (const binary_operator& opr) {
                 if (pr.debug_mode) {
                     os << "(" << to_printer(opr.lhs) << ") " << opr.op << ' ' << to_printer(opr.rhs);
+                    if (opr.null_handling == null_handling_style::lwt_nulls) {
+                        os << " [[lwt_nulls]]";
+                    }
                 } else {
                     if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
                         tuple_constructor rhs_tuple {
@@ -1458,9 +1522,9 @@ expression search_and_replace(const expression& e,
                 [&] (const subscript& s) -> expression {
                     return subscript {
                         .val = recurse(s.val),
-                        .sub = recurse(s.sub)
+                        .sub = recurse(s.sub),
+                        .type = s.type,
                     };
-                    throw std::runtime_error("expr: search_and_replace - subscript not added to expression yet");
                 },
                 [&](const token& tok) -> expression {
                     return token {
@@ -1621,16 +1685,16 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
 
     switch (binop.op) {
         case oper_t::EQ:
-            binop_result = equal(binop.lhs, binop.rhs, inputs);
+            binop_result = equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::NEQ:
-            binop_result = not_equal(binop.lhs, binop.rhs, inputs);
+            binop_result = not_equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::LT:
         case oper_t::LTE:
         case oper_t::GT:
         case oper_t::GTE:
-            binop_result = limits(binop.lhs, binop.op, binop.rhs, inputs);
+            binop_result = limits(binop.lhs, binop.op, binop.null_handling, binop.rhs, inputs);
             break;
         case oper_t::CONTAINS:
             binop_result = contains(binop.lhs, binop.rhs, inputs);
@@ -1642,7 +1706,7 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
             binop_result = like(binop.lhs, binop.rhs, inputs);
             break;
         case oper_t::IN:
-            binop_result = is_one_of(binop.lhs, binop.rhs, inputs);
+            binop_result = is_one_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
@@ -2078,9 +2142,6 @@ static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_
 
     for (const expression& arg : fun_call.args) {
         cql3::raw_value arg_val = evaluate(arg, inputs);
-        if (arg_val.is_null()) {
-            throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *scalar_fun));
-        }
 
         arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
     }
@@ -2545,6 +2606,91 @@ unset_bind_variable_guard::is_unset(const query_options& qo) const {
         return false;
     }
     return qo.is_unset(_var->bind_index);
+}
+
+static
+expression
+convert_map_back_to_listlike(expression e) {
+    class conversion_function : public functions::scalar_function {
+        functions::function_name _name = { "system", "reserialize_listlike" };
+        shared_ptr<const map_type_impl> _map_type;
+        shared_ptr<const listlike_collection_type_impl> _listlike_type;
+        std::vector<data_type> _arg_types;
+    public:
+        explicit conversion_function(shared_ptr<const map_type_impl> map_type,
+                shared_ptr<const listlike_collection_type_impl> listlike_type)
+                : _map_type(std::move(map_type))
+                , _listlike_type(std::move(listlike_type)) {
+            _arg_types.push_back(_listlike_type);
+        }
+
+        virtual const functions::function_name& name() const override {
+            return _name;
+        }
+
+        virtual const std::vector<data_type>& arg_types() const override {
+            return _arg_types;
+        }
+
+        virtual const data_type& return_type() const override {
+            return _arg_types[0];
+        }
+
+        virtual bool is_pure() const override {
+            return true;
+        }
+
+        virtual bool is_native() const override {
+            return true;
+        }
+
+        virtual bool requires_thread() const override {
+            return false;
+        }
+
+        virtual bool is_aggregate() const override {
+            return false;
+        }
+
+        virtual void print(std::ostream& os) const override {
+            os << "MAP_TO_LIST(internal)";
+        }
+
+        virtual sstring column_name(const std::vector<sstring>& column_names) const override {
+            return "NONE";
+        }
+
+        virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+            auto& p = parameters[0];
+            if (!p) {
+                return std::nullopt;
+            }
+            auto v = _map_type->deserialize_value(*p);
+            return _listlike_type->serialize_map(*_map_type, v);
+        }
+    };
+
+    auto type = dynamic_pointer_cast<const listlike_collection_type_impl>(type_of(e));
+    auto map_type = map_type_impl::get_instance(type->name_comparator(), type->value_comparator(), true);
+    auto args = std::vector<expression>();
+    args.push_back(std::move(e));
+
+    return function_call{
+        .func = make_shared<conversion_function>(std::move(map_type), std::move(type)),
+        .args = std::move(args),
+    };
+}
+
+expression
+adjust_for_collection_as_maps(const expression& e) {
+    return search_and_replace(e, [] (const expression& candidate) -> std::optional<expression> {
+        if (auto* cval = as_if<column_value>(&candidate)) {
+            if (cval->col->type->is_listlike() && cval->col->type->is_multi_cell()) {
+                return convert_map_back_to_listlike(candidate);
+            }
+        }
+        return std::nullopt;
+    });
 }
 
 } // namespace expr

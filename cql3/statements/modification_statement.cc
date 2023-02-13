@@ -148,7 +148,8 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
     });
 }
 
-bool modification_statement::applies_to(const update_parameters::prefetch_data::row* row,
+bool modification_statement::applies_to(const selection::selection* selection,
+        const update_parameters::prefetch_data::row* row,
         const query_options& options) const {
 
     // Assume the row doesn't exist if it has no static columns and the statement is only interested
@@ -169,15 +170,25 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
         return row == nullptr;
     }
 
-    auto condition_applies = [&row, &options](const lw_shared_ptr<column_condition>& cond) {
-        const data_value* value = nullptr;
-        if (row != nullptr) {
-            auto it = row->cells.find(cond->_column.ordinal_id);
-            if (it != row->cells.end()) {
-                value = &it->second;
-            }
+    // Fake out an all-null static_and_regular_columns if we didn't find a row
+    auto fake_static_and_regular_columns = std::vector<managed_bytes_opt>();
+    auto static_and_regular_columns = std::invoke([&] () -> const std::vector<managed_bytes_opt>* {
+        if (row) {
+            return &row->cells;
+        } else {
+            fake_static_and_regular_columns.resize(selection->get_column_count());
+            return &fake_static_and_regular_columns;
         }
-        return cond->applies_to(value, options);
+    });
+
+    auto inputs = expr::evaluation_inputs{
+        .static_and_regular_columns = static_and_regular_columns,
+        .selection = selection,
+        .options = &options,
+    };
+
+    auto condition_applies = [&row, &inputs](const lw_shared_ptr<column_condition>& cond) {
+        return cond->applies_to(inputs);
     };
     return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
             std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
@@ -348,10 +359,14 @@ void modification_statement::build_cas_result_set_metadata() {
         }
     } else {
         for (const auto& cond : _regular_conditions) {
-            _columns_of_cas_result_set.set(cond->_column.ordinal_id);
+            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
+                _columns_of_cas_result_set.set(col.col->ordinal_id);
+            });
         }
         for (const auto& cond : _static_conditions) {
-            _columns_of_cas_result_set.set(cond->_column.ordinal_id);
+            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
+                _columns_of_cas_result_set.set(col.col->ordinal_id);
+            });
         }
     }
     columns.reserve(columns.size() + all_columns.size());
@@ -522,18 +537,10 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
-                auto id = entry.first->prepare_column_identifier(schema);
-                const column_definition* def = get_column_definition(schema, *id);
-                if (!def) {
-                    throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
-                }
+                auto condition = entry->prepare(db, keyspace(), schema);
 
-                auto condition = entry.second->prepare(db, keyspace(), *def);
                 condition->collect_marker_specificaton(ctx);
 
-                if (def->is_primary_key()) {
-                    throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));
-                }
                 stmt.add_condition(condition);
             }
         }
@@ -608,14 +615,16 @@ bool modification_statement::is_conditional() const {
 }
 
 void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
-    if (cond->_column.is_static()) {
+  expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
+    if (col.col->is_static()) {
         _has_static_column_conditions = true;
         _static_conditions.emplace_back(std::move(cond));
     } else {
         _has_regular_column_conditions = true;
-        _selects_a_collection |= cond->_column.type->is_collection();
+        _selects_a_collection |=  col.col->type->is_collection();
         _regular_conditions.emplace_back(std::move(cond));
     }
+  });
 }
 
 void modification_statement::set_if_not_exist_condition() {

@@ -1754,12 +1754,12 @@ SEASTAR_TEST_CASE(test_duration_restrictions) {
                 return validate_request_failure(
                         env,
                         "select * from my_table0 where key = 0 and span < 3d;",
-                        "Slice restrictions are not supported on duration columns");
+                        "Duration type is unordered for span");
             }).then([&] {
                 return validate_request_failure(
                         env,
                         "update my_table0 set name = 'joe' where key = 0 if span >= 5m",
-                        "Slice conditions are not supported on durations");
+                        "Duration type is unordered for span");
             });
         });
     });

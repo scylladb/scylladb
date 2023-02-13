@@ -217,7 +217,7 @@ public:
      * is no matching row.
      * @return whether the conditions represented by this statement apply or not.
      */
-    bool applies_to(const update_parameters::prefetch_data::row* row, const query_options& options) const;
+    bool applies_to(const selection::selection* selection, const update_parameters::prefetch_data::row* row, const query_options& options) const;
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
