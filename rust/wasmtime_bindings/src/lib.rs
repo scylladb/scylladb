@@ -409,7 +409,10 @@ impl<'a> Fut<'a> {
         )) {
             Poll::Pending => Ok(false),
             Poll::Ready(Ok(())) => Ok(true),
-            Poll::Ready(Err(e)) => Err(e),
+            Poll::Ready(Err(e)) => Err(e
+                .downcast_ref::<wasmtime::Trap>()
+                .map(|t| anyhow!("Trap: {}", t))
+                .unwrap_or(e)),
         }
     }
 }
