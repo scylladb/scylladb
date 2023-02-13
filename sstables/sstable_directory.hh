@@ -65,7 +65,6 @@ public:
     };
 
     class components_lister {
-    public:
         struct scan_state {
             using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
             using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -87,10 +86,11 @@ public:
         directory_lister _lister;
         std::unique_ptr<scan_state> _state;
 
-    public:
         future<sstring> get();
-        components_lister(std::filesystem::path dir);
         future<> close();
+
+    public:
+        components_lister(std::filesystem::path dir);
 
         future<> process(sstable_directory& directory, fs::path location, process_flags flags);
         future<> commit();
