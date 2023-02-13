@@ -13,19 +13,18 @@ namespace compaction {
 
 future<> run_on_table(sstring op, replica::database& db, std::string_view keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
-        // FIXME: fix indentation
-        tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
-        try {
-            co_await func(db.find_column_family(ti.id));
-        } catch (const replica::no_such_column_family& e) {
-            tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
-        } catch (...) {
-            ex = std::current_exception();
-            tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
-        }
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
+    tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
+    try {
+        co_await func(db.find_column_family(ti.id));
+    } catch (const replica::no_such_column_family& e) {
+        tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
+    } catch (...) {
+        ex = std::current_exception();
+        tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 // Run on all tables, skipping dropped tables
@@ -72,16 +71,15 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     // Thus, they are sorted before each invidual compaction and the smallest table is chosen.
     while (!table_tasks.empty()) {
         try {
-    // FIXME: fix indentation
-    // Major compact smaller tables first, to increase chances of success if low on space.
-    // Tables will be kept in descending order.
-    std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
-        try {
-            return _db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
-        } catch (const replica::no_such_column_family& e) {
-            return int64_t(-1);
-        }
-    });
+            // Major compact smaller tables first, to increase chances of success if low on space.
+            // Tables will be kept in descending order.
+            std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
+                try {
+                    return _db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
+                } catch (const replica::no_such_column_family& e) {
+                    return int64_t(-1);
+                }
+            });
             // Task responsible for the smallest table.
             current_task = table_tasks.back().task;
             table_tasks.pop_back();
