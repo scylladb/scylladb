@@ -48,16 +48,15 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     // Thus, they are sorted before each invidual compaction and the smallest table is chosen.
     while (!table_tasks.empty()) {
         try {
-    // FIXME: fix indentation
-    // Major compact smaller tables first, to increase chances of success if low on space.
-    // Tables will be kept in descending order.
-    std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
-        try {
-            return _db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
-        } catch (const replica::no_such_column_family& e) {
-            return int64_t(-1);
-        }
-    });
+            // Major compact smaller tables first, to increase chances of success if low on space.
+            // Tables will be kept in descending order.
+            std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
+                try {
+                    return _db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
+                } catch (const replica::no_such_column_family& e) {
+                    return int64_t(-1);
+                }
+            });
             // Task responsible for the smallest table.
             current_task = table_tasks.back().task;
             table_tasks.pop_back();

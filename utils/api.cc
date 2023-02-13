@@ -23,19 +23,18 @@ namespace api {
 
 future<> run_on_table(sstring op, replica::database& db, std::string_view keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
-        // FIXME: fix indentation
-        apilog.debug("Starting {} on {}.{}", op, keyspace, ti);
-        try {
-            co_await func(db.find_column_family(ti.id));
-        } catch (const replica::no_such_column_family& e) {
-            apilog.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
-        } catch (...) {
-            ex = std::current_exception();
-            apilog.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
-        }
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
+    apilog.debug("Starting {} on {}.{}", op, keyspace, ti);
+    try {
+        co_await func(db.find_column_family(ti.id));
+    } catch (const replica::no_such_column_family& e) {
+        apilog.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
+    } catch (...) {
+        ex = std::current_exception();
+        apilog.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 // Run on all tables, skipping dropped tables
