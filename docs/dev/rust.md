@@ -39,6 +39,8 @@ versions used in the last successful build. Dependency modification may include:
 After each such modification, a new Cargo.lock file should be submitted. Cargo.lock can be generated
 by the `cargo update` command.
 
+Before committing changes, run `cargo-fmt` and `cargo-clippy` commands to keep the Rust code clean and well formatted.
+
 ## Rust interoperability implementation
 
 Using Rust alongside C++ in scylla is made possible by the Rust crate CXX. The `cxx::bridge` macro,
