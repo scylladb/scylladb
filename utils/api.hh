@@ -20,6 +20,7 @@ struct table_info {
     table_id id;
 };
 
+future<> run_on_table(sstring op, replica::database& db, std::string_view keyspace, table_info ti, std::function<future<> (replica::table&)> func);
 future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func);
 
 }
