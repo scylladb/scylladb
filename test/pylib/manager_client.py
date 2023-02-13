@@ -158,7 +158,7 @@ class ManagerClient():
             if cmdline:
                 data['cmdline'] = cmdline
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
-                                                     timeout=ScyllaServer.START_TIMEOUT)
+                                                     timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
@@ -176,13 +176,15 @@ class ManagerClient():
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
         data = {"server_id": server_id, "ignore_dead": ignore_dead}
-        await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data)
+        await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
+                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
     async def decommission_node(self, server_id: ServerNum) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
-        await self.client.get_text(f"/cluster/decommission-node/{server_id}")
+        await self.client.get_text(f"/cluster/decommission-node/{server_id}",
+                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
