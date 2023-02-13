@@ -991,8 +991,7 @@ void table::set_metrics() {
 }
 
 size_t compaction_group::live_sstable_count() const noexcept {
-    // FIXME: switch to sstable_set::size() once available.
-    return _main_sstables->all()->size() + _maintenance_sstables->all()->size();
+    return _main_sstables->size() + _maintenance_sstables->size();
 }
 
 uint64_t compaction_group::live_disk_space_used() const noexcept {
