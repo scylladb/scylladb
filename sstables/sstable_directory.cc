@@ -77,7 +77,7 @@ sstable_directory::handle_component(components_lister::scan_state& state, sstabl
         // for instance on mutate_level. We should delete it - so we mark it for deletion
         // here, but just the component. The old statistics file should still be there
         // and we'll go with it.
-        _files_for_removal.insert(filename.native());
+        state.files_for_removal.insert(filename.native());
         break;
     case component_type::TOC:
         state.descriptors.emplace(desc.generation, std::move(desc));
@@ -213,7 +213,7 @@ sstable_directory::process_sstable_dir(process_flags flags) {
         for (auto it = range.first; it != range.second; ++it) {
             auto& path = it->second;
             dirlog.trace("Scheduling to remove file {}, from an SSTable with a Temporary TOC", path.native());
-            _files_for_removal.insert(path.native());
+            state.files_for_removal.insert(path.native());
         }
         state.generations_found.erase(range.first, range.second);
         state.descriptors.erase(desc.generation);
@@ -244,16 +244,17 @@ sstable_directory::process_sstable_dir(process_flags flags) {
             throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _sstable_dir.native(), path.native()));
         } else {
             dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _sstable_dir.native());
-            _files_for_removal.insert(path.native());
+            state.files_for_removal.insert(path.native());
         }
     }
 }
 
 future<>
 sstable_directory::commit_directory_changes() {
+    auto files_for_removal = std::exchange(_lister->_state->files_for_removal, {});
     _lister.reset();
     // Remove all files scheduled for removal
-    return parallel_for_each(std::exchange(_files_for_removal, {}), [] (sstring path) {
+    return parallel_for_each(std::move(files_for_removal), [] (sstring path) {
         dirlog.info("Removing file {}", path);
         return remove_file(std::move(path));
     });
