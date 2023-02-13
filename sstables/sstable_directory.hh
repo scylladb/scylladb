@@ -102,6 +102,7 @@ private:
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
+    std::unique_ptr<components_lister> _lister;
 
     generation_type _max_generation_seen = generation_from_value(0);
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;

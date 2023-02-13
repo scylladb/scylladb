@@ -58,6 +58,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
+    , _lister(_manager.get_components_lister(_sstable_dir))
     , _unshared_remote_sstables(smp::count)
 {}
 
@@ -181,7 +182,7 @@ sstable_directory::process_sstable_dir(process_flags flags) {
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
-    auto sstable_dir_lister = _manager.get_components_lister(_sstable_dir);
+    auto& sstable_dir_lister = *_lister;
     auto& state = *sstable_dir_lister._state;
     std::exception_ptr ex;
     try {
@@ -250,6 +251,7 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
 future<>
 sstable_directory::commit_directory_changes() {
+    _lister.reset();
     // Remove all files scheduled for removal
     return parallel_for_each(std::exchange(_files_for_removal, {}), [] (sstring path) {
         dirlog.info("Removing file {}", path);
