@@ -10,7 +10,7 @@
 
 #include <seastar/util/bool_class.hh>
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 class atomic_cell_view;
 class collection_mutation_view;

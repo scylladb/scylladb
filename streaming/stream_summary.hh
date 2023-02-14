@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <ostream>
 
 namespace streaming {

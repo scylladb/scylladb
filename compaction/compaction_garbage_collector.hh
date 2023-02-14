@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 class atomic_cell;
 class row_marker;

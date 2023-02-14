@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 
 using namespace seastar;

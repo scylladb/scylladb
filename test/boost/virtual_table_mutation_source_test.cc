@@ -9,7 +9,7 @@
 #include <seastar/util/closeable.hh>
 #include "db/virtual_table.hh"
 #include "db/system_keyspace.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 #include "test/lib/mutation_source_test.hh"
 

@@ -13,7 +13,7 @@
 #include <iosfwd>
 #include <seastar/core/sstring.hh>
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"

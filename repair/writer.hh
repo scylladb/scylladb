@@ -2,7 +2,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <optional>
 #include "reader_permit.hh"
 #include "streaming/stream_reason.hh"

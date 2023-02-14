@@ -53,9 +53,9 @@
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
 #include "utils/latency.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "query_ranges_to_vnodes.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>

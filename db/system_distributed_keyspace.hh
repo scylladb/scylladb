@@ -9,7 +9,7 @@
 #pragma once
 
 #include "bytes.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
 #include "cdc/generation_id.hh"

@@ -252,7 +252,6 @@ set(scylla_sources
     auth/standard_role_manager.cc
     auth/transitional.cc
     bytes.cc
-    caching_options.cc
     cdc/cdc_partitioner.cc
     cdc/generation.cc
     cdc/log.cc
@@ -398,9 +397,10 @@ set(scylla_sources
     replica/database.cc
     replica/table.cc
     row_cache.cc
-    schema.cc
+    schema/caching_options.cc
+    schema/schema.cc
+    schema/schema_registry.cc
     schema_mutations.cc
-    schema_registry.cc
     serializer.cc
     service/client_state.cc
     service/forward_service.cc

@@ -41,7 +41,7 @@
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"

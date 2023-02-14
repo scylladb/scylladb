@@ -19,7 +19,7 @@
 #include "readers/multishard.hh"
 #include "readers/mutation_source.hh"
 #include "readers/queue.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 
 extern logger mrlog;
 

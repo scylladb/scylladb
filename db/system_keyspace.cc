@@ -36,7 +36,7 @@
 #include "db/config.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "hashers.hh"
 #include "release.hh"
 #include "log.hh"

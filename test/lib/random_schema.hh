@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "dht/i_partitioner.hh"
 #include "test/lib/data_model.hh"
 

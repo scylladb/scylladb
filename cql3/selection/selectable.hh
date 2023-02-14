@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "cql3/selection/selector.hh"
 #include "cql3/cql3_type.hh"

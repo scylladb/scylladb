@@ -10,7 +10,7 @@
 #include "types.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include <seastar/core/print.hh>
 #include "redis/keyspace_utils.hh"
 

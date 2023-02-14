@@ -16,7 +16,7 @@
 #include <boost/range/algorithm/transform.hpp>
 #include "exceptions/exceptions.hh"
 #include <seastar/core/sstring.hh>
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "replica/database.hh"
 #include "unimplemented.hh"
 #include "db/read_repair_decision.hh"

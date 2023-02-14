@@ -10,7 +10,7 @@
 
 #include <vector>
 #include <boost/dynamic_bitset.hpp>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "replica/database_fwd.hh"
 #include "timestamp.hh"
 #include "bytes.hh"

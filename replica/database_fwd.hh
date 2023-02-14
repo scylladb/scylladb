@@ -24,7 +24,7 @@ class memtable_list;
 class mutation;
 class mutation_partition;
 
-// schema.hh
+// schema/schema.hh
 class schema;
 class column_definition;
 class column_mapping;

@@ -14,10 +14,10 @@
 #include <seastar/core/weak_ptr.hh>
 
 #include "utils/hash.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "utils/top_k.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 
 #include <vector>
 #include <set>

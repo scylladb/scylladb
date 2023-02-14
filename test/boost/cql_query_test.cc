@@ -37,7 +37,7 @@
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"
 #include "utils/fmt-compat.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include <regex>
 #include "gms/feature.hh"

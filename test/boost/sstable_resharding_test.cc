@@ -9,7 +9,7 @@
 #include "types/map.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "replica/database.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "compaction/compaction_manager.hh"

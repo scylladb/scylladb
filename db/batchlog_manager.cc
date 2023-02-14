@@ -29,7 +29,7 @@
 #include "unimplemented.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "db/schema_tables.hh"

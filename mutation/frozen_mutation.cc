@@ -8,7 +8,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "frozen_mutation.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"
 #include "counters.hh"

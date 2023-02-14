@@ -14,7 +14,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "keys.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"

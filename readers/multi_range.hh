@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include <functional>
 #include <optional>

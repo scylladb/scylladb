@@ -16,7 +16,7 @@
 #include "compaction.hh"
 #include "compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "sstables/sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>

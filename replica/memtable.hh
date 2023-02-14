@@ -13,7 +13,7 @@
 #include <iosfwd>
 #include "replica/database_fwd.hh"
 #include "dht/i_partitioner.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "encoding_stats.hh"
 #include "dirty_memory_manager.hh"
 #include "db/commitlog/replay_position.hh"

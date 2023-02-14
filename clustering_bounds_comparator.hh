@@ -11,7 +11,7 @@
 
 #include <functional>
 #include "keys.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "range.hh"
 
 /**

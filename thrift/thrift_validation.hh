@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "bytes.hh"
 #include "Cassandra.h"
 

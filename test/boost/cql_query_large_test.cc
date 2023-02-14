@@ -29,7 +29,7 @@
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 
 using namespace std::literals::chrono_literals;
 

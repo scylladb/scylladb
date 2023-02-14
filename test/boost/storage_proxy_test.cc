@@ -17,7 +17,7 @@
 #include "service/storage_proxy.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "partition_slice_builder.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 
 // Returns random keys sorted in ring order.
 // The schema must have a single bytes_type partition key column.

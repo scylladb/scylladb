@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "streaming/stream_summary.hh"
 #include <memory>
 #include <seastar/core/shared_ptr.hh>

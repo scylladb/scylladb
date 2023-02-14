@@ -12,7 +12,7 @@
 #include <seastar/util/backtrace.hh>
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation_assertions.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "test/lib/log.hh"
 
 inline bool trim_range_tombstone(const schema& s, range_tombstone& rt, const query::clustering_row_ranges& ck_ranges) {

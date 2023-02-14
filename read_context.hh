@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "query-request.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/mutation_fragment.hh"

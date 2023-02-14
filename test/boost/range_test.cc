@@ -14,7 +14,7 @@
 #include <unordered_set>
 
 #include "query-request.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 
 #include "locator/token_metadata.hh"
 

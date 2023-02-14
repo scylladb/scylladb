@@ -13,7 +13,7 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "log.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "tools/utils.hh"
 #include "utils/logalloc.hh"
 

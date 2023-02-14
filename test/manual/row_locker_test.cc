@@ -11,7 +11,7 @@
 #include <seastar/core/thread.hh>
 
 #include "db/view/row_locking.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 
 static row_locker::stats row_locker_stats;
 

@@ -10,7 +10,7 @@
 
 #include "readers/filtering.hh"
 #include "replica/memtable.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "replica/database_fwd.hh"
 
 namespace db {

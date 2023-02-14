@@ -15,7 +15,7 @@
 #include "serializer.hh"
 #include "db/extensions.hh"
 #include "cdc/cdc_options.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "serializer_impl.hh"
 
 namespace cdc {

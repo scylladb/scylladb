@@ -15,7 +15,7 @@
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql3_type.hh"
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 #include <seastar/core/shared_ptr.hh>
 

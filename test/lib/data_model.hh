@@ -10,7 +10,7 @@
 
 #include "mutation/mutation.hh"
 #include "cql3/cql3_type.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 namespace tests::data_model {
 

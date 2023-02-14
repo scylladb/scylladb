@@ -22,7 +22,7 @@
 
 #include "auth/resource.hh"
 #include "auth/service.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "db/extensions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "types/user.hh"

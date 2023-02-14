@@ -8,7 +8,7 @@
 
 #include "cdc_partitioner.hh"
 #include "dht/token.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
 #include "cdc/generation.hh"

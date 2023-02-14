@@ -12,7 +12,7 @@
 #include <random>
 #include <iostream>
 #include "keys.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "mutation/range_tombstone_list.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "test/lib/log.hh"

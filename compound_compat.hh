@@ -12,7 +12,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <compare>
 #include "compound.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "sstables/version.hh"
 #include "log.hh"
 

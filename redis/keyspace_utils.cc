@@ -9,7 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "redis/keyspace_utils.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "types.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/ks_prop_defs.hh"
@@ -23,7 +23,7 @@
 #include "service/client_state.hh"
 #include "transport/server.hh"
 #include "db/system_keyspace.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/print.hh>
 #include "db/config.hh"

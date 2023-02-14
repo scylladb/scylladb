@@ -25,8 +25,8 @@
 #include <memory>
 #include <seastar/core/seastar.hh>
 
-#include "schema.hh"
-#include "schema_builder.hh"
+#include "schema/schema.hh"
+#include "schema/schema_builder.hh"
 #include "row_cache.hh"
 #include "replica/database.hh"
 #include "cell_locking.hh"

@@ -29,7 +29,7 @@
 #include "legacy_schema_migrator.hh"
 #include "system_keyspace.hh"
 #include "schema_tables.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include "utils/fmt-compat.hh"

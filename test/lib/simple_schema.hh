@@ -12,12 +12,12 @@
 
 #include <map>
 
-#include "schema.hh"
-#include "schema_registry.hh"
+#include "schema/schema.hh"
+#include "schema/schema_registry.hh"
 #include "keys.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "reader_permit.hh"
 #include "types/map.hh"
 #include "test/lib/key_utils.hh"

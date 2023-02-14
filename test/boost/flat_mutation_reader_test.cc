@@ -19,7 +19,7 @@
 #include "readers/reversing_v2.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
 #include "row_cache.hh"
 #include "test/lib/tmpdir.hh"

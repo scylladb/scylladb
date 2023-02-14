@@ -14,7 +14,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 namespace service {
 class migration_manager;

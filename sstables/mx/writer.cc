@@ -9,7 +9,7 @@
 #include "sstables/mx/writer.hh"
 #include "sstables/writer.hh"
 #include "encoding_stats.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
 #include "vint-serialization.hh"
 #include "sstables/types.hh"

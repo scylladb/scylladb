@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema/schema.hh"
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"

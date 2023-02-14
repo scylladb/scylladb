@@ -12,8 +12,8 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "data_dictionary/user_types_metadata.hh"
-#include "schema_registry.hh"
-#include "schema_builder.hh"
+#include "schema/schema_registry.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"

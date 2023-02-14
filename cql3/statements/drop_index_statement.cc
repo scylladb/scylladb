@@ -13,7 +13,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/mutation.hh"
 #include "gms/feature_service.hh"

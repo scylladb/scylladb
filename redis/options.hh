@@ -13,7 +13,7 @@
 #include "db/consistency_level_type.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/net/socket_defs.hh>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "service/client_state.hh"
 #include "auth/service.hh"
 

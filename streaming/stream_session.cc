@@ -25,7 +25,7 @@
 #include "service/priority_manager.hh"
 #include "service/migration_manager.hh"
 #include "query-request.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstable_set.hh"
 #include "db/view/view_update_checks.hh"

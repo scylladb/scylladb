@@ -22,7 +22,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
 #include "readers/generating_v2.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"

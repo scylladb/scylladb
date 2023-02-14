@@ -9,8 +9,8 @@
 #include "db/tags/utils.hh"
 
 #include "db/tags/extension.hh"
-#include "schema_builder.hh"
-#include "schema_registry.hh"
+#include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
 
 namespace db {
 

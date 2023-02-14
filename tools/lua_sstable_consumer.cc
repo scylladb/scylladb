@@ -16,7 +16,7 @@
 
 #include "lang/lua_scylla_types.hh"
 #include "reader_permit.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "sstables/sstables.hh"
 #include "tools/json_writer.hh"
 #include "tools/lua_sstable_consumer.hh"

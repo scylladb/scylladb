@@ -9,7 +9,7 @@
 #pragma once
 
 #include "db/per_partition_rate_limit_options.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "serializer.hh"
 
 namespace db {

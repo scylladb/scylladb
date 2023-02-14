@@ -16,7 +16,7 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "utils/human_readable.hh"
 
 logger rcslog("reader_concurrency_semaphore");

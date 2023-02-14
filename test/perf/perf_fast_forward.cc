@@ -19,7 +19,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "release.hh"
 #include "db/config.hh"

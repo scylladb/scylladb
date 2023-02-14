@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "compaction_descriptor.hh"
 
 class reader_permit;
