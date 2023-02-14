@@ -18,8 +18,14 @@
 
 class compressor {
     sstring _name;
+    // keeps track of whether the linear compressor path of this
+    // type already writes its uncompressed size as part of the 
+    // packet (i.e. is lz4compressor which for historical reasons
+    // w.r. cassandra does this). Used to avoid duplicate info
+    // in faking stream/fragmented compression
+    bool _writes_uncompressed_size;
 public:
-    compressor(sstring);
+    compressor(sstring, bool writes_uncompressed_size = false);
 
     virtual ~compressor() {}
 
