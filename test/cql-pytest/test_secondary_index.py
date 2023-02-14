@@ -1618,3 +1618,16 @@ def test_7659_local(cql, test_keyspace):
         assert [(0,)] == list(cql.execute(f"SELECT a FROM {table} WHERE a=0 and b=0 AND d=0 AND f in (1,2) ALLOW FILTERING"))
         # With issue #7659, this generated an exception and failed request:
         assert [(0,)] == list(cql.execute(f"SELECT a FROM {table} WHERE a=0 and b=0 AND d=0 AND f>0 ALLOW FILTERING"))
+
+# An index can be used to satisfy equality relations (a=2) but not
+# inequality (e.g., a>=2). If those are present, Scylla needs to ignore
+# the index and just do filtering normally.
+# Reproduces #5823
+def test_index_non_eq_relation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a bigint, b bigint, c bigint, PRIMARY KEY ((a, b))') as table:
+        cql.execute(f'CREATE INDEX ON {table}(a)')
+        cql.execute(f'INSERT INTO {table} (a,b,c) VALUES (0,2,1)')
+        cql.execute(f'INSERT INTO {table} (a,b,c) VALUES (1,2,3)')
+        cql.execute(f'INSERT INTO {table} (a,b,c) VALUES (2,2,4)')
+        assert [(3,),(4,)] == sorted(cql.execute(f"SELECT c FROM {table} WHERE a>0 and b=2 ALLOW FILTERING"))
+        assert [(4,)] == sorted(cql.execute(f"SELECT c FROM {table} WHERE a>=2 ALLOW FILTERING"))
