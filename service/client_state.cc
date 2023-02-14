@@ -90,8 +90,8 @@ future<> service::client_state::has_functions_access(data_dictionary::database d
     co_return co_await has_access(db, ks, {p, r});
 }
 
-future<> service::client_state::has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_name, auth::permission p) const {
-    auth::resource r = auth::make_functions_resource(ks, function_name);
+future<> service::client_state::has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_signature, auth::permission p) const {
+    auth::resource r = auth::make_functions_resource(ks, function_signature);
     co_return co_await has_access(db, ks, {p, r});
 }
 

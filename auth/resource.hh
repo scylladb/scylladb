@@ -92,7 +92,7 @@ public:
     resource(service_level_resource_t);
     explicit resource(functions_resource_t);
     resource(functions_resource_t, std::string_view keyspace);
-    resource(functions_resource_t, std::string_view keyspace, std::string_view function_name);
+    resource(functions_resource_t, std::string_view keyspace, std::string_view function_signature);
     resource(functions_resource_t, std::string_view keyspace, std::string_view function_name,
             std::vector<sstring> function_signature);
 
@@ -250,8 +250,8 @@ inline resource make_functions_resource(std::string_view keyspace) {
     return resource(functions_resource_t{}, keyspace);
 }
 
-inline resource make_functions_resource(std::string_view keyspace, std::string_view function_name) {
-    return resource(functions_resource_t{}, keyspace, function_name);
+inline resource make_functions_resource(std::string_view keyspace, std::string_view function_signature) {
+    return resource(functions_resource_t{}, keyspace, function_signature);
 }
 
 resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature);

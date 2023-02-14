@@ -129,9 +129,9 @@ resource::resource(functions_resource_t, std::string_view keyspace) : resource(r
     _parts.emplace_back(keyspace);
 }
 
-resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name) : resource(resource_kind::functions) {
+resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_signature) : resource(resource_kind::functions) {
     _parts.emplace_back(keyspace);
-    _parts.emplace_back(function_name);
+    _parts.emplace_back(function_signature);
 }
 
 resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name, std::vector<sstring> function_signature) : resource(resource_kind::functions) {
