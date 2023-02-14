@@ -355,11 +355,9 @@ void modification_statement::build_cas_result_set_metadata() {
             _columns_of_cas_result_set.set(def.ordinal_id);
         }
     } else {
-        for (const auto& cond : expr::boolean_factors(_condition)) {
-            expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
-                _columns_of_cas_result_set.set(col.col->ordinal_id);
-            });
-        }
+        expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {
+            _columns_of_cas_result_set.set(col.col->ordinal_id);
+        });
     }
     columns.reserve(columns.size() + all_columns.size());
     // We must filter conditions using the _columns_of_cas_result_set, since
