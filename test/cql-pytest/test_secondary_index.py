@@ -1375,6 +1375,24 @@ def test_static_column_index_build(cql, test_keyspace):
 
         assert [(0,),(1,),(2,)] == rows
 
+# Tests combinations of lookup in an index of static column with other
+# restrictions. Reproduces #12829.
+# NOTE: currently marked with skip instead of xfail because
+# on_internal_error() crashes Scylla.
+@pytest.mark.skip(reason="issue #12829")
+def test_static_column_index_restrictions(cql, test_keyspace):
+    schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        cql.execute(f'INSERT INTO {table} (pk, c, s) VALUES (0, 3, 1)')
+        cql.execute(f'INSERT INTO {table} (pk, c, s) VALUES (0, 4, 1)')
+        cql.execute(f'INSERT INTO {table} (pk, c, s) VALUES (1, 4, 2)')
+
+        assert [(0,3),(0,4)] == sorted(cql.execute(f'SELECT pk,c FROM {table} WHERE s = 1'))
+        assert [(0,3),(0,4)] == sorted(cql.execute(f'SELECT pk,c FROM {table} WHERE pk = 0 AND s = 1'))
+        # Reproduces #12829:
+        assert [(0,3)] == sorted(cql.execute(f'SELECT pk,c FROM {table} WHERE pk = 0 AND s = 1 AND c = 3'))
+
 # Checks that clustering row deletions do not affect static columns.
 def test_static_column_index_unaffected_by_clustering_row_ops(cql, test_keyspace):
     schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
