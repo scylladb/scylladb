@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.18)
 
 project(scylla)
 
+list(APPEND CMAKE_MODULE_PATH
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "Setting build type to 'Release' as none was specified.")
   set(CMAKE_BUILD_TYPE "Release" CACHE
@@ -737,9 +740,10 @@ target_compile_options(scylla PRIVATE
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
 
+find_package(libdeflate REQUIRED)
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    libdeflate
+    libdeflate::libdeflate
     "${scylla_gen_build_dir}")
 
 ###
@@ -759,20 +763,6 @@ string(STRIP "${scylla_release}" scylla_release)
 get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)
 list(APPEND release_cdefs "SCYLLA_VERSION=\"${scylla_version}\"" "SCYLLA_RELEASE=\"${scylla_release}\"")
 set_source_files_properties("${CMAKE_SOURCE_DIR}/release.cc" PROPERTIES COMPILE_DEFINITIONS "${release_cdefs}")
-
-###
-### Custom command for building libdeflate. Link the library to scylla.
-###
-set(libdeflate_lib "${scylla_build_dir}/libdeflate/libdeflate.a")
-add_custom_command(OUTPUT "${libdeflate_lib}"
-    COMMAND make -C "${CMAKE_SOURCE_DIR}/libdeflate"
-        BUILD_DIR=../build/${BUILD_TYPE}/libdeflate/
-        CC=${CMAKE_C_COMPILER}
-        "CFLAGS=${target_arch_flag}"
-        ../build/${BUILD_TYPE}/libdeflate//libdeflate.a) # Two backslashes are important!
-# Hack to force generating custom command to produce libdeflate.a
-add_custom_target(libdeflate DEPENDS "${libdeflate_lib}")
-target_link_libraries(scylla PRIVATE "${libdeflate_lib}")
 
 # TODO: create cmake/ directory and move utilities (generate functions etc) there
 # TODO: Build tests if BUILD_TESTING=on (using CTest module)
